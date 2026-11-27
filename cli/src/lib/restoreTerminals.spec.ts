@@ -103,7 +103,7 @@ describe('restore, on each pane\'s own backend', () => {
     await terminals.clearRemainOnExit(pty)
     await terminals.killPane(pty)
     expect(ptyBackend.paneState).toHaveBeenCalledWith(pty)
-    expect(ptyBackend.releaseHold).toHaveBeenCalledWith(pty)
+    expect(ptyBackend.releaseHold).toHaveBeenCalledWith(pty, undefined)
     expect(ptyBackend.kill).toHaveBeenCalledWith(pty)
     expect(tmuxBackend.kill).not.toHaveBeenCalled()
   })

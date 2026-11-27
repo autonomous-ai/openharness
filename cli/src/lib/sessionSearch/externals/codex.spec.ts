@@ -55,6 +55,14 @@ describe('readCodexHead', () => {
     writeFileSync(endless, 'x'.repeat(1024 * 1024 + 10))
     expect(await readCodexHead(endless)).toBeNull()
   })
+
+  it('reads a terminal\'s Codex its daemon runs as a terminal\'s, not an editor\'s', async () => {
+    // Codex 0.167+ runs a `codex` typed in a terminal as a client of its daemon (`codex app-server`), which writes the
+    // rollout as an app server's: `vscode`, from the TUI's own originator (Diego, CLI 0.6.90).
+    const dir = home()
+    const path = write(join(dir, 'daemon.jsonl'), [meta(C, 'vscode', 'codex-tui'), event('x')])
+    expect(await readCodexHead(path)).toEqual({ sessionId: C, cwd: '/work/cohorts', origin: 'terminal' })
+  })
 })
 
 describe('the rest of a Codex home', () => {
@@ -160,5 +168,29 @@ describe('codexProvider', () => {
     for (const sub of ['app-server', 'mcp-server', 'mcp', 'proto']) expect(codexServer(row('codex', `codex --verbose ${sub}`))).toBe(true)
     expect(codexServer(row('/opt/bin/codex-acp', '/opt/bin/codex-acp'))).toBe(true)
     expect(codexServer(row('node', 'node /opt/lib/codex-acp --stdio'))).toBe(true)
+  })
+
+  // macOS `ps` cuts `comm` at 16 bytes: the cut name of a `codex-acp` under a long path does not end in it.
+  it("knows an editor's `codex-acp` by its whole path, where ps cut its name", () => {
+    const path = '/Users/someone/Library/Application Support/Zed/external_agents/codex-acp'
+    const cut = { pid: 1, ppid: 0, executable: path.slice(0, 16), args: 'codex-acp-wrapper --stdio' }
+    expect(codexServer(cut)).toBe(false)
+    expect(codexServer({ ...cut, commandPath: path })).toBe(true)
+  })
+
+  // `args` is split at a space: under such a folder the subcommand read was a piece of the path, and Codex's server
+  // was taken for a person's Codex.
+  it("knows Codex's server under a folder with a space, by what follows its whole path", () => {
+    const path = '/Users/someone/Library/Application Support/X/codex'
+    const row = (args: string, commandPath?: string) => ({ pid: 1, ppid: 0, executable: path.slice(0, 16), args, ...(commandPath ? { commandPath } : {}) })
+    expect(codexServer(row(`${path} app-server --listen stdio`))).toBe(false)
+    expect(codexServer(row(`${path} app-server --listen stdio`, path))).toBe(true)
+    expect(codexServer(row(`${path} --verbose mcp`, path))).toBe(true)
+    // A person's Codex there is still one.
+    expect(codexServer(row(path, path))).toBe(false)
+    expect(codexServer(row(`${path} resume 01a0`, path))).toBe(false)
+    expect(codexServer(row(`${path} "run the mcp tests"`, path))).toBe(false)
+    // A program that only starts with the same text is read as before.
+    expect(codexServer(row(`${path}-helper mcp`, path))).toBe(false)
   })
 })

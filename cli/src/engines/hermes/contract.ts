@@ -7,8 +7,6 @@ import { env as hookEnvironment } from '../../config/env.js'
 import type { StoreHomes } from '../kit/storeHomes.js'
 import type { StoreSourceRule } from '../kit/storeSource.js'
 
-export const HERMES_PROFILE = { variable: 'HERMES_HOME', setting: 'HERMES_HOME', trimTrailingSlashes: true } as const
-
 /** The store a Hermes home keeps its sessions in. */
 export function hermesDbPath(home: string): string {
   return join(home, 'state.db')
@@ -112,7 +110,7 @@ export const HERMES_HOOK_SETTINGS = {
   messages: {
     missing: '[hooks] no Hermes config at {file} — skipping (run hermes once first)',
     foreign: '[hooks] {file} has its own `hooks:` block — leaving it untouched.',
-    manual: '[hooks] add these entries under it manually to mirror Hermes sessions:',
+    manual: '[hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions',
     current: '[hooks] Hermes session hooks already installed',
     installed: '[hooks] installed Hermes session hooks → {file}',
     collapsed: '[hooks] installed Hermes session hooks (collapsed {removed} stale blocks) → {file}',
@@ -126,3 +124,46 @@ export const HERMES_HOOK_SETTINGS = {
       + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness',
   },
 } as const satisfies import('../kit/nativeHookYaml.js').NativeYamlHooks
+
+/** The store a Hermes holds open for its whole run (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result"): its first group is the home. */
+export const HERMES_HELD_STORE = /^(.+)\/state\.db$/
+
+/** `hermes --version` prints `Hermes Agent v<a>.<b>.<c> (<date>)` first (`hermes_cli/main.py` `cmd_version`). */
+export const HERMES_VERSION = { output: /Hermes Agent v(\d+)\.(\d+)\.(\d+)/, args: ['--version'], timeoutMs: 5_000 } as const
+
+/** The first release that keeps a terminal record (`hermes_cli/terminal_breadcrumbs.py`, tag v0.21.6). */
+export const HERMES_RECORD_SINCE = [0, 21, 6] as const
+
+/**
+ * The record Hermes's CLI writes each time it sets a terminal's session (`hermes_cli/terminal_breadcrumbs.py`):
+ * `<home>/terminal-sessions/<terminal id>` holding `{"session_id", "cwd", "ts"}`. The terminal id is
+ * `tty-<sanitized tty path>`, else `tmux_pane-<sanitized TMUX_PANE>`; sanitizing maps every character outside
+ * `[A-Za-z0-9._-]` to `-` and keeps 120.
+ */
+export const HERMES_TERMINAL_RECORD = {
+  directory: 'terminal-sessions',
+  maxBytes: 4096,
+  id: HERMES_HISTORY_ID_RE,
+  names: [{ of: 'tty', prefix: 'tty-' }, { of: 'tmuxPane', prefix: 'tmux_pane-' }],
+  unsafe: /[^A-Za-z0-9._-]/gu,
+  keep: 120,
+  session: 'session_id',
+  time: 'ts',
+} as const
+
+/** A home set to the TUI writes no terminal record (`hermes_cli/main.py` `_config_default_interface_early`). */
+export const HERMES_INTERFACE = { file: 'config.yaml', section: 'display', key: 'interface', tui: 'tui', maxBytes: 1 << 20 } as const
+
+export const HERMES_SANDBOX_HOLD = 'Hermes runs in a sandbox whose folder Harness cannot see'
+
+export const HERMES_TERMINAL_SAID = {
+  sandbox: 'hermes runs in a sandbox · followed from its terminal record',
+  fallback: 'hermes keeps no terminal record · its session switches are not followed',
+  ignored: (reason: string): string => `hermes terminal record ignored · ${reason}`,
+} as const
+
+export const HERMES_HOOKS_SAID = {
+  removed: "[hooks] removed Harness's Hermes hooks → {file}",
+  kept: "[hooks] could not remove Harness's Hermes hooks from {file} · {reason}",
+  unknown: "[hooks] Hermes's version could not be read · its session hooks are kept",
+} as const

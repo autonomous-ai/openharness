@@ -702,6 +702,16 @@ describe('PtyHostDrain', () => {
     expect(cleaned).toHaveBeenCalledTimes(1)
   })
 
+  it('says why a gone host left by its length, never its words: they can name the discovery file', async () => {
+    quiet()
+    const { drain, step } = drainFixture()
+    drain[0].hostGone = 'there is no /Users/sentinel/run/pty-p1.json'
+    for (let pass = 0; pass < EMPTY_PASSES; pass++) await step()
+    const lines = vi.mocked(console.log).mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[terminal] ptyhost: ptyhost:p${OLD} drained and removed (text(43))`)
+  })
+
   it('skips a step while one runs, and a cleanup that throws does not stop the drain', async () => {
     quiet()
     const { drain, drainer, backends } = drainFixture()
@@ -766,7 +776,7 @@ const computed = (word: string) => process.platform === 'win32' ? `echo "${word}
 describe.runIf(!!realBinary)('shutdown on the real host', () => {
   it('is refused while the host has a pane; granted, the host exits and takes its discovery file down', async () => {
     const home = tmpHome()
-    const target = targetHost({ runtimeDir: home })
+    const target = (await targetHost({ runtimeDir: home }))
     if (!target) throw new Error('HARNESS_PTY_BIN says no version')
     const { create } = ptyHostBackends(home, { target, owner: () => 'me' })
     cleanup.push(() => { create.dispose(); killPid(readInstanceDiscovery(home, target.instance)?.pid) })
@@ -793,8 +803,8 @@ describe.runIf(!!realBinary && !!previousBinary)('a previous version with the re
   it('streams the old host\'s pane, makes new panes on the target, and shuts the old one down once its pane closes', async () => {
     quiet()
     const home = tmpHome()
-    const target = targetHost({ runtimeDir: home })
-    const previous = targetHost({ runtimeDir: home, env: { HARNESS_PTY_BIN: previousBinary } })
+    const target = (await targetHost({ runtimeDir: home }))
+    const previous = (await targetHost({ runtimeDir: home, env: { HARNESS_PTY_BIN: previousBinary } }))
     if (!target || !previous) throw new Error('a binary says no version')
     expect(previous.instance).not.toBe(target.instance)
     cleanup.push(() => { killPid(readInstanceDiscovery(home, previous.instance)?.pid); killPid(readInstanceDiscovery(home, target.instance)?.pid) })

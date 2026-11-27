@@ -68,12 +68,15 @@ export function nativeLaunchConfirmed(native: Pick<NativeLaunch, 'executable' | 
 
 /**
  * A held pane on Windows: it says why, waits, and survives Ctrl-C and Ctrl-Break, as the `/bin/sh` loop does elsewhere
- * (core/agents/heldLaunches.ts `heldPaneArgv`). Run by the daemon's own Node, the detail and the token as arguments:
- * the start command must carry `harness-held` and the token, which is how the daemon and the host know a held pane
- * (lib/nativePaneHold.ts `isHeldStartCommand`, pty/src/panes.rs `held_by`).
+ * (core/agents/heldLaunches.ts `heldPaneArgv`). It ends on the console's close, as that loop ends on hangup: Node hears
+ * the close as SIGHUP, and a listener for it holds the close until the host kills the pane, so a respawn over it spent
+ * the host's whole 2 s grace (#4517's VM run: six panes reopened after a reboot, two past the 5 s deadline). Run by
+ * the daemon's own Node, the detail and the token as arguments: the start command must carry `harness-held` and the
+ * token, which is how the daemon and the host know a held pane (lib/nativePaneHold.ts `isHeldStartCommand`,
+ * pty/src/panes.rs `held_by`).
  */
 export function windowsHeldPaneArgv(detail: string, token?: string, node: string = baseNode(process.execPath)): string[] {
-  const script = 'for(const s of ["SIGINT","SIGBREAK","SIGHUP"])process.on(s,()=>{});'
+  const script = 'for(const s of ["SIGINT","SIGBREAK"])process.on(s,()=>{});'
     + 'process.stdout.write(process.argv[2]+"\\r\\n");setInterval(()=>{},3600000)'
   const argv = [node, '-e', script, 'harness-held', detail, ...(token ? [token] : [])]
   HELD_PANES.add(argv)

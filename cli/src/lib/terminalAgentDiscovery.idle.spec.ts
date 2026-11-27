@@ -10,7 +10,7 @@ import type { TerminalRootObservation } from './terminalTypes.js'
  */
 
 const processRows = vi.hoisted(() => vi.fn())
-const agentCommandOwnershipSnapshot = vi.hoisted(() => vi.fn())
+const agentCommandOwnershipSnapshotAsync = vi.hoisted(() => vi.fn())
 
 vi.mock('./processTable.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./processTable.js')>(),
@@ -18,8 +18,8 @@ vi.mock('./processTable.js', async (importOriginal) => ({
 }))
 vi.mock('./engineBin.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./engineBin.js')>()
-  agentCommandOwnershipSnapshot.mockImplementation(actual.agentCommandOwnershipSnapshot)
-  return { ...actual, agentCommandOwnershipSnapshot }
+  agentCommandOwnershipSnapshotAsync.mockImplementation(actual.agentCommandOwnershipSnapshotAsync)
+  return { ...actual, agentCommandOwnershipSnapshotAsync }
 })
 
 const { probeTerminalAgents } = await import('./terminalAgentDiscovery.js')
@@ -37,7 +37,7 @@ beforeEach(async () => {
   // A pass that sees no pane, so the next one starts as a daemon at rest does.
   await probeTerminalAgents([backendWith([])], ['tmux'], 999)
   processRows.mockClear()
-  agentCommandOwnershipSnapshot.mockClear()
+  agentCommandOwnershipSnapshotAsync.mockClear()
 })
 
 describe('a discovery pass with no pane', () => {
@@ -46,7 +46,7 @@ describe('a discovery pass with no pane', () => {
 
     expect(probe).toMatchObject({ processTableAvailable: true, agents: [] })
     expect(processRows).not.toHaveBeenCalled()
-    expect(agentCommandOwnershipSnapshot).not.toHaveBeenCalled()
+    expect(agentCommandOwnershipSnapshotAsync).not.toHaveBeenCalled()
   })
 
   it('still reads the table beside the panes for a pass someone waits on (an engine starting in a pane)', async () => {
@@ -60,7 +60,7 @@ describe('a discovery pass with no pane', () => {
     await probeTerminalAgents([backendWith([{ runtime: { backend: 'tmux', paneId: '%1' }, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
 
     expect(processRows).toHaveBeenCalledTimes(1)
-    expect(agentCommandOwnershipSnapshot).toHaveBeenCalledTimes(1)
+    expect(agentCommandOwnershipSnapshotAsync).toHaveBeenCalledTimes(1)
   })
 
   it('says the table could not be read when there is a pane and ps failed', async () => {

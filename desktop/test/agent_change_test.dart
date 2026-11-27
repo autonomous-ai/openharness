@@ -8,6 +8,8 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/home_dir.dart';
 import 'package:harness/e2ee/envelope.dart';
+import 'package:harness/core/first_task.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/state/agent_handoff_file.dart';
 import 'package:harness/state/agent_switch_handoff.dart';
 import 'package:harness/ws/ws_conn.dart'
@@ -257,8 +259,17 @@ AppNotifier fixture(
   String sourceEngine = 'codex',
   String? claudeHome,
   String? codexHome,
+  HomeLook? homeLook,
 }) {
-  final app = createApp(connectionForTest: (_) => connection, connected: true);
+  final app = createApp(connectionForTest: (_) => connection, connected: true)
+    // macOS unless a test says otherwise: the folders it pins are ~/.harness's.
+    ..homeLook =
+        homeLook ??
+        HomeLook(
+          linux: false,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path off Linux'),
+        );
   connection.app = app;
   final source = Agent(
     id: 'a0',
@@ -1008,12 +1019,53 @@ void main() {
       connection.handoff = handoffOk;
       final target = allEngines
           .map((e) => e.id)
-          .firstWhere((id) => !supportsAgentHandoff(id) && id != 'codex');
+          .firstWhere((id) => !takesHandoff(id) && id != 'codex');
       await app.changeAgent('m', 'a0', target);
       expect(connection.handoffCalls, isEmpty);
       expect(connection.recentReads, 0);
       expect(notices, isEmpty);
     });
+
+    // omp takes a first task as an argument (the CLI's FIRST_PROMPT_ARGS), so it takes the handoff as one.
+    test('a switch to omp keeps the handoff', () async {
+      final (connection, app) = await open();
+      connection.handoff = handoffOk;
+      expect(await app.changeAgent('m', 'a0', 'omp'), isNull);
+      final call = connection.handoffCalls.single;
+      expect(call['targetEngine'], 'omp');
+      expect(
+        connection.creations.single['prompt'],
+        agentHandoffFilePrompt(
+          'Codex',
+          '.harness/handoff/a0-${call['changeId']}.md',
+          gitRepo: true,
+        ),
+      );
+    });
+
+    // OpenClaw's tools work in its Gateway agent's workspace, not the pane's folder where the handoff file is written:
+    // it starts a new conversation, and nothing is read for it.
+    test('a switch to OpenClaw reads no handoff', () async {
+      final (connection, app) = await open();
+      connection.handoff = handoffOk;
+      await app.changeAgent('m', 'a0', 'openclaw');
+      expect(connection.handoffCalls, isEmpty);
+      expect(connection.recentReads, 0);
+    });
+
+    // A machine from before omp refuses its handoff as an engine it does not know: the switch goes on to the excerpt,
+    // as with a machine from before the handoff file, never held for a retry that refuses again.
+    test(
+      'a machine that does not know the engine falls back to the excerpt',
+      () async {
+        final (connection, app) = await open();
+        connection.handoff = (_) => {'error': 'BAD_ENGINE'};
+        expect(await app.changeAgent('m', 'a0', 'omp'), isNull);
+        expect(connection.handoffCalls, hasLength(1));
+        expect(connection.recentReads, 1);
+        expect(connection.creations.single['prompt'], contains('maple-42'));
+      },
+    );
 
     test('the request is sealed on the wire', () {
       expect(encryptedDownTypes, contains('agent_handoff_prepare'));
@@ -1706,17 +1758,19 @@ void main() {
       expect(claudeReads(), 12);
     });
 
+    const profiles = '/home/me/.harness/claude-profiles';
+
     test('Add Claude account… skips folders that are listed or used by an agent, and a double click adds one', () async {
       final connection = ProfileConnection();
       connection.claudeRows.add({
         'id': '39f7292d285c38ed',
-        'path': '/home/me/.harness/claude-profiles/1',
+        'path': '$profiles/1',
         'label': 'One',
       });
       final app = fixture(
         connection,
         sourceEngine: 'codex',
-        claudeHome: '/home/me/.harness/claude-profiles/2',
+        claudeHome: '$profiles/2',
       );
       app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
@@ -1728,7 +1782,7 @@ void main() {
       expect(connection.creations, hasLength(1));
       expect(
         connection.creations.single,
-        containsPair('claudeHome', '/home/me/.harness/claude-profiles/3'),
+        containsPair('claudeHome', '$profiles/3'),
       );
       // Settled: the next one may go.
       expect(await app.addClaudeAccount('m', 'a0'), isNull);
@@ -1749,11 +1803,34 @@ void main() {
         expect(connection.creations.single, containsPair('engine', 'claude'));
         expect(
           connection.creations.single,
-          containsPair('claudeHome', '/home/me/.harness/claude-profiles/1'),
+          containsPair('claudeHome', '$profiles/1'),
         );
         expect(notice, 'Run /login, then pick it again');
       },
     );
+
+    test('on Linux, Add Claude account… opens Claude in the data root\'s claude-profiles', () async {
+      final connection = ProfileConnection();
+      final app = fixture(
+        connection,
+        sourceEngine: 'codex',
+        homeLook: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) => false,
+        ),
+      );
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      expect(await app.addClaudeAccount('m', 'a0'), isNull);
+      expect(
+        connection.creations.single,
+        containsPair(
+          'claudeHome',
+          '/home/me/.local/share/harness/claude-profiles/1',
+        ),
+      );
+    });
     test(
       'a remote machine is never asked for accounts and offers none',
       () async {

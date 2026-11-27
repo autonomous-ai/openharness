@@ -9,7 +9,7 @@
  */
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/questionController.js'
 import type { AutonomousDeviceInput } from './deviceInput.js'
-import { preview, sid } from '../lib/log.js'
+import { sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
 
@@ -29,11 +29,17 @@ export interface QuestionDeps {
   sessionTurnOpen: (sessionId: string) => boolean
   /** Whether anyone could answer right now: a device watching, a window on this computer, or an app away. */
   someoneCanAnswer: () => boolean
+  /** Whether an agent's `harness wait` or `watch` follows [agentId] by what is pushed it (core/toolWatches.ts). */
+  followedByTool: (agentId: string) => boolean
   deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
+  /** The person is no longer waited on there: a question closed, or the pane read clear after a wait hook
+   *  (core/turns/turnHooks.ts). */
+  waitOver: (sessionId: string) => void
 }
 
 export function createQuestions({
-  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, deviceInput,
+  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, deviceInput,
+  waitOver,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
   // AskUserQuestion bridge: mirrors the question to the device's question screen, and keys the device's
@@ -46,6 +52,9 @@ export function createQuestions({
     sendText: submitTerminal,
     sendKey: keyTerminal,
     acquireControl: acquireTerminalControl,
+    // The watcher keeps a question's id while its words stay, so an answer is checked against that id too.
+    // Read when an answer comes, by when the watcher exists.
+    heldRequestId: (sessionId, view): string | undefined => questionWatcher.heldRequestId(sessionId, view),
   })
   // Command Code ENDS its turn in order to ask (its Stop hook fires, the dialog goes up, and the answer
   // opens a NEW turn). With the turn closed the device tile falls back to the PREVIOUS task's recap — so
@@ -88,7 +97,9 @@ export function createQuestions({
     getSession: (id) => resolve(id),
     capture: captureTerminal,
     readQuestion,
-    hasDevice: () => someoneCanAnswer(),
+    // A tool cannot answer, but the agent waiting on this harness tells the person: with no window, dial or app here
+    // the question was never looked for, and `harness wait` read the screen itself every 3 s to find it.
+    hasDevice: (sessionId) => someoneCanAnswer() || followedByTool(agentIdFor(sessionId)),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped, detail) => {
       deviceInput.setUserAction(agentIdFor(sessionId), true)
@@ -121,7 +132,7 @@ export function createQuestions({
       clients.sendRemote(asked)
       openQuestions.set(sessionId, asked)
       askedRemotely.set(sessionId, asked)
-      console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
+      console.log(`[question] ${sid(sessionId)} asking the user · question ${(shaped[0]?.q ?? '').length} chars · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
@@ -129,6 +140,7 @@ export function createQuestions({
     onQuestionGone: (sessionId, requestId) => {
       heard?.('answered', sessionId, requestId)
       pending.delete(sessionId)
+      waitOver(sessionId)
       deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
@@ -146,6 +158,7 @@ export function createQuestions({
       askedRemotely.delete(sessionId)
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
+    onClear: waitOver,
   })
   /**
    * An app away from this desk gained a session: it is told every question still open, then which are open
@@ -154,12 +167,33 @@ export function createQuestions({
    * and each takes a question it already holds as the same wait continuing, never as news.
    */
   const reannounceRemote = (): void => {
+    forgetGone()
     for (const asked of askedRemotely.values()) clients.sendRemote(asked)
     const requestIds = [...askedRemotely.values()].map((asked) => (asked.payload as { requestId: string }).requestId)
     clients.sendRemote({ type: 'commander_questions_open', payload: { requestIds } })
   }
+  /**
+   * A question this module asked whose agent the registry no longer finds is never answered, and nothing
+   * else may close it: a `reset()` (a device joined) before the agent went left the watcher no id to close.
+   * Forgotten before a dial, a window or an app that attaches is handed it. A cloud agent's question, which
+   * the registry never knows, is not one of these: core/agents/cloud.ts closes it when its harness leaves.
+   */
+  const forgetGone = (): void => {
+    for (const [sessionId, asked] of askedRemotely) {
+      if (resolve(sessionId)) continue
+      openQuestions.delete(sessionId)
+      askedRemotely.delete(sessionId)
+      pending.delete(sessionId)
+      console.log(`[question] ${sid(sessionId)} forgotten · its agent is gone · req=${(asked.payload as { requestId: string }).requestId}`)
+    }
+  }
+  /** The questions still open, to hand a dial or a window on this computer that attaches. */
+  const openQuestionFrames = (): Record<string, unknown>[] => {
+    forgetGone()
+    return [...openQuestions.values()]
+  }
   const questionResponse = createQuestionResponse(answer)
-  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, openQuestionFrames, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
 }
 
 /**

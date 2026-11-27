@@ -11,6 +11,7 @@ import type { ReviewedAnswer } from './questionInbox.js'
 import type { CableAgent } from './cableSession.js'
 import type { RecentTurn } from './cableHost.js'
 import type { Tier } from '../lib/notifyTier.js'
+import type { NotNews } from '../lib/agentNotifications.js'
 
 /** One of the owner's machines, as the fleet knows it. The local row is added by the host, not here. */
 /**
@@ -45,8 +46,12 @@ export class FleetError extends Error {
 /** A card from an attached machine, already translated into the dial's four kinds. */
 export type FleetEvent =
   | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent?: boolean; update?: string
+      /** Why a silent card is not news, as that machine's recaps said it (lib/agentNotifications.ts): this dial logs it. */
+      notNews?: NotNews
       /** A summary's tier, as that machine's recaps decided it (services/recaps.ts): the dial follows it. */
-      tier?: Tier }
+      tier?: Tier
+      /** A summary of a failed turn: a card with no tier (a cloud harness's) is decided here, where it rings. */
+      failed?: boolean }
   | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown }
   | { machineId: string; kind: 'questionClosed'; agentId: string; requestId: string }
   | { machineId: string; kind: 'state'; state: FleetMachine['state'] }

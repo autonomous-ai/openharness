@@ -59,8 +59,10 @@ describe('devLogHistory', () => {
 describe('shared history and divergence vectors', () => {
   it('the Dart copies are byte-identical to this fixture', () => {
     const here = readFileSync(fileURLToPath(new URL('./deviceHistory.vectors.json', import.meta.url)))
-    for (const app of ['desktop', 'mobile']) {
-      const copy = readFileSync(fileURLToPath(new URL(`../../../../${app}/test/viewer/deviceHistory.vectors.json`, import.meta.url)))
+    // Named in full: CI's planner reads these paths to run this spec when a copy changes (scripts/ci-plan.py PR_READS).
+    for (const [app, path] of [['desktop', '../../../../desktop/test/viewer/deviceHistory.vectors.json'],
+      ['mobile', '../../../../mobile/test/viewer/deviceHistory.vectors.json']]) {
+      const copy = readFileSync(fileURLToPath(new URL(path, import.meta.url)))
       expect(copy.equals(here), `${app} copy differs: run scripts/gen-devhistory-vectors.ts and copy it`).toBe(true)
     }
   })

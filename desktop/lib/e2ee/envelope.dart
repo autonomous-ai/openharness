@@ -36,11 +36,12 @@ const Set<String> encryptedDownTypes = {
   'viewer_surface',
   'api_connections',
   'connectors',
+  // An Intern 3 managed from here (CLI services/osDevice.ts): its passwords and Wi-Fi pass through.
+  'os_device',
   // Sharing a machine across accounts (CLI services/sharedMachines.ts): the addresses it is shared with,
   // and where a guest may start a harness (the owner's folders).
   'shared_machines',
   'guest_folders',
-  'super_tabs',
   'orchestrator',
   'route_task',
   'route_send',
@@ -69,17 +70,17 @@ const Set<String> encryptedDownTypes = {
   'agent_update',
   'agent_files',
   'agent_read_file',
-  // An agent's instructions file, read and saved from another of the owner's
-  // computers (CLI services/projects.ts): the text is the person's own, so the
-  // relay sees none of it. `MACHINE_REQUESTS` types in the CLI.
-  'agent_instructions_read',
-  'agent_instructions_write',
   // An agent's Browser (CLI services/agentBrowser.ts): its settings carry the proxy and its password.
   'agent_browser_available',
   'agent_browser_retry',
   'agent_browser_settings',
   'agent_browser_settings_save',
   'agent_browser_proxy_test',
+  // Start, Stop and the window's size (applicationFrames.ts `MACHINE_REQUESTS`): unsealed, the machine answers
+  // E2EE_REQUIRED.
+  'agent_browser_start',
+  'agent_browser_stop',
+  'agent_browser_window',
   // Its stream's control (applicationFrames.ts `AGENT_BROWSER_DOWN_TYPES`).
   'agent_browser_open',
   'agent_browser_ack',
@@ -89,7 +90,7 @@ const Set<String> encryptedDownTypes = {
   'git_project_info',
   // The harness's branch and pull-request history is a machine RPC too (applicationFrames.ts
   // `MACHINE_REQUESTS`): unsealed, the machine answers E2EE_REQUIRED.
-  'git_pull_request', 'git_pull_requests_status',
+  'git_pull_request',
   // Memories across machines (CLI services/memory.ts).
   'memory_snapshot',
   'memory_about_put',

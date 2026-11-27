@@ -19,7 +19,7 @@ class HarnessCommand {
     this.context = KeymapContext.workspace,
     this.repeatable = false,
     this.hidden = false,
-    this.daemon = false,
+    this.gate,
   });
   final String id, label;
   final ShortcutGroup group;
@@ -29,13 +29,6 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
-    // The Swarm chat's own letter is Cmd's on a Mac and Ctrl's elsewhere,
-    // as in a browser: no terminal is there to take Ctrl.
-    if (id == 'swarm.find_in_chat') {
-      return [
-        defaultTargetPlatform == TargetPlatform.macOS ? 'cmd+f' : 'ctrl+f',
-      ];
-    }
     // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
     // Use the companion chord already used by the other Alt-prefix platform.
     if (kIsWeb && id == 'app.daemon_talk') return const ['alt+shift+a'];
@@ -76,9 +69,23 @@ class HarnessCommand {
   /// Review commands still use the shared keymap, but stay out of normal help.
   final bool hidden;
 
-  /// One of the daemon's (daemons/README.md): it exists only while this
-  /// window has daemons ([daemonCommandsActive]).
-  final bool daemon;
+  /// What it exists only while: null for always.
+  final CommandGate? gate;
+}
+
+/// The switches a command can exist behind. Off, a gated command is not bound at all: its keys reach
+/// the pane as they did before it existed, and it is in no list, no help and no native keymap.
+enum CommandGate {
+  /// The daemon's (daemons/README.md), while this window has daemons ([daemonCommandsActive]).
+  daemons,
+
+  /// Hachi's (docs/design/2026-11-12-hachi.md), while the account's switch is on ([hachiCommandsActive]).
+  hachi;
+
+  ValueNotifier<bool> get active => switch (this) {
+    daemons => daemonCommandsActive,
+    hachi => hachiCommandsActive,
+  };
 }
 
 /// Whether the daemon's commands exist in this window: only while daemons are
@@ -86,6 +93,10 @@ class HarnessCommand {
 /// their keys (⌘⌥T) reach the pane as they did before daemons existed, and
 /// they are in no list, no help and no native keymap. The workspace sets it.
 final daemonCommandsActive = ValueNotifier<bool>(false);
+
+/// Whether Hachi's commands exist in this window: only while the account's `hachi` switch is on. The
+/// workspace sets it.
+final hachiCommandsActive = ValueNotifier<bool>(false);
 
 /// What a person looking for Agent Messages may type, older names included.
 const _agentMessagesKeywords = [
@@ -114,7 +125,7 @@ const _sharedTabKeywords = [
 
 /// Whether [id] is a command this window has now.
 bool harnessCommandActive(String id) =>
-    harnessCommandById[id]?.daemon != true || daemonCommandsActive.value;
+    harnessCommandById[id]?.gate?.active.value ?? true;
 
 final _workspaceKeysByPlatform =
     <TargetPlatform, Map<ShortcutAction, List<String>>>{};
@@ -225,36 +236,6 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.showAttention,
     nativeAction: 'notifications',
-  ),
-  // Slack's next and previous unread chat, in the sidebar's order. Only the
-  // Swarm chat has them: in a pane, Alt+Shift+arrows still move it where Alt
-  // is the workspace key (Linux, the web, Windows).
-  const HarnessCommand(
-    'swarm.next_unread',
-    'Next unread chat',
-    ShortcutGroup.navigate,
-    extraKeys: ['alt+shift+down'],
-    context: KeymapContext.swarmChat,
-    keywords: ['unread', 'chat', 'Swarm', 'Slack'],
-    repeatable: true,
-  ),
-  const HarnessCommand(
-    'swarm.previous_unread',
-    'Previous unread chat',
-    ShortcutGroup.navigate,
-    extraKeys: ['alt+shift+up'],
-    context: KeymapContext.swarmChat,
-    keywords: ['unread', 'chat', 'Swarm', 'Slack'],
-    repeatable: true,
-  ),
-  // Find in the open chat or thread (task #2826). A focused terminal keeps
-  // the same key for its own find.
-  const HarnessCommand(
-    'swarm.find_in_chat',
-    'Find in chat',
-    ShortcutGroup.navigate,
-    context: KeymapContext.swarmChat,
-    keywords: ['find', 'search', 'chat', 'Swarm'],
   ),
   for (var i = 1; i <= 9; i++)
     HarnessCommand(
@@ -466,6 +447,13 @@ final harnessCommands = <HarnessCommand>[
     'Toggle Viewer',
     ShortcutGroup.panes,
     nativeAction: 'toggleViewer',
+  ),
+  // The focused agent's own Chrome, beside its terminal (lib/browser/).
+  const HarnessCommand(
+    'pane.toggle_browser',
+    'Toggle Browser',
+    ShortcutGroup.panes,
+    keywords: ['chrome', 'web', 'agent browser'],
   ),
   const HarnessCommand(
     'pane.toggle_composer',
@@ -685,7 +673,7 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     keywords: ['hatch', 'egg', 'zoo', 'pair', 'nap', 'buddy', 'companion'],
     nativeAction: 'daemon',
-    daemon: true,
+    gate: CommandGate.daemons,
   ),
   // ⌘⌥Space is macOS's Finder search; ⌘⌥ plus y, n, s or g answers the
   // daemon's line. T for talk.
@@ -695,7 +683,16 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     extraKeys: ['cmd+alt+t'],
     keywords: ['ask', 'pair', 'daemon', 'chat', 'autonomy', 'lessons'],
-    daemon: true,
+    gate: CommandGate.daemons,
+  ),
+  // H for Hachi. Off, ⇧⌘H is not bound, so a person's own binding on it still works.
+  const HarnessCommand(
+    'hachi.open',
+    'Open Hachi',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+shift+h'],
+    keywords: ['hachi', 'goal', 'chief of staff', 'ask'],
+    gate: CommandGate.hachi,
   ),
   const HarnessCommand(
     'app.settings',
@@ -745,13 +742,6 @@ final harnessCommands = <HarnessCommand>[
     'Pause quick start',
     ShortcutGroup.actions,
     keywords: ['hide guide', 'dismiss tutorial'],
-  ),
-  const HarnessCommand(
-    'super_tab.new',
-    'New Swarm',
-    ShortcutGroup.actions,
-    extraKeys: ['cmd+s'],
-    hidden: true,
   ),
   if (kDebugSurfaceEnabled)
     const HarnessCommand(

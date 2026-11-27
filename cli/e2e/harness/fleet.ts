@@ -88,12 +88,6 @@ export async function writeE2ee(daemon: IsolatedDaemon, files: Record<string, un
 /** A daemon for one machine of the account, signed in to the fake backend and nothing else. */
 export async function signedInDaemon(backend: FakeBackend, spec: FakeMachine, env: Record<string, string> = {}, scriptPath?: string, trustPrompt?: boolean): Promise<IsolatedDaemon> {
   const daemon = await IsolatedDaemon.create({ ...(scriptPath ? { scriptPath } : {}), ...(trustPrompt ? { trustPrompt } : {}), env: { ...remoteSettings(backend), ADAPTER_COMPUTER_ID: spec.computerId, ...env } })
-  // The daemon inherits the runner's environment, where a registry or a proxy may be named. None of
-  // them is anywhere a fleet daemon may go.
-  for (const [key, value] of Object.entries(daemon.env)) {
-    const host = serverHost(value)
-    if (host && !loopback(host)) delete daemon.env[key]
-  }
   assertLocalOnly(daemon.env, backend)
   await signIn(daemon, spec)
   return daemon

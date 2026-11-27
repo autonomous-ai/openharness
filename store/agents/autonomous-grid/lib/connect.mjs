@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { ASLEEP_CODE, atomicJson, gridJson, gridSelect, NO_WAKE, now, readConfig, readJson, stateDir, text, validateConfig } from './fleet.mjs';
 import { discoverMachines } from './harness.mjs';
+import { harnessRoots } from './localDaemon.mjs';
 
 /** The email `grid login` recorded in the credential store, or null. `GRID_HOME` is honoured the way grid honours it. */
 export async function signedInEmail(env = process.env) {
@@ -32,7 +33,7 @@ export function pickPrivateGrid(email, rows) {
 }
 
 export function defaultsPath(env = process.env) {
-  const path = env.GRID_FLEET_DEFAULTS || join(homedir(), '.harness', 'grid-fleet', 'default.json');
+  const path = env.GRID_FLEET_DEFAULTS || join(harnessRoots(env).data, 'grid-fleet', 'default.json');
   if (!isAbsolute(path)) throw new Error('GRID_FLEET_DEFAULTS must be an absolute path.');
   return path;
 }

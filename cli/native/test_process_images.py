@@ -14,6 +14,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'native/darwin-process-images.c'
+DEV_WATCH_SOURCE = ROOT / 'native/darwin-dev-watch.c'
 BUILDER = ROOT / 'scripts/build-process-images.py'
 STUB = r'''
 #include <errno.h>
@@ -184,6 +185,19 @@ class ProcessImagesTest(unittest.TestCase):
         self.assertEqual(sorted(command(['/usr/bin/lipo', str(self.probe), '-archs']).stdout.split()),
                          [b'arm64', b'x86_64'])
         command(['/usr/bin/codesign', '--verify', '--strict', '--all-architectures', str(self.probe)])
+
+    def test_dev_watch_artifact_is_universal_signed_and_pinned_to_its_source(self):
+        entry = self.artifact['devWatch']
+        data = base64.b64decode(entry['base64'], validate=True)
+        self.assertEqual(entry['sha256'], hashlib.sha256(data).hexdigest())
+        self.assertEqual(entry['size'], len(data))
+        self.assertEqual(entry['sourceSha256'], hashlib.sha256(DEV_WATCH_SOURCE.read_bytes()).hexdigest())
+        watch = self.root / 'dev-watch'
+        watch.write_bytes(data)
+        watch.chmod(0o700)
+        self.assertEqual(sorted(command(['/usr/bin/lipo', str(watch), '-archs']).stdout.split()),
+                         [b'arm64', b'x86_64'])
+        command(['/usr/bin/codesign', '--verify', '--strict', '--all-architectures', str(watch)])
 
     def test_invalid_arguments_are_rejected_before_output(self):
         for argv in [[], ['--paths'], ['--table', '7'], ['--paths', '7', 'bad'],

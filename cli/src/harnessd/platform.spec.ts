@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import {
   COMMAND_TIMEOUT_MS, LAUNCHD_LABEL, OS_SYSTEMD_UNIT, OS_UNIT_FILE, PLATFORM_ENV, PLATFORM_LABEL, PlatformService, RESTART_THROTTLE_S, STOP_TIMEOUT_S, SYSTEMD_UNIT,
-  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, taskName, taskSchedulerXml, whoamiSid,
+  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, systemRoot, taskName, taskSchedulerXml, whoamiSid,
   type CommandResult, type PlatformDeps, type ServiceDefinition,
 } from './platform.js'
 
@@ -188,6 +188,44 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(missing.stdout).toBe('')
     expect(missing.error).toMatch(/ENOENT/)
     expect(COMMAND_TIMEOUT_MS).toBeGreaterThan(STOP_TIMEOUT_S * 1000)
+  })
+
+  // Windows looks for a bare name in the folder `harness service install` runs in before PATH.
+  it("run Windows' own schtasks and whoami from System32 on Windows, never from the PATH", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      // Windows' own folder, as the file system names it: SystemRoot and windir are whoever runs the command's.
+      const deps = defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: 'D:\\Elsewhere', windir: 'D:\\Elsewhere' }, uid: 501, home: join(dir, 'home') })
+      const schtasks = deps.run('schtasks', ['/Query']).error
+      expect(schtasks).not.toContain('Elsewhere')
+      expect(schtasks).toContain(`${systemRoot()}\\System32\\schtasks.exe`)
+      expect(deps.run('whoami', ['/user']).error).toContain(`${systemRoot()}\\System32\\whoami.exe`)
+      expect(fake.calls()).toEqual([])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
+  it('find Windows\' own folder where \\\\?\\GLOBALROOT\\SystemRoot leads, asked of the file system', () => {
+    const asked: string[] = []
+    expect(systemRoot((path) => { asked.push(path); return 'D:\\Windows' })).toBe('D:\\Windows')
+    expect(asked).toEqual(['\\\\?\\GLOBALROOT\\SystemRoot'])
+  })
+
+  it('take C:\\Windows when that is no drive\'s folder cmd.exe reads as itself', () => {
+    expect(systemRoot(() => { throw new Error('ENOENT') })).toBe('C:\\Windows')
+    for (const name of ['\\\\server\\share\\Windows', '\\\\?\\GLOBALROOT\\Device\\X', 'D:\\Win%OS%', 'D:\\a!b', 'D:\\a&b', 'D:\\a"b']) {
+      expect(systemRoot(() => name), name).toBe('C:\\Windows')
+    }
+  })
+
+  it('run a command with its output unread when asked, its exit status and what it said on stderr kept', () => {
+    const deps = defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home: join(dir, 'home') })
+    expect(deps.run('launchctl', ['print', 'gui/501'], { stdout: 'ignore' })).toEqual({ status: 0, stdout: '', stderr: '' })
+    fake.set({ guiDomain: false })
+    expect(deps.run('launchctl', ['print', 'gui/501'], { stdout: 'ignore' }))
+      .toEqual({ status: 113, stdout: '', stderr: 'Could not find domain for port identifier: gui/501\n' })
   })
 
   it('write whole, into a folder they make, readable by launchd and by nobody else to write', () => {
@@ -506,6 +544,22 @@ describe('discarding a definition that could not be registered', () => {
 })
 
 describe('reading what the platform says', () => {
+  // A domain's or a job's listing holds launchd's environment, what a person set with `launchctl setenv` among it.
+  it('asks launchd whether it has the domain and the job by exit status alone, its listing unread', () => {
+    const read: string[] = []
+    const { deps } = stubDeps({}, {}, {
+      run: (command, args, options) => {
+        if (options?.stdout !== 'ignore') read.push([command, ...args].join(' '))
+        return ok(command === 'launchctl' && args[0] === 'print' ? 'gui/501 = {\n\tenvironment = {\n\t}\n}\n' : '')
+      },
+    })
+    const service = new PlatformService('launchd', deps)
+    expect(service.preflight()).toEqual({ ok: true })
+    expect(service.start(false)).toEqual({ ok: true })
+    expect(service.stop()).toEqual({ ok: true })
+    expect(read).toEqual([`launchctl kickstart gui/501/${LAUNCHD_LABEL}`, `launchctl bootout gui/501/${LAUNCHD_LABEL}`])
+  })
+
   it('takes launchd\'s listing as it comes: no state, no pid, no last exit', () => {
     const { deps } = stubDeps({ 'launchctl print': ok('gui/501/x = {\n\tactive count = 0\n}\n') })
     expect(new PlatformService('launchd', deps).inspect()).toMatchObject({ registered: true, pid: null, state: null, lastExit: null })
@@ -804,12 +858,15 @@ describe('PlatformService over schtasks', () => {
     expect(discarded.calls).toEqual([])
   })
 
-  it('cannot render a task without a launcher, and takes this process\'s user and the home\'s data folder by default', () => {
+  it('a Task Scheduler service needs its data folder', () => {
+    expect(() => new PlatformService('taskscheduler', stubDeps({ whoami: ok(WHOAMI) }).deps)).toThrow('Task Scheduler needs the daemon\'s data folder')
+  })
+
+  it('cannot render a task without a launcher, and takes this process\'s user by default', () => {
     const { service } = make()
     expect(() => service.render({ ...definition(), launcherPath: undefined })).toThrow(/must be absolute/)
-    const stub = stubDeps({ whoami: ok(WHOAMI) })
+    const stub = stubDeps({ whoami: ok(WHOAMI) }, {}, { dataDir: data })
     const plain = new PlatformService('taskscheduler', stub.deps)
-    expect(plain.file).toBe(join('/Users/demo', '.harness', 'cli', 'data', 'harnessd-task.xml'))
     // No user given: the name is this process's user's; the XML names the user by the SID whoami gives.
     expect(plain.target).toBe(taskName(userInfo().username))
     expect(plain.render(definition())).toContain('<TimeTrigger>')

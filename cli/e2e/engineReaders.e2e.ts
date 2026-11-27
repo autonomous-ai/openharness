@@ -54,6 +54,24 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(d.coresStarted()).toBe(1)
   })
 
+  // #4146: before a resume, the `claude agents --json` that finds a `claude --bg` job holding the session is run by Claude
+  // Code's worker, never by the core; only explicit inline mode runs it in the core.
+  it.each([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]] as const)(
+    'asks whether a background job holds a Claude Code session it resumes from %s', async (_where, env) => {
+      const { d, c } = await fresh(env)
+      const agent = await create(d, c, 'claude')
+      await turn(c, agent, 'before-the-stop')
+      const stopped = await c.request('agent_delete', { agentId: agent.id }, 60_000)
+      expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
+      await until('the agent to stop', async () => (await c.request('agents_list', { includeStopped: true })).agents.find((row: { id: string; status: string }) =>
+        row.id === agent.id)?.status === 'stopped' || null, 45_000, 500)
+      const resumed = await c.request('agent_resume', { agentId: agent.id }, 90_000)
+      expect(resumed.error, JSON.stringify(resumed)).toBeUndefined()
+      const askers = readFileSync(join(d.engineConfig.root, 'background-job-queries'), 'utf8').trim().split('\n').map(Number)
+      expect(askers).toEqual([env.HARNESSD_SERVICES ? d.corePid() : readerPid(d, 'claude')])
+      await turn(c, agent, 'after-the-resume')
+    })
+
   it('starts no reader for an empty core, reads pages and recap text on demand, and keeps private requests off the client router', async () => {
     const { d, c } = await fresh()
     expect(readerPid(d, 'claude')).toBeUndefined()

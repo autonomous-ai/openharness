@@ -89,7 +89,9 @@ void main() {
   }) => setup
       .ensureReady(onProgress: onProgress ?? (_) {}, install: false)
       .then<EnvironmentReadiness?>((value) => value)
-      .timeout(const Duration(milliseconds: 300), onTimeout: () => null);
+      // Only a guard against a hang (a null result fails "Checking must stop waiting"): the provisioner's own 20 ms
+      // probe timeouts are what is tested. 300 ms raced the probes' kills and restarts on a busy CI runner.
+      .timeout(const Duration(seconds: 5), onTimeout: () => null);
 
   for (final stalled in ['shell', 'tmux', 'node', 'cli']) {
     test('$stalled timeout is a failed check, and Retry can recover', () async {

@@ -1,0 +1,9 @@
+{
+  "name": "harness-device-gate-driver",
+  "displayName": "Harness Device gate driver",
+  "description": "The gate's hands inside a throwaway VS Code: it makes terminals and says their shells' pids.",
+  "version": "0.0.0",
+  "publisher": "autonomous-ai",
+  "private": true,
+  "engines": { "vscode": "^1.75.0" }
+}

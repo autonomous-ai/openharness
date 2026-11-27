@@ -16,7 +16,7 @@
  * window's own engines with their small model (Claude's `haiku`, Codex at low effort).
  */
 import { execFile } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
@@ -24,8 +24,10 @@ import { parseOpencodeModelsOutput } from '../engines/opencode/runtimeProfile.js
 import { isTerminalEngine } from '../engines/types.js'
 import { isAutomaticName } from '../lib/agentNames.js'
 import type { OneShotEngine } from '../lib/disposableOneShotPool.js'
-import { opencodeBin } from '../lib/engineBin.js'
+import { opencodeBinAsync } from '../lib/engineBin.js'
+import { errorKind } from '../lib/log.js'
 import { runRouterOneShot } from '../lib/oneshot.js'
+import { atomicWriteFile, jsonArray, readState } from '../lib/secureState.js'
 import { describeScmProject } from '../scm/scmProjects.js'
 import { internalOnThrow } from './requestErrors.js'
 
@@ -121,7 +123,7 @@ const run = promisify(execFile)
  * (none named here; OpenCode not installed, none), then each of the window's engines that can answer once,
  * with its small model — Claude's `haiku`, Codex at low effort, the others as they are set.
  */
-export async function defaultNamers(engines: readonly string[], list: () => Promise<string> = async () => (await run(opencodeBin(), ['models'], { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout): Promise<Namer[]> {
+export async function defaultNamers(engines: readonly string[], list: () => Promise<string> = async () => (await run(await opencodeBinAsync(), ['models'], { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout): Promise<Namer[]> {
   const free = await list().then((out) => parseOpencodeModelsOutput(out).map((m) => m.id).filter((id) => /-free$/.test(id)), () => [])
   const own: Namer[] = engines.flatMap((engine): Namer[] => engine === 'claude' ? [{ engine: 'claude', model: 'haiku', effort: 'low' }]
     : engine === 'codex' ? [{ engine: 'codex', effort: 'low' }]
@@ -147,19 +149,19 @@ export function startWindowNames(core: CoreApi, deps: WindowNamesDeps = {}): Ser
   const failed = new Map<string, number>()
   let naming: string | null = null
 
-  try {
-    const rows: unknown = JSON.parse(readFileSync(file, 'utf8'))
-    if (Array.isArray(rows)) for (const row of rows) if (Array.isArray(row) && typeof row[0] === 'string' && typeof row[1] === 'string') names.set(row[0], row[1])
-  } catch { /* none kept yet */ }
+  // A file that could not be read now (EACCES, EMFILE) may hold every name: this run keeps its names in memory alone.
+  const saved = readState(file, 'cache', jsonArray)
+  const unread = saved.state === 'unreadable'
+  if (saved.state === 'ok') for (const row of saved.value) if (Array.isArray(row) && typeof row[0] === 'string' && typeof row[1] === 'string') names.set(row[0], row[1])
 
   const keep = (key: string, name: string): void => {
     names.delete(key)
     names.set(key, name)
     for (const old of names.keys()) { if (names.size <= KEEP) break; names.delete(old) }
+    if (unread) return
     try {
-      writeFileSync(`${file}.tmp`, JSON.stringify([...names]))
-      renameSync(`${file}.tmp`, file)
-    } catch (error) { console.error('[window-names] could not keep the names:', String(error)) }
+      atomicWriteFile(file, JSON.stringify([...names]), 'cache')
+    } catch (error) { console.error('[window-names] could not keep the names:', errorKind(error)) }
   }
 
   /** The first valid name a small model gives the window; null when none does. */

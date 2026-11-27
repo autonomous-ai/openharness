@@ -1,0 +1,35 @@
+#!/usr/bin/env node
+const args = process.argv.slice(2)
+const out = (text) => process.stdout.write(`${text}\n`)
+const err = (text) => process.stderr.write(`${text}\n`)
+
+if (args.includes('--version')) {
+  out('gpg (GnuPG) 2.4.5\nlibgcrypt 1.10.3')
+  process.exit(0)
+}
+if (args.includes('--card-status')) {
+  out('Reader ...........: Yubico YubiKey OTP FIDO CCID')
+  out('Application type .: OpenPGP')
+  out('Serial number ....: 18342291')
+  out('Signature key ....: 3F9A 1C7E 52D8 B604 9E1D  7A55 C2B8 F0E4 613D 9A27')
+  out('General key info..: sec>  ed25519/C2B8F0E4613D9A27 2025-03-02 Mira Holt <mira@quayside.invalid>')
+  process.exit(0)
+}
+if (args.includes('-K') || args.includes('--list-secret-keys')) {
+  out('sec>  ed25519 2025-03-02 [SC]')
+  out('      3F9A1C7E52D8B6049E1D7A55C2B8F0E4613D9A27')
+  out('      Card serial no. = 0006 18342291')
+  out('uid           [ultimate] Mira Holt <mira@quayside.invalid>')
+  process.exit(0)
+}
+if (args.some((a) => /^-[^-]*s/.test(a) || ['--sign', '--detach-sign', '--clearsign'].includes(a))) {
+  err('gpg: using "C2B8F0E4613D9A27" as default secret key for signing')
+  err('gpg: touch your security key to sign')
+  setTimeout(() => {
+    err('gpg: signing failed: Timeout')
+    process.exit(2)
+  }, 1_500)
+} else {
+  err('usage: gpg [options] [files]')
+  process.exit(2)
+}

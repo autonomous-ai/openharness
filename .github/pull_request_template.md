@@ -12,24 +12,13 @@ For a visual change, include a screenshot or short recording.
 List the checks you ran, the engine and operating system you used, and any known limitations.
 For a harness, include `harness dsh check` and a real run of the example above.
 
-For paths requiring local checks, the CI plan lists the check names. Run
-`python3 scripts/local-checks.py --list PATH...` for their commands and working
-directories. After testing the final commit, put its receipts in one JSON fence
-like this **before pushing that commit or marking the PR ready**. Replace the
-example with actual results; omit the fence when no local check is required.
-Body edits alone do not start another CI run. These are attestations of successful
-complete checks, not a way to waive failures. Native checks require `macos`.
-
-```harness-local-checks
-[
-  {"check":"cli-core","command":"npm run test:core","cwd":"cli","head":"FULL_40_CHARACTER_TESTED_HEAD","status":"passed","passed":123,"platform":"macos"}
-]
-```
-
-Use a positive test count; zero, failed, stale-head and wrong-platform receipts
-cannot satisfy the gate. Coverage commands may add ` -- --maxWorkers=2` to cap
-resources, and `make desktop-test` may add `ARGS="--timeout 3600 --workers 4"`
-(budget and workers only). Do not include logs, personal paths or environment values.
+For paths requiring local checks, the CI plan lists the check names. After
+testing the final commit, run `python3 scripts/local-checks.py --run` from a
+clean tree and paste its output into this body **before pushing that commit or
+marking the PR ready**. It runs each required check on that commit and prints
+their receipts, or nothing when no local check is required. Body edits alone do
+not start another CI run. These are attestations of successful complete checks,
+not a way to waive failures. Native checks require `macos`.
 
 Record the tested commit/tree (or dirty-source fingerprint), check scope, and result links.
 When reusing CI or baseline evidence, link it and explain why it still covers this diff.

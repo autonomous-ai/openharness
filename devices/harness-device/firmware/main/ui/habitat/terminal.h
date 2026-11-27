@@ -234,8 +234,8 @@ void ht_arc_title_face(ht_scene_t *scene, uint16_t fg, const char *text, const h
 // The lower arc, in GeistMono; ht_arc_status_face takes any face, like ht_arc_title_face.
 void ht_arc_status(ht_scene_t *scene, uint16_t fg, const char *text);
 void ht_arc_status_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);
-// A smaller label on a tighter curve under the upper arc: a Swarm face's chat name under its project (design
-// 2026-10-28-round-dial-swarm-chat). Proportional faces only (a mono face draws nothing), fitted to a shorter span with
+// A smaller label on a tighter curve under the upper arc: the face's grey line under the name, in the machine view the
+// app an agent runs in (design 2026-10-28). Proportional faces only (a mono face draws nothing), fitted to a shorter span with
 // "…". Its mask cache is its own, in PSRAM on the board, and made only the first time such a label is drawn, so a dial
 // that never shows one spends nothing on it; the upper and lower arcs and their caches are as before.
 void ht_arc_inner_face(ht_scene_t *scene, uint16_t fg, const char *text, const ht_arc_face_t *face);

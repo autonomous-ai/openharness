@@ -1,10 +1,11 @@
+import { EventEmitter } from 'node:events'
 import type { Socket } from 'node:net'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import type { Frame, LocalClientSink } from './backendSocket.js'
-import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
+import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, rejectUpgrade, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { listenLocalSocket } from './lib/localSocket.js'
 import { RelayConnectError } from './lib/relayFrames.js'
@@ -26,12 +27,14 @@ class FakeBackend implements LocalWsBackend {
   focuses: Array<[string, string | null]> = []
   tools: string[] = []
   surfaces: Array<string | undefined> = []
+  watches: Array<readonly string[] | undefined> = []
 
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: 'tui' } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[] } = {}): boolean {
     this.connId = connId
     this.sink = sink
     if (opts.tool) this.tools.push(connId)
     this.surfaces.push(opts.surface)
+    this.watches.push(opts.watch)
     return true
   }
   async unregisterLocalClient(connId: string): Promise<void> {
@@ -124,6 +127,87 @@ describe('local CLI WebSocket', () => {
       ws.close()
       await local!.close()
       local = null
+    }
+  })
+
+  it('tells a tool what this daemon can do, and a window nothing new', async () => {
+    for (const tool of [true, false]) {
+      const ws = new WebSocket(await start(new FakeBackend()))
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...(tool ? { tool } : {}) } }))
+      const frame = await connected
+      expect(frame.type).toBe('connected')
+      if (tool) expect(frame.payload).toMatchObject({ features: ['openclaw-local', 'dial-watch'] })
+      else expect(frame.payload).not.toHaveProperty('features')
+      ws.close()
+      await local!.close()
+      local = null
+    }
+  })
+
+  /** Every frame a client is sent up to a marker behind all its select set off, so an absence needs no wait.
+   *  Called in the turn its select is sent, before any reply can arrive. */
+  async function after(ws: WebSocket, backend: FakeBackend): Promise<Frame[]> {
+    const frames: Frame[] = []
+    const marked = new Promise<Frame[]>((resolve) => ws.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString()) as Frame
+      frames.push(frame)
+      if (frame.type === 'marker') resolve(frames)
+    }))
+    // A connection's frames are handled in order: this one reaching the backend means the select was handled.
+    const handled = { type: 'agents_list', payload: { requestId: randomBytes(8).toString('hex') } }
+    ws.send(JSON.stringify(handled))
+    await vi.waitFor(() => expect(backend.frames).toContainEqual(handled))
+    expect(local!.sendToWindow(backend.connId!, { type: 'marker', payload: {} })).toBe(true)
+    return marked
+  }
+
+  async function selectHere(url: string, backend: FakeBackend, fields: Record<string, unknown>): Promise<Frame[]> {
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...fields } }))
+    const frames = await after(ws, backend)
+    ws.close()
+    return frames
+  }
+
+  it('sends the last dial status to a window and to a tool that asked for the dial', async () => {
+    const backend = new FakeBackend()
+    const url = await start(backend, { dialStatus: () => ({ attached: true, fw: '0.0.95' }) })
+    for (const fields of [{}, { tool: true, watch: ['dial'] }]) {
+      const frames = await selectHere(url, backend, fields)
+      expect(frames.map((frame) => frame.type)).toEqual(['connected', 'dial_status', 'marker'])
+      expect(frames[1].payload).toEqual({ attached: true, fw: '0.0.95' })
+    }
+    expect(backend.watches).toEqual([undefined, ['dial']])
+  })
+
+  it('sends a tool that did not ask no dial status', async () => {
+    const backend = new FakeBackend()
+    const url = await start(backend, { dialStatus: () => ({ attached: true, fw: '0.0.95' }) })
+    expect((await selectHere(url, backend, { tool: true })).map((frame) => frame.type)).toEqual(['connected', 'marker'])
+    expect(backend.watches).toEqual([[]])
+  })
+
+  it('reads watch from a tool only, and only names it knows', async () => {
+    const backend = new FakeBackend()
+    const url = await start(backend, { dialStatus: () => ({ attached: false }) })
+    const told = ['connected', 'dial_status', 'marker'], untold = ['connected', 'marker']
+    const cases: Array<[Record<string, unknown>, readonly string[] | undefined, string[]]> = [
+      [{ tool: true, watch: 'dial' }, [], untold],
+      [{ tool: true, watch: ['agents', 7, null] }, [], untold],
+      [{ tool: true, watch: {} }, [], untold],
+      [{ tool: true, watch: ['agents', 'dial', 'dial'] }, ['dial'], told],
+      // A window is sent the dial whatever it asks, and stays a window: its watch is never read.
+      [{ watch: ['dial'] }, undefined, told],
+      // `harness tui` selects without `tool: true`: a window.
+      [{ client: 'tui' }, undefined, told],
+    ]
+    for (const [fields, watch, types] of cases) {
+      expect((await selectHere(url, backend, fields)).map((frame) => frame.type)).toEqual(types)
+      expect(backend.watches.at(-1)).toEqual(watch)
+      expect(backend.tools.includes(backend.connId!)).toBe(fields.tool === true)
     }
   })
 
@@ -253,6 +337,22 @@ describe('local CLI WebSocket', () => {
     release(true)
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(ws.readyState).not.toBe(WebSocket.OPEN)
+  })
+
+  it('a refused upgrade\'s client that resets raises nothing', () => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: false, end: vi.fn() })
+    rejectUpgrade(socket as unknown as Socket, 403, 'Forbidden')
+    expect(socket.end).toHaveBeenCalled()
+    expect(() => socket.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))).not.toThrow()
+  })
+
+  it('the caller lookup\'s refusal keeps a listener on the socket', async () => {
+    let held: Socket | undefined
+    const url = await start(new FakeBackend(), { localCredential: 'c'.repeat(43), peerAccount: async (socket) => { held = socket; return false } })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': 'c'.repeat(43) } })
+    ws.on('error', () => {})
+    expect(await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
+    expect(held!.listenerCount('error')).toBeGreaterThan(0)
   })
 
   it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {
@@ -488,16 +588,10 @@ describe('local CLI WebSocket', () => {
     const held = async () => { trace.push('route started'); entered.resolve(); await pending.promise; trace.push('route answered') }
     backend.handleLocalFrame = () => { trace.push('next') }
     const ws = new WebSocket(await start(backend, {
-      async onRouteTask(this: LocalWsServerOptions) {
-        expect(this.machineId).toBe(machineId)
-        await held()
-        return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
-      },
-      async onRouteSend(this: LocalWsServerOptions) {
-        expect(this.machineId).toBe(machineId)
-        await held()
-        return { ok: true as const }
-      },
+      serviceFrames: new Map([[type, (_connId, frame) => held().then(() => ({
+        type: type === 'route_task' ? 'route_result' : 'route_send_result',
+        payload: { requestId: (frame.payload as { requestId?: unknown }).requestId },
+      }))]]),
     }))
     await onceOpen(ws)
     const connected = onceMessage(ws)
@@ -786,7 +880,9 @@ describe('local CLI WebSocket', () => {
     expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
   })
 
-  it('keeps a Swarm tab\'s superTabId and projectId when they are ids, and the fromDevice mark; drops them otherwise', async () => {
+  // The Swarm was deleted on 2026-11-14. A window from before still names each tab's Super Tab, project, open conversation
+  // and thread, and marks a desk a device chose: none of it reaches the dial.
+  it('app_swarms keeps a tab\'s id, name, agents and panes, and drops what an older window says of the Swarm', async () => {
     const backend = new FakeBackend()
     const seen: unknown[] = []
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
@@ -797,78 +893,11 @@ describe('local CLI WebSocket', () => {
     const connected = onceMessage(ws)
     ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
     await connected
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: {
-      active: 's1', fromDevice: true,
-      swarms: [
-        { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1' },
-        { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'no spaces', projectId: 7 },
-        { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'x'.repeat(48), projectId: 'y'.repeat(48) },
-      ],
-    } }))
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', fromDevice: 'yes', swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] } }))
-    await vi.waitFor(() => expect(seen).toHaveLength(2))
-    expect(seen).toEqual([
-      { active: 's1', fromDevice: true, tiles: [], swarms: [
-        { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1' },
-        { id: 's2', name: 'Bad', agentIds: [], panes: 1 },
-        { id: 's3', name: 'Long', agentIds: [], panes: 1 },
-      ] },
-      // Only a literal true marks it: anything else is an ordinary announce.
-      { active: 's1', tiles: [], swarms: [{ id: 's1', name: 'Swarm', agentIds: [], panes: 0, superTabId: 'st_1' }] },
-    ])
-    ws.close()
-  })
-
-  it('app_swarms keeps the open thread\'s root beside its conversation, and drops one that is not an id', async () => {
-    const backend = new FakeBackend()
-    const seen: unknown[] = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'no spaces' },
-      { id: 's3', name: 'Alone', agentIds: [], panes: 1, superTabId: 'st_1', threadRoot: 'm-1' },
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', fromDevice: true, swarms: [
+      { id: 's1', name: 'Team', agentIds: ['a1'], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1', threadRoot: 'm-1' },
     ] } }))
     await vi.waitFor(() => expect(seen).toHaveLength(1))
-    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1', threadRoot: 'm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'pm-1' },
-      // A thread is of a conversation: with none named, there is none.
-      { id: 's3', name: 'Alone', agentIds: [], panes: 1, superTabId: 'st_1' },
-    ] })
-    ws.close()
-  })
-
-  it('app_swarms keeps a Swarm tab\'s conversationId, and drops one that is not an id', async () => {
-    const backend = new FakeBackend()
-    const seen: unknown[] = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, { machineId, backend, onAppSwarms: (swarms) => seen.push(swarms) })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-    ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 's1', swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'no spaces' },
-      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 'c'.repeat(48) },
-      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1', conversationId: 7 },
-    ] } }))
-    await vi.waitFor(() => expect(seen).toHaveLength(1))
-    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [
-      { id: 's1', name: 'Swarm', agentIds: [], panes: 1, superTabId: 'st_1', projectId: 'p-1', conversationId: 'pm-1' },
-      { id: 's2', name: 'Bad', agentIds: [], panes: 1, superTabId: 'st_1' },
-      { id: 's3', name: 'Long', agentIds: [], panes: 1, superTabId: 'st_1' },
-      { id: 's4', name: 'Number', agentIds: [], panes: 1, superTabId: 'st_1' },
-    ] })
+    expect(seen[0]).toEqual({ active: 's1', tiles: [], swarms: [{ id: 's1', name: 'Team', agentIds: ['a1'], panes: 1 }] })
     ws.close()
   })
 
@@ -920,6 +949,32 @@ describe('local CLI WebSocket', () => {
       surviving.close()
       await vi.waitFor(() => expect(panes).toHaveBeenLastCalledWith([], false))
       expect(swarms).toHaveBeenLastCalledWith(null)
+    })
+  }
+
+  // A tool reaching another machine hears only its own replies and is no app there (OPENHARNES-13): its select takes a
+  // background pool of its own and tells the backend so with `relayIsolation`. A window keeps the shared pool.
+  for (const tool of [true, false]) {
+    it(`relays a ${tool ? 'tool' : 'window'}'s select for another machine on ${tool ? 'an isolated' : 'the shared'} pool`, async () => {
+      const sessionFor = async (_machine: string, _env: string, _select: unknown, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'remote' } })
+        return { send: async () => {}, sendBinary: async () => {}, detach: () => {} }
+      }
+      const pool = { acquire: vi.fn(sessionFor), acquireIsolated: vi.fn(sessionFor), invalidate: vi.fn(), invalidateIsolated: vi.fn() }
+      const url = await start(new FakeBackend(), { relayPool: pool as unknown as NonNullable<LocalWsServerOptions['relayPool']>, autonomousEnv: 'prod' })
+      const ws = new WebSocket(url)
+      await onceOpen(ws)
+      const ready = onceMessage(ws)
+      const select = { machineId: 'remote', localProtocolVersion: 1, forceReconnect: true, ...(tool ? { tool: true } : {}) }
+      ws.send(JSON.stringify({ type: 'machine_select', payload: select }))
+      await ready
+      const [used, unused] = tool ? [pool.acquireIsolated, pool.acquire] : [pool.acquire, pool.acquireIsolated]
+      expect(unused).not.toHaveBeenCalled()
+      expect(used).toHaveBeenCalledOnce()
+      expect(used.mock.calls[0]![2]).toEqual({ type: 'machine_select', payload: tool ? { ...select, relayIsolation: true } : select })
+      expect(tool ? pool.invalidateIsolated : pool.invalidate).toHaveBeenCalledWith('remote')
+      expect(tool ? pool.invalidate : pool.invalidateIsolated).not.toHaveBeenCalled()
+      ws.close()
     })
   }
 
@@ -1242,14 +1297,19 @@ describe('local CLI WebSocket', () => {
     }
   })
 
-  it('carries the window\'s answer about a spoken task, and keeps it off the wire', async () => {
+  it('hands a frame a service answers to it, sends back what it answers, and keeps the frame off the wire', async () => {
     const backend = new FakeBackend()
-    const replies: Array<{ voiceId: string; reply: unknown }> = []
+    const asked: Array<{ connId: string; frame: Frame }> = []
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
     local = attachLocalWsServer(server, {
       machineId,
       backend,
-      onVoiceRouteReply: (voiceId, reply) => replies.push({ voiceId, reply }),
+      // ⌘K's pick is answered; the window's answer to a spoken task is told, and nothing goes back; any other frame is
+      // no service's.
+      serviceFrames: new Map(['route_task', 'voice_route_reply'].map(type => [type, (connId: string, frame: Frame) => {
+        asked.push({ connId, frame })
+        return Promise.resolve(frame.type === 'route_task' ? { type: 'route_result', payload: { requestId: 'q-7', agentId: 'a1' } } : null)
+      }])),
     })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
@@ -1261,152 +1321,17 @@ describe('local CLI WebSocket', () => {
     await connected
 
     ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } }))
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'sent', agentId: 'a7' } }))
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v2', state: 'cancelled' } }))
-    // Neither of these is an answer: one names no request, the other a state this side cannot read.
-    // Guessing at either would settle a spoken turn on something nobody said.
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { state: 'sent', agentId: 'a9' } }))
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v3', state: 'maybe' } }))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-
-    expect(replies).toEqual([
-      { voiceId: 'v1', reply: { t: 'taken' } },
-      { voiceId: 'v1', reply: { t: 'sent', agentId: 'a7' } },
-      { voiceId: 'v2', reply: { t: 'cancelled' } },
-    ])
-    // It describes a hand at this desk. The machine has no use for it.
-    expect(backend.frames).toEqual([])
-    ws.close()
-  })
-
-  it('answers a routed task on the id it was asked with, and sends nothing', async () => {
-    const backend = new FakeBackend()
-    const asked: string[] = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteTask: async (text) => {
-        asked.push(text)
-        return {
-          agentId: 'a1', machineId: 'm-local', name: 'auth-api', confidence: 0.86, reason: 'name matches',
-          weighed: 4, machines: 2, via: 'model',
-          candidates: [{ agentId: 'a1', machineId: 'm-local', name: 'auth-api', machine: 'this computer', engine: 'claude', recent: 'token rotation', confidence: 0.86 }],
-        }
-      },
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
     const answered = onceMessage(ws)
     ws.send(JSON.stringify({ type: 'route_task', payload: { requestId: 'q-7', text: '  fix the retry  ' } }))
-    const reply = await answered   // onceMessage already parses
-    // The requestId comes back UNTOUCHED — it is the window's own rpc id, and the only thing tying this
-    // answer to the spinner it is holding open.
-    expect(reply.type).toBe('route_result')
-    expect(reply.payload).toMatchObject({ requestId: 'q-7', agentId: 'a1', machineId: 'm-local', name: 'auth-api', confidence: 0.86 })
-    expect(asked).toEqual(['fix the retry'])
-    // Asking is not sending. Nothing reached the machine.
-    expect(backend.frames.map((frame) => frame.type)).toEqual([])
-    ws.close()
-  })
-
-  it('still answers when there is nothing to answer with', async () => {
-    // The window holds a spinner on the id it asked with, so silence is the one reply it cannot recover
-    // from — an empty task and a router that throws must both come back as frames.
-    const backend = new FakeBackend()
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteTask: async () => { throw new Error('router unavailable') },
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
-    const blank = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_task', payload: { requestId: 'q-empty', text: '   ' } }))
-    expect((await blank).payload).toMatchObject({ requestId: 'q-empty', agentId: '', reason: 'empty task' })
-
-    const failed = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_task', payload: { requestId: 'q-throw', text: 'anything' } }))
-    expect((await failed).payload).toMatchObject({ requestId: 'q-throw', agentId: '', reason: 'router unavailable' })
-    ws.close()
-  })
-
-  it('delivers a committed route, and keeps the frame off the wire', async () => {
-    const backend = new FakeBackend()
-    const sent: Array<{ agentId: string; text: string }> = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteSend: async (agentId, text) => {
-        sent.push({ agentId, text })
-        return { ok: true as const }
-      },
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
-    const delivered = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_send', payload: { requestId: 's-1', agentId: 'a2', text: 'do the thing' } }))
-    expect((await delivered).payload).toMatchObject({ requestId: 's-1', ok: true })
-
-    // The half-formed one is dropped rather than delivered to whoever sorts first — and it is REFUSED
-    // out loud, because the window is waiting on this id either way.
-    const refused = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_send', payload: { requestId: 's-2', agentId: '', text: 'nobody' } }))
-    expect((await refused).payload).toMatchObject({ requestId: 's-2', ok: false })
-
-    expect(sent).toEqual([{ agentId: 'a2', text: 'do the thing' }])
-    expect(backend.frames.map((frame) => frame.type)).toEqual([])
-    ws.close()
-  })
-
-  it('says so when the agent could not be delivered to', async () => {
-    // The remote leg carries no ack of its own: a machine that has gone deaf takes the turn and nothing
-    // comes back. With the palette closing silently on a confident route, that is a task that vanishes
-    // without a mark anywhere — so the refusal has to travel.
-    const backend = new FakeBackend()
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteSend: async () => ({ ok: false as const, machine: 'mac-mini', reason: 'the last request to it did not come back' }),
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
-    const answered = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_send', payload: { requestId: 's-3', agentId: 'a9', text: 'work' } }))
-    expect((await answered).payload).toMatchObject({
-      requestId: 's-3', ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back',
-    })
+    expect(await answered).toEqual({ type: 'route_result', payload: { requestId: 'q-7', agentId: 'a1' } })
+    expect(asked.map(({ frame }) => frame)).toEqual([
+      { type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } },
+      { type: 'route_task', payload: { requestId: 'q-7', text: '  fix the retry  ' } },
+    ])
+    expect(asked[0].connId).toMatch(/^local:/)
+    // They describe a hand at this desk: the machine has no use for them. Any other frame goes on as ever.
+    ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'r-1' } }))
+    await vi.waitFor(() => expect(backend.frames.map((frame) => frame.type)).toEqual(['agents_list']))
     ws.close()
   })
 

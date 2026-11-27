@@ -68,7 +68,7 @@ describe the larger bet and its proposed sequence.
 
    SUPPORTING SERVICES
    +----------------------------------------------------+
-   | Backend: accounts, machine discovery, shared swarms |
+   | Backend: accounts, machine discovery, shared tabs   |
    | Relay: connection signaling + encrypted forwarding |
    | Store: domain packages, tools, skills, viewers      |
    +----------------------------------------------------+
@@ -104,11 +104,11 @@ administration, and desktop work includes quick decisions. Actual connection pat
 | Mobile | Remote access, focused interaction, and decisions while away from the desktop. |
 | Device | Desk status, questions, and voice input through the host. |
 | TUI, in development | Interactive access inside a terminal, using the same operations. |
-| Web, public preview | The shared desktop workspace of swarms and harnesses in a browser, including private read-only invitations; public session pages for discovery and acquisition follow separately. |
+| Web, public preview | The shared desktop workspace of tabs and harnesses in a browser, including private read-only invitations; public session pages for discovery and acquisition follow separately. |
 | Backend and relay | Identity, discovery, selected shared metadata, signaling, and encrypted forwarding. |
 | Domain packages | Instructions, skills, toolchain setup, project templates, checks, and viewers. |
 
-Window layouts belong to clients; account-level swarm membership is shared through the backend.
+Window layouts belong to clients; account-level tab membership is shared through the backend.
 Runtime truth belongs to the daemon owning the work. A question answered through one interface
 must resolve for the others. Closing an interface leaves execution running on an available host;
 it does not make a sleeping or disconnected host capable of continuing work elsewhere.

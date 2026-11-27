@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { removeLink } from '../../lib/removePath.js'
 
 const clock = vi.hoisted(() => ({ now: 0 }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => clock.now } }))
@@ -235,9 +236,9 @@ describe('exact resume uses complete native evidence', () => {
     symlinkSync(path('target-a'), path(engine))
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
     vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
-      rmSync(path(engine)); symlinkSync(path('target-b'), path(engine))
+      removeLink(path(engine)); symlinkSync(path('target-b'), path(engine))
       const handle = await actual.open(name, flags, mode)
-      rmSync(path(engine)); symlinkSync(path('target-a'), path(engine))
+      removeLink(path(engine)); symlinkSync(path('target-a'), path(engine))
       return handle
     })
     await expect(repair.findResumedTranscript(engine, ID, { cwd })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
@@ -278,9 +279,9 @@ describe('exact resume uses complete native evidence', () => {
     ;(await import('../../lib/engineHomes.js')).adoptHomes({ CLAUDE_CONFIG_DIR: path('moved') })
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
     vi.mocked(fs.opendir).mockImplementationOnce(async (name, options) => {
-      rmSync(alias); symlinkSync(target('target-b'), alias)
+      removeLink(alias); symlinkSync(target('target-b'), alias)
       const directory = await actual.opendir(name, options)
-      rmSync(alias); symlinkSync(target('target-a'), alias)
+      removeLink(alias); symlinkSync(target('target-a'), alias)
       return directory
     })
     await expect(repair.findResumedTranscript('claude', ID)).rejects.toThrow('alias changed during lookup')
@@ -302,7 +303,7 @@ describe('exact resume uses complete native evidence', () => {
       return { async *[Symbol.asyncIterator]() { yield* entries } } as never
     })
     vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
-      if (String(name) === second) { rmSync(alias); symlinkSync(kind === 'accepted' ? other : cwd, alias) }
+      if (String(name) === second) { removeLink(alias); symlinkSync(kind === 'accepted' ? other : cwd, alias) }
       return actual.open(name, flags, mode)
     })
     await expect(repair.findResumedTranscript('pi', ID, { cwd })).rejects.toThrow('workspace identity changed')

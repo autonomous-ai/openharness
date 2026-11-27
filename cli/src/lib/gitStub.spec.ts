@@ -1,15 +1,23 @@
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { repoState } from './agentHandoff.js'
 import { agentProject } from './agentProject.js'
 import { nameBranchAfterSession } from './branchNaming.js'
 import { insideGitCheckout } from './gitProject.js'
 import { readGitPullRequest } from './gitPullRequest.js'
 import { projectPreview } from './projectPreview.js'
-import type { RegisteredSession } from './registry.js'
 import { inspectWorkspace, inspectWorktree } from './worktreeDeletion.js'
+import { writeExecutable } from '../testing/executableFixture.js'
+
+// gitPath keeps the git it finds for the process, and asks the login shell when PATH has none; these tests change PATH
+// between runs, so each run looks on PATH alone, again. The git is this computer's, even where a test stubs the platform.
+vi.mock('./gitOnPath.js', async (original) => {
+  const real = await original<typeof import('./gitOnPath.js')>()
+  const platform = process.platform
+  return { ...real, gitPath: () => real.createProgramPath('git', () => real.findGit({ platform, loginShell: async () => null }))() }
+})
 
 // On a Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub: running it opens the
 // "install the command line developer tools" dialog. A fresh Mac's first harness runs in a folder
@@ -23,8 +31,7 @@ describe('a folder with no .git runs no git', () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'harness-git-stub-')))
     calls = join(root, 'git-calls')
     await mkdir(join(root, 'bin'))
-    await writeFile(join(root, 'bin', 'git'), `#!/bin/sh\necho "$*" >> '${calls}'\nexit 1\n`)
-    await chmod(join(root, 'bin', 'git'), 0o755)
+    writeExecutable(join(root, 'bin', 'git'), `#!/bin/sh\necho "$*" >> '${calls}'\nexit 1\n`)
     await mkdir(join(root, 'project'))
     path = process.env.PATH
     process.env.PATH = `${join(root, 'bin')}:${path}`
@@ -56,9 +63,9 @@ describe('a folder with no .git runs no git', () => {
   })
 
   it('when Harness Monitor previews deleting it', async () => {
-    const session = { cwd: join(root, 'project') } as RegisteredSession
-    expect(await inspectWorkspace(session, [session])).toMatchObject({ kind: 'folder' })
-    await expect(inspectWorktree(session, [session])).rejects.toThrow(/No separate worktree/)
+    const session = { cwd: join(root, 'project') }
+    expect(await inspectWorkspace(session, [])).toMatchObject({ kind: 'folder' })
+    await expect(inspectWorktree(session, [])).rejects.toThrow(/No separate worktree/)
     expect(await ran()).toBe('')
   })
 

@@ -1,56 +1,39 @@
 /**
- * Which grid is a running agent ACTUALLY on?
+ * Which grid is a running agent on, as far as its command line says?
  *
  * The desktop app can point an agent at a grid when it is created (`gridLaunch.ts`), and can move an
- * existing one (`agent_retarget`). Both work by changing how the engine was launched, which means the
- * answer is not in any record this daemon keeps — it is in the process. So it is read from the
- * process, the same way `gatewayRuntime.ts` reads which endpoint a pane is talking to, and for the
- * same reason: a bookkeeping map drifts the moment anything happens that the bookkeeper did not do,
- * and plenty does. A daemon restart forgets nothing. An agent the user started themselves with
- * `ANTHROPIC_BASE_URL=… claude` in their own shell — which this product discovers and adopts —
- * reports the truth rather than "none".
+ * existing one (`agent_retarget`). Both record the launch on the agent's row (`grid`), and that record
+ * is the answer for every engine whose grid travels outside its command line: Claude Code, Hermes,
+ * Grok and Copilot take it in their environment, OpenCode in the config file its environment names.
+ * No process's environment is read, so an agent a person started by hand with a relay URL in their
+ * own shell (`ANTHROPIC_BASE_URL=… claude`) shows its own login.
  *
- * Each engine is read through the same knob it was written through, so this table and
- * `GRID_ENGINE_CONTRACTS` must stay in step: an engine written by environment is read from the
- * environment, and Codex, which is written on the command line, is read from argv.
+ * Two engines carry their grid in argv, and only theirs is read back: Codex's provider block
+ * (`-c model_providers.<id>.base_url=…` with its `-m`), and the extension `-e …/grid-provider.ts` a
+ * launch hands Pi, with its `--model`. Each is read through the same knob `GRID_ENGINE_CONTRACTS`
+ * writes, so the two must stay in step.
  *
- * **The key is never read.** The pane's credential is the pane's business; what leaves here is the
- * endpoint and the model, both of which the app already knows because it chose them.
+ * **The key is never read.** What leaves here is the endpoint and the model, both of which the app
+ * already knows because it chose them.
  */
 
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { enginesDeclaring } from '../engines/discoveries.js'
 import type { ApiConnections } from './apiConnections.js'
-import { anthropicBaseUrl, GRID_ROUTER_MODEL, relayBaseUrl } from './gridLaunchWire.js'
-import { readProcessEnv } from './processEnv.js'
-import type { ProcessIdentity } from './registry.js'
+import { anthropicBaseUrl, relayBaseUrl } from './gridLaunchWire.js'
 
 export type { GridAssignment } from './gridAssignmentWire.js'
-import { GRID_ENDPOINT_VARS as BASE_URL_VAR, GRID_MODEL_VARS as MODEL_VAR, GRID_CODEX_ENDPOINT as CODEX_BASE_URL,
-  GRID_ARGV_MODEL as ARGV_MODEL, GRID_PI_MODEL as PI_ARGV_MODEL, GRID_PI_EXTENSION as PI_EXTENSION, piProviderExtensionIn, type GridAssignment, type GridAssignmentProcess,
+import { GRID_CODEX_ENDPOINT as CODEX_BASE_URL, GRID_ARGV_MODEL as ARGV_MODEL, GRID_PI_MODEL as PI_ARGV_MODEL,
+  GRID_PI_EXTENSION as PI_EXTENSION, piProviderExtensionIn, type GridAssignment, type GridAssignmentProcess,
   type GridAssignmentAnswer } from './gridAssignmentWire.js'
 export { sameGridAssignment } from './gridAssignmentWire.js'
 
 /**
- * Engines whose model was written into argv as `-m <model>` rather than an environment variable: Codex's
- * discovery contract declares it (`modelInArgv`).
- *
- * Codex omits the flag when no model was picked; grok always carries one, because its grid credential
- * rides on a declared model block and "let the grid route" is therefore spelled `-m Auto` rather than
- * by leaving the flag off. [classifyGridAssignment] maps that id back to null.
+ * Engines whose model was written into argv as `-m <model>`: Codex's discovery contract declares it
+ * (`modelInArgv`). Codex omits the flag when no model was picked.
  */
-const MODEL_IN_ARGV = new Set<AgentEngine>([...enginesDeclaring('modelInArgv'), 'grok'])
-
-/**
- * Pi's endpoint is in neither its environment nor its argv — it is in the extension file `-e` hands
- * it, or, for a Pi launched before that, the `models.json` inside the config directory
- * `PI_CODING_AGENT_DIR` points at. So that is where it is read from, because the alternative is to
- * trust a note we wrote ourselves about what we did.
- */
-const PI_CONFIG_DIR_VAR = 'PI_CODING_AGENT_DIR'
-
+const MODEL_IN_ARGV = new Set<AgentEngine>(enginesDeclaring('modelInArgv'))
 
 /**
  * Endpoints of the APIs saved on this computer (`apiModels.ts`), in both forms an engine is handed
@@ -92,72 +75,32 @@ function isGridUrl(value: string): boolean {
   }
 }
 
-/** Classify an already-read environment and argv. Exported so a spec can pin the rules with no I/O. */
-export function classifyGridAssignment(
-  engine: AgentEngine,
-  processEnv: Record<string, string>,
-  args = '',
-): GridAssignment | null {
-  const urlVar = BASE_URL_VAR[engine]
-  const fromArgv = urlVar ? null : CODEX_BASE_URL.exec(args)
-  const baseUrl = (urlVar ? processEnv[urlVar] : (fromArgv?.[1] ?? fromArgv?.[2]))?.trim()
+/** Classify a command line's provider block. Exported so a spec can pin the rules with no I/O. */
+export function classifyGridAssignment(engine: AgentEngine, args: string): GridAssignment | null {
+  const fromArgv = CODEX_BASE_URL.exec(args)
+  const baseUrl = (fromArgv?.[1] ?? fromArgv?.[2])?.trim()
   if (!baseUrl || !isGridUrl(baseUrl)) return null
-  const modelVar = MODEL_VAR[engine]
-  const model = modelVar
-    ? processEnv[modelVar]?.trim()
-    : MODEL_IN_ARGV.has(engine)
-      ? ARGV_MODEL.exec(args)?.[1]
-      : undefined
-  // GROK ONLY, and deliberately not a rule for every engine here.
-  //
-  // Grok's launch always passes `-m`, unlike every other argv engine: its grid credential rides on a
-  // declared `[model.<id>]` block, so "let the grid route" is spelled by declaring the ROUTER rather
-  // than by omitting the flag. Reporting that id verbatim would print `Auto` where the app prints its
-  // own Auto row from null, and a check that the agent is where the person put it would compare 'Auto'
-  // against null and call every routed grok agent misplaced, forever — the trap
-  // `readOpencodeGridAssignment` documents below.
-  //
-  // Scoped to grok because for anyone else a model literally named `Auto` is a model, and blanking it
-  // would be this function inventing a meaning the launch never gave it. Opencode reaches the same
-  // conclusion in its own reader, for its own reason; codex simply omits the flag.
-  if (engine === 'grok' && model && model.toLowerCase() === GRID_ROUTER_MODEL.toLowerCase()) {
-    return { baseUrl, model: null }
-  }
+  const model = MODEL_IN_ARGV.has(engine) ? ARGV_MODEL.exec(args)?.[1] : undefined
   return { baseUrl, model: model || null }
 }
 
 /**
- * Pi's provider block, read out of the extension (or, launched before it, the config directory) its process was
- * pointed at.
+ * Pi's provider block, read out of the extension its command line hands it.
  *
- * Exported so a spec can drive the real read against real files: the process half of the probe
- * cannot be faked (an environment is fixed at exec), and a round trip that re-implemented this
- * would prove nothing about the code that runs.
+ * Exported so a spec can drive the real read against the files a real launch writes.
  *
- * Every failure lands on null — an unreadable or rewritten directory is "we cannot tell", which the
+ * Every failure lands on null — an unreadable or rewritten extension is "we cannot tell", which the
  * caller already treats as "not on the grid you picked".
  */
-export async function readPiGridAssignment(
-  processEnv: Record<string, string>,
-  args: string,
-): Promise<GridAssignment | null> {
+export async function readPiGridAssignment(args: string): Promise<GridAssignment | null> {
   const model = PI_ARGV_MODEL.exec(args)
-  if (!model) return null
   const extension = PI_EXTENSION.exec(args)?.[1]
-  const dir = processEnv[PI_CONFIG_DIR_VAR]?.trim()
+  if (!model || !extension) return null
   try {
-    let baseUrl: unknown
-    if (extension) {
-      // The provider the extension registers, by the id `--model` names.
-      const registered = piProviderExtensionIn(await readFile(extension, 'utf8'))
-      if (registered?.id !== model[1]) return null
-      baseUrl = registered.provider.baseUrl
-    } else if (dir) {
-      const raw = JSON.parse(await readFile(join(dir, 'models.json'), 'utf8')) as {
-        providers?: Record<string, { baseUrl?: unknown }>
-      }
-      baseUrl = raw.providers?.[model[1]]?.baseUrl
-    }
+    // The provider the extension registers, by the id `--model` names.
+    const registered = piProviderExtensionIn(await readFile(extension, 'utf8'))
+    if (registered?.id !== model[1]) return null
+    const baseUrl = registered.provider.baseUrl
     if (typeof baseUrl !== 'string' || !isGridUrl(baseUrl)) return null
     return { baseUrl, model: model[2] }
   } catch {
@@ -165,112 +108,12 @@ export async function readPiGridAssignment(
   }
 }
 
-/** The config file OpenCode was pointed at. Fixed at exec; nothing the engine does can change it. */
-const OPENCODE_CONFIG_VAR = 'OPENCODE_CONFIG'
-
-/**
- * OpenCode's endpoint and model, read out of the config file its process was pointed at.
- *
- * Same shape as Pi's, and for the same reason: neither engine carries its endpoint in an environment
- * variable, so the only honest answer comes from the file the process is actually reading. Reading
- * our own record of what we launched would answer a different question — what we intended — and that
- * is precisely the disagreement a probe exists to catch.
- *
- * **It deliberately does not read argv.** The first version matched `-m <provider>/<model>` there,
- * and the app's grid pill flickered between the model and "own login" while an agent was answering:
- * every re-probe during a turn had to re-parse a live process's command line, and a command line is
- * that process's to rewrite. The file is written once by the launch and is exactly one provider on
- * one grid with one model, so those are read straight out of it — a fact that cannot move.
- *
- * Every failure lands on null. "We cannot tell" and "not on a grid" are treated alike by the caller;
- * the opposite error, claiming a grid nobody verified, would leave an agent quietly somewhere else.
- */
-export async function readOpencodeGridAssignment(
-  processEnv: Record<string, string>,
-): Promise<GridAssignment | null> {
-  const configPath = processEnv[OPENCODE_CONFIG_VAR]?.trim()
-  if (!configPath) return null
-  try {
-    const raw = JSON.parse(await readFile(configPath, 'utf8')) as {
-      provider?: Record<string, { options?: { baseURL?: unknown }; models?: Record<string, unknown> }>
-    }
-    const providers = Object.values(raw.provider ?? {})
-    // More than one provider is not a file this launch wrote. Rather than guess which one the engine
-    // would pick, say nothing — the caller reads that as "not on the grid you picked", which is the
-    // safe direction to be wrong in.
-    if (providers.length !== 1) return null
-    const baseUrl = providers[0].options?.baseURL
-    if (typeof baseUrl !== 'string' || !isGridUrl(baseUrl)) return null
-    const models = Object.keys(providers[0].models ?? {})
-    if (models.length !== 1) return null
-    // The router reports as NO model, the same as every other engine launched without one.
-    //
-    // OpenCode is the only engine whose provider block has to name something, so a launch with no
-    // model picked writes the relay's router id there. That is an OpenCode implementation detail and
-    // must not leak: the app's own "Auto" is `model: null`, and a raw `Auto` coming back would be the
-    // same state under a different name — the header would print the id instead of "Auto", and a check
-    // that the agent is where the person put it would compare 'Auto' against null and report every such
-    // agent as being on the wrong target, forever. See the desktop's `kAutoModelId`, and the commit that stopped the
-    // model menu offering the router beside its own Auto row.
-    const model = models[0]
-    return { baseUrl, model: model.toLowerCase() === GRID_ROUTER_MODEL.toLowerCase() ? null : model }
-  } catch {
-    return null
-  }
-}
-
-/**
- * Read one live engine process's grid.
- *
- * **Three answers, not two.** `null` is a finding — this process was read and is on no grid.
- * `undefined` is the absence of one: the environment could not be read at all, so there is nothing to
- * report. They were the same value until the app's grid pill was seen flickering between an agent's
- * model and "own login" for the length of every turn: each failed read overwrote a known-good
- * assignment with "on no grid", and the next successful one put it back.
- *
- * The reads that fail are ordinary — `ps eww` carries a 2s timeout and a discovery sweep runs one per
- * agent while the machine is busy answering. Which of them fails does not matter, and chasing that
- * was the wrong instinct: what matters is that failing to look must not erase what was already seen.
- * A process's environment cannot change under it (see `processEnv.ts`), so an earlier successful read
- * of THIS process stays true.
- *
- * `gateway` in the same registry has worked this way all along — `undefined` there means "the probe
- * failed" and leaves the stored value alone. Both `openProcessAgent` and `updateProcessIdentity`
- * already guard on `!== undefined`; the grid simply never used it.
- */
-export async function probeGridAssignment(
-  identity: ProcessIdentity,
-  engine: AgentEngine,
-  args = '',
-): Promise<GridAssignment | null | undefined> {
-  const processEnv = await readProcessEnv(identity)
-  if (!processEnv) return undefined
-  return await gridAssignmentFromEnv(engine, processEnv, args)
-}
-
-/**
- * The same classification, over an environment the caller already holds.
- *
- * Split from the read so the RULES live in one place: which variable each engine's endpoint is in,
- * and the two engines whose provider is in a file rather than a variable at all. That last part is
- * what a second caller would get wrong on its own, which is the whole reason this is a function and
- * not a comment.
- *
- * There is no `undefined` here: the caller decided it could look, and did. Only [probeGridAssignment]
- * distinguishes "could not read the process".
- */
-export async function gridAssignmentFromEnv(
-  engine: AgentEngine,
-  env: Record<string, string>,
-  args = '',
-): Promise<GridAssignment | null> {
-  if (engine === 'pi') return await readPiGridAssignment(env, args)
-  if (engine === 'opencode') return await readOpencodeGridAssignment(env)
-  return classifyGridAssignment(engine, env, args)
+/** Pi's grid is in the file its argv names; every other engine's in the argv itself. */
+async function assignmentOf(engine: AgentEngine, args: string): Promise<GridAssignment | null> {
+  return engine === 'pi' ? await readPiGridAssignment(args) : classifyGridAssignment(engine, args)
 }
 
 /** One fresh classification per process per pass; this is deliberately not an assignment cache. */
 export async function gridAssignments(processes: readonly GridAssignmentProcess[]): Promise<GridAssignmentAnswer[]> {
-  return Promise.all(processes.map(async process => ({ key: process.key,
-    assignment: await gridAssignmentFromEnv(process.engine, process.env, process.args) })))
+  return Promise.all(processes.map(async process => ({ key: process.key, assignment: await assignmentOf(process.engine, process.args) })))
 }

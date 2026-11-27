@@ -1,23 +1,25 @@
 /**
- * harnessd's services, in processes of their own, kept running by the master beside the core.
+ * harnessd's services: the processes they run in, and what a master tells the core it runs.
  *
  * A service is a feature the core can run without (search, devices, models, …). In the core's process a
  * service's exception is caught (core/serviceHost.ts), but a native crash, a hung event loop or a leak
- * would still take the core with it. Out here a service can only take its own process down, and the
- * services that share it (`SERVICE_HOSTS`): the master restarts it with backoff, kills it when it stops
- * beating (hung) or outgrows its memory budget (leaking), parks it when it keeps crashing, and the core
- * answers its services' requests SERVICE_UNAVAILABLE meanwhile.
+ * would still take the core with it. Out in a process of its own a service can only take that process down,
+ * and the services that share it (`SERVICE_HOSTS`).
  *
- * The same shape as ./supervisor.ts, for many children and fewer promises: a service has no port to
- * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
- * system is injected, so every decision here is tested without one.
+ * The master and the core both read this file, so it holds no supervision: what keeps these processes
+ * running is ./serviceSupervisor.ts, the master's alone. The core's process loaded that, and the core's
+ * supervisor with it, for the table below (the audit of 2026-11-12).
  */
-import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
-import { describeExit, type CoreHandle } from './supervisor.js'
-import { SWARM_ENV, swarmOn } from './swarmSwitch.js'
+
+// Full legacy histories exceed 16 KiB; see docs/design/2026-11-16-git-frame-facts.md.
+export const FRAME_PART_BYTES = 2 * 1024 * 1024
+export const FRAME_PART_VALUES = 16_384
+export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
+export const FRAME_PART_ENTRIES = 4096
 
 export interface ServiceSpec {
-  /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
+  /** The process's name: what the master logs it as, and the hard link it is started through (`harnessd-<name>`,
+   *  ./processName.ts). */
   name: string
   /** The services it runs, as `harness __service <a>,<b>` names them, each on its own link to the core. */
   services: readonly string[]
@@ -31,331 +33,16 @@ export interface ServiceSpec {
   /** The core protocol (./protocol.ts) from which a core asks for this process on demand; 3, the experiments',
    *  when unset. A core that speaks an older one never asks for it, and it is started as that core binds. */
   askedSince?: number
+  /** What happens to agents that this process's services must not miss while it is down, by service: the core holds
+   *  each of these for that service from its own start until the service hears it (core/agentLife.ts). */
+  hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
+  /** Display fields a service may publish, and row fields required while they are shown. */
+  frameParts?: Readonly<Record<string, { fields: readonly string[]; having?: readonly string[] }>>
 }
 
-export interface ServiceSupervisorDeps {
-  /** Start a process with these extra environment variables, running every service its spec names. */
-  spawnService(spec: ServiceSpec, env: Record<string, string>): CoreHandle
-  /** A monotonic clock, in ms. */
-  now(): number
-  /** The wall clock, in ms: what the status says things happened at. */
-  wallClock(): number
-  setTimer(run: () => void, ms: number): unknown
-  clearTimer(timer: unknown): void
-  log(line: string): void
-  /** The updater staged a CLI build, a terminal host or both on disk (`harnessd:staged`): the core is to hand over. */
-  staged?(staged: StagedUpdate): void
-  /** Stop a service with `harnessd:shutdown` rather than SIGTERM: Windows, where Node's `kill` is TerminateProcess
-   *  and the service's own stop never runs (./supervisor.ts `SupervisorDeps.stopByMessage`). */
-  stopByMessage?: boolean
-}
-
-export interface ServiceSupervisorOptions {
-  /** A service that sends no heartbeat for this long — from its start, too — is hung: killed, restarted. */
-  heartbeatTimeoutMs: number
-  /** How long a service gets to stop after SIGTERM before SIGKILL. */
-  stopGraceMs: number
-  /** Restart delay: starts here, doubles per crash, caps at `maxBackoffMs`. */
-  initialBackoffMs: number
-  maxBackoffMs: number
-  /** A service that stayed up this long earns the next crash the initial delay again. */
-  backoffResetMs: number
-  /** Past this share of its heap limit a service is restarted cleanly, before V8 aborts it. */
-  heapRestartPercent: number
-  /** This many crashes inside `parkWindowMs` park the service: reported, and not respawned in a loop. */
-  parkCrashes: number
-  parkWindowMs: number
-  /** A parked service is tried again after this long. */
-  parkRetryMs: number
-}
-
-export const DEFAULT_SERVICE_OPTIONS: ServiceSupervisorOptions = {
-  heartbeatTimeoutMs: 30_000,
-  stopGraceMs: 1_500,
-  initialBackoffMs: 1_000,
-  maxBackoffMs: 60_000,
-  backoffResetMs: 60_000,
-  heapRestartPercent: 75,
-  parkCrashes: 5,
-  parkWindowMs: 600_000,
-  parkRetryMs: 1_800_000,
-}
-
-/** `off`: an experiment's process that no one has asked for yet, and so was never started. */
-export type ServiceState = 'off' | 'starting' | 'running' | 'restarting' | 'parked' | 'stopping' | 'stopped'
-export type ServiceExitReason = 'crashed' | 'hung' | 'memory' | 'stopped' | 'restart'
-
-export interface ServiceStatus {
-  name: string
-  state: ServiceState
-  pid: number | null
-  restarts: number
-  lastExit: string | null
-  lastExitReason: ServiceExitReason | null
-  /** When the state last changed, wall clock ms. */
-  since: number
-}
-
-const MIB = 1024 * 1024
-
-/** One service's process, restarted for as long as the master runs. */
-class Service {
-  state: ServiceState
-  private since: number
-  private child: CoreHandle | null = null
-  private restarts = 0
-  private backoff: number
-  private upAt = 0
-  private crashes: number[] = []
-  private lastExit: string | null = null
-  private lastExitReason: ServiceExitReason | null = null
-  /** Why the master killed the running process, when it did. */
-  private killReason: ServiceExitReason | null = null
-  private ending = false
-  private heartbeatTimer: unknown = null
-  private killTimer: unknown = null
-  private restartTimer: unknown = null
-  private onStopped: Array<() => void> = []
-  private refusedStaged = false
-
-  constructor(
-    readonly spec: ServiceSpec,
-    private readonly deps: ServiceSupervisorDeps,
-    private readonly options: ServiceSupervisorOptions,
-    private readonly env: Record<string, string>,
-  ) {
-    this.backoff = options.initialBackoffMs
-    this.since = deps.wallClock()
-    this.state = spec.onDemand ? 'off' : 'starting'
-  }
-
-  status(): ServiceStatus {
-    return {
-      name: this.spec.name,
-      state: this.state,
-      pid: this.child?.pid ?? null,
-      restarts: this.restarts,
-      lastExit: this.lastExit,
-      lastExitReason: this.lastExitReason,
-      since: this.since,
-    }
-  }
-
-  start(): void {
-    const child = this.deps.spawnService(this.spec, {
-      ...this.env,
-      HARNESSD_SERVICE: this.spec.name,
-      HARNESSD_RESTARTS: String(this.restarts),
-      HARNESSD_WATCHDOG_MS: String(this.options.heartbeatTimeoutMs),
-    })
-    this.child = child
-    this.killReason = null
-    this.ending = false
-    this.upAt = this.deps.now()
-    child.onMessage((message) => { if (this.child === child) this.onMessage(child, message) })
-    child.onExit((code, signal) => { if (this.child === child) this.onExit(code, signal) })
-    this.deps.log(`[harnessd] service ${this.spec.name} started (pid ${child.pid ?? '?'})${this.restarts ? ` · restart ${this.restarts}` : ''}`)
-    this.setState(this.restarts === 0 ? 'starting' : 'restarting')
-    this.watchHeartbeat(child)
-  }
-
-  /** Start a process on demand the core asked for: once, while it is off. One already started is the
-   *  master's to keep running, parked included. */
-  want(): void {
-    if (this.state === 'off') this.start()
-  }
-
-  /** A process on demand stopped with the others and started again with them: off, for whoever needs it next to
-   *  ask. Left stopped, no `want` started it again for the rest of the master's life. */
-  rest(): void {
-    if (this.state === 'stopped') this.setState('off')
-  }
-
-  /** SIGTERM, then SIGKILL after the grace; `done` once it is gone. A parked or waiting one is simply stopped. */
-  stop(done: () => void): void {
-    if (this.state === 'stopped') { done(); return }
-    this.onStopped.push(done)
-    if (this.state === 'stopping') return
-    this.clearTimer('restartTimer')
-    if (!this.child) { this.setState('stopped'); this.stopped(); return }
-    this.setState('stopping')
-    this.end('SIGTERM')
-  }
-
-  private stopped(): void {
-    const waiting = this.onStopped
-    this.onStopped = []
-    for (const done of waiting) done()
-  }
-
-  private onMessage(child: CoreHandle, message: unknown): void {
-    if (isUpdaterMessage(message)) {
-      // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
-      const staged: StagedUpdate = {
-        ...(message.version ? { version: message.version } : {}), ...(message.ptyVersion ? { ptyVersion: message.ptyVersion } : {}),
-      }
-      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${describeStaged(staged)}, which only the updater may — ignored`); this.refusedStaged = true; return }
-      this.deps.log(`[harnessd] service ${this.spec.name} staged ${describeStaged(staged)}`)
-      this.deps.staged?.(staged)
-      return
-    }
-    if (!isCoreMessage(message) || message.type !== 'harnessd:heartbeat') return
-    this.watchHeartbeat(child)
-    if (this.state === 'starting' || this.state === 'restarting') this.setState('running')
-    if (this.ending) return
-    const heapBudget = this.spec.heapLimitMiB * MIB * this.options.heapRestartPercent / 100
-    if (heapBudget && message.heapUsedBytes > heapBudget) {
-      this.restartForMemory(`its heap is at ${Math.round(message.heapUsedBytes / MIB)} MiB, past ${this.options.heapRestartPercent}% of its ${this.spec.heapLimitMiB} MiB limit`)
-    } else if (this.spec.rssLimitMiB && message.rssBytes > this.spec.rssLimitMiB * MIB) {
-      this.restartForMemory(`it is using ${Math.round(message.rssBytes / MIB)} MiB, over its ${this.spec.rssLimitMiB} MiB budget`)
-    }
-  }
-
-  private restartForMemory(why: string): void {
-    this.deps.log(`[harnessd] service ${this.spec.name}: ${why} — restarting it`)
-    this.killReason = 'memory'
-    this.end('SIGTERM')
-  }
-
-  private onExit(code: number | null, signal: NodeJS.Signals | null): void {
-    const exit = describeExit(code, signal)
-    this.clearTimer('heartbeatTimer')
-    this.clearTimer('killTimer')
-    this.child = null
-    this.lastExit = exit
-    if (this.state === 'stopping') {
-      this.lastExitReason = 'stopped'
-      this.deps.log(`[harnessd] service ${this.spec.name} stopped (${exit})`)
-      this.setState('stopped')
-      this.stopped()
-      return
-    }
-    if (code === SERVICE_EXIT_RESTART && this.spec.name === UPDATER_PROCESS && !this.killReason) {
-      // Asked for: the updater, once it has staged a build, so that it next runs as that build (a lean bundle
-      // that no longer matches cli.js is not used, ./leanServices.ts). Not a crash, and not delayed; from any
-      // other service, 75 is a crash, or a loop of them would never be parked.
-      this.lastExitReason = 'restart'
-      this.restarts++
-      this.deps.log(`[harnessd] service ${this.spec.name} asked to start again (${exit}) — restarting`)
-      this.setState('restarting')
-      this.armTimer('restartTimer', () => { this.restartTimer = null; this.start() }, 0)
-      return
-    }
-    const reason = this.killReason ?? 'crashed'
-    this.lastExitReason = reason
-    this.restarts++
-    const now = this.deps.now()
-    if (this.upAt && now - this.upAt >= this.options.backoffResetMs) this.backoff = this.options.initialBackoffMs
-    // A memory restart counts like a crash: a service over budget from the start must not spin.
-    this.crashes = [...this.crashes.filter((at) => now - at < this.options.parkWindowMs), now]
-    if (this.crashes.length >= this.options.parkCrashes) {
-      this.crashes = []
-      this.backoff = this.options.initialBackoffMs
-      this.deps.log(`[harnessd] service ${this.spec.name} ended ${this.options.parkCrashes} times in ${Math.round(this.options.parkWindowMs / 60_000)} min (${exit}, ${reason}) — parked; trying again in ${Math.round(this.options.parkRetryMs / 60_000)} min`)
-      this.setState('parked')
-      this.armTimer('restartTimer', () => { this.restartTimer = null; this.start() }, this.options.parkRetryMs)
-      return
-    }
-    const delay = this.backoff
-    this.backoff = Math.min(this.backoff * 2, this.options.maxBackoffMs)
-    this.deps.log(`[harnessd] service ${this.spec.name} exited (${exit}, ${reason}) — restarting in ${delay} ms`)
-    this.setState('restarting')
-    this.armTimer('restartTimer', () => { this.restartTimer = null; this.start() }, delay)
-  }
-
-  private end(signal: NodeJS.Signals): void {
-    const child = this.child!
-    this.ending = true
-    this.clearTimer('heartbeatTimer')
-    // Called with SIGTERM only: a stop, or a restart for memory.
-    if (this.deps.stopByMessage) child.send({ type: 'harnessd:shutdown' })
-    else child.kill(signal)
-    this.armTimer('killTimer', () => {
-      this.deps.log(`[harnessd] service ${this.spec.name} outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
-      child.kill('SIGKILL')
-    }, this.options.stopGraceMs)
-  }
-
-  /** A silence that runs out gets one beat's time more, in case the master was paused too: see
-   *  `Supervisor.watchHeartbeat`, where a 40 s pause cost the core and an app's message. */
-  private watchHeartbeat(child: CoreHandle): void {
-    const timeout = this.options.heartbeatTimeoutMs
-    const grace = heartbeatGraceMs(timeout)
-    this.armTimer('heartbeatTimer', () => {
-      this.armTimer('heartbeatTimer', () => {
-        this.deps.log(`[harnessd] service ${this.spec.name} sent no heartbeat for ${timeout + grace} ms — it is hung; killing it`)
-        this.killReason = 'hung'
-        child.kill('SIGKILL')
-      }, grace)
-    }, timeout)
-  }
-
-  private setState(state: ServiceState): void {
-    this.state = state
-    this.since = this.deps.wallClock()
-  }
-
-  private armTimer(name: 'heartbeatTimer' | 'killTimer' | 'restartTimer', run: () => void, ms: number): void {
-    this.clearTimer(name)
-    this[name] = this.deps.setTimer(run, ms)
-  }
-
-  private clearTimer(name: 'heartbeatTimer' | 'killTimer' | 'restartTimer'): void {
-    if (this[name] !== null) this.deps.clearTimer(this[name])
-    this[name] = null
-  }
-}
-
-/** Every enabled service's process, started together and stopped together. */
-export class ServiceSupervisor {
-  private readonly services: Service[]
-
-  constructor(
-    specs: readonly ServiceSpec[],
-    deps: ServiceSupervisorDeps,
-    options: ServiceSupervisorOptions = DEFAULT_SERVICE_OPTIONS,
-    /** What every service is started with: the token that lets the core know it, for one. */
-    env: Record<string, string> = {},
-  ) {
-    this.services = specs.map((spec) => new Service(spec, deps, options, env))
-  }
-
-  /** Start every service but those on demand, which wait to be asked for again; none waits on another, or on the
-   *  core. Found end to end (e2e/reexec.e2e.ts): a master whose re-execution was refused stops its services and
-   *  starts them again, and a process on demand stayed stopped, so a core too old to ask never got models. */
-  start(): void {
-    for (const service of this.services) {
-      if (!service.spec.onDemand) service.start()
-      else service.rest()
-    }
-  }
-
-  /** Start the process on demand that hosts [service], if it is not running yet: the core asked for it (`harnessd:want`). */
-  want(service: string): void {
-    for (const each of this.services) if (each.spec.services.includes(service)) each.want()
-  }
-
-  /**
-   * A core bound that speaks [protocol], older than this master's: every process that became on demand after it
-   * starts now, since that core never asks for one and ran it as it ran every other service. A core from before
-   * `want` (2) asks for none; one from before the devices were on demand (3) never asks for theirs, and one from
-   * before the viewers were (4) never for theirs.
-   */
-  unasked(protocol: number): void {
-    for (const each of this.services) if (each.spec.onDemand && (each.spec.askedSince ?? 3) > protocol) each.want()
-  }
-
-  /** Stop every service; `done` once all are gone. */
-  stop(done: () => void): void {
-    let left = this.services.length
-    if (!left) { done(); return }
-    for (const service of this.services) service.stop(() => { if (--left === 0) done() })
-  }
-
-  status(): ServiceStatus[] {
-    return this.services.map((service) => service.status())
-  }
-}
+/** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
+ *  a person or an agent made, a purge, and a new agent in the pane one ended in. */
+export type HeldAgentLife = 'stopped' | 'purged' | 'taken'
 
 /** A process the services run in: the services it hosts, and its memory budget. */
 export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
@@ -378,14 +65,20 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
   'engine-claude': { services: ['engine-claude'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
   'engine-codex': { services: ['engine-codex'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
-  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
+  // The fourteen other engines in one worker (engines/others/otherEnginesProcess.ts): their conversations read from their
+  // transcripts and stores, at most sixteen reads at once with replies capped at 4 MiB, each engine's code loaded
+  // only once one of its sessions is read. Started on demand, as theirs are: a computer that runs none never pays.
+  'engine-others': { services: ['engine-others'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
+  // A purged conversation is never left searchable: its purge is held for search while it is down (core/agentLife.ts).
+  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048, hears: { search: ['purged'] } },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
   // in their own processes too, and take minutes, which is what it must not spend in the core.
   // Started only once something needs it (core/viewersWake.ts): a harness here, a Store or viewer request, or
   // the release's own harnesses to put in place. It idled at about 96 MiB on every computer, and few harnesses
   // have a viewer: 1 of 14 on one real machine, 2 of 35 on another (2026-10-12).
-  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5 },
+  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5,
+    frameParts: { viewers: { fields: ['dsh', 'dshName', 'viewerUrl', 'viewerName', 'verdict'], having: ['dsh'] } } },
   // The git work (workspaces, the project readers) runs in git's own processes, and the monitor's
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
@@ -399,7 +92,13 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // the bundle rather than messaging: here it costs the edge host about 1 MiB on, and 0.4 MiB off
   // (e2e/footprint.e2e.ts, 2026-10-12). The Harness OS computer's management (services/osDevice.ts) holds one
   // timestamp and runs its commands bounded, or detached when they must outlive this process.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // The engine probe (services/engineProbe.ts) holds this process's login-shell environment, read once; the shells
+  // a probe starts, four at once, are processes of their own, outside this budget. The home bridge
+  // (services/homeBridge.ts) runs one timer, a look at /proc every 10 minutes, only while ~/.harness bridges the old
+  // paths after the move to the XDG folders on Linux, and nothing after.
+  // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe', 'homeBridge'], heapLimitMiB: 384, rssLimitMiB: 768,
+    hears: { agentCleanup: ['stopped'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -411,7 +110,6 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The router (services/routerProcess.ts), an experiment: started at its first request. A few decisions in
   // flight, each one bounded Jev answer.
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
-  superTabs: { services: ['superTabs'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Cloud agents (services/cloudProcess.ts), an experiment: started once one is on, for a saved harness or a
   // request. A timer and a bounded look per working harness, and each conversation read a file at a time.
   cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
@@ -442,11 +140,23 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
   // this budget. Started only once a browser is wanted here (core/agentBrowserLink.ts): a computer that never ticked
   // Browser never pays for it.
-  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7 },
+  // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
+  // with the pane (decision 19).
+  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] }, frameParts: { agentBrowser: { fields: ['browser'] } } },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+/** What the core holds for each service of [outOfProcess] while it is down (`hears`), by service. A service in the
+ *  core's process is told as it happens, and none is held for it. */
+export function heldAgentLife(outOfProcess: ReadonlySet<string>, hosts: Readonly<Record<string, ServiceHostSpec>> = SERVICE_HOSTS): Record<string, readonly HeldAgentLife[]> {
+  const held: Record<string, readonly HeldAgentLife[]> = {}
+  for (const host of Object.values(hosts)) {
+    for (const [service, kinds] of Object.entries(host.hears ?? {})) if (outOfProcess.has(service)) held[service] = kinds
+  }
+  return held
+}
 
 /**
  * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and
@@ -459,27 +169,6 @@ export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).fl
 export const UPDATER_HOST: ServiceHostSpec = { services: ['updater'], heapLimitMiB: 256, rssLimitMiB: 512 }
 export const UPDATER_PROCESS = 'updater' // the name the master runs it under: the one whose staged build counts
 
-/** Service timings from the environment (for tests and support); anything unset or invalid keeps its default. */
-export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions {
-  const read = (name: string, fallback: number, min: number): number => {
-    const value = Number(env[name])
-    return env[name] !== undefined && Number.isFinite(value) && value >= min ? value : fallback
-  }
-  const d = DEFAULT_SERVICE_OPTIONS
-  return {
-    // A second at least: below that a GC pause reads as a hang.
-    heartbeatTimeoutMs: read('HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS', d.heartbeatTimeoutMs, 1_000),
-    stopGraceMs: read('HARNESSD_SERVICE_STOP_GRACE_MS', d.stopGraceMs, 1),
-    initialBackoffMs: read('HARNESSD_SERVICE_INITIAL_BACKOFF_MS', d.initialBackoffMs, 0),
-    maxBackoffMs: read('HARNESSD_SERVICE_MAX_BACKOFF_MS', d.maxBackoffMs, 0),
-    backoffResetMs: read('HARNESSD_SERVICE_BACKOFF_RESET_MS', d.backoffResetMs, 0),
-    heapRestartPercent: Math.min(100, read('HARNESSD_SERVICE_HEAP_RESTART_PERCENT', d.heapRestartPercent, 1)),
-    parkCrashes: read('HARNESSD_SERVICE_PARK_CRASHES', d.parkCrashes, 1),
-    parkWindowMs: read('HARNESSD_SERVICE_PARK_WINDOW_MS', d.parkWindowMs, 0),
-    parkRetryMs: read('HARNESSD_SERVICE_PARK_RETRY_MS', d.parkRetryMs, 0),
-  }
-}
-
 /** How a master tells the core it starts which services it runs in their own processes. */
 export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
 /** Version of the live engine methods hosted by this master, independent of reader-only hosts. */
@@ -491,6 +180,17 @@ export const ENGINE_MODEL_CONTROL_ENV = 'HARNESSD_ENGINE_MODEL_CONTROL'
 export const ENGINE_QUESTION_CONTROL_ENV = 'HARNESSD_ENGINE_QUESTION_CONTROL'
 export const ENGINE_SUBMISSION_ENV = 'HARNESSD_ENGINE_SUBMISSION'
 export const ENGINE_NATIVE_CONTROL_ENV = 'HARNESSD_ENGINE_NATIVE_CONTROL'
+export const ENGINE_BACKGROUND_JOB_ENV = 'HARNESSD_ENGINE_BACKGROUND_JOB'
+export const ENGINE_PROVIDER_MOVE_ENV = 'HARNESSD_ENGINE_PROVIDER_MOVE'
+export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
+/**
+ * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn; 2
+ * adds their live streams (engines/others/streams.ts), which a core under a master of 1 runs in its own process.
+ * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
+ * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
+ */
+export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
+export const ENGINE_OTHERS_VERSION = 2
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -502,7 +202,17 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1`, [ENGINE_RESUME_REPAIR_ENV]: `${masterPid}:1`, [ENGINE_OTHERS_ENV]: `${masterPid}:${ENGINE_OTHERS_VERSION}` }
+}
+
+/**
+ * The version of the other engines' worker this core's master runs (`ENGINE_OTHERS_ENV`), 0 for none: a master from
+ * before it, no master, or an environment another master left, which names its pid and not this core's parent.
+ */
+export function otherEnginesVersion(env: NodeJS.ProcessEnv, parentPid: number): number {
+  if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return 0
+  const said = /^(\d+):([1-9]\d{0,5})$/.exec(env[ENGINE_OTHERS_ENV] ?? '')
+  return said && said[1] === String(parentPid) ? Number(said[2]) : 0
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */
@@ -530,15 +240,6 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
   return new Set(said.split(',').map((name) => name.trim()).filter((name) => known.includes(name)))
 }
 
-/** The Swarm switch (harnessd/swarmSwitch.ts): off, the Swarm's service is left out of every process the master starts. */
-export { SWARM_ENV, swarmOn }
-const SWARM_SERVICES: ReadonlySet<string> = new Set(['superTabs'])
-
-/** The services of `known` that run on this computer, wherever they run: all of them, but the Swarm's while it is off. */
-export function servicesOn(env: NodeJS.ProcessEnv, known: readonly string[]): string[] {
-  return swarmOn(env) ? [...known] : known.filter((name) => !SWARM_SERVICES.has(name))
-}
-
 /**
  * The processes to run the services in: every service this build knows, unless `HARNESSD_SERVICES`
  * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
@@ -554,9 +255,8 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
   const named = env.HARNESSD_SERVICES === undefined ? null
     : new Set(env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none'))
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
-  const on = new Set(servicesOn(env, Object.values(hosts).flatMap((host) => host.services)))
   return Object.entries(hosts).flatMap(([name, host]) => {
-    const services = host.services.filter((service) => on.has(service) && (!named || named.has(service) || named.has(name)))
+    const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
     // A process on demand named outright runs from the start, as every service named does (a test, support).
     const onDemand = host.onDemand && !named ? { onDemand: true } : {}
     const { onDemand: _given, ...rest } = host
@@ -580,6 +280,21 @@ export function masterRunsEngineQuestionControl(env: NodeJS.ProcessEnv, parentPi
 /** A new core must not ask an older worker host for submission readings it does not serve. */
 export function masterRunsEngineSubmission(env: NodeJS.ProcessEnv, parentPid: number): boolean {
   return masterRunsLiveEngines(env, parentPid) && env[ENGINE_SUBMISSION_ENV] === `${parentPid}:1`
+}
+
+/** A new core must not ask an older worker host to stop a Claude Code background job its worker does not serve. */
+export function masterRunsEngineBackgroundJob(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_BACKGROUND_JOB_ENV] === `${parentPid}:1`
+}
+
+/** A new core must not ask an older worker host for a provider move its Codex worker does not serve. */
+export function masterRunsEngineProviderMove(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_PROVIDER_MOVE_ENV] === `${parentPid}:1`
+}
+
+/** Compatibility with masters before 2026-11-15; review inline repair removal on 2026-12-15. */
+export function masterRunsEngineResumeRepair(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_RESUME_REPAIR_ENV] === `${parentPid}:1`
 }
 
 /** A new core must not send an older worker host a stop its Codex worker cannot speak. */

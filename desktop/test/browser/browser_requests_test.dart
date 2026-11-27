@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/browser/browser_availability.dart';
-import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -132,6 +131,65 @@ void main() {
     ]);
   });
 
+  test('start and stop send their requests with the agent\'s id', () async {
+    daemon.reply = {'ok': true};
+    await app.agentBrowserStart('m', 'a1');
+    await app.agentBrowserStop('m', 'a1');
+    expect(daemon.requests.map((r) => r.type), [
+      'agent_browser_start',
+      'agent_browser_stop',
+    ]);
+    expect(daemon.requests.map((r) => r.payload), [
+      {'agentId': 'a1'},
+      {'agentId': 'a1'},
+    ]);
+  });
+
+  test('a refusal reaches the caller with the machine\'s code', () async {
+    daemon.failure = const WsRequestFailure(
+      responseType: 'agent_browser_start_result',
+      code: 'NOT_RUNNING',
+    );
+    await expectLater(
+      app.agentBrowserStart('m', 'a1'),
+      throwsA(
+        isA<WsRequestFailure>().having((e) => e.code, 'code', 'NOT_RUNNING'),
+      ),
+    );
+    daemon.failure = const WsRequestFailure(
+      responseType: 'agent_browser_stop_result',
+      code: 'NOT_OWNER',
+    );
+    await expectLater(
+      app.agentBrowserStop('m', 'a1'),
+      throwsA(
+        isA<WsRequestFailure>().having((e) => e.code, 'code', 'NOT_OWNER'),
+      ),
+    );
+  });
+
+  test('the window sends the size and reads the size set; UNSUPPORTED, '
+      'NOT_READY and WINDOW_FAILED are null', () async {
+    daemon.reply = {'width': 1280, 'height': 720};
+    final set = await app.agentBrowserWindow('m', 'a1', 1300, 700);
+    expect(daemon.requests.single.type, 'agent_browser_window');
+    expect(daemon.requests.single.payload, {
+      'agentId': 'a1',
+      'width': 1300,
+      'height': 700,
+    });
+    expect(set, (width: 1280, height: 720));
+    for (final code in ['UNSUPPORTED', 'NOT_READY', 'WINDOW_FAILED']) {
+      daemon.failure = WsRequestFailure(
+        responseType: 'agent_browser_window_result',
+        code: code,
+      );
+      expect(await app.agentBrowserWindow('m', 'a1', 1300, 700), isNull);
+    }
+    daemon.failure = const WsRequestTimeout('agent_browser_window');
+    expect(await app.agentBrowserWindow('m', 'a1', 1300, 700), isNull);
+  });
+
   test('settings read the saved settings, and a save sends them and reads '
       'the answer', () async {
     daemon.reply = _saved;
@@ -197,6 +255,9 @@ void main() {
           ..nodeOnline = true
           ..connectionStatus = ConnectionStatus.connected;
     await expectLater(app.agentBrowserRetry('m', 'a1'), throwsStateError);
+    await expectLater(app.agentBrowserStart('m', 'a1'), throwsStateError);
+    await expectLater(app.agentBrowserStop('m', 'a1'), throwsStateError);
+    expect(await app.agentBrowserWindow('m', 'a1', 1300, 700), isNull);
     app.machineStates['m'] = MachineState(
       const Machine(machineId: 'm', authMode: MachineAuthMode.remote),
     )..connectionStatus = ConnectionStatus.disconnected;
@@ -208,16 +269,18 @@ void main() {
     expect(daemon.requests, isEmpty);
   });
 
-  test('createAgent sends browser:true only when asked', () async {
+  test('createAgent sends no browser', () async {
     daemon.reply = {'state': 'failed'};
     await app.createAgent('m', engine: 'claude', folder: '/work');
     expect(daemon.requests.last.payload.containsKey('browser'), isFalse);
-    await app.createAgent(
-      'm',
-      engine: 'claude',
-      folder: '/work',
-      browser: true,
-    );
-    expect(daemon.requests.last.payload['browser'], isTrue);
+  });
+
+  test('the Browser button is not offered on the web or on Windows', () {
+    bool offered({bool web = false, bool windows = false, bool asked = true}) =>
+        browserOffered(web: web, windows: windows, offersBrowser: asked);
+    expect(offered(web: true), isFalse);
+    expect(offered(windows: true), isFalse);
+    expect(offered(asked: false), isFalse);
+    expect(offered(), isTrue);
   });
 }

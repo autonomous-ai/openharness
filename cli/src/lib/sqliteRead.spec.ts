@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from './sqliteBuiltin.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite, readBuiltin, type DatabaseConstructor } from './sqliteBuiltin.js'
 import { idleWalStore, inlineSqlParams, sqliteReadAll } from './sqliteRead.js'
+import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
 
 const hasCli = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
@@ -58,9 +59,13 @@ withCli('sqliteReadAll', () => {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   })
 
-  const paths: Array<['builtin' | 'cli', () => void]> = [
-    ['cli', () => overrideBuiltinSqlite(null)],
-    ...(hasBuiltin ? [['builtin', () => overrideBuiltinSqlite(undefined)] as ['builtin', () => void]] : []),
+  // The core reads on its read threads (sqliteThread.ts): the same answers, from the same reader source.
+  const paths: Array<['builtin' | 'cli', string, () => void]> = [
+    ['cli', 'the CLI', () => overrideBuiltinSqlite(null)],
+    ...(hasBuiltin ? [
+      ['builtin', 'the binding', () => overrideBuiltinSqlite(undefined)],
+      ['builtin', 'the core\'s read threads', () => { overrideBuiltinSqlite(undefined); enableOffThreadSqlite() }],
+    ] as Array<['builtin', string, () => void]> : []),
   ]
   const withBuiltin = hasBuiltin ? it : it.skip
 
@@ -73,9 +78,10 @@ withCli('sqliteReadAll', () => {
     }
   })
 
-  for (const [via, select] of paths) {
-    describe(`via ${via}`, () => {
+  for (const [via, name, select] of paths) {
+    describe(`via ${name}`, () => {
       beforeEach(select)
+      afterEach(() => resetOffThreadSqlite())
 
       it('binds parameters in order and returns rows as plain objects', async () => {
         const result = await sqliteReadAll(db,
@@ -191,6 +197,33 @@ withCli('sqliteReadAll', () => {
     expect(idleWalStore(join(dir, 'short.db'))).toBe(false)
   })
 
+  // A store in a folder a sandboxed agent controls may be anything: a FIFO's open waits for a writer, on the core's
+  // read thread or its own, for good. What is not a regular file is never opened as a store.
+  it('never opens a store that is not a regular file', () => {
+    const opened: string[] = []
+    const Recording = class { constructor(path: string | URL) { opened.push(String(path)) } } as unknown as DatabaseConstructor
+    mkdirSync(join(dir, 'folder.db'))
+    expect(readBuiltin(Recording, join(dir, 'folder.db'), 'SELECT 1;', [], 0)).toMatchObject({ ok: false, reason: 'transient' })
+    expect(opened).toEqual([])
+  })
+
+  it.runIf(process.platform !== 'win32')('tells a FIFO is no idle store without waiting for a writer', async () => {
+    const fifo = join(dir, 'fifo.db')
+    execFileSync('mkfifo', [fifo])
+    // In a process of its own: a read that waits would hold this one for good.
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+      `const { idleWalStore } = await import(${JSON.stringify(new URL('./sqliteRead.ts', import.meta.url).href)}); console.log(idleWalStore(process.argv[1]))`, fifo],
+    { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
+    const answered = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(false) }, 10_000)
+      child.on('exit', () => { clearTimeout(timer); resolve(true) })
+    })
+    expect(answered).toBe(true)
+    expect(out.trim()).toBe('false')
+  }, 15_000)
+
   it('reports missing when neither reader exists', async () => {
     overrideBuiltinSqlite(null)
     const realPath = process.env.PATH
@@ -216,7 +249,7 @@ withCli('sqliteReadAll', () => {
     process.env.PATH = shim
     try {
       const started = Date.now()
-      const result = await sqliteReadAll(db, 'SELECT 1;', [], { cliTimeoutMs: 300 })
+      const result = await sqliteReadAll(db, 'SELECT 1;', [], { timeoutMs: 300 })
       expect(result).toMatchObject({ ok: false, reason: 'transient' })
       expect(Date.now() - started).toBeLessThan(5_000)
     } finally {

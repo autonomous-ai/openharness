@@ -1,5 +1,6 @@
 import 'error_burst_filter.dart';
 import 'log_file.dart';
+import 'log_safe_error.dart';
 
 /// Severity of an [AppLog] event, in ascending order.
 enum AppLogLevel { debug, info, warn, error }
@@ -120,7 +121,7 @@ class FileAppLog implements FlushableAppLog {
     final body = StringBuffer(
       '${_levelTag(level)} ${_categoryTag(category)} $message',
     );
-    if (error != null) body.write('  err=$error');
+    if (error != null) body.write('  err=${logErrorText(error)}');
 
     if (level != AppLogLevel.error) {
       final buffered = bufferDebug && level == AppLogLevel.debug;

@@ -34,9 +34,15 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-/** Everything Browsers drives, as fakes: a container "runs" from its start until it is stopped, removed or crashed. */
+/**
+ * Everything Browsers drives, as fakes: a container "runs" from its start until it is stopped, removed or crashed.
+ * `running` holds agents, as Podman's labels say; Containers is handed a profile for the name, the agent's id unless
+ * its browser moved.
+ */
 function rig() {
   const running = new Set<string>()
+  const named = new Map<string, string>()
+  const agentNamed = (profile: string) => named.get(profile) ?? profile
   const exitCodes = new Map<string, number>()
   const availability: { value: Availability } = { value: { state: 'ready' } }
   const connection: { value: string | null } = { value: null }
@@ -47,16 +53,21 @@ function rig() {
     startMachine: vi.fn(async () => {}),
     memoryBytes: vi.fn(async () => 17 * GiB),
   }
+  const gone = (profile: string) => {
+    running.delete(agentNamed(profile))
+    named.delete(profile)
+  }
   const containers = {
-    start: vi.fn(async (agentId: string, _image: string, _settings: BrowserSettings, _zone: string, _secretId: string) => {
+    start: vi.fn(async (agentId: string, profile: string, _image: string, _settings: BrowserSettings, _zone: string, _secretId: string) => {
       running.add(agentId)
+      named.set(profile, agentId)
       return { limitsDropped: [] as string[] }
     }),
-    stop: vi.fn(async (agentId: string) => { running.delete(agentId) }),
-    remove: vi.fn(async (agentId: string) => { running.delete(agentId) }),
-    sweep: vi.fn(async (_listed: Set<string>) => 0),
+    stop: vi.fn(async (profile: string) => gone(profile)),
+    remove: vi.fn(async (profile: string) => gone(profile)),
+    sweep: vi.fn(async (_listed: (agentId: string) => boolean) => 0),
     running: vi.fn(async () => [...running]),
-    ready: vi.fn(async (agentId: string) => running.has(agentId)),
+    ready: vi.fn(async (profile: string) => running.has(agentNamed(profile))),
     exitCode: vi.fn(async (agentId: string) => (running.has(agentId) ? null : exitCodes.get(agentId) ?? null)),
   }
   const setup = { run: vi.fn(async (_from: unknown): Promise<void> => {}) }
@@ -199,7 +210,7 @@ describe('Browsers', () => {
     expect(shown(r, 'a1')).toBe('failed/podman_install_failed')
     expect(shown(r, 'a2')).toBe('failed/podman_install_failed')
     expect(r.measured).toContain('agent_browser_setup_failed')
-    expect(r.logged.join('\n')).toContain('User canceled')
+    expect(r.logged).toContain('agent browser: setup failed · PodmanError PODMAN_INSTALL_FAILED')
     r.setup.run.mockRejectedValueOnce(new PodmanError('podman_manual', 'pkexec is not installed'))
     await r.browsers.retry('a1')
     expect(shown(r, 'a1')).toBe('failed/podman_manual')
@@ -207,6 +218,16 @@ describe('Browsers', () => {
     expect(r.setup.run).toHaveBeenCalledTimes(3)
     expect(shown(r, 'a1')).toBe('ready')
     expect(shown(r, 'a2')).toBe('ready')
+  })
+
+  it('setup that fails with no Podman state of its own is Podman not running, logged by its kind', async () => {
+    const r = rig()
+    r.availability.value = { state: 'needs_setup' }
+    await r.browsers.start('a1')
+    r.setup.run.mockRejectedValueOnce(new Error('spawn EACCES'))
+    await r.browsers.setUp()
+    expect(shown(r, 'a1')).toBe('failed/podman_down')
+    expect(r.logged).toContain('agent browser: setup failed · Error')
   })
 
   it('start starts a stopped machine first', async () => {
@@ -232,12 +253,12 @@ describe('Browsers', () => {
 
   it('resume with the step starting_podman runs setUp', async () => {
     const setup = { step: 'starting_podman' }
-    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup }))
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup }), { mode: 0o600 })
     const r = rig()
     r.availability.value = { state: 'needs_setup' }
     const run = deferred<void>()
     r.setup.run.mockReturnValueOnce(run.promise)
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     expect(r.setup.run).toHaveBeenCalledWith(setup)
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('setup/starting_podman')
@@ -246,10 +267,10 @@ describe('Browsers', () => {
   })
 
   it('resume with the step installing does not run the installer', async () => {
-    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: { step: 'installing' } }))
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: { step: 'installing' } }), { mode: 0o600 })
     const r = rig()
     r.availability.value = { state: 'needs_setup' }
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     expect(r.setup.run).not.toHaveBeenCalled()
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('failed/podman_install_failed')
@@ -277,24 +298,25 @@ describe('Browsers', () => {
   })
 
   it('failures are named', async () => {
-    const cases: Array<[string, (r: ReturnType<typeof rig>) => void]> = [
-      ['podman_old', r => { r.availability.value = { state: 'podman_old' } }],
-      ['podman_memory', r => { r.availability.value = { state: 'podman_memory' } }],
-      ['podman_down', r => { r.podman.available.mockRejectedValue(new PodmanError('podman_down', 'Podman is not running')) }],
-      ['podman_down', r => { r.availability.value = { state: 'stopped' }; r.podman.startMachine.mockRejectedValue(new PodmanError('podman_down', 'machine did not start')) }],
+    // The state the panel shows, and the kind the log line names in its place.
+    const cases: Array<[string, string, (r: ReturnType<typeof rig>) => void]> = [
+      ['podman_old', 'PodmanError PODMAN_OLD', r => { r.availability.value = { state: 'podman_old' } }],
+      ['podman_memory', 'PodmanError PODMAN_MEMORY', r => { r.availability.value = { state: 'podman_memory' } }],
+      ['podman_down', 'PodmanError PODMAN_DOWN', r => { r.podman.available.mockRejectedValue(new PodmanError('podman_down', 'Podman is not running')) }],
+      ['podman_down', 'PodmanError PODMAN_DOWN', r => { r.availability.value = { state: 'stopped' }; r.podman.startMachine.mockRejectedValue(new PodmanError('podman_down', 'machine did not start')) }],
       // A podman call that failed or timed out is Podman not running, the failure the panel has copy for.
-      ['podman_down', r => { r.containers.start.mockRejectedValue(new PodmanError('podman_failed', 'podman create timed out after 30000 ms')) }],
-      ['podman_down', r => { r.containers.start.mockRejectedValue(new Error('spawn EACCES')) }],
-      ['image_failed', r => { r.image.mockRejectedValue(new PodmanError('image_failed', 'E: Unable to locate package')) }],
-      ['browser_limit', r => { r.podman.memoryBytes.mockResolvedValue(3 * GiB); r.running.add('other') }],
+      ['podman_down', 'PodmanError PODMAN_FAILED', r => { r.containers.start.mockRejectedValue(new PodmanError('podman_failed', 'podman create timed out after 30000 ms')) }],
+      ['podman_down', 'Error', r => { r.containers.start.mockRejectedValue(new Error('spawn EACCES')) }],
+      ['image_failed', 'PodmanError IMAGE_FAILED', r => { r.image.mockRejectedValue(new PodmanError('image_failed', 'E: Unable to locate package')) }],
+      ['browser_limit', 'PodmanError BROWSER_LIMIT', r => { r.podman.memoryBytes.mockResolvedValue(3 * GiB); r.running.add('other') }],
     ]
-    for (const [state, arrange] of cases) {
+    for (const [state, kind, arrange] of cases) {
       const r = rig()
       arrange(r)
       await r.browsers.start('a1')
       expect(shown(r, 'a1')).toBe(`failed/${state}`)
       expect(r.measured).toEqual(['agent_browser_start_failed', `agent_browser_failed_${state}`])
-      expect(r.logged).toEqual([expect.stringContaining(state)])
+      expect(r.logged).toEqual([`agent browser a1: failed · ${kind}`])
     }
   })
 
@@ -368,7 +390,10 @@ describe('Browsers', () => {
     await vi.advanceTimersByTimeAsync(120_000)
     await again
     expect(shown(r, 'a2')).toBe('failed/browser_stopped')
-    expect(r.logged.join('\n')).toContain('podman rm timed out')
+    expect(r.logged.slice(-2)).toEqual([
+      'agent browser a2: the browser that was not ready was not removed · PodmanError PODMAN_FAILED',
+      'agent browser a2: failed · PodmanError BROWSER_STOPPED',
+    ])
   })
 
   it('a start whose listing Podman answered says so, for the event stream to try again', async () => {
@@ -384,13 +409,13 @@ describe('Browsers', () => {
   it("the proxy's secret id changes with its password alone, outlives a restart and is never handed out", async () => {
     const r = rig()
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-    const lastId = (of = r) => of.containers.start.mock.calls.at(-1)![4]
+    const lastId = (of = r) => of.containers.start.mock.calls.at(-1)![5]
     const withProxy = { ...defaultSettings(host), proxy }
     await r.browsers.saveSettings('a1', withProxy)
     await r.browsers.start('a1')
     const first = lastId()
     expect(first).toMatch(uuid)
-    expect(r.containers.start.mock.calls.at(-1)![2]).toEqual(withProxy)
+    expect(r.containers.start.mock.calls.at(-1)![3]).toEqual(withProxy)
     expect(r.browsers.settings('a1')).toEqual(withProxy)
     // Kept beside the password, in the person's own 0600 file.
     expect(r.state.read().browsers.a1!.proxy).toMatchObject({ password: proxy.password, secretId: first })
@@ -426,6 +451,7 @@ describe('Browsers', () => {
     r.crash('a1', 137)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(shown(r, 'a1')).toBe('failed/browser_stopped')
+    expect(r.logged.slice(-2)).toEqual(['agent browser a1: the browser exited (137) 4 times in a row', 'agent browser a1: failed (browser_stopped)'])
     expect(r.containers.start).toHaveBeenCalledTimes(4)
     // Retry starts over.
     await r.browsers.retry('a1')
@@ -487,6 +513,72 @@ describe('Browsers', () => {
     expect(shown(r, 'a1')).toBe('none')
   })
 
+  // CLI 0.6.40 on a Mac (2026-11-12): a Stop came while Podman was still asked about an exit, and the exit was taken
+  // for a crash. It logged "starting it again in 1 s", showed `starting`, and armed a restart the stop had already
+  // cleared for, which started the browser again after the stop had removed it.
+  it('an exit still being looked at when the browser is stopped is not restarted, logged or shown starting; a crash while it is on still is', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const code = deferred<number | null>()
+    r.containers.exitCode.mockImplementationOnce(() => code.promise)
+    r.crash('a1', 0)
+    await settle()
+    expect(r.containers.exitCode).toHaveBeenCalledOnce()
+    const stopped = r.browsers.stop('a1')
+    code.resolve(0)
+    await stopped
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(r.logged.filter(line => line.includes('starting it again'))).toEqual([])
+    expect(r.seen.get('a1')).toEqual(['starting', 'ready', 'none'])
+    expect(r.containers.start).toHaveBeenCalledOnce()
+    expect(r.running.has('a1')).toBe(false)
+    expect(shown(r, 'a1')).toBe('none')
+    await r.browsers.start('a1')
+    r.crash('a1', 0)
+    await settle()
+    expect(shown(r, 'a1')).toBe('starting')
+    expect(r.logged.at(-1)).toBe('agent browser a1: the browser exited (0); starting it again in 1 s')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(shown(r, 'a1')).toBe('ready')
+    expect(r.containers.start).toHaveBeenCalledTimes(3)
+  })
+
+  // Review, 2026-11-12: an exit heard again while Podman was asked about it (the event, and the look at what runs after
+  // the stream reconnected) armed a second restart. The first one's timer was lost, so a stop did not clear it, and it
+  // started the browser after the stop.
+  it('one exit heard twice while it is looked at restarts the browser once, and a stop after it leaves it off', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const code = deferred<number | null>()
+    r.containers.exitCode.mockImplementationOnce(() => code.promise)
+    r.crash('a1', 0)
+    await settle()
+    r.browsers.exited('a1')
+    code.resolve(0)
+    await settle()
+    expect(r.logged.filter(line => line.includes('starting it again'))).toEqual(['agent browser a1: the browser exited (0); starting it again in 1 s'])
+    await r.browsers.stop('a1')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(r.containers.start).toHaveBeenCalledOnce()
+    expect(r.running.has('a1')).toBe(false)
+    expect(shown(r, 'a1')).toBe('none')
+  })
+
+  it('a stop while the start looks for the ready marker leaves the browser off, never ready', async () => {
+    const r = rig()
+    const ready = deferred<boolean>()
+    r.containers.ready.mockImplementationOnce(() => ready.promise)
+    const started = r.browsers.start('a1')
+    await settle()
+    expect(r.containers.ready).toHaveBeenCalledOnce()
+    const stopped = r.browsers.stop('a1')
+    ready.resolve(true)
+    await Promise.all([started, stopped])
+    expect(r.seen.get('a1')).toEqual(['starting', 'none'])
+    expect(r.measured).not.toContain('agent_browser_start_ok')
+    expect(shown(r, 'a1')).toBe('none')
+  })
+
   it('operations are serialized per agent; different agents run in parallel', async () => {
     const r = rig()
     const slow = deferred<{ limitsDropped: string[] }>()
@@ -535,59 +627,81 @@ describe('Browsers', () => {
     expect(recorded).toEqual(['a1'])
     expect(r.closed).toEqual(['a1'])
     expect(r.state.read().deleting).toEqual(['a1'])
-    expect(r.logged.join('\n')).toContain('timed out')
+    expect(r.logged).toContain('agent browser a1: its queued work failed · PodmanError PODMAN_FAILED')
     r.containers.remove.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman rm timed out after 30000 ms'))
     await r.browsers.delete('a1')
     expect(r.state.read().deleting).toEqual(['a1'])
 
     const after = rig()
-    await after.browsers.resume(null)
+    await after.browsers.resume()
     expect(after.containers.remove).toHaveBeenCalledWith('a1')
     expect(after.state.read()).toEqual({ browsers: {}, deleting: [], setup: null })
   })
 
-  it('browser of a gone agent is deleted at service start, and resume sweeps unlisted containers of this daemon', async () => {
+  // Its mark (notices.ts) says the agent was told its browser is ready: an agent that is gone has none.
+  it('a delete removes the agent\'s told mark with its settings', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.start('a2')
+    r.state.update(s => { s.told = { a1: true, a2: true }; s.on = { a1: true, a2: true }; s.adopted = { a1: true } })
+    await r.browsers.delete('a1')
+    expect(Object.keys(r.state.read().browsers)).toEqual(['a2'])
+    expect(r.state.read()).toMatchObject({ told: { a2: true }, on: { a2: true }, adopted: {} })
+  })
+
+  // Its agent ended while the service could not hear it (its process and the core both restarted).
+  it('stops every running browser its service does not want, keeps their profiles, and says why; a listing that fails stops nothing', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.start('a2')
+    await r.browsers.stopAllBut(agentId => agentId === 'a1')
+    expect(r.containers.stop.mock.calls).toEqual([['a2']])
+    expect(r.containers.remove).not.toHaveBeenCalled()
+    expect(r.logged).toContain('agent browser a2: stopped, its agent is not here or its Browser is off')
+    r.containers.running.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman ps timed out after 30000 ms'))
+    await r.browsers.stopAllBut(() => false)
+    expect(r.containers.stop).toHaveBeenCalledTimes(1)
+    expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers · PodmanError PODMAN_FAILED')
+  })
+
+  it('startup keeps profiles until an explicit purge, and sweeps only unlisted containers', async () => {
     const settings = defaultSettings(host)
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }), { mode: 0o600 })
     const r = rig()
     r.containers.sweep.mockResolvedValue(2)
-    await r.browsers.resume(new Set(['a1']))
-    expect(r.containers.remove.mock.calls).toEqual([['a2']])
-    expect(Object.keys(r.state.read().browsers)).toEqual(['a1'])
-    expect(r.containers.sweep).toHaveBeenCalledWith(new Set(['a1']))
+    await r.browsers.resume()
+    expect(r.containers.remove).not.toHaveBeenCalled()
+    expect(Object.keys(r.state.read().browsers)).toEqual(['a1', 'a2'])
+    const listed = r.containers.sweep.mock.calls[0]![0]
+    expect(listed('a1')).toBe(true)
+    expect(listed('a2')).toBe(true)
+    expect(listed('other')).toBe(false)
+    r.state.update(state => { state.browsers.new = settings })
+    expect(listed('new')).toBe(true)
     expect(r.logged).toEqual([expect.stringContaining('2')])
   })
 
-  it('no answer from the core deletes nothing', async () => {
+  it('startup finishes only the purges already recorded', async () => {
     const settings = defaultSettings(host)
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: ['a3'], setup: null }))
+    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: ['a3'], setup: null }), { mode: 0o600 })
     const r = rig()
-    await r.browsers.resume(null)
+    await r.browsers.resume()
     expect(r.containers.remove.mock.calls).toEqual([['a3']])
-    expect(r.containers.sweep).not.toHaveBeenCalled()
+    expect(r.containers.sweep).toHaveBeenCalledOnce()
     expect(Object.keys(r.state.read().browsers)).toEqual(['a1', 'a2'])
-  })
-
-  it('an empty set from the core is believed', async () => {
-    const settings = defaultSettings(host)
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }))
-    const r = rig()
-    await r.browsers.resume(new Set())
-    expect(r.containers.remove.mock.calls).toEqual([['a1'], ['a2']])
-    expect(r.state.read().browsers).toEqual({})
   })
 
   it('a sweep Podman cannot answer is logged', async () => {
     const r = rig()
     r.containers.sweep.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
-    await r.browsers.resume(new Set())
-    expect(r.logged).toEqual([expect.stringContaining('machine is not running')])
+    await r.browsers.resume()
+    expect(r.logged).toEqual(['agent browser: could not sweep containers · PodmanError PODMAN_FAILED'])
   })
 
   it('an unreadable state file removes nothing and is named', async () => {
     writeFileSync(path, '{"browsers": {')
     const r = rig()
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     await r.browsers.start('a1')
     await r.browsers.delete('a1')
     await r.browsers.start('a2')
@@ -598,7 +712,7 @@ describe('Browsers', () => {
     }
     expect(readFileSync(path, 'utf8')).toBe('{"browsers": {')
     expect(r.measured).toContain('agent_browser_failed_state_unreadable')
-    expect(r.logged.length).toBeGreaterThan(0)
+    expect(r.logged).toContain('agent browser: the state file cannot be read; nothing is removed or started · PodmanError STATE_UNREADABLE')
   })
 
   it('saveSettings with a changed hash restarts the browser and keeps the volume; a human-input-only change does not', async () => {
@@ -613,7 +727,7 @@ describe('Browsers', () => {
     await r.browsers.saveSettings('a1', moved)
     await settle()
     expect(r.containers.start).toHaveBeenCalledTimes(2)
-    expect(r.containers.start.mock.calls[1]![2]).toEqual(moved)
+    expect(r.containers.start.mock.calls[1]![3]).toEqual(moved)
     expect(r.containers.remove).not.toHaveBeenCalled()
     expect(shown(r, 'a1')).toBe('ready')
     // Saved for an agent whose browser is not running: kept, and nothing starts.
@@ -624,12 +738,26 @@ describe('Browsers', () => {
     expect(r.browsers.settings('a8')).toEqual(defaultSettings(host))
   })
 
+  // The default became portrait (2026-11-12). A first start saves the defaults it ran with, so a browser that ever ran
+  // keeps its landscape screen, and its container and profile stay as they are; only a first start takes portrait.
+  it('a first start saves the portrait default; a browser an earlier default started keeps its screen', async () => {
+    const before = { ...defaultSettings(host), screen: '1920x1080' as const }
+    writeFileSync(path, JSON.stringify({ browsers: { a1: before }, deleting: [], setup: null }), { mode: 0o600 })
+    const r = rig()
+    await r.browsers.start('a1')
+    expect(r.containers.start.mock.calls[0]![3]).toEqual(before)
+    await r.browsers.start('a2')
+    expect(r.containers.start.mock.calls[1]![3].screen).toBe('1080x1920')
+    expect(r.state.read().browsers.a2!.screen).toBe('1080x1920')
+    expect(r.state.read().browsers.a1).toEqual(before)
+  })
+
   it("auto time zone uses the proxy's exit zone, and the machine's when the lookup fails", async () => {
     const r = rig()
     const zoneOf = async (agentId: string, settings: BrowserSettings) => {
       await r.browsers.saveSettings(agentId, settings)
       await r.browsers.start(agentId)
-      return r.containers.start.mock.calls.at(-1)![3]
+      return r.containers.start.mock.calls.at(-1)![4]
     }
     r.exitZone.mockResolvedValueOnce('Europe/Berlin')
     expect(await zoneOf('a1', { ...defaultSettings(host), proxy })).toBe('Europe/Berlin')
@@ -663,17 +791,303 @@ describe('Browsers', () => {
     expect(r.containers.start).toHaveBeenCalledTimes(3)
     r.containers.running.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman ps timed out after 30000 ms'))
     await r.browsers.reconcile()
-    expect(r.logged.at(-1)).toContain('timed out')
+    expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers · PodmanError PODMAN_FAILED')
   })
 
   it('a listing that keeps failing is logged once, until one works again', async () => {
     const r = rig()
     r.containers.running.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
     for (let i = 0; i < 3; i++) await r.browsers.reconcile()
-    expect(r.logged).toEqual([expect.stringContaining('machine is not running')])
+    expect(r.logged).toEqual(['agent browser: could not list running browsers · PodmanError PODMAN_FAILED'])
     r.containers.running.mockResolvedValueOnce([])
     await r.browsers.reconcile()
     await r.browsers.reconcile()
     expect(r.logged).toHaveLength(2)
+  })
+})
+
+// Decision 19: a browser's container, network, volume and secret are named by the profile its entry keeps, and the
+// entry moves with its pane to the agent that replaces the one that ended there.
+describe('Browsers, named by a profile', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+  const named = (r: ReturnType<typeof rig>) => r.containers.start.mock.calls.map(call => call.slice(0, 2))
+  /** Every call Browsers made to Podman or Containers. */
+  const podmanCalls = (r: ReturnType<typeof rig>) => [...Object.values(r.podman), ...Object.values(r.containers)]
+    .reduce((sum, fn) => sum + (vi.isMockFunction(fn) ? fn.mock.calls.length : 0), 0)
+
+  it("a browser with no profile in its entry is named by its agent's id", async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    expect(named(r)).toEqual([['a1', 'a1']])
+    expect(r.containers.ready).toHaveBeenCalledWith('a1')
+    // The file of a browser that never moved is byte for byte what an older CLI writes.
+    expect(readFileSync(path, 'utf8')).not.toContain('profile')
+    expect(r.browsers.profile('a1')).toBe('a1')
+    expect(r.browsers.profile('a9')).toBe('a9')
+    await r.browsers.stop('a1')
+    expect(r.containers.stop.mock.calls).toEqual([['a1']])
+    await r.browsers.delete('a1')
+    expect(r.containers.remove.mock.calls).toEqual([['a1']])
+  })
+
+  it("a move gives the new agent the entry and the profile, takes the previous agent's entry and told mark, and touches no volume", async () => {
+    const r = rig()
+    const kept = { ...defaultSettings(host), screen: '1366x768' as const, timeZone: 'Europe/Berlin', proxy }
+    await r.browsers.saveSettings('a1', kept)
+    await r.browsers.start('a1')
+    const secretId = r.state.read().browsers.a1!.proxy as { secretId?: string }
+    r.state.update(s => { s.told = { a1: true, a2: true }; s.on = { a1: true, a2: true } })
+    expect(await r.browsers.move('a1', 'b1')).toBe(true)
+    const saved = r.state.read()
+    expect(Object.keys(saved.browsers)).toEqual(['b1'])
+    expect(saved.browsers.b1).toEqual({ ...kept, proxy: { ...proxy, secretId: secretId.secretId }, profile: 'a1' })
+    expect(saved.told).toEqual({ a2: true })
+    // Its Browser being on goes with it, and the flag the previous agent's row may still carry is never taken in after.
+    expect(saved.on).toEqual({ a2: true, b1: true })
+    expect(saved.adopted).toEqual({ a1: true, b1: true })
+    expect(r.containers.remove).not.toHaveBeenCalled()
+    // One line, with nothing of the settings in it.
+    expect(r.logged).toEqual(['agent browser b1: took the browser of a1'])
+    // The new agent's browser runs on the profile that moved, under its own label, with the settings that moved.
+    await r.browsers.start('b1')
+    expect(named(r).at(-1)).toEqual(['b1', 'a1'])
+    expect(r.containers.start.mock.calls.at(-1)![3]).toEqual(kept)
+    expect(r.containers.start.mock.calls.at(-1)![5]).toBe(secretId.secretId)
+    expect(r.containers.ready).toHaveBeenLastCalledWith('a1')
+    expect(shown(r, 'b1')).toBe('ready')
+    expect(r.browsers.profile('b1')).toBe('a1')
+  })
+
+  it('a moved entry moves again and keeps its first profile', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    expect(await r.browsers.move('a1', 'b1')).toBe(true)
+    expect(await r.browsers.move('b1', 'c1')).toBe(true)
+    expect(r.state.read().browsers).toEqual({ c1: { ...defaultSettings(host), profile: 'a1' } })
+    expect(r.browsers.profile('c1')).toBe('a1')
+    expect(r.logged).toEqual(['agent browser b1: took the browser of a1', 'agent browser c1: took the browser of b1'])
+  })
+
+  it("a move stops the previous agent's browser first when it runs, and makes no Podman call when it does not", async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    let entriesAtStop: string[] = []
+    r.containers.stop.mockImplementationOnce(async (profile: string) => {
+      entriesAtStop = Object.keys(r.state.read().browsers)
+      r.running.delete(profile)
+    })
+    expect(await r.browsers.move('a1', 'b1')).toBe(true)
+    expect(r.containers.stop.mock.calls).toEqual([['a1']])
+    expect(entriesAtStop).toEqual(['a1'])
+    expect(shown(r, 'a1')).toBe('none')
+    expect(r.seen.get('a1')!.at(-1)).toBe('none')
+    expect(r.closed).toEqual(['a1'])
+    expect(r.running.size).toBe(0)
+    // b1 never started the browser it was handed: nothing of it runs, and its move asks Podman nothing.
+    const before = podmanCalls(r)
+    expect(await r.browsers.move('b1', 'c1')).toBe(true)
+    expect(podmanCalls(r)).toBe(before)
+    expect(r.closed).toEqual(['a1'])
+  })
+
+  it('a stop that fails is logged and the entry still moves', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    r.containers.stop.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman rm timed out after 30000 ms'))
+    expect(await r.browsers.move('a1', 'b1')).toBe(true)
+    expect(r.logged).toEqual(['agent browser a1: the browser that moved was not stopped · PodmanError PODMAN_FAILED', 'agent browser b1: took the browser of a1'])
+    expect(Object.keys(r.state.read().browsers)).toEqual(['b1'])
+    expect(shown(r, 'a1')).toBe('none')
+  })
+
+  it('a move with no entry, of an agent being deleted, or to an agent that has an entry, changes nothing and answers false', async () => {
+    const r = rig()
+    expect(await r.browsers.move('a1', 'b1')).toBe(false)
+    expect(r.state.read().browsers).toEqual({})
+    // b2 has its own (call 25): a2 keeps its running browser, and b2 its settings.
+    await r.browsers.start('a2')
+    await r.browsers.saveSettings('b2', { ...defaultSettings(host), screen: '1366x768' as const })
+    // a3's delete is recorded and its removal failed: it is finished at the next service start.
+    await r.browsers.start('a3')
+    r.containers.remove.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman rm timed out after 30000 ms'))
+    await r.browsers.delete('a3')
+    const before = readFileSync(path, 'utf8')
+    const calls = podmanCalls(r)
+    expect(await r.browsers.move('a2', 'b2')).toBe(false)
+    expect(await r.browsers.move('a2', 'a2')).toBe(false)
+    expect(await r.browsers.move('a3', 'b3')).toBe(false)
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(podmanCalls(r)).toBe(calls)
+    expect(shown(r, 'a2')).toBe('ready')
+    expect(r.logged.join('\n')).not.toContain('took the browser')
+  })
+
+  it('a save for the new agent while the previous browser stops is kept, and nothing moves', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const stopping = deferred<void>()
+    r.containers.stop.mockImplementationOnce(async () => await stopping.promise)
+    const moved = r.browsers.move('a1', 'b1')
+    await settle()
+    const own = { ...defaultSettings(host), screen: '1366x768' as const }
+    await r.browsers.saveSettings('b1', own)
+    stopping.resolve()
+    expect(await moved).toBe(false)
+    expect(r.state.read().browsers).toEqual({ a1: defaultSettings(host), b1: own })
+  })
+
+  it('a destination Stop during the old container wait keeps the moved profile off', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    r.state.update(s => { s.on = { a1: true }; s.adopted = { b1: true } })
+    const entered = deferred<void>(), release = deferred<void>()
+    r.containers.stop.mockImplementationOnce(async () => { entered.resolve(); await release.promise })
+    const moved = r.browsers.move('a1', 'b1')
+    await entered.promise
+    r.state.update(s => { delete s.on?.b1 })
+    const stopped = r.browsers.stop('b1')
+    release.resolve()
+    expect(await moved).toBe(true)
+    await stopped
+    expect(r.state.read().browsers.b1).toMatchObject({ profile: 'a1' })
+    expect(r.state.read().on).toEqual({})
+    expect(shown(r, 'b1')).toBe('none')
+  })
+
+  it('a move that cannot write the state file rejects, and both entries are as they were', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    const before = readFileSync(path, 'utf8')
+    vi.spyOn(r.state, 'update').mockImplementationOnce(() => { throw new Error("EACCES: permission denied, open 'agent-browser.json.tmp'") })
+    await expect(r.browsers.move('a1', 'b1')).rejects.toThrow('EACCES')
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(r.browsers.profile('a1')).toBe('a1')
+    expect(r.browsers.profile('b1')).toBe('b1')
+    // Nothing moved, and a1's queue goes on: its browser comes back on its own profile.
+    await r.browsers.start('a1')
+    expect(named(r).at(-1)).toEqual(['a1', 'a1'])
+    expect(shown(r, 'a1')).toBe('ready')
+  })
+
+  it('a move waits for the work already queued for either agent', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    // a1's stop, asked first, finishes first.
+    const stopping = deferred<void>()
+    r.containers.stop.mockImplementationOnce(async (profile: string) => { await stopping.promise; r.running.delete(profile) })
+    const stopped = r.browsers.stop('a1')
+    let answered: boolean | undefined
+    const moved = r.browsers.move('a1', 'b1').then(result => { answered = result })
+    await settle()
+    expect(answered).toBeUndefined()
+    stopping.resolve()
+    await Promise.all([stopped, moved])
+    expect(answered).toBe(true)
+    // A start of the new agent, asked first, finishes first: b1 made its own entry, and keeps it.
+    const build = deferred<string>()
+    r.image.mockReturnValueOnce(build.promise)
+    const started = r.browsers.start('c1')
+    await settle()
+    answered = undefined
+    const second = r.browsers.move('b1', 'c1').then(result => { answered = result })
+    await settle()
+    expect(answered).toBeUndefined()
+    build.resolve(IMAGE)
+    await Promise.all([started, second])
+    expect(answered).toBe(false)
+    expect(shown(r, 'c1')).toBe('ready')
+    expect(Object.keys(r.state.read().browsers).sort()).toEqual(['b1', 'c1'])
+  })
+
+  // Review Focus 10: the previous agent, resumed after its browser moved, and its person presses Start.
+  it("the previous agent's next start gets a profile of its own: the moved volume is not mounted for it, and its stop and its delete remove nothing named by its id", async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.move('a1', 'b1')
+    await r.browsers.start('b1')
+    r.containers.stop.mockClear()
+    expect(r.browsers.profile('a1')).toBeNull()
+    // Its id names b1's browser now: a stop before its own start has nothing to stop.
+    await r.browsers.stop('a1')
+    expect(r.containers.stop).not.toHaveBeenCalled()
+    await r.browsers.start('a1')
+    const [agentId, profile] = named(r).at(-1)!
+    expect(agentId).toBe('a1')
+    expect(profile).toMatch(UUID)
+    expect(r.state.read().browsers.a1).toEqual({ ...defaultSettings(host), profile })
+    expect(r.browsers.profile('a1')).toBe(profile)
+    expect(r.containers.ready).toHaveBeenLastCalledWith(profile)
+    expect(shown(r, 'a1')).toBe('ready')
+    await r.browsers.stop('a1')
+    await r.browsers.delete('a1')
+    expect(r.containers.stop.mock.calls).toEqual([[profile]])
+    expect(r.containers.remove.mock.calls).toEqual([[profile]])
+    // b1's browser runs on, on the volume it was handed.
+    expect(shown(r, 'b1')).toBe('ready')
+    expect(r.running.has('b1')).toBe(true)
+    expect(r.state.read().browsers.b1!.profile).toBe('a1')
+  })
+
+  it("a delete removes the volume of the agent's own profile, and a delete of the new agent removes the moved one", async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.start('a2')
+    await r.browsers.move('a1', 'b1')
+    await r.browsers.delete('a2')
+    await r.browsers.delete('b1')
+    expect(r.containers.remove.mock.calls).toEqual([['a2'], ['a1']])
+    expect(r.state.read().browsers).toEqual({})
+    expect(r.state.read().deleting).toEqual([])
+  })
+
+  it('a delete of an agent with no entry whose id is another\'s profile removes nothing in Podman', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.move('a1', 'b1')
+    const calls = podmanCalls(r)
+    await r.browsers.delete('a1')
+    expect(podmanCalls(r)).toBe(calls)
+    expect(r.state.read().deleting).toEqual([])
+    // Nor at the next service start, from a delete recorded before it was cut off.
+    r.state.update(s => { s.deleting.push('a1') })
+    const after = rig()
+    await after.browsers.resume()
+    expect(after.containers.remove).not.toHaveBeenCalled()
+    expect(r.state.read().deleting).toEqual([])
+    expect(Object.keys(r.state.read().browsers)).toEqual(['b1'])
+    expect(r.browsers.profile('b1')).toBe('a1')
+  })
+
+  it('settings never show the profile, and a save keeps it', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.move('a1', 'b1')
+    expect(r.browsers.settings('b1')).toEqual(defaultSettings(host))
+    expect(r.browsers.settings('b1')).not.toHaveProperty('profile')
+    const next = { ...defaultSettings(host), languages: 'en-US' }
+    await r.browsers.saveSettings('b1', next)
+    expect(r.state.read().browsers.b1).toEqual({ ...next, profile: 'a1' })
+    expect(r.browsers.settings('b1')).not.toHaveProperty('profile')
+    await r.browsers.saveSettings('b1', { ...next, proxy })
+    await r.browsers.start('b1')
+    // What the container is made with, and labelled by, is the person's settings alone.
+    expect(r.containers.start.mock.calls.at(-1)![3]).toEqual({ ...next, proxy })
+    expect(r.containers.start.mock.calls.at(-1)![3]).not.toHaveProperty('profile')
+    expect(r.state.read().browsers.b1!.profile).toBe('a1')
+  })
+
+  it("a save while off for an agent whose id is another's profile makes its entry with a profile of its own", async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.move('a1', 'b1')
+    await r.browsers.saveSettings('a1', defaultSettings(host))
+    const own = r.state.read().browsers.a1!.profile
+    expect(own).toMatch(UUID)
+    expect(r.browsers.profile('a1')).toBe(own)
+    await r.browsers.saveSettings('a1', { ...defaultSettings(host), screen: '1366x768' as const })
+    expect(r.state.read().browsers.a1!.profile).toBe(own)
+    // Any other new entry has none, as before.
+    await r.browsers.saveSettings('a2', defaultSettings(host))
+    expect(r.state.read().browsers.a2).not.toHaveProperty('profile')
   })
 })

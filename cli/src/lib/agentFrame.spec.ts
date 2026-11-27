@@ -2,10 +2,11 @@ import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
-import { agentFrame } from './agentFrame.js'
+import { agentFrame, agentStarting, openclawStartingUntil } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
-import type { RegisteredSession } from './registry.js'
+import type { AgentLaunch, RegisteredSession } from './registry.js'
 
 function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['codexHome'] = null): RegisteredSession {
   return {
@@ -21,7 +22,65 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
 
 const assignment = { baseUrl: 'https://grid.autonomous.ai/grid-abc/relay', model: 'DeepSeek-V4-Flash-0731' }
 
+describe('agentStarting', () => {
+  const launched = Date.parse('2026-11-19T08:00:00.000Z')
+  const unboundOpenclaw = { ...session(null), engine: 'openclaw' as const, sessionId: '', registeredAt: launched }
+
+  it('is starting while the row still holds its first task', () => {
+    expect(agentStarting({ ...session(null), firstTask: 'Fix the parser' }, false, launched + 3_600_000)).toBe(true)
+  })
+  it('is starting while its typed first task awaits confirmation', () => {
+    expect(agentStarting(session(null), true, launched + 3_600_000)).toBe(true)
+  })
+  // A daemon restarted since it was typed awaits nothing yet: the row's mark keeps it starting until it is settled.
+  it('is starting while its row holds a first task typed and not yet confirmed', () => {
+    expect(agentStarting({ ...session(null), engine: 'openclaw', firstTaskTyped: { text: 'Fix the parser', at: launched } }, false, launched + 3_600_000)).toBe(true)
+  })
+  it('an OpenClaw with no session bound is starting for a minute from its launch', () => {
+    expect(agentStarting(unboundOpenclaw, false, launched + 59_000)).toBe(true)
+    expect(agentStarting(unboundOpenclaw, false, launched + 61_000)).toBe(false)
+  })
+  // An engine typed into a pane that was open first starts later than its row.
+  it('an OpenClaw counts its minute from its process\'s start when that is later than its row', () => {
+    const row = { ...unboundOpenclaw, processIdentity: { pid: 7, executable: 'openclaw', startMarker: new Date(launched + 30_000).toISOString() } }
+    expect(agentStarting(row, false, launched + 89_000)).toBe(true)
+    expect(agentStarting(row, false, launched + 91_000)).toBe(false)
+  })
+  it('an unbound Codex is not starting', () => {
+    expect(agentStarting({ ...unboundOpenclaw, engine: 'codex' }, false, launched + 1_000)).toBe(false)
+  })
+  it('a bound OpenClaw with no task is not starting', () => {
+    expect(agentStarting({ ...unboundOpenclaw, sessionId: 's1' }, false, launched + 1_000)).toBe(false)
+  })
+})
+
+describe('openclawStartingUntil', () => {
+  const launched = Date.parse('2026-11-19T08:00:00.000Z')
+  const unboundOpenclaw = { ...session(null), engine: 'openclaw' as const, sessionId: '', registeredAt: launched }
+
+  it('an unbound OpenClaw starts until a minute after its row', () => {
+    expect(openclawStartingUntil(unboundOpenclaw)).toBe(launched + 60_000)
+  })
+  it('until a minute after its process\'s start when that is later than its row', () => {
+    const row = { ...unboundOpenclaw, processIdentity: { pid: 7, executable: 'openclaw', startMarker: new Date(launched + 30_000).toISOString() } }
+    expect(openclawStartingUntil(row)).toBe(launched + 90_000)
+  })
+  it('a bound OpenClaw has no starting minute', () => {
+    expect(openclawStartingUntil({ ...unboundOpenclaw, sessionId: 's1' })).toBeNull()
+  })
+  it('a Codex has none', () => {
+    expect(openclawStartingUntil({ ...unboundOpenclaw, engine: 'codex' })).toBeNull()
+  })
+})
+
 describe('agentFrame', () => {
+  it.each(['Live view is waiting for its engine reader. The terminal and Stop still work.',
+    'Transcript changed while its reader was unavailable. Rebuilding the live view; check its history for missed events.'])
+  ('shows the reader state to the person: %s', async identityHold => {
+    const row = { ...session(null), engine: 'pi' as const, identityHold }
+    expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true })).toMatchObject({ namedState: identityHold, status: 'active', terminal: { available: true } })
+  })
+
   it('exposes an unavailable identity reason while retaining the current session', async () => {
     const row = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
     expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
@@ -36,6 +95,19 @@ describe('agentFrame', () => {
     expect(await agentFrame(waiting, context)).not.toHaveProperty('namedState')
     expect(await agentFrame(session(null), context)).not.toHaveProperty('namedState')
   })
+  // Only the person clears these two; a helper that failed to prepare may recover on a later pass, so it stays the daemon's.
+  it('names a build without its helper and a replaced program as named states', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    for (const identityHold of [MISSING_HELPER, REPLACED_PROGRAM]) {
+      expect(await agentFrame({ ...session(null), identityHold }, context)).toMatchObject({ namedState: identityHold })
+    }
+    const transient = { ...session(null), identityHold: 'Conversation identity is held: the native control helper is unavailable.' }
+    expect(await agentFrame(transient, context)).not.toHaveProperty('namedState')
+  })
+  it('a stopped local run is a named state', async () => {
+    const held = { ...session(null), engine: 'openclaw' as const, identityHold: "OpenClaw's local run stopped: boom" }
+    expect(await agentFrame(held, { selectedModel: null, terminalAvailable: true })).toMatchObject({ namedState: "OpenClaw's local run stopped: boom" })
+  })
   // Null is a real answer: a push without the key would leave a window showing a wait that ended.
   it('says what a message to it waits for, read as the frame is built, and null when nothing', async () => {
     expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).waitingFor).toBeNull()
@@ -44,9 +116,9 @@ describe('agentFrame', () => {
   // Absent is a real answer here: an agent without Browser has no browser, and the panel draws nothing for it.
   it('browser field present only when the context has it', async () => {
     expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).not.toHaveProperty('browser')
-    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser: undefined })).not.toHaveProperty('browser')
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, parts: () => ({}) })).not.toHaveProperty('browser')
     const browser = { state: 'setup' as const, step: 'building' }
-    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser })).browser).toEqual(browser)
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, parts: () => ({ browser }) })).browser).toEqual(browser)
   })
   it('says its name was not chosen by a person when nobody renamed it, whatever its session title says', async () => {
     const row = { ...session(null), title: 'cd /Users/macbookpro/projects/lamp' }
@@ -88,6 +160,28 @@ describe('agentFrame', () => {
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
     expect(frame).not.toHaveProperty('gridLaunch')
     expect(JSON.stringify(frame)).not.toContain('gridkey-SECRET')
+  })
+
+  // The task is the person's words, typed into the pane once (core/agents/bind.ts); no client is ever sent it.
+  it('a first task never rides the agent\'s frame', async () => {
+    const row = { ...session(null), engine: 'openclaw' as const, firstTask: 'Fix the parser' }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, starting: () => true })
+    expect(frame.starting).toBe(true)
+    expect(JSON.stringify(frame)).not.toContain('Fix the parser')
+  })
+
+  it('a first task typed never rides the agent\'s frame', async () => {
+    const row = { ...session(null), engine: 'openclaw' as const, firstTaskTyped: { text: 'Fix the parser', at: 1 } }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, starting: () => true })
+    expect(frame).not.toHaveProperty('firstTaskTyped')
+    expect(JSON.stringify(frame)).not.toContain('Fix the parser')
+  })
+
+  // Always present: a push without the key would leave a window showing a start that ended.
+  it('says starting as its context reads it, and false without one', async () => {
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).starting).toBe(false)
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, starting: () => true })).starting).toBe(true)
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, starting: () => false })).starting).toBe(false)
   })
 
   it('F1 sends a fork origin to clients as name and id only, never its transcript', async () => {
@@ -152,12 +246,12 @@ describe('agentFrame', () => {
   it('carries the viewer pane’s name with the harness, and null for a plain engine', async () => {
     const withViewer = await agentFrame(session(null), {
       selectedModel: null, terminalAvailable: true,
-      dsh: { id: 'autonomous/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:4100/', viewerName: '3D Viewer', verdict: null },
+      parts: () => ({ dsh: 'autonomous/blender', dshName: 'Blender', viewerUrl: 'http://127.0.0.1:4100/', viewerName: '3D Viewer', verdict: null }),
     })
     expect(withViewer).toMatchObject({ dsh: 'autonomous/blender', dshName: 'Blender', viewerName: '3D Viewer' })
     const older = await agentFrame(session(null), {
       selectedModel: null, terminalAvailable: true,
-      dsh: { id: 'autonomous/blender', name: 'Blender', viewerUrl: null, verdict: null },
+      parts: () => ({ dsh: 'autonomous/blender', dshName: 'Blender', viewerUrl: null, verdict: null }),
     })
     expect(older).toHaveProperty('viewerName', null)
     expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).toHaveProperty('viewerName', null)
@@ -208,6 +302,46 @@ describe('agentFrame', () => {
     legacy.launch = { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' }
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } })
+  })
+
+  // A held row is inactive in the registry (setLaunch); one the guard held starts again by itself, so every client is
+  // shown its usual "Starting" (docs/plans/2026-11-25-held-launch-recovery-design.md, section 4).
+  const guardHeldLaunch = { state: 'held', service: 'native', detail: 'Starting again.', nativeToken: 'tok-1', startsAgain: true } as const
+
+  it.each([['a first launch', ''], ['a conversation', 's1']])('sends %s the guard held as a launch starting, and active', async (_case, sessionId) => {
+    const row = { ...session(null), sessionId, active: false, launch: guardHeldLaunch }
+    // Its activity is none, so `harness wait` never reads it idle: the reader skips a row the registry keeps inactive
+    // (core/turns/activity.spec.ts).
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(frame.launch).toEqual({ state: 'starting' })
+    expect(frame.status).toBe('active')
+    expect(JSON.stringify(frame)).not.toContain('startsAgain')
+    expect(JSON.stringify(frame)).not.toContain('tok-1')
+  })
+
+  it.each([
+    ['no guard proof, no session', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, ''],
+    ['no guard proof, a conversation', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, 's1'],
+    ['no native token', { state: 'held', service: 'models', detail: 'Waiting for models.', startsAgain: true }, ''],
+    // Its wait is that service's, not the guard's (design section 4).
+    ['the guard held it, its recovery waits for models', { ...guardHeldLaunch, service: 'models', detail: 'Waiting for the models service.' }, ''],
+    ['the guard held it, its recovery waits for the Store', { ...guardHeldLaunch, service: 'store', detail: 'Waiting for the Store.' }, 's1'],
+    ['the guard held it, its recovery waits for search', { ...guardHeldLaunch, service: 'search', detail: 'Waiting for search.' }, 's1'],
+  ] as const)('sends every other held launch as it is, but the core\'s own startsAgain: %s', async (_case, launch, sessionId) => {
+    const frame = await agentFrame({ ...session(null), sessionId, active: false, launch }, { selectedModel: null, terminalAvailable: true })
+    // No client ever sees `startsAgain` (design, Data 5): the held launch as a frame sent it before.
+    const { startsAgain: _, ...sent } = launch as AgentLaunch & { startsAgain?: true }
+    expect(frame.launch).toEqual(sent)
+    expect(JSON.stringify(frame)).not.toContain('startsAgain')
+    expect(frame.status).toBe('offline')
+  })
+
+  // The receipt that made the row is the core's own (registry.ts `creationId`).
+  it('never sends the creation id', async () => {
+    const row = { ...session(null), sessionId: '', active: false, launch: guardHeldLaunch, creationId: 'crt-0123456789abcdef' }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(frame).not.toHaveProperty('creationId')
+    expect(JSON.stringify(frame)).not.toContain('crt-0123456789abcdef')
   })
 })
 

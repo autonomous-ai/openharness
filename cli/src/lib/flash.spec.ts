@@ -1,5 +1,34 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flashCommand, flasherScript, scriptUrl, type FlashDeps } from './flash.js'
+import { FLASHER_DIR } from './flasherDir.js'
+import { directorySyncSupported } from './secureState.js'
+
+// Pass-through, recording each path written to by name, each rename's target and each flush (of a file or a folder).
+// `full`: a write stops part way, as on a full disk.
+const disk = vi.hoisted(() => ({ events: [] as string[], full: false }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.events.push(`write ${String(args[0])}`)
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { disk.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
+  }
+})
+// The cached flasher in a throwaway folder of this file's own.
+vi.mock('./flasherDir.js', async () => {
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  return { FLASHER_DIR: join(mkdtempSync(join(tmpdir(), 'flasher-')), 'flasher') }
+})
+afterEach(() => { disk.events = []; disk.full = false })
 
 /**
  * `harness flash` chooses and gets the script, passes the user's flags over untouched, and supplies
@@ -137,6 +166,14 @@ describe('harness flash — where it points', () => {
     expect(scriptUrl('darwin')).toMatch(/^https?:\/\/.+\/flash-circle\.sh$/)
     expect(scriptUrl('linux')).toBe(scriptUrl('darwin'))
   })
+
+  // The script would read a relative HARNESS_FLASHER_CACHE against its own folder; the CLI reads it against the home.
+  it.each(['darwin', 'win32'] as const)('hands the script the cache folder the CLI resolved, on %s', async (platform) => {
+    let child: NodeJS.ProcessEnv | undefined
+    const { deps } = harness({ platform, fetchScript: async () => (platform === 'win32' ? '# flash-circle.ps1\n' : SCRIPT), run: async (_path, _args, given) => { child = given; return 0 } })
+    await flashCommand([], { ...deps, environment: { HARNESS_FLASHER_CACHE: 'flasher' } })
+    expect(child?.HARNESS_FLASHER_CACHE).toBe(FLASHER_DIR)
+  })
 })
 
 describe('harness flash — on Windows', () => {
@@ -184,14 +221,18 @@ describe('harness flash — on Windows', () => {
     expect(calls.args).toEqual([['--yes']])
   })
 
-  it('runs Windows PowerShell with the path and arguments untouched and no profile or prompt', () => {
+  it('runs Windows PowerShell from System32 with the path and arguments untouched and no profile or prompt', () => {
     const path = "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\flasher\\flash-circle.ps1"
     const args = ['--yes', '--port', 'COM3', '--unknown', "x y' & 100%"]
 
-    expect(flasherScript('win32').command(path, args)).toEqual({
-      file: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
-    })
+    // By its full path: Windows looks for a bare name in the folder `harness flash` runs in before PATH.
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    try {
+      expect(flasherScript('win32').command(path, args)).toEqual({
+        file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
+      })
+    } finally { vi.unstubAllEnvs() }
     expect(flasherScript('darwin').command('/x/flash-circle.sh', ['--yes'])).toEqual({
       file: 'bash', args: ['/x/flash-circle.sh', '--yes'],
     })
@@ -275,5 +316,40 @@ describe('harness flash — successful Windows flash recovery', () => {
     expect(child?.HARNESS_FLASH_RECOVERY_NODE).toBe(process.execPath)
     expect(JSON.parse(child!.HARNESS_FLASH_RECOVERY_ARGS!)).toEqual([...process.execArgv, process.argv[1]])
     expect(environment).toEqual({ KEEP: 'present' })
+  })
+})
+
+describe('harness flash — the cached copy', () => {
+  const cached = join(FLASHER_DIR, 'flash-circle.sh')
+  const offline = { log: () => {}, warn: () => {}, run: async () => 0, platform: 'darwin' as const }
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    disk.events = []
+    expect(await flashCommand([], { ...offline, fetchScript: async () => SCRIPT })).toBe(0)
+    expect(readFileSync(cached, 'utf8')).toBe(SCRIPT)
+    expect(statSync(cached).mode & 0o777).toBe(0o755)
+    expect(disk.events).toContain(`rename ${cached}`)
+    expect(disk.events).not.toContain(`write ${cached}`)
+  })
+
+  // The cache is what runs offline: one a power cut emptied would be run.
+  it('the cached copy is flushed before it is renamed into place, and its folder after', async () => {
+    disk.events = []
+    expect(await flashCommand([], { ...offline, fetchScript: async () => SCRIPT })).toBe(0)
+    const at = disk.events.indexOf(`rename ${cached}`)
+    expect(disk.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${cached}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
+  })
+
+  it('a write that fails part way leaves the old file', async () => {
+    mkdirSync(FLASHER_DIR, { recursive: true })
+    writeFileSync(cached, SCRIPT, { mode: 0o755 })
+    const ran: string[] = []
+    disk.full = true
+    expect(await flashCommand([], { ...offline, fetchScript: async () => '#!/bin/sh\necho a newer flasher\n',
+      run: async (path) => { ran.push(readFileSync(path, 'utf8')); return 0 } })).toBe(0)
+    disk.full = false
+    expect(ran).toEqual([SCRIPT])
+    expect(readFileSync(cached, 'utf8')).toBe(SCRIPT)
   })
 })

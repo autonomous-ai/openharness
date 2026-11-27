@@ -8,7 +8,11 @@ import type { RegisteredSession } from './registry.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the binding golden') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  return { exec: forbidden, execSync: forbidden,
+    execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
+      if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
+      done(null, 'fixture-start')
+    }, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -44,6 +48,7 @@ it.each(['linux', 'darwin'])('preserves healthy binding and capture answers on %
     if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
   }
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  let owned: typeof import('./registry.js')['registry'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...originalPlatform, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T00:00:00Z') })
@@ -80,6 +85,7 @@ it.each(['linux', 'darwin'])('preserves healthy binding and capture answers on %
     vi.resetModules()
     const homes = await import('./engineHomes.js')
     const { registry, validTranscriptPath } = await import('./registry.js')
+    owned = registry
     const { admitHook } = await import('../engines/hooks.js')
     const { captureResumeIdentity } = await import('./captureResumeIdentity.js')
     registry.load()
@@ -92,11 +98,12 @@ it.each(['linux', 'darwin'])('preserves healthy binding and capture answers on %
     check('homes', [homes.sessionHomeOf('codex', { transcriptPath: parent }),
       homes.sessionHomeOf('codex', { transcriptPath: movedFile }), homes.sessionHomeOf('codex', { profile, transcriptPath: profiled })])
     check('stop', [shape(await captureResumeIdentity(registry.byAgent('parent')!)), shape(await captureResumeIdentity(registry.byAgent('moved')!))])
-    const bound = registry.register({ engine: 'codex', sessionId: D, transcriptPath: registeredFile, tmuxPane: '%6', cwd: root, source: 'fixture-register' })
+    const bound = (await registry.register({ engine: 'codex', sessionId: D, transcriptPath: registeredFile, tmuxPane: '%6', cwd: root, source: 'fixture-register' }))
     check('registered-terminal', bound && { row: shape(bound.entry), isNew: bound.isNew, evicted: bound.evicted, rebound: bound.rebound })
     check('saved', JSON.parse(readFileSync(path('ADAPTER_DATA_DIR', 'registry.json'), 'utf8')).map(shape).sort((a: any, b: any) => a.agent.localeCompare(b.agent)))
     homes.resetEngineHomes()
   } finally {
+    await owned?.flush({ exiting: true }).catch(() => {})
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', originalPlatform)
     rmSync(root, { recursive: true, force: true })

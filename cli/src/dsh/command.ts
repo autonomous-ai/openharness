@@ -2,6 +2,8 @@
  * `harness dsh …` — the terminal face of domain-specific harnesses, for a server with no desktop
  * and for the development loop (`--link` a checkout, iterate, no re-clone).
  */
+import { env } from '../config/env.js'
+import { readAgentSettings } from '../lib/agentSettings.js'
 import { ensureBundledCoreHarnesses } from './builtins.js'
 import { listDshState, installedDsh } from './installed.js'
 import { DSH_ID_RE, dshTier } from './manifest.js'
@@ -37,7 +39,8 @@ export async function dshCommand(verb: string | undefined, rest: readonly string
   const args = rest.filter((arg, at) => !arg.startsWith('-') && !valued.has(rest[at - 1] ?? ''))
   switch (verb) {
     case 'builtins':
-      return ensureBundledCoreHarnesses() ? 0 : 1
+      // What the Store puts in place as it starts, Hachi included while this computer's copy of its switch is on.
+      return ensureBundledCoreHarnesses({ hachi: readAgentSettings(env.ADAPTER_DATA_DIR).hachi }) ? 0 : 1
     case 'list': {
       const { installed, broken } = listDshState()
       const registry = await refreshDshRegistry()
@@ -46,7 +49,7 @@ export async function dshCommand(verb: string | undefined, rest: readonly string
       for (const dsh of installed) {
         seen.add(dsh.id)
         const update = dshUpdateInfo(dsh, registry.find(entry => entry.id === dsh.id))
-        rows.push(`  ${dsh.id.padEnd(28)} ${dsh.manifest.name.padEnd(12)} ${(dsh.manifest.kind === 'viewer' ? 'viewer' : `on ${dsh.manifest.engine}`).padEnd(11)} tier ${dshTier(dsh.manifest)}  installed${dsh.linked ? ' (linked)' : ''}${dsh.commit ? ` @ ${dsh.commit.slice(0, 8)}` : ''}${update.updateAvailable ? ` · update available (${update.availableCommit!.slice(0, 8)})` : ''} · ${dsh.dir}`)
+        rows.push(`  ${dsh.id.padEnd(28)} ${dsh.manifest.name.padEnd(12)} ${(dsh.manifest.kind === 'viewer' ? 'viewer' : `on ${dsh.manifest.engine}`).padEnd(11)} tier ${dshTier(dsh.manifest)}  installed${dsh.linked ? ' (linked)' : ''}${dsh.commit ? ` @ ${dsh.commit.slice(0, 8)}` : ''}${update.updateAvailable ? ` · update available (${update.availableCommit!.slice(0, 8)})` : ''} · ${dsh.dir}${dsh.setup === 'needs-setup' ? ' · needs setup' : ''}`)
       }
       for (const row of broken) {
         seen.add(row.id)

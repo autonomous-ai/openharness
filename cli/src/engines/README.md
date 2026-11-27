@@ -57,8 +57,10 @@ lists the files of theirs the core still reaches, and the list only shrinks.
 vendor CLI — `ori claude`, an `env`-prefixed alias, a shell function — produces an agent of the
 *wrapped* engine, with that engine's name, icon and normalizer. Discovery reads through the wrapper
 (and most wrappers, ori included, `exec` themselves away entirely), so there is nothing to add here
-for one. What a gateway launcher does change is billing: see `lib/gatewayRuntime.ts`, which marks such
-a session display-only for model/effort and routes the daemon's own recap through the gateway.
+for one. What a gateway launcher does change is billing: a session on one is display-only for
+model/effort. Codex's gateway is read from its argv (`lib/gatewayRuntime.ts`); the hooks of Claude Code,
+OpenCode and Hermes say theirs in a header (`hookServer.ts` `hookFacts`). Any other engine has none Harness
+can see.
 
 ---
 
@@ -198,6 +200,10 @@ measured on 2026.11.2 with a real model; re-measure it on the binary you ship.
   open (`/proc/<pid>/fd`, `lsof -p`), which is right under `--profile`, `--dev` and
   `OPENCLAW_STATE_DIR`; remember it at bind for when the TUI is gone. A Gateway on another host still
   leaves the local file open, so the title's URL, not the file, says whether the transcript is on this machine.
+- **The TUI's store is not always the Gateway's.** A Gateway started with its own `OPENCLAW_STATE_DIR` (systemd)
+  writes elsewhere, and the TUI's store never gets the session: a pane working for 30 s on a key with no row is that.
+- **Type the first task; do not pass `--message`.** The TUI sends it once, after its first Gateway connection, and a
+  send that fails or is blocked leaves only a line on screen. Typed once the pane reads ready, the store confirms it.
 - **There is no approval to answer.** The TUI denies an exec approval at once ("Headless runs cannot
   wait"), so no permission dialog ever appears on screen for Harness to walk.
 
@@ -309,6 +315,18 @@ Worth knowing even if you do not need it: some agents already record which termi
 session. Amp keys `lastThreadByTerminal` in its `session.json` by `tmux:<pane>@<server-pid>,<session>`,
 an exact pane→thread map. Harness does not use it (the repair path is asked about a directory, not a
 pane) but it is the kind of thing to look for before assuming a scan is the only option.
+
+An engine that writes down which session a terminal is on needs neither a hook nor a scan: Hermes
+v0.21.6+ with its default CLI is followed from `<HERMES_HOME>/terminal-sessions/<terminal id>` on macOS
+and Linux, and v0.21.6 is the minimum for following it without a hook. An older Hermes, one whose
+version cannot be read, and a home whose `config.yaml` says `display.interface: tui` (the TUI writes no
+record) keep the hook until 2026-12-07 or later (#4207); Windows keeps hooks. A run that writes no
+record in a home set to the CLI (`hermes --tui`, `HERMES_TUI=1`, `session.terminal_continue: false`) is
+bound once, and its session switches are not followed. A restart, resume or fork names a Hermes home
+only when the process itself set `HERMES_HOME`; a home worked out from its `HOME` is worked out again
+by the new process. A wrapper named `hermes` must `exec` what it starts: Harness reads the shallowest
+process that reads as Hermes, and a wrapper that stays the parent is read in place of the Hermes inside
+its sandbox.
 
 Either way, two more files:
 

@@ -2,15 +2,11 @@ import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify'
 import { AppError, ValidationError } from '../errors/index.js'
 import { sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
-import { SuperTabError } from '../superTabs/model.js'
-import { RETRYABLE_SWARM_CODES } from '../superTabs/retry.js'
 
-/** The Swarm 503s that waiting fixes. Others (no attachment store, no picture uploads) are this server's setup. */
-
-/** How long a busy answer asks the caller to wait: just past the Swarm transaction's longest backoff (1.5 s). */
+/** How long a busy answer asks the caller to wait: just past a transaction's longest backoff (1.5 s). */
 const BUSY_RETRY_AFTER_SECONDS = 2
 
-/** A 503 the caller should simply try again: it carries Retry-After. Every client retries a 5xx (store.ts `transaction`). */
+/** A 503 the caller should simply try again: it carries Retry-After. Every client retries a 5xx. */
 function sendBusy(reply: FastifyReply, message: string, code: string): void {
   reply.header('Retry-After', String(BUSY_RETRY_AFTER_SECONDS))
   sendError(reply, message, code, 503)
@@ -38,15 +34,6 @@ export async function errorHandler(
     })
     sendError(reply, error.message, error.code || 'APP_ERROR', error.statusCode)
     return
-  }
-
-  // A Swarm refusal or busy answer thrown outside the Super Tab routes (the harness-shares list asks the Swarm store).
-  if (error instanceof SuperTabError) {
-    if (RETRYABLE_SWARM_CODES.has(error.code)) {
-      logger.warn('Swarm busy', { code: error.code, path: request.url, method: request.method })
-      return sendBusy(reply, error.message, error.code)
-    }
-    return sendError(reply, error.message, error.code, error.status, error.details)
   }
 
   // A database transaction that expired or could not start (P2028) is load, not a fault: the caller retries.

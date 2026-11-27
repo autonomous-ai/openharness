@@ -1,13 +1,30 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS, type Message } from './model.js'
 import { MessageStore } from './store.js'
 
+// Pass-through, noting each open, write and rename by path, until a test fills the disk: a write then stops part way,
+// as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, touched: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.touched.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      disk.touched.push(`write ${String(args[0])}`)
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.touched.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'store-')) })
-afterEach(() => rmSync(dir, { recursive: true, force: true }))
+afterEach(() => { disk.full = false; disk.touched = []; rmSync(dir, { recursive: true, force: true }) })
 
 const message = (n: number, tabId = 'app'): Message => ({
   id: `m${String(n).padStart(7, '0')}`, tabId, text: `t${n}`, at: n,
@@ -39,6 +56,35 @@ describe('Agent Messages\' saved state', () => {
     writeFileSync(join(dir, 'state', 'state.json'), JSON.stringify({ history: [{ message: { id: 'bad' } }, { message: message(2) }], local: [null, { key: 1 }], outbox: [null, { messageId: 'm0000002', machineId: 'm2', sharedTabId: 7 }], noted: 'x', notes: [] }))
     const partial = new MessageStore(join(dir, 'state'))
     expect(partial.state).toEqual({ history: [{ message: message(2), statuses: [] }], local: [], outbox: [], noted: {}, notes: {} })
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const store = new MessageStore(join(dir, 'state'))
+    store.save()
+    disk.touched = []
+    store.record(message(1))
+    store.save()
+    expect(disk.touched.filter((t) => t.endsWith(` ${store.file}`))).toEqual([`rename ${store.file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    mkdirSync(join(dir, 'state'))
+    const planted = join(dir, 'state', `state.json.${process.pid}.tmp`)
+    writeFileSync(planted, 'planted')
+    new MessageStore(join(dir, 'state')).save()
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary file', () => {
+    const store = new MessageStore(join(dir, 'state'))
+    store.record(message(1))
+    store.save()
+    store.record(message(2))
+    disk.full = true
+    expect(() => store.save()).toThrow(/ENOSPC/)
+    disk.full = false
+    expect(new MessageStore(join(dir, 'state')).state.history.map((e) => e.message.id)).toEqual(['m0000001'])
+    expect(readdirSync(join(dir, 'state'))).toEqual(['state.json'])
   })
 
   it('reads a pane already keyed by its backend as it is, and a stopped harness\'s empty pane as none', () => {

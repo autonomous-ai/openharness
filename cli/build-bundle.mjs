@@ -1,7 +1,7 @@
 /**
  * Release build: bundle the whole CLI into ONE self-contained `dist/cli.js`
  * that runs on every OS under the user's Node, plus the standalone hook script.
- * The optional macOS image probe is embedded as pinned bytes in that same JS.
+ * The optional macOS image probe and /dev watch helper are embedded as pinned bytes in that same JS.
  *
  * Version is baked in via esbuild `define(__ADAPTER_VERSION__)`, sourced from `ADAPTER_VERSION`
  * (set by scripts/upload-cli.sh) else package.json — so the running binary's version EXACTLY
@@ -14,8 +14,11 @@ import * as esbuild from 'esbuild'
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
-import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
+import { readClaudePluginBundle } from './scripts/lib/claudePluginBundle.mjs'
+import { readOrcaPluginBundle } from './scripts/lib/orcaPluginBundle.mjs'
+import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
+import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readDevWatchBundle, readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
 import { copyPtyPayload } from './scripts/lib/ptyPayload.mjs'
@@ -25,12 +28,13 @@ const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(n
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
 const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('../store/agents/memories', import.meta.url))))
+const hachiBundle = JSON.stringify(readHachiBundle(fileURLToPath(new URL('../store/agents/hachi', import.meta.url))))
 // What src/dsh/builtins.ts records in the installed index as each bundled harness's revision once it is in place: the
 // sha256 of its files' JSON, as it reads them back (src/dsh/bundledFiles.ts). The core checks the index against these
 // as it starts, without loading the files, and starts the Store's process only when one is not in place
 // (src/core/viewersWake.ts). A harness whose files are missing is never put in place, so it has none.
 const builtinRevisions = JSON.stringify(Object.fromEntries(
-  [['models', modelManagerBundle], ['devices', devicesBundle], ['monitor', harnessMonitorBundle], ['memories', memoriesBundle]]
+  [['models', modelManagerBundle], ['devices', devicesBundle], ['monitor', harnessMonitorBundle], ['memories', memoriesBundle], ['hachi', hachiBundle]]
     .filter(([, bundle]) => JSON.parse(bundle)['harness.json'])
     .map(([name, bundle]) => [name, createHash('sha256').update(JSON.stringify(JSON.parse(bundle))).digest('hex')]),
 ))
@@ -42,6 +46,10 @@ const version =
 // The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
 const dshRegistry = JSON.stringify(readDshRegistry(new URL('../store', import.meta.url)))
 const processImages = readProcessImageBundle({
+  path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
+  required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
+})
+const devWatch = readDevWatchBundle({
   path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
   required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
 })
@@ -65,9 +73,12 @@ const options = {
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
     __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
     __MEMORIES_BUNDLE__: JSON.stringify(memoriesBundle),
+    __HACHI_BUNDLE__: JSON.stringify(hachiBundle),
     // The guest helper and its sudoers drop-in (src/lib/guestHelperAssets.ts): the installed CLI is cli.js alone.
     __GUEST_HELPER__: JSON.stringify(readFileSync('assets/guest-helper/guest-helper.sh', 'utf8')),
     __GUEST_SUDOERS__: JSON.stringify(readFileSync('assets/guest-helper/sudoers', 'utf8')),
+    // The instructions in the model card Codex is given for a grid model (src/lib/codexGridModel.ts).
+    __CODEX_GRID_INSTRUCTIONS__: JSON.stringify(readFileSync('assets/codex/grid-model-instructions.md', 'utf8')),
     // The agent browser's image files (src/services/agentBrowser/assets.ts) and its tool list (src/lib/browserToolsAsset.ts).
     __BROWSER_CONTAINERFILE__: JSON.stringify(readFileSync('assets/browser/Containerfile', 'utf8')),
     __BROWSER_ENTRYPOINT__: JSON.stringify(readFileSync('assets/browser/entrypoint.sh', 'utf8')),
@@ -82,8 +93,16 @@ const options = {
     __BROWSER_DEVICE_INJECT__: JSON.stringify(readFileSync('assets/browser/device-inject.mjs', 'utf8')),
     // Claude Code's status line script (src/engines/kit/statusLine.ts), which a launch writes into the data folder.
     __STATUS_LINE_SCRIPT__: JSON.stringify(readFileSync('hook/statusline.mjs', 'utf8')),
+    // Harness's VS Code extension (src/devices/vscodeExtension.ts), at this CLI's version: the two ship together.
+    __VSCODE_EXTENSION__: JSON.stringify(await readVscodeExtensionBundle(version)),
+    // Harness's Orca plugin, at this CLI's version: `harness device orca` installs it from the data folder.
+    __ORCA_PLUGIN__: JSON.stringify(readOrcaPluginBundle(version)),
+    // Claude Code's marketplace with Harness's two plugins, at this CLI's version: Claude Code installs them from the
+    // data folder, with no git.
+    __CLAUDE_PLUGIN__: JSON.stringify(readClaudePluginBundle(version)),
     __BUILTIN_REVISIONS__: JSON.stringify(builtinRevisions),
     __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
+    __DARWIN_DEV_WATCH__: devWatch ? JSON.stringify(devWatch) : 'undefined',
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
   // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,

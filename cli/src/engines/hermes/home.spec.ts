@@ -17,7 +17,6 @@ import {
   forgetHermesHomes,
   hermesConfigHomes,
   hermesDbPath,
-  hermesHomeFromEnv,
   listHermesHomes,
 } from './home.js'
 
@@ -90,17 +89,5 @@ d('hermes homes', () => {
     expect(await findHermesHomeForSession('20260101_000000_abcdef', homes)).toBeNull()
     // Not a Hermes id at all: refused without opening anything.
     expect(await findHermesHomeForSession('../../etc/passwd', homes)).toBeNull()
-  })
-
-  it('reads a home off a process environment, and only a real one', () => {
-    expect(hermesHomeFromEnv('hermes', { HERMES_HOME: '/home/u/.hermes/profiles/demo' }, '/home/u/.hermes'))
-      .toBe('/home/u/.hermes/profiles/demo')
-    // The default home is "no profile" — the row stays null, as `codexHome` does.
-    expect(hermesHomeFromEnv('hermes', { HERMES_HOME: '/home/u/.hermes/' }, '/home/u/.hermes')).toBeNull()
-    expect(hermesHomeFromEnv('hermes', {}, '/home/u/.hermes')).toBeNull()
-    // Junk, and another engine's process, say nothing.
-    expect(hermesHomeFromEnv('hermes', { HERMES_HOME: 'relative/path' }, '/home/u/.hermes')).toBeNull()
-    expect(hermesHomeFromEnv('hermes', { HERMES_HOME: '/bad\u0000path' }, '/home/u/.hermes')).toBeNull()
-    expect(hermesHomeFromEnv('codex', { HERMES_HOME: '/home/u/.hermes/profiles/demo' }, '/home/u/.hermes')).toBeNull()
   })
 })

@@ -1,0 +1,1 @@
+{"prompt_id":"board-unplugged.claude","rep":1,"failure_class":"timeout","error":"claude ran past 600 s","retries":0,"judge_retries":0,"latency_s":600.694}

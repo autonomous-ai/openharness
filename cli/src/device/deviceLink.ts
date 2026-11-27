@@ -25,14 +25,16 @@
 //   3. LOG EVERY ERROR AND EVERY DROPPED FRAME. This feature's characteristic bug is SILENT EMPTINESS —
 //      an RPC answered with an error nobody printed, a card arriving in a shape nobody recognised. All of
 //      them render as "the carousel is empty", and none of them says so anywhere by default.
-import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 
 import WebSocket from 'ws'
 
+import { backendName } from '../config/env.js'
 import type { LaneSeal } from '../core/api.js'
 import type { MachinePeer } from '../lib/e2ee/machinePeers.js'
 import { isWrapped } from '../lib/relayFrames.js'
+import { computerName } from '../lib/computerName.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { VERSION } from '../version.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE } from '../cable/machineFleet.js'
 
@@ -310,8 +312,8 @@ export class DeviceLink {
     await this.select(machineId)
     await this.establish(machineId)
     // Again, because the handshake can take its whole 15 s with its select already settled, so a newer pick found nothing
-    // to replace: this attach resolved, and the dial was told it had landed on a machine the person had left (Diego's
-    // Buddy, 11-02). The session it made is kept: the carousel holds this machine's agents whichever is selected.
+    // to replace: this attach resolved, and the dial was told it had landed on a machine the person had left (Diego,
+    // 11-02). The session it made is kept: the carousel holds this machine's agents whichever is selected.
     if (this.wanted !== machineId) throw new Error(SELECT_SUPERSEDED)
   }
 
@@ -530,7 +532,7 @@ export class DeviceLink {
         return
       }
       try { ws.send(JSON.stringify(out)) } catch (err) {
-        this.opts.log(`device: send ${frame.type ?? '?'} failed (${(err as Error).message})`)
+        this.opts.log(`device: send ${frame.type ?? '?'} failed (${errorKind(err)})`)
       }
     })
   }
@@ -582,7 +584,7 @@ export class DeviceLink {
   async sendSealed(frame: DeviceFrame & { machineId: string }): Promise<void> {
     const deliverable = DELIVERABLE.has(String(frame.type ?? ''))
     try { await this.establish(frame.machineId) } catch (err) {
-      this.opts.log(`device: dropped ${frame.type ?? '?'} for ${frame.machineId} — ${(err as Error).message}`)
+      this.opts.log(`device: dropped ${frame.type ?? '?'} for ${frame.machineId} — ${errorKind(err)}`)
       if (deliverable) this.undelivered(frame.machineId, frame)
       return
     }
@@ -657,11 +659,12 @@ export class DeviceLink {
     this.state = 'connecting'
     const base = this.opts.backendWsBase.replace(/\/$/, '')
     const url = `${base}/api/device-ws?computer=${encodeURIComponent(this.opts.computerId)}`
-      + `&label=${encodeURIComponent(hostname())}`
+      // The backend names a new device binding with it once, as resolve-computer names a new machine.
+      + `&label=${encodeURIComponent(await computerName())}`
       + `&autonomousEnv=${encodeURIComponent(this.opts.autonomousEnv)}`
 
     let token = await this.readToken()
-    this.opts.log(`device: connecting → ${base}/api/device-ws`)
+    this.opts.log(`device: connecting → ${backendName(base)}`)
     try {
       await this.open(url, token)
     } catch (err) {
@@ -731,9 +734,11 @@ export class DeviceLink {
         // back before. Two guards make that harmless: the local machine's own cards are dropped on
         // arrival (see onMessage), and nothing local is ever ASKED for over this lane — cableHost reads
         // this computer's agents in-process, exactly as it did.
+        // The CLI's version is not firmware; the backend stores it as `cliVersion`
+        // (docs/plans/2026-11-27-cli-version-field-design.md).
         this.send({
           type: 'device_hello',
-          payload: { chip: 'harness-cli', firmwareVersion: VERSION, caps: ['e2ee_data', 'multi_machine'] },
+          payload: { chip: 'harness-cli', cliVersion: VERSION, caps: ['e2ee_data', 'multi_machine'] },
         })
 
         this.armPing()
@@ -747,7 +752,7 @@ export class DeviceLink {
       ws.once('open', onOpen)
       ws.on('message', (raw) => {
         this.inbound = this.inbound.then(() => this.onMessage(raw)).catch((err: unknown) => {
-          this.opts.log(`device: a frame could not be read (${err instanceof Error ? err.message : String(err)})`)
+          this.opts.log(`device: a frame could not be read (${errorKind(err)})`)
         })
       })
       // Only while it is still the lane's socket. One closed on purpose (teardown: an unplug, a revoke) closes a moment
@@ -876,7 +881,7 @@ export class DeviceLink {
     if (start === 'limited' && !this.allow(this.startedAt, machineId)) return
     // Not awaited: its welcome comes through the very inbound queue this is running in.
     void this.establish(machineId).catch((err: unknown) => {
-      this.opts.log(`device: could not renew the E2EE session with ${machineId} (${err instanceof Error ? err.message : String(err)})`)
+      this.opts.log(`device: could not renew the E2EE session with ${machineId} (${errorKind(err)})`)
     })
   }
 
@@ -978,7 +983,7 @@ export class DeviceLink {
       void retry.catch((err) => {
         // Replaced by a newer select meanwhile is not a failed reconnect: the newer one carries on.
         if ((err as Error).message === SELECT_SUPERSEDED) return
-        this.opts.log(`device: reconnect failed (${(err as Error).message})`)
+        this.opts.log(`device: reconnect failed (${errorKind(err)})`)
         // No socket came of this try (its token read threw), so no close will schedule the next one: it is scheduled
         // here, with the backoff, while the lane is still wanted. A socket that failed already scheduled its own
         // (onClose), another dial may be under way, and a lane the backend refused (4401/4403) stays refused.
@@ -1122,7 +1127,7 @@ export class DeviceLink {
     this.sessionGone(machineId)
     if (this.held.get(machineId)?.length) {
       void this.establish(machineId).catch((err: unknown) => {
-        this.opts.log(`device: could not renew the E2EE session with ${machineId} (${err instanceof Error ? err.message : String(err)})`)
+        this.opts.log(`device: could not renew the E2EE session with ${machineId} (${errorKind(err)})`)
       })
     }
   }
@@ -1214,7 +1219,7 @@ export class DeviceLink {
       this.pending.delete(requestId)
       clearTimeout(waiter.timer)
       if (typeof payload.error === 'string') {
-        this.opts.log(`device: ${type} error=${payload.error}`)
+        this.opts.log(`device: ${type} error=${codeOrLength(payload.error)}`)
         waiter.reject(new Error(payload.error))
         return
       }

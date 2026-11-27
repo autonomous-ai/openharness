@@ -28,25 +28,49 @@ export function findGitBash({ env = process.env, isFile = fileExists }: GitBashS
   const candidates: string[] = []
   // The git on PATH first, as the person's own terminal would run it. Git for Windows puts it in <root>\cmd (the
   // installer's default), <root>\bin or <root>\mingw64\bin; its bash is <root>\bin\bash.exe in each.
-  for (const dir of (env.PATH ?? '').split(';').filter(Boolean)) {
+  // A relative entry names a folder of whatever folder the daemon runs in, which someone else's repository may fill.
+  for (const dir of pathFolders(env.PATH).filter(fixedFolder)) {
     if (!isFile(win32.join(dir, 'git.exe'))) continue
     candidates.push(win32.resolve(dir, '..', 'bin', 'bash.exe'), win32.resolve(dir, '..', '..', 'bin', 'bash.exe'))
     // Scoop's git.exe on PATH is a shim in <root>\shims; the git it starts, and its bash, are in <root>\apps\git\current.
     candidates.push(win32.resolve(dir, '..', SCOOP_GIT_BASH))
   }
-  // Then where its installer puts it: for everyone, or for this user alone (no administrator rights).
-  for (const root of [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)']]) {
-    if (root) candidates.push(win32.join(root, 'Git', 'bin', 'bash.exe'))
-  }
-  if (env.LOCALAPPDATA) candidates.push(win32.join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'))
-  // And where Scoop installs it: its root for this user (SCOOP, else ~\scoop), then its root for everyone.
-  const scoopRoots = [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop'), env.SCOOP_GLOBAL, env.ProgramData && win32.join(env.ProgramData, 'scoop')]
-  for (const root of scoopRoots) {
-    if (root) candidates.push(win32.join(root, SCOOP_GIT_BASH))
-  }
+  // Then where its installer puts it, then where Scoop does for this user.
+  for (const root of gitForWindowsRoots(env)) candidates.push(win32.join(root, 'bin', 'bash.exe'))
+  for (const root of scoopRoots(env)) candidates.push(win32.join(root, SCOOP_GIT_BASH))
   return candidates.find((candidate) => isFile(candidate)) ?? null
 }
 
-function fileExists(path: string): boolean {
+/** The Program Files folders: this process's, the 64-bit one (another folder to a 32-bit process), and the 32-bit one. */
+export function programFilesRoots(env: NodeJS.ProcessEnv): string[] {
+  return [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)']].filter((root): root is string => !!root)
+}
+
+/** Where Git for Windows' installer puts it: for everyone, or for this user alone (no administrator rights). */
+export function gitForWindowsRoots(env: NodeJS.ProcessEnv): string[] {
+  const user = env.LOCALAPPDATA ? [win32.join(env.LOCALAPPDATA, 'Programs', 'Git')] : []
+  return [...programFilesRoots(env).map((root) => win32.join(root, 'Git')), ...user]
+}
+
+/** Scoop's root for this user: SCOOP, else ~\scoop. Never its root for everyone (SCOOP_GLOBAL, %ProgramData%\scoop):
+ *  any user of the computer may make and fill it, a Harness guest included, and a real global install puts its shims
+ *  on PATH. */
+export function scoopRoots(env: NodeJS.ProcessEnv): string[] {
+  return [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop')].filter((root): root is string => !!root)
+}
+
+/** PATH's folders as Node's spawn reads them on Windows (libuv's search_path): one in quotes, " or ', may hold a `;`,
+ *  and the quotes are no part of it. */
+export function pathFolders(path: string | undefined): string[] {
+  return [...(path ?? '').matchAll(/(?:"[^"]*"?|'[^']*'?)?[^;]*/g)].map(([folder]) => folder.replace(/^["']|["']$/g, ''))
+}
+
+/** A folder that is the same whatever folder a program runs in: a drive's (C:\…) or a share's (\\server\…). Any other
+ *  is looked up from the working folder, `\tools` included (from its drive). */
+export function fixedFolder(folder: string): boolean {
+  return /^(?:[A-Za-z]:\\|\\\\[^\\])/.test(win32.normalize(folder))
+}
+
+export function fileExists(path: string): boolean {
   try { return statSync(path).isFile() } catch { return false }
 }

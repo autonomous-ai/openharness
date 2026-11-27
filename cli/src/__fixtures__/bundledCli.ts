@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { build } from 'esbuild'
+import { build, type Plugin } from 'esbuild'
 import { afterAll, beforeAll } from 'vitest'
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -13,8 +13,11 @@ const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
  * owns its temporary bundle, so concurrent suites/watch runs cannot reuse stale dist output.
  * Auth, devices and Grid command fixtures do not need embedded release assets; release bundle
  * integration remains responsible for the registry, built-in harnesses, workers and hook payload.
+ *
+ * [stubs] maps a source file under `src/` (`'lib/computerName.ts'`) to a module that replaces it in the bundle, for
+ * what a test cannot set from outside the process (the computer's own name).
  */
-export function useBundledCli(): () => string {
+export function useBundledCli(options: { stubs?: Record<string, string> } = {}): () => string {
   let directory: string | undefined
   let executable: string | undefined
 
@@ -36,6 +39,7 @@ export function useBundledCli(): () => string {
       keepNames: true,
       legalComments: 'eof',
       logLevel: 'silent',
+      plugins: options.stubs ? [stubbed(options.stubs)] : [],
     })
     executable = output
   }, 30_000)
@@ -48,5 +52,20 @@ export function useBundledCli(): () => string {
   return () => {
     if (!executable) throw new Error('CLI fixture must finish building before it can run')
     return executable
+  }
+}
+
+/** Sends every import that resolves to a stubbed file to its stub. Imports under `src/` are relative and name the `.js`
+ *  of a `.ts` file. */
+function stubbed(stubs: Record<string, string>): Plugin {
+  const byFile = new Map(Object.entries(stubs).map(([file, stub]) => [join(CLI_ROOT, 'src', file), stub]))
+  return {
+    name: 'stubs',
+    setup(bundle) {
+      bundle.onResolve({ filter: /^\./ }, (args) => {
+        const stub = byFile.get(join(args.resolveDir, args.path).replace(/\.js$/, '.ts'))
+        return stub ? { path: stub } : undefined
+      })
+    },
   }
 }

@@ -18,7 +18,7 @@ the root is the hosted workspace, where sign-in returns (`/web` redirects there)
 Publish the browser build before the corresponding native hn release so the entry point
 recognizes the viewer destination.
 
-The browser target uses this same Flutter package: swarms, pickers, settings, state and
+The browser target uses this same Flutter package: tabs, pickers, settings, state and
 the patched xterm renderer are shared. `lib/main.dart` picks the browser's workspace at
 compile time (a conditional import of `lib/web/web_entry.dart`), composed for a mouse:
 every action desktop keeps in its native menus is clickable (keys still work, they are
@@ -113,7 +113,7 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
   a full-page fleet diagram and prominent CTA, sharing the native login actions
   and their waiting, cancellation, and recovery states.
 - Workspace shortcuts use **Option/Alt** in the browser: Alt-P finds harnesses,
-  Alt-N starts a harness, Alt-M opens machines, and Alt-T opens a swarm.
+  Alt-N starts a harness, Alt-M opens machines, and Alt-T opens a tab.
   Alt-Shift-A opens the companion conversation without taking New Tab's key.
   Machine connection commands and link requests use that same `@` picker,
   with connection and setup forms inside its preview pane.
@@ -243,7 +243,8 @@ receipt rather than starting the process twice.
 
 ## Speed marks
 
-Desktop writes `speed` lines to its app log (`~/.harness/logs/app-YYYYMMDD.log`): launch steps in
+Desktop writes `speed` lines to its app log (`~/.harness/logs/app-YYYYMMDD.log`, on Linux
+`~/.local/state/harness/logs/app-YYYYMMDD.log`): launch steps in
 milliseconds since the app started (ending at `first_chat_painted`), each first-page and scroll-up
 message read of a chat (rows, request time, total time), and each picture shown in a chat (bytes and
 fetch time, or a failure). A line holds no name, path, address or message text. To measure a build:
@@ -279,7 +280,8 @@ The pane shows download progress and Cancel. Closing/changing panes cancels the
 download. An interrupted transfer or a file changed during transfer is never opened.
 
 Previews are limited to 512 MiB per file and downloaded in bounded chunks. Copies
-live in `~/.harness/desktop-app/media-previews`; before each download, inactive
+live in `~/.harness/desktop-app-v2/media-previews` (on Linux
+`$XDG_DATA_HOME/harness/desktop-app-v2/media-previews`, by default under `~/.local/share`); before each download, inactive
 copies older than 24 hours or over the 1 GiB cache budget are pruned. Cache names
 are unique, so matching paths on different machines cannot overwrite one another.
 This reads visible terminal text, not hidden OSC 8 hyperlink targets.
@@ -412,9 +414,6 @@ public GCS release bucket. Release commands stay in this repository:
 
 ```bash
 make upload-desktop           # macOS
-make upload-desktop-linux     # Linux (ARM64 or x64) — must run on the matching Ubuntu build host
-make upload-desktop-linux ARCH=arm64
-make upload-desktop-linux ARCH=amd64  # amd64 is the x64 artifact
 make upload-node-runtime ARGS="24.22.2"
 ```
 

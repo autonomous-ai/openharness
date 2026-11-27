@@ -1,6 +1,6 @@
 # Web new-version notice Implementation Plan
 
-> **For agentic workers:** Work task by task, test first (project instructions, revision 26: Engineer role, not subagent-driven-development). Steps use checkbox (`- [ ]`) syntax. There is no Execution Handoff: the Engineer goes on to implement.
+> **For agentic workers:** Work task by task, test first (not subagent-driven-development). Steps use checkbox (`- [ ]`) syntax. There is no Execution Handoff.
 
 **Goal:** An open Harness web page says so within minutes of a new web release ("A new version of Harness is ready." with Reload), Reload loads the new build, and the account menu shows the running version ("Harness X.Y.Z").
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Flutter web (`desktop/`), `package:web`, `flutter_test`.
 
-**Spec:** Task #2185 (Huy). Mockup posted in the project chat: a bar "A new version of Harness is ready.    Reload", and "Harness 1.3.51" under Settings · Sign out in the account menu. No server or website change: the website's `release.json` and `index.html` are already `no-store` (`website/next.config.js`), and releases already start no service worker (`website/scripts/harness-web-assets.mjs`).
+**Spec:** Task #2185 (Huy). Mockup: a bar "A new version of Harness is ready.    Reload", and "Harness 1.3.51" under Settings · Sign out in the account menu. No server or website change: the website's `release.json` and `index.html` are already `no-store` (`website/next.config.js`), and releases already start no service worker (`website/scripts/harness-web-assets.mjs`).
 
 ## Design
 

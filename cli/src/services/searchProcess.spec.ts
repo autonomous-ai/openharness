@@ -66,6 +66,19 @@ describe('search in its own process', () => {
     // Something it is told that it does not act on changes nothing.
     options.onEvent!({ kind: 'renamed', sessionId: SESSION })
     expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish' }, ASKER))).toContain(SESSION)
+    // A purge, held for search while it is down (harnessd/services.ts `hears`): every conversation it had goes.
+    options.onEvent!({ kind: 'agent', event: { kind: 'purged', agentId: 'a1', sessionIds: [SESSION] } })
+    expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish', limit: 5 }, ASKER))).not.toContain(SESSION)
+  })
+
+  // A core from before purges were followed (2026-11-15) says each conversation so. Delete on or after 2026-12-18.
+  it('forgets a conversation a core from before says was purged', async () => {
+    const { dataDir, options } = setup()
+    options.onConnected!(core([conversation(dataDir, 'a zebrafish named Ines')]))
+    options.onEvent!({ kind: 'touch', sessionId: SESSION })
+    await vi.waitFor(async () => {
+      expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish' }, ASKER))).toContain(SESSION)
+    }, { timeout: 15_000, interval: 250 })
     options.onEvent!({ kind: 'deleteHistory', sessionId: SESSION })
     expect(JSON.stringify(await options.requests.session_search({ query: 'zebrafish', limit: 5 }, ASKER))).not.toContain(SESSION)
   })

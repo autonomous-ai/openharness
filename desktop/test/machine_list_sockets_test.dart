@@ -130,13 +130,13 @@ void main() {
       built.clear();
 
       await expectLater(
-        app.superTabMachineRequest('laptop', {'action': 'renewNative'}),
+        app.listRemoteFolder('laptop', null),
         throwsA(anything),
       );
       expect(built, isNot(contains('laptop')));
 
       // A listed machine still gets one.
-      await app.superTabMachineRequest('studio', {'action': 'renewNative'});
+      await app.listRemoteFolder('studio', null);
       expect(built, contains('studio'));
     },
   );

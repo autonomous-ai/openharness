@@ -54,6 +54,14 @@ const List<_Field> _sent = [
         'How often Find and Computers are opened, by a swipe or a button; '
         'request outcomes counted as this phone\'s rather than any app\'s.',
   ),
+  (
+    label: 'Dial and voice',
+    text:
+        'Days connected, used and returned to; time to first agent; agents shown '
+        'by engine, host and app (from a fixed list); voice and tap results; '
+        'how long agents wait for you; agents\' notices to the dial and whether '
+        'the dial skill is installed; seconds of voice turned into text.',
+  ),
   (label: 'Feedback', text: 'Only your selected task outcome or reason.'),
   (
     label: 'Older apps',

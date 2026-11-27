@@ -123,6 +123,9 @@ describe('the hook client', () => {
       console.log(`---- hooks the engines ran\n${d.hookLog()}`)
     })
     await d.start()
+    // Its tests run engines by hand, or stop the daemon, right after start: an engine started before its
+    // hooks are in runs none.
+    await d.hooksInstalled(engines)
     return d
   }
 
@@ -155,7 +158,7 @@ describe('the hook client', () => {
   it('keeps a later Cursor turn open when Cancel superseded its linked Stop registration', async () => {
     const d = daemon = await IsolatedDaemon.create()
     onTestFailed(() => console.log(d.log()))
-    const home = join(d.root, 'cursor'), binary = join(d.root, 'bin', 'cursor-agent')
+    const home = join(d.env.HOME!, 'cursor'), binary = join(d.root, 'bin', 'cursor-agent')
     Object.assign(d.env, { CURSOR_HOME: home, CURSOR_CONFIG_DIR: home, CURSOR_DATA_DIR: home, CURSOR_PATH: binary })
     mkdirSync(home, { recursive: true })
     const pidFile = join(d.root, 'cursor.pid')
@@ -382,10 +385,14 @@ setInterval(() => {}, 1000)
 
     // Back, the daemon lists no agent for it, and a prompt typed there, its hook now answered, makes none.
     await d.start()
+    const said = d.log().length
     const client = await LocalClient.connect(d)
     await type(d, pane, 'typed in a session of my own')
     await until('the engine to take the prompt', () => ran(hooksSince(d, from), / UserPromptSubmit /), 30_000, 100)
-    await new Promise((done) => setTimeout(done, 6_000))
+    // The hook's post can reach the daemon after the engine ran it: wait until the daemon took the event, then
+    // for passes that looked after it, so a row it would wrongly make has had its chance to appear.
+    await until('the daemon to take the prompt\'s event', () => d.log().slice(said).includes(`[hooks] paneless ${engine} turn-start`), 30_000, 100)
+    await d.twoMorePasses('after the prompt')
     expect((await rows(client)).filter((one) => one.tmuxPane === pane)).toEqual([])
     client.close()
   })

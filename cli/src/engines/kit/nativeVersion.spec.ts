@@ -2,14 +2,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { majorVersion, nativeVersionProbe } from './nativeVersion.js'
+import { majorVersion, nativeVersionProbe, parseRelease, probedVersion, releaseAtLeast, type Release } from './nativeVersion.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 const roots: string[] = []
 const rule = { output: /(\d+)\.\d+\.\d+/, args: ['--version'], timeoutMs: 2_000 }
 function fixture(source: string) {
   const root = mkdtempSync(join(tmpdir(), 'native-version-probe-')); roots.push(root)
   const file = join(root, 'engine')
-  writeFileSync(file, `#!${process.execPath}\n${source}\n`, { mode: 0o700 })
+  writeExecutable(file, `#!${process.execPath}\n${source}\n`)
   return file
 }
 afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -44,7 +45,10 @@ it('discards a version answer if the selected executable is replaced while it ru
 })
 
 it('bounds a native process that never answers', async () => {
-  const file = fixture('setInterval(() => {}, 1000)')
+  // Not `fixture`: a process meant to be cut off needs no admission run first, which would only spend this case's 2 s.
+  const root = mkdtempSync(join(tmpdir(), 'native-version-probe-')); roots.push(root)
+  const file = join(root, 'engine')
+  writeFileSync(file, `#!${process.execPath}\nsetInterval(() => {}, 1000)\n`, { mode: 0o700 })
   const bounded = { ...rule, timeoutMs: 80 }
   expect(await majorVersion(bounded, nativeVersionProbe(bounded, () => file), new Map())).toBeNull()
 }, 2_000)
@@ -81,11 +85,40 @@ it('returns a confirmed answer while a newer probe of the unchanged file is stil
   expect(memo.get('same-file')).toBe(2)
 })
 
+const hermesRule = { output: /Hermes Agent v(\d+)\.(\d+)\.(\d+)/, args: ['--version'], timeoutMs: 5_000 }
+it('reads a release and compares it', () => {
+  expect(parseRelease(hermesRule, 'Hermes Agent v0.21.6 (2026.9.24)')).toEqual([0, 21, 6])
+  expect(parseRelease(hermesRule, 'Hermes Agent vunknown')).toBeNull()
+  expect(releaseAtLeast([0, 21, 6], [0, 21, 6])).toBe(true)
+  expect(releaseAtLeast([0, 21, 5], [0, 21, 6])).toBe(false)
+  expect(releaseAtLeast([0, 20, 99], [0, 21, 6])).toBe(false)
+  expect(releaseAtLeast([1, 0, 0], [0, 21, 6])).toBe(true)
+})
+
+it('asks an installed file once, and keeps that it could not be read', async () => {
+  const memo = new Map<string, Release | null>(); let reads = 0
+  const probe = { identity: () => 'file-a', read: async () => { reads++; return 'Hermes Agent v0.23.1 (2026.11.11)' } }
+  expect(await probedVersion(output => parseRelease(hermesRule, output), probe, memo)).toEqual([0, 23, 1])
+  expect(await probedVersion(output => parseRelease(hermesRule, output), probe, memo)).toEqual([0, 23, 1])
+  expect(reads).toBe(1)
+  const broken = { identity: () => 'file-b', read: async () => { reads++; throw new Error('timeout') } }
+  expect(await probedVersion(output => parseRelease(hermesRule, output), broken, memo)).toBeNull()
+  expect(await probedVersion(output => parseRelease(hermesRule, output), broken, memo)).toBeNull()
+  expect(reads).toBe(2)
+})
+
+it('does not keep the release of a file replaced while it was asked', async () => {
+  const memo = new Map<string, Release | null>(); let identity = 'before'
+  const probe = { identity: () => identity, read: async () => { identity = 'after'; return 'Hermes Agent v0.23.1' } }
+  expect(await probedVersion(output => parseRelease(hermesRule, output), probe, memo)).toBeNull()
+  expect(memo.size).toBe(0)
+})
+
 it('keeps the production resolver asynchronous when only the interactive shell can find OpenCode', async () => {
   const file = fixture("console.log('2.0.18')")
   const root = roots.at(-1)!, engine = join(root, 'opencode'), shell = join(root, 'shell'), release = join(root, 'allow-shell')
   renameSync(file, engine)
-  writeFileSync(shell, `#!${process.execPath}\nconst fs = require('node:fs');\nconst timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('__HARNESS_ENGINE_PATH__=' + ${JSON.stringify(root)}); } }, 10)\n`, { mode: 0o700 })
+  writeExecutable(shell, `#!${process.execPath}\nconst fs = require('node:fs');\nconst timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('__HARNESS_ENGINE_PATH__=' + ${JSON.stringify(root)}); } }, 10)\n`)
   vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', join(root, 'empty-path'))
   vi.stubEnv('SHELL', shell); vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()

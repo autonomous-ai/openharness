@@ -1,8 +1,10 @@
+import { releaseRegistryEngine, unbindRegistrySession } from '../testing/registryFixtures.js'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ENUMERATION_ATTEMPTS } from '../engines/kit/nativeFiles.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const fault = vi.hoisted(() => ({ beforeVerify: undefined as (() => void) | undefined, captures: 0,
   onDirectoryOpen: undefined as (() => void) | undefined }))
@@ -14,6 +16,14 @@ vi.mock('node:fs', async original => {
     return directory
   } }
 })
+// A slow disk: a registry image that names `slow.image` is synced only once the test waits for the registry's writes.
+const slow = vi.hoisted(() => ({ image: undefined as string | undefined, waited: Promise.resolve(), release: () => {} }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async (path, actual) => {
+  if (slow.image && (await actual.readFile(path, 'utf8')).includes(slow.image)) await slow.waited
+} }))
+// No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 function observeHomeReads(): void { vi.doMock('./engineHomes.js', async original => {
   const actual = await original<typeof import('./engineHomes.js')>()
@@ -28,7 +38,7 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 let root: string | undefined
-afterEach(() => { fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { slow.release(); slow.image = undefined; vi.restoreAllMocks(); fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
 
 it('repairs a child-overwritten parent from an adopted Codex home before the login shell is read', async () => {
   // Found by QA on a quiet machine: restart searched only the default home and discarded this parent binding.
@@ -53,6 +63,9 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   }]), { mode: 0o600 })
   vi.resetModules()
   const { registry } = await import('./registry.js')
+  slow.image = `rollout-${parentId}.jsonl`; slow.waited = new Promise<void>(done => { slow.release = done })
+  const flush = registry.flush.bind(registry)
+  vi.spyOn(registry, 'flush').mockImplementation(options => { slow.release(); return flush(options) })
   // An ancestor that changes during every look (`ENUMERATION_ATTEMPTS`); one change alone is looked at again.
   let looks = ENUMERATION_ATTEMPTS
   fault.onDirectoryOpen = () => {
@@ -64,13 +77,15 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   expect(registry.get(parentId)).toMatchObject({ transcriptPath: child, identityHold: expect.stringContaining('ancestor changed') })
   expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
   // A changed ancestor is incomplete evidence, even when another CI fixture
-  // caused it. The preserved binding can be repaired by the next fresh read.
-  await vi.waitFor(() => {
-    registry.load()
-    expect(registry.get(parentId)?.transcriptPath).toBe(parent)
-    expect(registry.get(parentId)?.identityHold).toBeUndefined()
-    expect(JSON.parse(readFileSync(join(root!, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
-  }, { timeout: 3_000 })
+  // caused it. The preserved binding is repaired by the next fresh read, and that repair is saved.
+  registry.load()
+  await registry.flush()
+  expect(registry.get(parentId)?.transcriptPath).toBe(parent)
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
+  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
+  registry.load()
+  expect(registry.get(parentId)).toMatchObject({ transcriptPath: parent })
+  expect(registry.get(parentId)?.identityHold).toBeUndefined()
 })
 
 
@@ -90,8 +105,8 @@ it.each(['unbind', 'release', 'separate-shell'] as const)('clears a hold with it
     registry.load()
     expect(registry.byAgent('fixture-0')?.identityHold).toBeTruthy()
     const released = operation === 'unbind'
-      ? (expect(registry.unbindSession('session-0')).toBe(true), registry.byAgent('fixture-0'))
-      : registry.releaseEngine('fixture-0', operation === 'separate-shell')
+      ? (expect((await unbindRegistrySession(registry, 'session-0'))).toBe(true), registry.byAgent('fixture-0'))
+      : (await releaseRegistryEngine(registry, 'fixture-0', operation === 'separate-shell'))
     expect(released).toMatchObject({ sessionId: '', transcriptPath: null })
     expect(released).not.toHaveProperty('identityHold')
     expect(registry.byAgent(released!.agentId)).not.toHaveProperty('identityHold')

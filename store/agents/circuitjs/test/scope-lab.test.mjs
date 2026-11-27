@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -373,7 +374,7 @@ test('archives refuse symlinked directories and archive files', () => {
       /real workspace/
     )
     assert.deepEqual(readdirSync(outside), [])
-    rmSync(join(ws, '.harness'))
+    unlinkSync(join(ws, '.harness'))
     const store = createCaptureStore(ws, runtime),
       a = packet()
     store.keep(a)

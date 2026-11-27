@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:cryptography/dart.dart';
 
-import 'bytes.dart';
+import 'chacha20_poly1305.dart';
 
 /// Hashes, HMAC, HKDF and the ChaCha20-Poly1305 AEAD — what core.ts takes from noble, each one held
 /// byte-for-byte against the CLI by test/e2ee/.
@@ -14,8 +14,6 @@ import 'bytes.dart';
 const _sha256 = DartSha256();
 const _sha512 = DartSha512();
 const _hmacSha256 = DartHmac(DartSha256());
-const _aead = DartChacha20.poly1305Aead();
-const _aeadTagBytes = 16;
 
 Uint8List sha256(List<int> data) =>
     Uint8List.fromList(_sha256.hashSync(data).bytes);
@@ -66,15 +64,7 @@ Uint8List aeadSeal(
   int counter,
   List<int> aad,
   List<int> plaintext,
-) {
-  final box = _aead.encryptSync(
-    plaintext,
-    secretKey: SecretKeyData(key),
-    nonce: counterNonce(counter),
-    aad: aad,
-  );
-  return concatBytes([box.cipherText, box.mac.bytes]);
-}
+) => chacha20Poly1305Seal(key, counterNonce(counter), aad, plaintext);
 
 /// The inverse of [aeadSeal]; null when the tag does not verify — a wrong key, counter or AAD, or
 /// a flipped byte.
@@ -84,21 +74,8 @@ Uint8List? aeadOpen(
   List<int> aad,
   List<int> sealed,
 ) {
-  if (sealed.length < _aeadTagBytes) return null;
-  final split = sealed.length - _aeadTagBytes;
   try {
-    final clear = _aead.decryptSync(
-      SecretBox(
-        sealed.sublist(0, split),
-        nonce: counterNonce(counter),
-        mac: Mac(sealed.sublist(split)),
-      ),
-      secretKey: SecretKeyData(key),
-      aad: aad,
-    );
-    return Uint8List.fromList(clear);
-  } on SecretBoxAuthenticationError {
-    return null;
+    return chacha20Poly1305Open(key, counterNonce(counter), aad, sealed);
   } on ArgumentError {
     return null;
   }

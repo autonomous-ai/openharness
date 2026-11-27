@@ -59,10 +59,18 @@ module.exports = {
         destination: 'https://harness.autonomous.ai/:path*',
         permanent: true,
       })),
-      // The front door is the web app again (owner, 2026-10-26; from 2026-10-13 it was the Hub and the
-      // app lived at /web). Old /web links land on it, query and all; temporary, so no browser keeps it.
+      // The home page and the device guide moved to autonomous.ai's Meet Harness page (owner, 2026-11-21);
+      // temporary, so it can change again and no browser keeps it. Next passes the query (a QR's utm_*) on.
+      // A viewer link (/?viewer=1) stays on the web app: see the '/' rewrite below.
+      { source: '/', missing: [{ type: 'query', key: 'viewer' }], destination: 'https://www.autonomous.ai/meet-harness', permanent: false },
+      // The guide page only: its /device/download-* routes and the /device/install.sh rewrite stay here.
+      { source: '/device', destination: 'https://www.autonomous.ai/meet-harness', permanent: false },
+      // Old /web links follow the home page, query and all; temporary, so no browser keeps it.
       { source: '/web', destination: '/', permanent: false },
       { source: '/install', destination: '/download', permanent: true },
+      // The Harness Device guide replaced the desktop download page (owner, 2026-11-20); /desktop/download/* stays.
+      // Still to /device, which sends it on: browsers keep this permanent hop, so it never names an outside URL.
+      { source: '/desktop', destination: '/device', permanent: true },
       { source: '/explore', destination: '/hub', permanent: true },
       { source: '/explore/:id', destination: '/hub/:id', permanent: true },
       { source: '/explore/:id/fork', destination: '/hub/:id/fork', permanent: true },
@@ -103,7 +111,13 @@ module.exports = {
         // Older desktop builds consume snapshots without following redirects.
         { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
         { source: '/explore/:id/download', destination: '/hub/:id/download' },
-        { source: '/', destination: '/harness-web/index.html' },
+        // Harness Device's one line on Linux, served from the CDN in place: no /device/... path redirects, so the
+        // /device page's redirect reaches no other page. Before the files, so no /device route can take it;
+        // the CDN's headers, its content type among them, pass through. release-device.yml uploads
+        // scripts/device-install.sh there with every release that carries Linux.
+        { source: '/device/install.sh', destination: 'https://cdn.autonomous.ai/harness/device/install.sh' },
+        // `hn view` links open the web app's viewer at /?viewer=1 (tui/src/viewer.rs).
+        { source: '/', has: [{ type: 'query', key: 'viewer' }], destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
         { source: '/auth/callback', destination: '/harness-web/index.html' },
         // Local website previews use the SSO service's native loopback callback.
@@ -152,6 +166,12 @@ module.exports = {
           { key: 'Cache-Control', value: 'no-store, no-transform' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
         ],
+      },
+      {
+        // Chromium sends the CPU hints only to a site that asked: once /device has, a later request to
+        // /device/download-windows or -linux carries them, and those pick the arch from them.
+        source: '/device',
+        headers: [{ key: 'Accept-CH', value: 'Sec-CH-UA-Arch, Sec-CH-UA-Bitness' }],
       },
       {
         source: '/os/latest',

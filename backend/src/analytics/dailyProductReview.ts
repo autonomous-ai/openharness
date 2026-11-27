@@ -75,11 +75,15 @@ export function dailyProductReview(rows: Row[], now: Date) {
   const retention = [1, 7, 28].map(lag => {
     const cohorts = Array.from({ length: 7 }, (_, i) => {
       const stamp = today - (lag + 7 - i) * DAY, cohort = byDay.get(dayKey(stamp)) ?? {}
+      const followUp = byDay.get(dayKey(stamp + lag * DAY)) ?? {}
       const denominator = cohort.working_installation_days ?? 0
-      const followUpObserved = (byDay.get(dayKey(stamp + lag * DAY))?.working_installation_days ?? 0) > 0
+      const followUpObserved = (followUp.working_installation_days ?? 0) > 0
       // Older collectors reported work but had no D28 counter. Their missing metric is unknown, not zero retention.
       const measurementAvailable = lag !== 28 || (cohort.measurement_v2_installation_days ?? 0) > 0
-      const returned = denominator && followUpObserved && measurementAvailable ? cohort[`d${lag}_returning_work_installations`] ?? 0 : null
+      // The gateway counts a D7 and a D28 return on the return day: dated on its cohort's, the report would be past
+      // the receipt window. A D1 return stays on its cohort's day.
+      const counted = lag === 1 ? cohort : followUp
+      const returned = denominator && followUpObserved && measurementAvailable ? counted[`d${lag}_returning_work_installations`] ?? 0 : null
       return { day: dayKey(stamp), workingInstallations: denominator || null, returned, measurementAvailable,
         percent: returned === null ? null : rate(returned, denominator) }
     })

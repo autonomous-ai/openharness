@@ -1,15 +1,41 @@
 // What is installed on this machine: the index file, each record resolved to its manifest, the short
 // cache in front of both, and finding a harness by an id it went by before (`formerly`).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import {
-  dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh,
-  readInstalledIndex, removeInstalledRecord, resolveInstalled, upsertInstalledRecord, writeInstalledIndex,
+  awaitsSetup, dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh, markSetup,
+  readInstalledIndex, removeInstalledRecord, resolveInstalled, setupsPending, upsertInstalledRecord, writeInstalledIndex,
   type InstalledDshRecord,
 } from './installed.js'
+
+// Pass-through, recording which paths are opened for writing and renamed onto, until a test fills the disk: a write
+// then stops part way, as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, writes: [] as string[], renames: [] as [string, string][] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writing = (flags: unknown) => typeof flags === 'number'
+    ? (flags & (actual.constants.O_WRONLY | actual.constants.O_RDWR)) !== 0
+    : typeof flags === 'string' && /[wa+]/.test(flags)
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (typeof args[0] === 'string' && writing(args[1])) disk.writes.push(args[0])
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] === 'string') disk.writes.push(args[0])
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.renames.push([String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+  }
+})
 
 describe('the installed index', () => {
   let root: string
@@ -21,7 +47,9 @@ describe('the installed index', () => {
     invalidateInstalledDsh()
   })
   afterEach(() => {
+    disk.full = false
     vi.useRealTimers()
+    vi.restoreAllMocks()
     env.DSH_DIR = saved
     invalidateInstalledDsh()
     rmSync(root, { recursive: true, force: true })
@@ -44,6 +72,7 @@ describe('the installed index', () => {
   })
 
   it('reads as empty when the file is missing, not JSON, or not a list, and keeps only well-formed rows', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(readInstalledIndex()).toEqual([])
     mkdirSync(dshRootDir(), { recursive: true })
     writeFileSync(indexFile(), '{nope')
@@ -127,6 +156,44 @@ describe('the installed index', () => {
     expect(listInstalledDsh().map((dsh) => dsh.id)).toEqual(['acme/ok'])
   })
 
+  it('a record keeps its setup mark through a read and a write', () => {
+    const marked = [record('acme/a', { setup: 'pending' }), record('acme/b', { setup: 'needs-setup' })]
+    writeInstalledIndex(marked)
+    expect(readInstalledIndex()).toEqual(marked)
+    upsertInstalledRecord(record('acme/c'))
+    expect(readInstalledIndex()).toEqual([...marked, record('acme/c')])
+  })
+
+  it('setupsPending counts pending only', () => {
+    const records = [
+      record('acme/pending', { setup: 'pending' }), record('acme/failed', { setup: 'needs-setup' }), record('acme/plain'),
+      // A linked package's checkout stays where it is, but what its setup built runs on Harness's Python, which moved.
+      record('acme/linked', { setup: 'pending', linked: true }),
+    ]
+    expect(records.filter(awaitsSetup).map(({ id }) => id)).toEqual(['acme/pending', 'acme/linked'])
+    expect(setupsPending(records)).toBe(2)
+    expect(setupsPending()).toBe(0)
+    writeInstalledIndex(records)
+    expect(setupsPending()).toBe(2)
+  })
+
+  it('markSetup with null removes the field', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_000_000)
+    writeInstalledIndex([{ ...pkg('acme/a'), setup: 'pending' }, record('acme/b', { setup: 'pending' })])
+    expect(listInstalledDsh().map((dsh) => dsh.setup)).toEqual(['pending'])
+    markSetup('acme/a', 'needs-setup')
+    expect(readInstalledIndex().map((row) => [row.id, row.setup])).toEqual([['acme/a', 'needs-setup'], ['acme/b', 'pending']])
+    // The Store's list says it at once, not after the cache's two seconds.
+    expect(listInstalledDsh().map((dsh) => dsh.setup)).toEqual(['needs-setup'])
+    markSetup('acme/a', null)
+    const [a, b] = readInstalledIndex()
+    expect(a).toEqual(record('acme/a'))
+    expect('setup' in a!).toBe(false)
+    expect(b).toEqual(record('acme/b', { setup: 'pending' }))
+    expect(listInstalledDsh().map((dsh) => 'setup' in dsh)).toEqual([false])
+  })
+
   it('finds a harness by its own id first, then by an id it went by before', () => {
     writeInstalledIndex([
       pkg('acme/solid', { formerly: ['acme/workshop', 'acme/cad'] }),
@@ -138,5 +205,49 @@ describe('the installed index', () => {
     // a package still installed under the old id is that package, not the one that took its name
     expect(installedDsh('acme/cad')?.id).toBe('acme/cad')
     expect(installedDsh('acme/nobody')).toBeUndefined()
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    mkdirSync(dshRootDir(), { recursive: true })
+    disk.writes = []
+    disk.renames = []
+    upsertInstalledRecord(record('acme/one'))
+    expect(disk.writes).not.toContain(indexFile())
+    expect(disk.renames.filter(([, to]) => to === indexFile())).toEqual([[expect.stringMatching(/\.tmp$/), indexFile()]])
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary one', () => {
+    writeInstalledIndex([record('acme/a')])
+    const before = readFileSync(indexFile(), 'utf8')
+    disk.full = true
+    expect(() => writeInstalledIndex([record('acme/a'), record('acme/b')])).toThrow(/ENOSPC/)
+    disk.full = false
+    expect(readFileSync(indexFile(), 'utf8')).toBe(before)
+    expect(readdirSync(dshRootDir())).toEqual(['installed.json'])
+  })
+
+  it('a torn installed.json is set aside, not written over', () => {
+    mkdirSync(dshRootDir(), { recursive: true })
+    writeFileSync(indexFile(), '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(readInstalledIndex()).toEqual([])
+    upsertInstalledRecord(record('acme/one'))
+    expect(readFileSync(`${indexFile()}.unreadable`, 'utf8')).toBe('[{"')
+    expect(readInstalledIndex().map((row) => row.id)).toEqual(['acme/one'])
+    expect(warn).toHaveBeenCalledWith('[state] installed.json could not be read (not valid JSON); kept as installed.json.unreadable, starting empty.')
+  })
+
+  // Nothing was read (EACCES here; EMFILE or a Windows scanner's EBUSY in the field), so an install cannot know the rest.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an installed.json that cannot be read is not written over', () => {
+    writeInstalledIndex([record('acme/one')])
+    const before = readFileSync(indexFile(), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(indexFile(), 0o000)
+    expect(() => upsertInstalledRecord(record('acme/two'))).toThrow('installed.json could not be read (EACCES)')
+    // The Store's mark after a setup runs again (setupAgain.ts): read as none, it would write an empty index.
+    expect(() => markSetup('acme/one', 'needs-setup')).toThrow('installed.json could not be read (EACCES)')
+    chmodSync(indexFile(), 0o600)
+    expect(readFileSync(indexFile(), 'utf8')).toBe(before)
+    expect(readdirSync(dshRootDir())).toEqual(['installed.json'])
   })
 })

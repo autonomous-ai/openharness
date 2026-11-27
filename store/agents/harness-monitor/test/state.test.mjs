@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DAY, row } from './fixtures.mjs'
-import { stripJsonc, updateConfig } from '../lib/config.mjs'
+import { stateDir, stripJsonc, updateConfig } from '../lib/config.mjs'
 import { EMPTY_STATE, clearStopped, forget, gb, markStopped, pin, readLog, readState, record, writeState, writeVerdict } from '../lib/state.mjs'
 import { decide } from '../lib/policy.mjs'
 
@@ -54,6 +55,26 @@ test('changing a value leaves every comment in the person\'s file exactly where 
   assert.match(after, /"stopAfterIdle": "3d"/)
   assert.match(after, /"runningCeiling": 30/)
   assert.equal((await readState(null, env)).policy.stopAfterIdle, '3d')
+})
+
+test('its state is in <state>/monitor, HARNESS_MONITOR_STATE first', (t) => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  t.after(() => Object.defineProperty(process, 'platform', platform))
+  const home = mkdtempSync(join(tmpdir(), 'hps-home-'))
+
+  Object.defineProperty(process, 'platform', { value: 'linux' })
+  assert.equal(stateDir({ HOME: home }), join(home, '.local', 'state', 'harness', 'monitor'), 'a fresh Linux home')
+  assert.equal(stateDir({ HOME: home, XDG_STATE_HOME: '/s' }), join('/s', 'harness', 'monitor'))
+  mkdirSync(join(home, '.harness'))
+  assert.equal(stateDir({ HOME: home }), join(home, '.harness', 'monitor'), 'a Linux home not moved yet')
+  mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+  assert.equal(stateDir({ HOME: home }), join(home, '.harness', 'monitor'), 'a data root without the marker')
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
+  assert.equal(stateDir({ HOME: home }), join(home, '.local', 'state', 'harness', 'monitor'), 'a Linux home moved')
+  assert.equal(stateDir({ HOME: home, HARNESS_MONITOR_STATE: '/m' }), '/m')
+
+  Object.defineProperty(process, 'platform', { value: 'darwin' })
+  assert.equal(stateDir({ HOME: home }), join(home, '.harness', 'monitor'), 'macOS keeps ~/.harness')
 })
 
 test('tickets and pins are written where the program keeps them, and read back', async () => {

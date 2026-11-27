@@ -1,6 +1,7 @@
 /**
- * The worker's side of reaperProcess.mjs: it tells that process, started once per test worker, which process groups and tmux
- * servers to end should the worker go without closing them (a killed run, a test that never reached its afterEach).
+ * The worker's side of reaperProcess.mjs: it tells that process, started once per test worker, which process groups, tmux
+ * servers and processes the harness started to end should the worker go without closing them (a killed run, a test that
+ * never reached its afterEach).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { Socket } from 'node:net'
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 
 type Message = { group: number } | { leaderGone: number } | { forget: number } | { tmux: string; root: string } | { forgetTmux: string }
+  | { own: number; started: string } | { forgetOwn: number }
 
 let reaper: ChildProcess | null = null
 /** What the reaper has been told and not told to forget: a reaper started again (the last one died) is told it all again. */
@@ -54,3 +56,7 @@ export const forgetGroup = (pgid: number): void => tell(`group ${pgid}`, null, {
 /** Stop the tmux server at [socket] and remove [root] if the worker goes before `forgetTmux`. */
 export const watchTmux = (socket: string, root: string): void => tell(`tmux ${socket}`, { tmux: socket, root }, { forgetTmux: socket })
 export const forgetTmux = (socket: string): void => tell(`tmux ${socket}`, null, { forgetTmux: socket })
+/** End process [pid], which the harness started at [started] (`ps -o lstart=`), and what descends from it, if the worker
+ *  goes before `forgetOwn` while it still runs as itself (IsolatedDaemon.own). */
+export const watchOwn = (pid: number, started: string): void => tell(`own ${pid}`, { own: pid, started }, { forgetOwn: pid })
+export const forgetOwn = (pid: number): void => tell(`own ${pid}`, null, { forgetOwn: pid })

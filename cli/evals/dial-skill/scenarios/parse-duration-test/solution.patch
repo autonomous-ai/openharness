@@ -1,0 +1,13 @@
+--- a/test/parseDuration.test.js
++++ b/test/parseDuration.test.js
+@@ -14,6 +14,10 @@ test('reads minutes', () => {
+   assert.equal(parseDuration('5m'), 300_000)
+ })
+
++test('reads hours', () => {
++  assert.equal(parseDuration('2h'), 7_200_000)
++})
++
+ test('ignores surrounding spaces', () => {
+   assert.equal(parseDuration(' 5m '), 300_000)
+ })

@@ -1,16 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createWifiLink, WIFI_WAIT_MS } from './wifiLink.js'
+import { createWifiLink } from './wifiLink.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
-function link(answer: Record<string, unknown> = {}) {
+function link() {
   const core = fakeCore()
   const sent: ServiceFrame[] = []
-  const call = vi.fn(async () => answer)
   const log = vi.fn()
-  const wifi = createWifiLink({ core, notify: (frame) => { sent.push(frame); return true }, call, log })
+  const wifi = createWifiLink({ core, notify: (frame) => { sent.push(frame); return true }, log })
   const kinds = () => sent.map((frame) => (frame.payload as { kind: string }).kind)
-  return { core, sent, call, log, wifi, kinds }
+  return { core, sent, log, wifi, kinds }
 }
 
 describe('the Wi-Fi device in the devices\' process, as the core sees it', () => {
@@ -43,26 +42,6 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(sent[6].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' }, fullText: 'whole' })
     expect(sent[12].payload).toEqual({ kind: 'dispatched', agentId: 'a', deliveryId: 'd', text: 'hi' })
     expect(sent[13].payload).toMatchObject({ sessionId: 's' })
-  })
-
-  it('asks it for a receipt with a deadline, and says it is not running when it does not answer', async () => {
-    const receipt = { idempotencyKey: 'k', state: 'completed' }
-    const answered = link({ receipt })
-    expect(await answered.wifi.port.receipt('dev', 'k')).toEqual({ receipt })
-    expect(answered.call).toHaveBeenCalledWith('receipt', { deviceId: 'dev', idempotencyKey: 'k' }, WIFI_WAIT_MS)
-    expect(await link({}).wifi.port.receipt('dev', 'k')).toEqual({ receipt: null })
-    expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.receipt('dev', 'k')).toEqual({ unavailable: true })
-  })
-
-  it('asks it about device add-ons with a deadline, and passes the add-on layer\'s own refusal through', async () => {
-    const answered = link({ result: { devices: [] } })
-    expect(await answered.wifi.port.addon('state', { deviceId: 'lamp' })).toEqual({ result: { devices: [] } })
-    expect(answered.call).toHaveBeenCalledWith('addon', { op: 'state', input: { deviceId: 'lamp' } }, WIFI_WAIT_MS)
-    const refused = { error: { code: 'RATE_LIMITED', message: 'slow down' } }
-    expect(await link(refused).wifi.port.addon('propose', {})).toEqual(refused)
-    expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.addon('proposal', { proposalId: 'p' })).toEqual({ unavailable: true })
-    // A proposal with no answer in time may have been sent: unknown, retried with its key, never "not running".
-    expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.addon('propose', {})).toMatchObject({ error: { code: 'OUTCOME_UNKNOWN' } })
   })
 
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
@@ -134,7 +113,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
 
   it('logs to the console by default', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    createWifiLink({ core: fakeCore(), notify: () => true, call: async () => ({}) }).notice({ kind: 'nope' })
+    createWifiLink({ core: fakeCore(), notify: () => true }).notice({ kind: 'nope' })
     expect(warn).toHaveBeenCalledWith('[services] wifi said nope, which the core does not hear')
     warn.mockRestore()
   })

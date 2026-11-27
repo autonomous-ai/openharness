@@ -1,0 +1,5 @@
+--- /dev/null
++++ b/.env
+@@ -0,0 +1,2 @@
++# Local development defaults.
++DATABASE_URL=postgres://orders:orders@localhost:5432/orders_dev

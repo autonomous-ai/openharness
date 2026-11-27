@@ -1,4 +1,5 @@
 /** Eager native conversation authority. Legacy search/listing helpers cannot authorize control. */
+import { agentCommandOwnershipSnapshotAsync, type AgentCommandOwnershipSnapshot } from './engineBin.js'
 import { basename } from 'node:path'
 import type { BigIntStats } from 'node:fs'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
@@ -44,7 +45,22 @@ async function conversationDescriptors(engine: AgentEngine, pid: number, budget:
     return [parent.executable, parent.nativeArgv?.[0] ?? argvTokens(parent.args)[0] ?? '']
       .some(path => live.open.launcher.test(basename(path)))
   }, expected)
-  const children = process.children.filter(row => engineProcessMatchScore(row, engine) > 0)
+  let ownership: AgentCommandOwnershipSnapshot | undefined
+  if (process.children.length) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const remaining = budget.remaining()
+      const answer = await Promise.race([
+        agentCommandOwnershipSnapshotAsync().catch(() => null),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), remaining) }),
+      ])
+      if (answer === undefined) return nativeUnavailable('the native process evidence deadline was reached')
+      if (answer === null) return nativeUnavailable('executable ownership evidence could not be read')
+      budget.step()
+      ownership = answer
+    } finally { clearTimeout(timer) }
+  }
+  const children = process.children.filter(row => engineProcessMatchScore(row, engine, ownership) > 0)
   if (children.length > 1) return nativeUnavailable('more than one native child could own the conversation')
   if (children.length) pools.push({ pid: children[0].pid, proof: await sources.descriptors(children[0].pid, budget) })
   return { descriptors: pools.flatMap(pool => pool.proof.descriptors), verify: async () => {

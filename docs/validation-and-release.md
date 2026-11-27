@@ -5,6 +5,43 @@ The release clock starts at the user's request, not at the tag. The October 2
 baseline investigations, local environment failures, and waiting before publishing.
 Keep a short validation plan and reuse its evidence through merge and release.
 
+## In short
+
+The rules AGENTS.md carried until 2026-11-11; the sections below have the details.
+
+- Time the request through completion: implementation, validation, merge, publication and waiting, each apart.
+- Pick the checks before starting them: affected tests and integration checks, full suites for broad changes, run
+  together within the machine's capacity. No second full local suite after equivalent CI passed.
+- Reuse evidence only for the source and environment it covers (pass the prior receipt with `--reuse`). A squash with
+  the same tree keeps it; conflicts, dependencies or relevant code changes do not.
+- A documented, unchanged failure needs no new baseline. New failures need investigation. Never call an incomplete or
+  failed suite passing, and never skip a required check to save time.
+- PR CI runs the Linux unit checks of changed components, and of each suite that reads a changed file (`PR_READS`); the
+  one required check is `ci/required`. Push work in progress as a draft; mark it ready, then keep the head stable while
+  CI and review run. Review independently of implementation. Base the branch on current `main`.
+- Never start extra runs: no manual CI run beside the automatic one, no pushes to retrigger. Read the failure, fix it,
+  push once. Rerun only a [recorded flaky test](#recorded-flaky-tests).
+- Checks PR CI does not run are yours when you touch their area: the CLI coverage gates (`npm run test:core`,
+  `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`,
+  `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Run them with
+  `python3 scripts/local-checks.py --run` from a clean tree at the final commit: it runs the ones your paths need and
+  prints their receipts; paste its output into the PR body.
+- Heavy workflows (OS images, VM tests, the full CLI end to end) run only by hand, once, when the change needs them; report the
+  run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
+- Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
+  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `make merge-pr` refuses only because `main`
+  moved, and the required checks are green on the head and GitHub shows the PR mergeable with no conflict and
+  no unresolved review conversation, merge with `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
+  On a conflict, integrate `main`, review the combined change, rerun only the affected checks, and finish the
+  authorized merge without asking again.
+- Once required checks pass, do the authorized merge or release without another validation cycle, then verify the
+  published versions and checksums. A release failure is a code failure: fix it and cut the next version; never move a
+  published tag.
+- For an authorized Desktop release, start `make release-desktop ARGS="--prepare"` from the final pushed branch beside
+  validation and review; publish only after checks pass. Its `--wait` receipt is the artifact verification.
+- An authorized Harness Device release is `make release-device`; `ARGS="--prepare"` builds, signs and checks `main`'s
+  tip and publishes nothing ([device-app/RELEASE.md](../device-app/RELEASE.md)).
+
 ## Select the checks once
 
 | Change | Required scope |
@@ -27,19 +64,67 @@ two commands each spawning every CPU is not useful parallelism.
 
 ## PR CI
 
-PR CI is deliberately fast. Each changed component runs only its own Linux suite:
+PR CI is deliberately fast. Each changed component runs its own Linux suite, and a changed file another suite reads
+(`PR_READS` in `scripts/ci-plan.py`, each inside the broader `DEPENDS` that reuse checks) runs that suite too: #4033 changed a CLI file Desktop's
+tests read, ran the CLI's suite only, and turned main's Desktop CI red. The table lists each directory's own check; the
+broad reads on top: `companions` and `pty` import the CLI's code, so a `cli/` change runs them (about a minute each,
+beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop reads `store/` and `docs/images/`, `os-checks` reads
+`term/` and `tui/`, and `store-checks` reads `store/agents/`, `store/viewers/` and the rest of `store/tools/`:
 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
-| `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
-| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `ALSO`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
+| `cli/`, `tests/`, `plugins/harness-device-vscode/` (the CLI's build carries it and its Vitest runs its tests), `plugins/harness-device-orca/` (the CLI's build carries it), `plugins/harness-device/`, `plugins/harness/` and `.claude-plugin/marketplace.json` (the CLI's build carries them as Claude Code's marketplace) | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (`PR_READS` in `scripts/ci-plan.py`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
-| `pty/`, `term/`, `tui/vendor/`, the CLI's ptyhost backend (`cli/src/lib/ptyHost/`, `ptyHostBackend*`, `terminalBackend.contract.ts`) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
-| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
+| `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
+| `device-app/`, and `release-device.yml`, `release-desktop.yml` or the Windows signing action (its release tests read all three) | `device-app-checks` (the release scripts' tests against temp Git repositories and fake `gcloud`, `curl` and `gh`, then the UI's typecheck, Vitest and bundle, then `cargo test` with Tauri's Linux packages, then the X11 source of the app in front, live under Xvfb; on Windows, `cargo test --lib`; the macOS code is not compiled) | a few minutes |
+| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the backend integration suite, `npm run test:integration`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
-| `devices/` | `firmware-checks` | 1–2 min |
+| `store/tools/` | `store-checks` (the runtime helpers' tests, the check that every package's `runtimes.sh` copy matches, the tools' offline Node tests, the local AI packages' tests; the browser and network suites stay in their own workflows). Only the files it runs and those they read beside them are its own (`ALSO` in `scripts/ci-plan.py`); the rest of `store/tools/` is outside every component | about 1 min |
+| `devices/`, `.github/assets/apps/` (the Pro's host tests check its baked app icons against this art) | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
-| anything else (docs, workflows, scripts, store) | `process-checks` only | about 1.5 min |
+| anything else (docs, workflows, scripts) | `process-checks` only, but for the workflows, actions and scripts an end-to-end suite or `cross-read-scan` runs on (below), and an edit to a job's block in `ci.yml`, or to what it takes from the rest of the file (an `env` variable it names, the `permissions`, `defaults` and `concurrency`, an anchor it names), which selects that job's suite (`device-app-build`'s: the Device suites that install its packages) | about 1.5 min |
+
+`on:` selects no suite, because every new suite adds a manual `scope` option there and reading it as the whole file would
+run every suite on each such change.
+
+The end-to-end suites below are selected only by their own path lists in `scripts/ci-plan.py` (`WINDOWS_SPECS`,
+`DIAL_HOST_PATHS`, `DEVICE_APP_PATHS` and the functions beside them) and by an edit to their jobs in `ci.yml`, across
+components, never by what their files read: each costs many times a unit suite, so a typical CLI pull request runs none. A file their tests only read runs its
+component's unit suite. When selected, each suite's jobs gate `ci/required` like any other. The commit counts are of the
+211 commits merged to `main` from 2026-11-14 to 11-21.
+
+| Changed paths | PR check | Typical time |
+| --- | --- | --- |
+| Windows-only code: `pty/`, `term/`, `tui/vendor/`, `serial/`, any `install.ps1`, `cli/src/lib/ptyHost*`, `cli/scripts/windows-ci/`, the Store's pipe script `store/tools/windows-ci/`, a file under `cli/src/` or `cli/e2e/` whose own name contains `windows` or `Windows`, `.github/workflows/windows.yml`, `cli/vitest.e2e.windows.config.ts`, `cli/scripts/windows-install-manifest.mjs`. x64 alone also for `cli/src/lib/windows/`, `cli/src/devices/`, `cli/src/cable/`, `cli/hook/`, `tui/`, `plugins/harness-device*/`, `website/src/app/flash-circle.ps1/`, the Store's pipe test `store/tools/windows-pipe.test.mjs` (`storePackagesPipe.windows.spec.ts` runs it) with what it and the pipe script import under `store/`: the pipe client `store/tools/local-daemon.mjs` and `local-credential.mjs`, `test-folders.mjs`, and the four agents' transports it drives with each one's `lib/localDaemon.mjs` (`WINDOWS_STORE_PIPE_PATHS`), and `windows.yml`'s specs (`WINDOWS_SPECS`) with the module beside each (`secureState.spec.ts` → `secureState.ts`), the dial desk bundle `cli/scripts/windows-dial-e2e/`, what it and `cli/vitest.e2e.windows.config.ts`'s files, setup files and global setup import from `cli/e2e/harness/` and `cli/src/testing/`, the setup file `cli/vitest.setup.ts`, and what those read or start by a path built from parts, declared by hand: `cli/build-bundle.mjs`, `devices/harness-device/firmware/version.txt`, `cli/e2e/harness/reaperProcess.mjs` (`WINDOWS_E2E_HARNESS_PATHS`). Product code they import selects it only where the folders above do. Markdown files and images there do not select it, but `tui/THIRD_PARTY_NOTICES.md`, which the TUI compiles in | `windows-e2e`: calls `windows.yml` (the PTY host's Rust tests and builds, the Windows CLI specs, the dial end to end on a stand-in dial, the install check) on `windows-latest`, and on `windows-11-arm` only for Windows-only code (`x64_only` otherwise) | x64 about 16 min, arm64 about 27 more; x64 in 100 commits, arm64 in 23 |
+| A `cli/e2e/**/*.e2e.ts` file the PR adds or modifies, but `dialWindows.e2e.ts` (`windows-e2e` runs it), `diskfull.e2e.ts` (macOS only), `dialAppEvalIterm.e2e.ts` (macOS only), `agentBrowserPodman.e2e.ts` (by hand) and the dial hosts' files. What every e2e file runs on: `.github/actions/cli-e2e-setup/`, `cli/e2e/harness/`, `cli/vitest.e2e*.config.ts`, `cli/ci-e2e-durations.json`. What the Orca files cover: Orca's terminal-host stand-in `cli/e2e/harness/orcaHost.ts`, `inOrca.ts`, `fakeOrca.ts`, Orca's adapter `cli/src/cable/hosts/orca.ts`, and the harness's `pluginLoop.ts` and `pluginDial.ts` that run Orca's plugin and its dial stream. What the dial app eval's files cover: all of `cli/src/cable/hosts/`, `cli/src/testing/dialAppEval/`, the carousel model `cli/src/testing/dialCarousel.ts`, the tier B driver `cli/e2e/harness/appEval*.ts`, for the editors the devices process `cli/src/services/devices.ts`, the listener whose `vscode` stream the editors' windows open `cli/src/services/devicesListener.ts` and its path `cli/src/devices/listenerPath.ts`, the hook `cli/hook/notify.mjs`, the extension `plugins/harness-device-vscode/src/`, `cli/src/devices/vscodeExtension.ts`, `cli/src/cable/vscodeExtensionSetup.ts`, Cursor's engine `cli/src/engines/cursor/` and `cli/src/core/engines/cursorDiscovery.ts`, the harness's `cli/e2e/harness/vscodeWindow.ts`, `editorWindow.ts`, `outsideAgent.ts`, `codexOutside.ts` and `cursorOutside.ts`, for Orca the plugin's code `plugins/harness-device-orca/src/`, the devices' Orca reads `cli/src/devices/orcaHomes.ts` and `cli/src/testing/recordedOrca.ts`, the harness's `pluginDial.ts` and `pluginLoop.ts` that run it, `fakeOrca.ts`, `inOrca.ts` and `orcaHost.ts`, for every app the rest of the harness the driver runs (`desk.ts`, `fakeDial.ts`, `fakeBackend.ts`, `modInbox.ts`, `schemeApps.ts`, `codexAppCli.ts`, and for iTerm2 `herdrServer.ts`, `dialHosts.ts`, `ownTmux.ts` and `runLog.ts`), and the six files | `linux-e2e`: those files on `ubuntu-24.04`, set up as the nightly shards (`.github/actions/cli-e2e-setup`, the in-memory backend), one runner per 10 hinted minutes (`cli/ci-e2e-durations.json`), at most 4; above 40 such files (after the exclusions), the full suite on the nightly's 8 shards. A change to what every file runs on, or to the job alone, runs the canary `cli/e2e/twoAccounts.spike.e2e.ts` (two daemons on the real backend, one case) beside the PR's own files. A change to what the Orca files cover, its deletion too, runs the five that drive an Orca terminal through the stand-in on Linux (`dialOrcaFocus`, `dialOrcaFullRing`, `dialStream`, `dialPaneFollow`, `dialClaudeAppFollow`, `LINUX_E2E_ORCA_FILES` in `scripts/ci-plan.py`) beside the PR's own files; a head without one of them fails the plan. A change to what the dial app eval's files cover, its deletion too, runs its six (`dialAppEvalClaude`, `dialAppEvalChatgpt`, `dialAppEvalVscode`, `dialAppEvalCursor`, `dialAppEvalOrca`, `dialAppEvalHeldOut`, `LINUX_E2E_APP_EVAL_FILES` in `scripts/ci-plan.py`) beside the PR's own files; a head without one of them fails the plan. `linux-e2e-summary` requires each selected file to run and pass: a file that collects no test fails, and a file whose every case skips on Linux passes and is listed in the job summary. macOS-only files are not verified by PR CI. A file name that is not plain fails the plan: folders of letters, digits, `_` and `-`, a file name of those and `.` that does not start with `.` | one file as long as its hint in `cli/ci-e2e-durations.json` (1 min without one), the dial app eval's 3½–7 min each; in 105 commits (none above 40 files) |
+| `cli/e2e/dialHost*.e2e.ts`, `cli/e2e/deviceHerdr.e2e.ts`, `cli/vitest.e2e.dialHosts.config.ts`, all of `cli/src/cable/hosts/` (the daemon runs every adapter from its bundle, and they share the folder's code), `cableFrame.ts`, `portAccess.ts` and `roundGlyphs.ts` in `cli/src/cable/`, the carousel model `cli/src/testing/dialCarousel.ts`, the harness files the dial hosts' files drive (`dialHosts.ts`, `desk.ts`, `fakeBackend.ts`, `fakeDial.ts`, `fakeOrca.ts`, `herdrServer.ts`, `inOrca.ts`, `kittyWindow.ts`, `orcaHost.ts`, `outsideAgent.ts`, `runLog.ts`, `swayDesk.ts`, `weztermMux.ts`, `x11Desk.ts`, `zellijSession.ts` in `cli/e2e/harness/`), `.github/workflows/cli-e2e-dial-hosts.yml`, `.github/actions/cli-e2e-setup/` | `dial-hosts`: calls `cli-e2e-dial-hosts.yml`, the nightly's `e2e (dial hosts)` job (herdr, WezTerm, Zellij, kitty, an X11 desktop and sway; a missing host or a skipped case fails) | about 4 min |
+| Any `device-app/` change but Markdown and the release scripts' Python tests (`device-app/scripts/test_*.py`) | `device-app-e2e`: `device-app-linux` (`linux.sh`, with the app's real install lines, on `ubuntu-22.04` and `ubuntu-22.04-arm`) and `device-app-windows` (`windows.ps1` on `windows-latest` and `windows-11-arm`) | Linux about 10 min and Windows about 15 min each arch, after the builds; in 24 commits |
+| `device-app/src-tauri/src/update.rs`, `device-app/scripts/e2e/update-pair.sh`, `linux.sh` and `windows.ps1` there, `release-build.sh`, `release-check.sh`, `release-setup.sh`, `tauri*.conf.json`, `Cargo.toml`, `Cargo.lock`, the installer's hooks (`device-app/src-tauri/windows/`) | `device-app-update`: `update-pair.sh` builds 0.0.1 and 0.0.2, then `linux.sh --update` or `windows.ps1 -Update`, on `ubuntu-22.04`, `ubuntu-22.04-arm` and `windows-latest` | 13–29 min each |
+| `desktop/lib/devices/`, `desktop/lib/update/tauri_signature.dart` and the `update_signature.dart` it extends, `desktop/integration_test/device_app_install_windows_linux_native_test.dart` and the `desktop/test/support/tauri_test_signer.dart` it imports, the Flutter its jobs set up (`.github/actions/desktop-flutter/`, `desktop-flutter-arm64/`), the app's `install.rs`, `packaging.rs`, `instance.rs`, `tauri*.conf.json`, the installer's hooks | `device-app-desktop`: that Desktop test installs the app on `windows-latest`, `windows-11-arm`, `ubuntu-22.04` and `ubuntu-22.04-arm`; the Linux legs install a package the test signs with a key made for the run | 9–19 min each, after the builds |
+| `website/scripts/device-install.sh`, `device-app/scripts/e2e/linux-install.sh`, `https-fake-cdn.py` there, the app's `appimage_env.rs`, `packaging.rs`, `tauri*.conf.json` | `device-app-install`: `linux-install.sh`, the one-line install with no `libfuse2` against a stand-in CDN, on `ubuntu-22.04`, `ubuntu-24.04` and `ubuntu-26.04` (x64), one at a time | about 1 min each, after the x64 AppImage build |
+
+The Device jobs' setup action, `.github/actions/device-app-setup/`, selects all four Device suites.
+
+`device-app-build` builds each debug package the running Device suites need once (an AppImage and an NSIS installer,
+x64 and arm64; `device-app-install` needs only the x64 AppImage) and hands it to their jobs as an artifact, kept 3 days;
+about 7–8 min each. It is in no suite, so a suite reused after **Update branch** builds nothing, but `ci/required` needs
+it: a failed build fails the gate. The Device jobs hold at most 9 runners at once. The Tauri CLI comes from a cache keyed
+on `device-app/scripts/release-setup.sh`, so a pull request's first run can compile it twice per OS and architecture:
+`device-app-build` and `device-app-update` start together and both miss the cache, and `ci.yml` never runs on `main`,
+so no `main` run fills it.
+
+`cross-read-scan` is no end-to-end suite: it runs on every PR that changes a component (a file one of the first table's
+suites runs as its own: `cli/`, `desktop/`, `backend/`, `devices/` and the other folders there) or a file an end-to-end
+suite runs as its own (`.github/workflows/windows.yml`, `.github/actions/cli-e2e-setup/action.yml`, `serial/` and the
+rest of their path lists), and on a change to `scripts/ci-plan.py`, `scripts/tests/test_ci_plan.py`,
+`scripts/record-ci-validation.py` (the desktop's inputs the planner's tables take) or the CLI lists those tables copy
+(`cli/e2e/harness/dialHosts.ts`, `cli/vitest.e2e.ci.config.ts`). Other files alone do not select it: docs outside the
+components, `ci.yml`, other scripts. It runs the `test_ci_plan.py` tests that need every file
+(`FullCheckoutTests.NAMES`), the repository-wide cross-read scan among them, on a full checkout with
+`CROSS_READ_SCAN_REQUIRED=1`: a skipped test fails, and so does a run of other than those tests. `process-checks`' sparse
+checkout skips them. The scan takes about 20 s locally and about 0.5 runner-minutes on CI. A string the scan reads as an undeclared path blocks the PR until it is declared in
+`DEPENDS` (and, for a unit suite, `PR_READS`), or added to `NOT_READS` with its reason when it is no read.
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
 run (after **Update branch**, untouched components reuse their earlier result: see
@@ -65,15 +150,18 @@ A component's result is reused only when all of these hold; otherwise it runs as
   to its exact run and attempt, and reads that run's receipt. A component the run
   itself reused points at the run where it last ran.
 - Nothing that differs between the tested commit and the new head is a component input:
-  its own directory (by the map above) or a file it reads elsewhere (`DEPENDS` in
-  `scripts/ci-plan.py`). `backend/integration/` and `cli/e2e/` (apart from
-  `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each Swarm UI
+  its own directory (by the map above) or a file it may read elsewhere (`DEPENDS` in
+  `scripts/ci-plan.py`: broader than the `PR_READS` that select it, as the scan misses a path joined from parts). `cli/e2e/` (apart from
+  `cli/e2e/harness/`) is skipped by the CLI's own suite only, whose jobs never read it; `linux-e2e` and `dial-hosts`
+  read it. Each UI
   style allowlist (`scripts/ui-style-allowlist/mobile.json`, `desktop.json`) is an input
   of the component whose job checks it, and a PR that changes one runs that component.
 - No changed path is a shared input: `.github/`, `scripts/` (the planner and the merge
   helper; apart from the two style allowlists above), `Makefile`, `.gitattributes`, `.gitignore`, `.gitmodules`, any lockfile or
   toolchain pin, or any path outside a component other than `docs/` (but `docs/images/`
-  counts) and top-level `.md` files. A shared change reruns every component.
+  counts) and top-level `.md` files. The `store/tools/` files `store-checks` neither runs nor reads beside them are
+  outside every component: the scan below cannot see a read of a file beside its reader. A shared change reruns every
+  component.
 - The PR itself changes no workflow, script, `Makefile` or Git setting: PR CI runs the
   PR's own planner.
 - Every GitHub read succeeded within a minute. The plan job has read-only `actions`
@@ -105,7 +193,7 @@ from `main` before relying on its CI.
 
 ### Reuse in a batch PR
 
-A batch PR (a branch from main with each member PR merged in, as the PM builds them) reuses
+A batch PR (a branch from main with each member PR merged in) reuses
 a member PR's passed result the same way. A phone PR batched with unrelated work does not
 run mobile-checks again. The planner reads the members from the batch's own commits, never
 from the PR's text:
@@ -135,9 +223,12 @@ the planner, refuses a receipt whose members differ from the head's merges.
 | --- | --- | --- |
 | CLI per-file coverage gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`, `test:local-models`) | nowhere automatically | when you change files those gates cover (`src/core/`, `src/services/`, `src/harnessd/` and each gate's area) |
 | CLI serial, PTY and login-shell specs; macOS process images | CLI release builds and verifies process images only | when you change `src/cable/` serial code, shell startup or process images; run the specs on macOS |
-| CLI end to end (`cli/e2e`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows; start one run on the branch |
+| The full CLI end-to-end suite (`cli/e2e`; PR CI runs a PR's own e2e files, `linux-e2e`, and the dial hosts, `dial-hosts`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows beyond the e2e files the PR changes; start one run on the branch |
 | A guest's harness against an owner's (`npm run test:guest-real`) | nowhere automatically: it needs a Mac with guest access on and a guest user | when you change guest sharing, a guest's launch or environment, Stop, or how pane titles name harnesses: the guest runs as another OS user with `env -i`, and each difference has broken something only a shared Mac showed |
 | Desktop tests on macOS | nowhere automatically | when you change macOS-specific Desktop code; `make desktop-test` on a Mac |
+| The Harness Device VS Code extension in a real VS Code (`npm run test:vscode` in `cli/`) | nowhere automatically | when you change `plugins/harness-device-vscode/`, the `.vsix`'s packing or the record's reader (`cli/src/devices/vscodeExtension.ts`, `cli/scripts/lib/vscodeExtensionBundle.mjs`). It downloads a VS Code into a temporary folder and runs it with its own user data, extensions and home; a window opens for up to about three minutes, as the gate waits for the extension's minute counts. On a Mac the copy gets a bundle id of its own (`ai.autonomous.harness.vscode-gate`) before it runs. After the run the gate removes that id's preferences and leaves nothing under it in LaunchServices, and the run fails if `~/Library/Preferences/com.microsoft.VSCode.plist` changed |
+| Harness Device on macOS (PR CI compiles only its Linux and Windows code) | nowhere automatically | when you change `device-app/`; `cargo test --locked` in `device-app/src-tauri` on a Mac |
+| Harness Device end to end on macOS (`device-app/scripts/e2e/macos.sh`) and an AppImage with no `libfuse2` (`appimage-starts.sh`); PR CI runs `linux.sh`, `windows.ps1`, `update-pair.sh` and `linux-install.sh` | nowhere automatically | `macos.sh` (with `--update` and `update-pair.sh` for the update check) when you change how the app installs, starts, follows the app in front, shows its tray or updates itself on macOS: it prints `ok:` per check and runs a debug build against the fake CLI, never a person's account or a backend. `appimage-starts.sh <AppImage> <name>`, on a computer with no `libfuse2`, when you change how an AppImage starts: it starts any AppImage it is given, Desktop's public release too, in a scratch HOME from which it may reach the backend. |
 | TUI native fixtures and connected shells | the TUI release (`release-tui.yml`) | optional locally: `scripts/validate-tui-native.py` |
 | Experience, authoring, Home Assistant and Desktop logging browser checks | **Run workflow** on their own workflows | when you change their area |
 | OS image builds, VM and hardware acceptance | **Actions → Harness OS** and the other OS workflows, by hand only | for installer, image or session changes; start once with the needed inputs |
@@ -153,27 +244,40 @@ an automatic run, and don't push again just to retrigger a failed check. Read th
 failure, fix it and push once. The account runs at most 20 jobs at once (5 on macOS),
 and every extra run delays every other PR.
 
+### Recorded flaky tests
+
+A record names the test, the job it runs in, the run where it failed and the date. It allows one rerun of that job.
+A second failure is a real failure. A recorded flaky test is still a bug: its owner fixes it and removes the record.
+
+| Test | Job | Failed | Run |
+| --- | --- | --- | --- |
+| `hosts_started_together_serve_once` (`pty/tests/control.rs`): one of eight hosts started together exited with status 1 (`tests/control.rs:383`), on a PR that changed nothing under `pty/`; not seen in the 25 failed CI runs before it | `pty-checks` | 2026-11-24 | [45326642430](https://github.com/autonomous-ai/openharness/actions/runs/45326642430) |
+| `pause_holds_output_until_resume` (`pty/tests/stream.rs`): after Resume the output read missed `out-50` (`tests\stream.rs:581`, the ConPTY's last line), on a PR that changed nothing under `pty/` (#4599, the dial's observed source) | `windows-e2e / windows-pty` (x64) | 2026-11-25 | [45523372202](https://github.com/autonomous-ai/openharness/actions/runs/45523372202) |
+| `harness device notify says no dial before the dial greets, and shown after` (`cli/e2e/dialWindows.e2e.ts`): right after the dial greets, the devices log `notify · agent · shown` but the CLI prints `no dial` (`dialWindows.e2e.ts:70`), on a PR that changed nothing in the devices or `notify` (#4671, `asked`'s Windows bound); under investigation: why `askDevices` returns null there | `windows-e2e / windows-pty` (x64) | 2026-11-27 | [45948212750](https://github.com/autonomous-ai/openharness/actions/runs/45948212750) |
+
 ### Suite details
 
 Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`,
-`full` (the default, all five core components), `all`, or one extra component. It
-runs the same fast jobs as PR CI.
+`full` (the default, all five core components), `all` (every component's suite and `cross-read-scan`), `process` (the
+always-on jobs only), `cross-read-scan`, one extra component, or one end-to-end suite: `windows-e2e` (x64 and arm64),
+`linux-e2e`, `dial-hosts`, `device-app-e2e`, `device-app-update`, `device-app-desktop` or `device-app-install`. `scope=linux-e2e` needs `e2e_files`, the `cli/e2e` files to run separated
+by spaces; the plan fails on a file `linux-e2e` does not run. It runs the same jobs as PR CI.
 
 `desktop-tests` uses the release's pinned Flutter SDK and shared dependency caches.
 Each shard has four test workers and the bounded runner's ten-minute budget. Logs
 and receipts are retained for seven days.
 
-`backend-integration` runs the backend's Super Tab integration suite (`backend/integration/`,
-`vitest.super-tabs.config.ts`) on four Linux runners. It replaces the full local run every
+`backend-integration` runs the backend's integration suite (`backend/integration/`,
+`vitest.integration.config.ts`) on four Linux runners. It replaces the full local run every
 backend pull request needed before Ready: CI's run is that evidence, so nobody waits on a
 per-Mac lock for it. Each integration file starts its own MongoDB replica set through
 `mongodb-memory-server-core` (the job caches the downloaded `mongod`), so the shards share no
-database; the suite opens no Redis. `vitest.super-tabs.ci.config.ts` spreads files over the
+database; the suite opens no Redis. `vitest.integration.ci.config.ts` spreads files over the
 shards by `integration/ci-durations.json`, longest first onto the least-loaded shard, as the
 CLI does below; new files get the default cost and the discovered file list stays
 authoritative. Each shard uploads its per-file JSON results (`backend-integration-N`) for
 refreshing the hints. Reproduce one shard locally with `npx vitest run --config
-vitest.super-tabs.ci.config.ts --shard=N/4` in `backend/`.
+vitest.integration.ci.config.ts --shard=N/4` in `backend/`.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
 its worker cap and isolation. Shard reports and inventories are retained as
@@ -201,14 +305,23 @@ macOS runner with `DISKFULL=1`. `e2e-summary` applies the default suite's rule: 
 discovered file exactly once, every shard passing. Its summary records each file's duration
 for refreshing the hints. A failing test's complete daemon logs and engine hook logs are
 uploaded as `cli-e2e-daemon-logs-N`, by file and test (`E2E_ARTIFACTS_DIR`, which works
-locally too). It is advisory, and so it does not run on pull requests: a failed check makes
-GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has stayed
+locally too). The nightly run is advisory: a failed check makes GitHub report a PR unstable, which `make merge-pr`
+refuses to merge. A pull request runs the full suite only when it adds or modifies more than 40 of the files
+`linux-e2e` runs; then the 8 shards are `linux-e2e`'s and gate `ci/required`. Once it has stayed
 green, run it on pull requests, make `e2e-summary` required and add it to the evidence
-collector.
+collector. PR CI runs a PR's own e2e files instead (`linux-e2e`, set up through the shards' action,
+`.github/actions/cli-e2e-setup`) and the dial hosts (`dial-hosts`, the same workflow as the nightly's,
+`cli-e2e-dial-hosts.yml`); both gate `ci/required` when selected.
 
 Run workflow with **`agent_browser_podman`** ticked runs only `cli/e2e/agentBrowserPodman.e2e.ts`, the agent
 browser on real rootless Podman: it builds the browser image, so nothing else runs beside it. Use it once for a
 change to the agent browser's container, image or stream; the nightly run leaves that file out.
+
+Run workflow with **`dial_hosts`** ticked runs only the `e2e (dial hosts)` job: `cli/e2e/dialHost*.e2e.ts` and
+`cli/e2e/deviceHerdr.e2e.ts` on Ubuntu 24.04 with herdr, WezTerm and Zellij installed from their pinned, checksum-checked
+releases, kitty from Ubuntu, an X11 desktop (Xvfb, openbox) and sway. There a host that is missing fails its file instead of skipping it,
+and a case that skips fails the job. The shards leave these files out; the nightly run, and every manual run without
+`agent_browser_podman`, includes the job. A pull request that changes a dial host's adapter runs it as `dial-hosts`.
 
 For changes to daemon lifetime or process boundaries, select an opt-in soak and chaos workload
 (`cli/e2e/endurance.e2e.ts`). On a Mac, run `SOAK=1 E2E_BUNDLE=1 SOAK_OUT=<folder> npx vitest run
@@ -242,8 +355,10 @@ Desktop build jobs check out the complete `desktop/` component, their local
 actions and shared packaging helpers. Keep these sparse checkout inputs current
 if a build starts using another component. The existing pub-cache key also reads
 `mobile/pubspec.lock`, which remains included so sparse and full checkouts restore
-the same dependency cache. Linux builders reuse a working Google Cloud CLI at or
-above the validated version, with the normal install path as a fallback.
+the same dependency cache. The Ubuntu jobs that reach the bucket (`upload-linux`,
+`publish` and the others; `build-linux` has no Google Cloud access) reuse a working
+Google Cloud CLI at or above the validated version, with the normal install path
+as a fallback.
 When installation is needed, hosted jobs use the extracted SDK directly instead
 of copying it into the runner's discarded local tool cache. Authentication still
 runs normally; self-hosted runners retain the upstream tool-cache behavior.
@@ -272,12 +387,16 @@ GitHub Actions. It neither tags nor updates the product manifest or Release page
 
 After validation and review pass, merge and release that version normally. The
 workflow automatically looks for a candidate with the same version and Desktop
-build inputs. It compares Git objects for the whole `desktop/` and `scripts/`
-trees, `.github/actions/`, the release workflow (including its SDK/runner pins),
-`mobile/pubspec.lock` when present, and root `.gitattributes`, `.gitignore` and
-`.gitmodules` files. File contents, additions, removals and executable modes are
-covered. Extend this input contract before a build starts reading another component;
-the process suite checks that it covers every native builder's sparse checkout.
+build inputs, `BUILD_INPUTS` in `scripts/desktop-release-candidate.py`. It compares
+Git objects for the whole `desktop/` and `scripts/` trees, the trees the Windows
+builds read, `.github/actions/`, the release workflow (including its SDK/runner
+pins), `device-app/scripts/release-setup.sh` (`sign-linux`'s pinned minisign),
+`device-app/src-tauri/tauri.conf.json` (the key its signatures are checked
+against), `mobile/pubspec.lock` when present, and root `.gitattributes`,
+`.gitignore` and `.gitmodules` files. File contents, additions, removals and
+executable modes are covered. Extend this input contract before a build starts
+reading another component; the process suite checks that it covers every native
+builder's sparse checkout.
 
 Unrelated CLI, firmware and documentation merges, or a clean squash, can preserve
 those inputs even when the full repository tree changes. Any Desktop source, asset,
@@ -335,7 +454,10 @@ all platform builds/native checks. A build-only run uses `publish=false`.
 ## Bound checks and preserve the result
 
 `make validate ARGS=".harness/validation-plan.json"` runs an explicit plan, at most
-two checks at once, without installing tools or retrying tests. Create a local plan
+two checks at once, without installing tools or retrying tests. Two `flutter test`
+checks (or desktop test commands) in one folder run one after the other: concurrent
+runs race on flutter_tools' shared shader outputs and can leave shaders unusable for
+the tests. Create a local plan
 with only the checks relevant to the diff, for example:
 
 ```json
@@ -467,12 +589,14 @@ artifacts, and changing run/PR state cannot become a successful record.
 For `process` and `desktop`, CI records a `ci-source-inputs` artifact and verifies
 each required job's sparse checkout before running its checks. The collector
 checks that artifact's immutable digest, run/source/attempt identity and recorded
-Git objects, then independently compares the selected inputs with the target:
+Git objects, then independently compares the selected inputs with the target.
+The complete boundary is `SOURCE_INPUTS` in `scripts/record-ci-validation.py`; in
+short:
 
-| CI scope | Complete input boundary |
+| CI scope | Input boundary |
 | --- | --- |
-| `process` | `.github/`, `scripts/`, `desktop/scripts/`, root Git configuration files and `Makefile` |
-| `desktop` | `.github/`, `scripts/`, `desktop/`, `cli/`, `tests/`, `daemons/`, `store/`, `docs/images/`, `mobile/pubspec.lock`, root Git configuration files and `Makefile` |
+| `process` | `.github/`, `scripts/`, `desktop/scripts/`, the CLI's and the backend's release commands, `device-app/src-tauri/tauri.conf.json`, root Git configuration files and `Makefile` |
+| `desktop` | `.github/`, `scripts/`, `desktop/`, `cli/`, `tests/`, `daemons/`, `store/`, `docs/images/`, `mobile/pubspec.lock`, the backend's Hub contracts and the phone's P2P/E2EE sources Desktop's tests compare with, `device-app/src-tauri/tauri.conf.json`, root Git configuration files and `Makefile` |
 
 The root Git files are `.gitattributes`, `.gitignore` and `.gitmodules`. Directory
 objects include every tracked descendant; file modes, additions and removals are
@@ -569,11 +693,12 @@ make merge-pr ARGS="PR_NUMBER --reviewed-head HEAD_SHA --reviewed-base REVIEW_BA
 ```
 
 The checkout must be clean at the exact reviewed head and include the reviewed
-`main` commit. The helper follows the latest automatic PR CI for that head, verifies
-its immutable `ci/required` receipt, rechecks the source and GitHub mergeability,
-then directly squash-merges with the exact reviewed head. It verifies that the
-merged full tree matches the reviewed and tested tree. It retains source, run,
-attempt, artifact digest and phase timings under `.harness/validation/*-merge-*/`.
+`main` commit. The helper follows the latest automatic PR CI for that head whose
+plan is not a draft, verifies its immutable `ci/required` receipt, rechecks the
+source and GitHub mergeability, then directly squash-merges with the exact
+reviewed head. It verifies that the merged full tree matches the reviewed and
+tested tree. It retains source, run, attempt, artifact digest and phase timings
+under `.harness/validation/*-merge-*/`.
 Omit `--merge` for a read-only preview.
 
 A merge queue is not a prerequisite for merging or releasing. Do not add `--queue`
@@ -582,13 +707,17 @@ actually enforces a queue, the helper detects its rule and uses it, verifying th
 merged tree against successful candidate CI. Explicit `--queue` is only for an
 intentionally configured queue, such as a disposable integration trial.
 
-If `main` moved before a direct merge, inspect and integrate the new source, then
-supply the updated reviewed head/base. Reuse validation only for unchanged inputs;
-rerun checks affected by the integration. This is routine handling of concurrent
-merges: continue the user's already-authorized merge without asking for permission
-again. A quiet branch takes the direct path immediately after checks and review;
-concurrent changes require only the additional review and validation they affect.
-Do not enable or disable a queue based on the number of open PRs or running jobs.
+If the helper refuses only because `main` moved ("main moved since review; inspect
+the new source before merging"), and the required checks are green on the head and
+GitHub shows the PR mergeable with no conflict and
+no unresolved review conversation, merge with
+`gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict,
+integrate `main`, review the combined change, then supply the updated reviewed
+head/base. Reuse validation only for unchanged inputs; rerun only the checks the
+integration affects. This is routine handling of concurrent merges: continue the
+user's already-authorized merge without asking for permission again. A quiet branch
+takes the direct path immediately after checks and review. Do not enable or disable
+a queue based on the number of open PRs or running jobs.
 
 A changed head/target, missing coverage,
 failed/skipped required jobs or a lost response cannot report success. Inspect an
@@ -603,13 +732,14 @@ depends on the collector's pre-#991 job lists.
 `scripts/ci-plan.py` reads the complete immutable Git diff, including both sides
 of renames, rather than GitHub's limited file list. PR runs check out the exact
 head; queue runs check out the combined candidate. Each changed path selects only
-its own component's suite ([PR CI](#pr-ci)); paths outside a component select no
-suite. CI uses read-only repository permissions and executes no contributor code
+its own component's suite, each suite that declares reading it (`PR_READS`) and each end-to-end suite whose path
+list names it, across components ([PR CI](#pr-ci)); other paths outside a component select no suite. CI uses read-only repository permissions and executes no contributor code
 with release credentials.
 
-Cross-component effects are not tested on PRs. A CLI change does not run the
-Desktop, TUI, companion or mobile suites even where they read CLI protocol files.
-When a change alters a protocol, wire format or shared fixture another component
+Cross-component effects are tested on PRs only where they are declared: another component's suite runs when its
+`PR_READS` names the changed file, and an end-to-end suite when its path list does (`desktop/lib/devices/` runs
+`device-app-desktop`, `website/scripts/device-install.sh` runs `device-app-install`). A read neither names runs nothing
+more. When a change alters a protocol, wire format or shared fixture another component
 reads, say so in the PR and run that component's tests locally or with
 **CI → Run workflow** (`scope=desktop`, `tui`, `companions` or `mobile`).
 
@@ -622,7 +752,8 @@ snapshots; any configured queue's distinct candidates must not share that group.
 The stable `ci/required` job runs even after an upstream failure. It accepts only
 successful selected jobs. Deliberately inapplicable jobs may be skipped; a required
 skip, cancellation, failure or missing result fails integration. Manual `full`
-selects the five core suites; `all` selects every suite. Manual dispatch is extra
+selects the five core suites; `all` selects every component suite, and each end-to-end suite
+runs by its own scope. Manual dispatch is extra
 evidence and cannot substitute for the automatic PR gate.
 
 Do not enable or change repository protection rules as part of an ordinary merge
@@ -635,9 +766,9 @@ locks belong to work jobs, leaving summaries and the always-running final gate i
 gate waiting for a runner cannot block the next revision. Checks no longer selected
 by the new plan may finish, including when a ready PR returns to draft; they cannot
 validate a newer head. Explicit runs and distinct candidates have independent
-concurrency identities. CLI end to end runs nightly and on demand; it no longer
-runs after each merge. A passing older run does not validate newer source. It
-remains advisory, and missing required acceptance still prevents an authorized
+concurrency identities. The full CLI end-to-end suite runs nightly and on demand; it no longer
+runs after each merge. A passing older run does not validate newer source. The nightly
+run remains advisory, and missing required acceptance still prevents an authorized
 release.
 
 OS workflows run only when started by hand. Pushing to an `os/**`, `os-polish/*` or

@@ -1,4 +1,3 @@
-import { parseSwarmSkill, type SwarmSkill } from './savedSkill.js'
 /**
  * Registry of process-owned AGENTS — one per supported top-level engine process in a tmux pane.
  *
@@ -16,25 +15,17 @@ import { parseSwarmSkill, type SwarmSkill } from './savedSkill.js'
 
 import { DSH_ID_RE } from '../dsh/id.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
-import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
-import { transcriptProject } from '../engines/discoveries.js'
+import { reportedProfileHome, transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
-  closeSync,
-  constants,
   existsSync,
-  fchmodSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   realpathSync,
   renameSync,
-  rmSync,
   statSync,
-  writeFileSync,
 } from 'fs'
 import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
@@ -55,16 +46,61 @@ import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
-import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { AtomicWriteUnconfirmed, atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { REGISTRY_WRITE_DEADLINE_MS, RegistryPersistenceUnavailable, RegistryWriteQueue, prepareRegistryImage, privateRegistryDirectory, readPrivateRegistryFile, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
+import { errorKind, sid } from './log.js'
+import { HOOK_GATEWAY_ENGINES } from './gatewayRuntime.js'
+import { validCreationId } from './agentCreationReceipt.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
+
+export interface RegistryAuthority {
+  current?: () => boolean
+  /** An earlier monotonic operation deadline; retries never renew it. */
+  expires?: number
+  /** Refresh an asynchronous native observation after image preparation, before final publication. */
+  refresh?: () => Promise<void>
+}
+
+export interface LaunchPublicationInput {
+  processIdentity: ProcessIdentity | null
+  gateway?: 'ori' | null
+  grid?: GridAssignment | null
+  launchArgs?: string[]
+  gridLaunchRecord?: GridLaunchRecord | null
+  subscriptionModel?: string | null
+  runtimes?: readonly TerminalRuntimeRef[]
+  primaryRuntimeKey?: string
+}
+
+export type LaunchPublication = { state: 'not-published' } | { state: 'confirmed'; entry: RegisteredSession | null }
+
+/** A launch published `ready` and the row a hook's registration rebuilds without one are the same launch. Read
+ *  apart, the second of two restarts took the engine down and answered AGENT_CHANGED (e2e/races.e2e.ts, 2026-11-17). */
+function launchIdentity(row: RegisteredSession | undefined): string {
+  return rowFingerprint({ launch: row?.launch?.state === 'ready' ? undefined : row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
+    gridLaunch: row?.gridLaunch, gridWebSearch: row?.gridWebSearch, subscriptionModel: row?.subscriptionModel, active: row?.active })
+}
+
+/** A durable receipt grants only this installed owner and launch, including after a terminal await. */
+export function matchesLaunchReceipt(row: RegisteredSession | undefined, receipt: RegisteredSession): boolean {
+  return !!row && ownershipIdentity(row) === ownershipIdentity(receipt) && launchIdentity(row) === launchIdentity(receipt)
+}
+
+function ownershipIdentity(row: RegisteredSession | undefined): string | undefined {
+  if (!row) return undefined
+  return rowFingerprint({ agentId: row.agentId, registeredAt: row.registeredAt, engine: row.engine,
+    sessionId: row.sessionId, transcriptPath: row.transcriptPath, processIdentity: row.processIdentity,
+    runtimes: row.runtimes, primaryRuntimeKey: row.primaryRuntimeKey, codexHome: row.codexHome,
+    claudeHome: row.claudeHome, hermesHome: row.hermesHome, openclawStateDir: row.openclawStateDir,
+    externalToken: row.externalResume?.token, evidenceRevision: row.evidenceRevision })
+}
 
 export type AgentLaunch =
   | { state: 'starting'; nativeToken?: string }
@@ -74,8 +110,21 @@ export type AgentLaunch =
    * Not launched yet because the service its launch asks could not be asked (core/agents/heldLaunches.ts): a
    * grid or saved-API agent while models is not running. Nothing about the agent is wrong. It waits in a pane
    * that says why, and is launched once the service is ready. Never a failure: a restore tries it again.
+   * `startsAgain`: the native guard held it, and the core saw its pane be the held shell under its token. It starts
+   * again by itself and clients see it starting (`guardHeld`, 2026-11-25).
    */
-  | { state: 'held'; service: string; detail: string; nativeToken?: string }
+  | { state: 'held'; service: string; detail: string; nativeToken?: string; startsAgain?: true }
+
+/** A launch the native guard held, to start again by itself: held, `startsAgain`, a `nativeToken`; any `sessionId`. */
+export function guardHeld(row: Pick<RegisteredSession, 'launch'> | undefined): boolean {
+  const launch = row?.launch
+  return launch?.state === 'held' && launch.startsAgain === true && !!launch.nativeToken
+}
+
+/** `guardHeld` and no `sessionId`: a first launch, recovered from its receipt. */
+export function heldFirstLaunch(row: Pick<RegisteredSession, 'launch' | 'sessionId'> | undefined): boolean {
+  return !!row && guardHeld(row) && !row.sessionId
+}
 
 /** Claude Code's hooks report `model` as {id, display_name}; Codex/Cursor report a plain string. This is
  *  the boundary where hook JSON becomes persisted state, so anything else is dropped rather than stored —
@@ -128,15 +177,18 @@ export interface RegisteredSession {
    * Set when the engine process is pointed at an OpenRouter endpoint (`ori claude`, `ori codex`, …).
    *
    * It is NOT a second engine: the engine stays `claude`/`codex`/… and every badge, icon and wire field
-   * keeps saying so. It only records HOW the pane's requests are billed, which decides two things — the
-   * runtime profile becomes display-only, and the daemon's recap/route calls go direct to OpenRouter
-   * instead of spawning a vendor CLI that has no credential. Re-derived from the live process on every
-   * discovery, so a pane restarted without the wrapper drops it on the next scan.
+   * keeps saying so. It only records HOW the pane's requests are billed, which makes the runtime profile
+   * display-only: the core types no `/model` into the pane. Never read from the process's environment:
+   * Codex's comes from its argv on every discovery; Claude Code's, OpenCode's and Hermes's from what their
+   * hook says of its own environment (`X-Harness-Hook-Gateway`), the only hooks that say it. A relaunch
+   * keeps it until the engine says it again, so a pane restarted without the wrapper drops it on the next
+   * scan or hook.
    */
   gateway?: 'ori' | null
   /**
-   * The grid this pane's engine is pointed at, if any — read off the live process on every discovery
-   * exactly like `gateway`, never declared. See `gridAssignment.ts`. Carries no credential; the
+   * The grid this pane's engine is pointed at, if any. Comes from the launch record (create and retarget
+   * write it) and from argv evidence that models classifies; unlike `gateway`, which comes from Codex's
+   * argv or a hook's header. See `gridAssignment.ts`. Carries no credential; the
    * launch that put the engine there, credential included, is `gridLaunch` below.
    */
   grid?: GridAssignment | null
@@ -161,7 +213,7 @@ export interface RegisteredSession {
   /**
    * What the workspace's SCM needs re-applied to the pane on every relaunch (scm/types.ts) — the
    * SCM's half of `gridLaunch`. A git worktree's record only says it is one and asks for nothing.
-   * Written by `agent_create` from what `prepareProjectFolder` made, carried forward like
+   * Written by `agent_create` from what the workspaces service made (`prepareFolder`), carried forward like
    * `gridLaunch`, never re-derived. Absent on a row from before the seam and on a folder no SCM
    * prepared — absent, not null, so a row that never had one is written exactly as before.
    */
@@ -179,7 +231,7 @@ export interface RegisteredSession {
   /**
    * The model and effort this session was launched with as flags (`agent_create`'s launch model, lib/launchModel.ts),
    * or the one a person moved it onto through Harness since (`agent_update`). Every relaunch passes them again
-   * (lib/launchOverrides.ts): the flags hold for one launch only, and a Product Manager launched on Opus at xhigh came
+   * (lib/launchOverrides.ts): the flags hold for one launch only, and an agent launched on Opus at xhigh came
    * back on its engine's own default, the machine's last-used Claude Code model, once reopened (task #3395, anh Dee
    * 11-05). Absent for a session launched with none.
    */
@@ -191,15 +243,25 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
-   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
-   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
+   * Its Browser was on, as the core kept it until 2026-11-15: the agent browser keeps whose Browser is on itself now
+   * (services/agentBrowser.ts), and takes this in once for each agent it sees with it, the migration of the flags the
+   * core kept. The core never sets or clears it but at the create of a Desktop from before Browser left New agent
+   * (core/agents/launches.ts), and carries it as it was, so a rollback finds every flag as it was at the update. Delete
+   * on or after 2026-12-18, with that create's field.
    */
   browser?: true
   /**
-   * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
-   * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
-   * process — a running agent cannot be moved to a different profile the way it can be retargeted
-   * to a different grid.
+   * On the shell an exit left (`confirmEngineExit(id, 'successor')`): the agent whose engine ended in this pane. The pane's next
+   * agent is reported through the generic pane-takeover lifecycle. A search of saved agents by pane is no proof: pane ids
+   * restart with every tmux server. Gone once an engine is adopted here, and once that agent runs again under its own
+   * id. Never in a saved record.
+   */
+  previousAgentId?: string
+  /**
+   * The CODEX_HOME folder this agent runs against, if it is not `~/.codex`. Codex only. Chosen at creation; a row
+   * that does not know it (a Codex started by hand) is filled once, from its hook's own CODEX_HOME when its transcript
+   * is under it, or from the rollout its process holds open. Unlike `grid`, never changed once known — a running
+   * agent cannot be moved to a different profile the way it can be retargeted to a different grid.
    */
   codexHome?: string | null
   /**
@@ -214,8 +276,9 @@ export interface RegisteredSession {
    *
    * Unlike `codexHome` this is not a launch choice the daemon makes: `hermes -p` is how a person starts
    * one, and the daemon meets the pane afterwards. So it is FOUND rather than recorded — by the session
-   * id, in whichever store holds its row (`engines/hermes/home.ts`) — and then kept here so the lookup
-   * happens once per agent instead of once per poll. Fill-only, like `codexHome`.
+   * id, in whichever store holds its row (`engines/hermes/home.ts`), or from the store its process holds
+   * open — and then kept here so the lookup happens once per agent instead of once per poll. Fill-only,
+   * like `codexHome`.
    *
    * Everything Hermes-shaped reads it: the live mirror, `agent_recent`, the recap fallback, the hook's
    * source check and the model/effort poll. Reading one fixed home instead is what left a profile
@@ -223,23 +286,59 @@ export interface RegisteredSession {
    */
   hermesHome?: string | null
   /**
+   * Only beside `hermesHome`: that path is the daemon's path of a sandboxed process's home, not the one the process
+   * names it by. A relaunch exports no `HERMES_HOME` for it, since the relaunched process works out its own home, in
+   * its own view. Stored, not kept in memory, so an agent resumed after the daemon that saw its process has gone still
+   * is not handed the daemon's path.
+   */
+  hermesHomeDerived?: true
+  /**
    * OpenClaw only: the state folder its TUI held open when the session was bound (lib/openclawStore.ts). A `--profile`
    * or `--dev` TUI keeps its store outside the default folder, and once the TUI has exited this is where its history,
    * usage and checkpoint are read from.
    */
   openclawStateDir?: string | null
   /**
+   * OpenClaw only: the `--local` folder this harness runs in (`agent_create`'s `openclawLocal`), an absolute path. Its
+   * `openclawStateDir` is this folder from the start and never moves off it. Kept as written: a folder that is gone is
+   * refused at launch, never dropped here.
+   */
+  openclawLocal?: string
+  /**
+   * The session keys this harness moved off (`/new`), newest first, once each, at most EARLIER_SESSIONS_MAX: a delete
+   * erases what is kept under every one of them. Never on the agent's frame.
+   */
+  earlierSessionIds?: string[]
+  /**
+   * The first task its launch carried, for an engine that is handed it by typing rather than in argv (OpenClaw), until
+   * it is typed into the pane. Saved with the row, so a daemon restart before the engine is ready still types it; moved
+   * durably to `firstTaskTyped` before it is typed (`takeFirstTask`), so it is typed at most once. Never on the agent's
+   * frame.
+   */
+  firstTask?: string
+  /**
+   * The first task once typed, and when, kept on the row until OpenClaw's store confirms it, the launch fails or the
+   * box is cleared for it (`untypeFirstTask`), so a daemon restarted in between knows it was typed and never pastes it
+   * again. The text tells it from the person's own in the box, and is never on the frame, sent or logged; a row holds
+   * this or `firstTask`, never both.
+   */
+  firstTaskTyped?: { text: string; at: number }
+  /**
+   * The creation receipt that made this row (a create's intent, a fork's receipt): the one a held first launch is
+   * recovered from, its task read there and never put on the row (2026-11-25). Written once at registration, never on
+   * the agent's frame. Dropped once a launch of the row is confirmed (an engine ran, a hook bound a session, its engine
+   * left a shell): the task was delivered, and a later launch with no conversation must never read it again.
+   */
+  creationId?: string
+  /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
-   * probe and install path keys on that. Chosen at creation, carried forward, and re-read off the
-   * live process's `HARNESS_DSH` by discovery so a pane the daemon did not create (or had to mint
-   * again after a restart) is still labelled. Fill-only, like `codexHome`. See `src/dsh/`.
+   * probe and install path keys on that. Chosen at creation and carried by every relaunch: the launch
+   * record is the one source, so a row discovery mints has none. See `src/dsh/`.
    */
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
   dshRuntime?: string | null
-  /** Role and stable key of this Swarm session; absent for ordinary sessions. */
-  swarmSkill?: SwarmSkill
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -265,7 +364,7 @@ export interface RegisteredSession {
    * The pane was opened as a terminal (engine `terminal`, the desktop's New Terminal) rather than
    * for an engine. Set once at creation and kept for the row's whole life, whichever engine is
    * running in it now: this is what tells the reconciler that an engine exiting means "back to a
-   * shell" (`releaseEngine`) rather than "dormant", and what tells `restoreAgents` to bring back
+   * shell" (`confirmEngineExit`) rather than "dormant", and what tells `restoreAgents` to bring back
    * a shell rather than a `claude`. Not a type — `engine` still says what the pane IS right now.
    */
   terminalHost?: boolean
@@ -314,6 +413,12 @@ export interface RegisteredSession {
   tmuxPane: string
   source: string | null
   title: string | null
+  /**
+   * The title its engine gave its conversation from a line typed for the agent alone (a quiet delivery,
+   * core/agents/quietTitles.ts), as `sessionDisplayTitle` reads one: never its name (`updateTitle`). Kept on the row because the
+   * engine shows it again after a restart or a resume (Codex keeps the first name it gave a thread). Absent until there is one.
+   */
+  quietTitle?: string
   model: string | null
   cliVersion: string | null
   processIdentity: ProcessIdentity | null
@@ -365,6 +470,12 @@ export interface RegisterInput {
    *  Found by the hook gate (`awaitHermesKind`), which has to look the session up anyway, and by the
    *  hook script itself when the daemon was down. Fill-only — see RegisteredSession.hermesHome. */
   hermesHome?: string
+  /** `hermesHome` is one Harness worked out — see RegisteredSession.hermesHomeDerived. */
+  hermesHomeDerived?: true
+  /** From the hook's own environment: undefined when the hook did not say. Taken for Claude Code, OpenCode and Hermes. */
+  gateway?: 'ori' | null
+  /** Codex only, the hook's own CODEX_HOME. Fill-only, and only when this session's transcript is under its sessions folder. */
+  codexHome?: string
 }
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
@@ -383,7 +494,7 @@ export function projectDisplayName(s: RegisteredSession): string {
 
 /** Whether a person chose [s]'s name: they renamed it (kept in agent-names.json), as against the name it was created with
  *  or the engine's session title, which `projectDisplayName` falls back to. The agent frame carries it (`nameChosen`), so
- *  a client sends only a chosen name to the Swarm and never a title (task #2920). */
+ *  a client sends only a chosen name on and never a title (task #2920). */
 export function isNameChosen(s: RegisteredSession): boolean {
   return !!(NAME_OVERRIDES.get(s.sessionId) || NAME_OVERRIDES.get(s.agentId))
 }
@@ -451,106 +562,6 @@ function normalizedAgentEngine(value: unknown): AgentEngine {
     ? value as AgentEngine
     : 'claude'
 }
-const LOCK_WAIT_MS = 20
-/** How long a write waits for a live holder, on the clock: a pause can take far longer than asked (an agent's process
- *  on the Mac Studio, 2026-11-07: 20 ms took ~150 ms), and counted as 100 pauses the wait blocked for ~15 s, not 2. */
-const LOCK_BUDGET_MS = 2_000
-/** A lock directory with no owner.json, or one that names no one, is a crash (or a full disk) between mkdir and the
- *  owner write: a window of microseconds. Older than this it is debris, not a lock (daemonSpawnLock.ts does the same);
- *  left alone it made every registry write fail with "registry lock is busy" until someone removed it by hand. */
-const OWNERLESS_STALE_MS = 5_000
-
-function sleepSync(ms: number): void {
-  const view = new Int32Array(new SharedArrayBuffer(4))
-  Atomics.wait(view, 0, 0, ms)
-}
-
-function removeRegistryLockOwnedBy(token: string): void {
-  try {
-    const saved = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as { token?: unknown }
-    if (saved.token === token) rmSync(LOCK_DIR, { recursive: true, force: true })
-  } catch { /* another owner or an unsafe artifact must not be removed */ }
-}
-
-function withRegistryFileLock<T>(apply: () => T): T {
-  secureStateDirectory(env.ADAPTER_DATA_DIR)
-  const uid = typeof process.getuid === 'function' ? process.getuid() : null
-  const processIdentity = processLockIdentity(process.pid)
-  const deadline = Date.now() + LOCK_BUDGET_MS
-  for (;;) {
-    const token = randomUUID()
-    let created = false
-    try {
-      mkdirSync(LOCK_DIR, { mode: 0o700 })
-      created = true
-      const owner = join(LOCK_DIR, 'owner.json')
-      try {
-        const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-        try {
-          writeFileSync(fd, JSON.stringify({ pid: process.pid, ...processIdentity, token }))
-          fsyncSync(fd)
-        } finally { closeSync(fd) }
-      } catch (ownerError) {
-        // The directory is ours (mkdir made it) but names no one: remove it whole, or it outlives this process ownerless.
-        rmSync(LOCK_DIR, { recursive: true, force: true })
-        created = false
-        throw ownerError
-      }
-      try {
-        return apply()
-      } finally {
-        removeRegistryLockOwnedBy(token)
-      }
-    } catch (error) {
-      if (created) removeRegistryLockOwnedBy(token)
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      if (Date.now() >= deadline) throw new Error('registry lock is busy')
-      let ownerPid = 0
-      let ownerStartMarker = ''
-      let ownerToken = ''
-      let since = Date.now()
-      try {
-        const stat = lstatSync(LOCK_DIR)
-        since = stat.mtimeMs
-        if (!stat.isDirectory() || stat.isSymbolicLink() || (uid !== null && stat.uid !== uid)
-          || (stat.mode & 0o777) !== 0o700) throw new Error('registry lock has unsafe owner, mode, or type')
-        const ownerStat = lstatSync(join(LOCK_DIR, 'owner.json'))
-        since = Math.max(since, ownerStat.mtimeMs)
-        if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (uid !== null && ownerStat.uid !== uid)
-          || (ownerStat.mode & 0o777) !== 0o600) throw new Error('registry lock owner has unsafe owner, mode, or type')
-        const owner = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
-          pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown
-        }
-        ownerPid = Number(owner.pid)
-        ownerStartMarker = lockStartMarker(owner)
-        ownerToken = typeof owner.token === 'string' ? owner.token : ''
-      } catch (inspectionError) {
-        if (inspectionError instanceof Error && inspectionError.message.startsWith('registry lock')) throw inspectionError
-      }
-      if (!(ownerPid > 0 && ownerToken)) {
-        if (Date.now() - since > OWNERLESS_STALE_MS) {
-          rmSync(LOCK_DIR, { recursive: true, force: true })
-          continue
-        }
-      } else if (!lockOwnerAlive(ownerPid, ownerStartMarker)) {
-        try {
-          const current = JSON.parse(readFileSync(join(LOCK_DIR, 'owner.json'), 'utf8')) as {
-            pid?: unknown; startMarker?: unknown; generationMarker?: unknown; token?: unknown
-          }
-          if (Number(current.pid) === ownerPid
-            && lockStartMarker(current) === ownerStartMarker
-            && current.token === ownerToken
-            && !lockOwnerAlive(ownerPid, ownerStartMarker)) {
-            rmSync(LOCK_DIR, { recursive: true, force: true })
-            continue
-          }
-        } catch { /* lock changed or disappeared; retry without deleting another owner's lock */ }
-      }
-      sleepSync(LOCK_WAIT_MS)
-    }
-  }
-}
-
 function rowId(row: unknown): string {
   if (!row || typeof row !== 'object') return ''
   const candidate = row as { agentId?: unknown; launcherId?: unknown }
@@ -563,39 +574,41 @@ function rowId(row: unknown): string {
 // setters that add keys (`launch`); compared as JSON text it rewrote registry.json (lock, 3 fsyncs, rename)
 // every 5 s on an unchanged row, ~720 writes/hour measured 2026-10-06. Array order still counts.
 function rowFingerprint(row: unknown): string {
-  return JSON.stringify(row, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
-    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)
+  return JSON.stringify(row, (_key, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+    // Admissions compare every row repeatedly; avoid a temporary entry array for every property.
+    const ordered: Record<string, unknown> = Object.create(null)
+    for (const key of Object.keys(value).sort()) ordered[key] = value[key]
+    return ordered
+  })
 }
 
 /** The new image is visible, but its directory has not confirmed durability yet. */
 const BINDING_RECOVERY_HOLD = 'Waiting for native evidence after a concurrent binding write.'
-class RegistryOwnershipChanged extends IdentityReadUnavailable {}
+export class RegistryOwnershipChanged extends IdentityReadUnavailable {}
+/** Two reasons a binding's publication is held, which a restart's log names by a fixed label (core/agents/restart.ts). */
+export const OBSERVATION_BATCH_INCOMPLETE = 'the registry observation batch is incomplete'
+export const SAVED_BINDING_CHANGED = 'the saved binding changed while its evidence was being read'
 
-class AtomicWriteUnconfirmed extends Error {
-  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
-}
-
-export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
-  const exists = hardenPrivateStateFileIfPresent(file)
-  if (exclusive && exists) return
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  try {
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    try {
-      writeFileSync(fd, JSON.stringify(value, null, 2))
-      fchmodSync(fd, 0o600)
-      fsyncSync(fd)
-    } finally { closeSync(fd) }
-    renameSync(temporary, file)
-    renamed = true
-    syncStateDirectory(dirname(file))
-  } catch (error) {
-    if (renamed) throw new AtomicWriteUnconfirmed(error)
-    throw error
-  } finally {
-    if (!renamed) rmSync(temporary, { force: true })
-  }
+/** Storage errors can quote file contents or paths. Only fixed categories cross this boundary, and the disk's
+ *  code on `cause`, so the log line can say `ENOSPC` or `EROFS`. */
+function persistenceFailure(error: unknown, names = false): Error {
+  if (error instanceof IdentityReadUnavailable || error instanceof RegistryPersistenceUnavailable) return error
+  const subject = names ? 'name storage' : 'registry storage'
+  // A write unconfirmed after its rename (the folder's fsync) carries the disk's code on its cause.
+  const code = (error instanceof AtomicWriteUnconfirmed ? error.cause as NodeJS.ErrnoException | undefined
+    : error as NodeJS.ErrnoException | null)?.code
+  // The master tells a full disk from a broken build by these codes (harnessd/supervisor.ts namesTheDisk).
+  // Without them a good build whose core could not save on a full disk was rolled back
+  // (e2e/updateHostile.e2e.ts, 2026-11-17). A code names no path.
+  const category = error instanceof SyntaxError ? 'contains invalid JSON'
+    : code === 'ENOSPC' || code === 'EDQUOT' ? `has no available space (${code})`
+      : code === 'EROFS' ? 'is read-only (EROFS)'
+        : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
+          : code === 'ENOENT' ? 'is unavailable'
+            : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
+  const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`, typeof code === 'string' ? code : undefined)
+  return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure) : failure
 }
 
 function boundedIdentityPart(value: unknown, max = 200): value is string {
@@ -650,20 +663,36 @@ function withoutRetiredRows(stored: readonly unknown[]): { rows: unknown[]; drop
 }
 
 /**
- * Swarm v3 (task #4215): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
+ * Task #4215 (2026-11-07): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
  * `readOnlyAsk`; nobody chose those, and a relaunch reapplies a saved mode. So the first load of a build with this clears them,
- * once (`OWN_MODES_FILE`): full mode a person chooses for a Swarm agent afterwards is theirs and kept. Review after 2027-01-07.
+ * once (`OWN_MODES_FILE`): full mode a person chose afterwards is theirs and kept. The Swarm is gone (2026-11-14), but a machine
+ * that has not loaded a build since still has those rows, Swarm role and all. Remove on or after 2027-01-07.
  */
 function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; cleared: number } {
   let cleared = 0
   const kept = rows.map((row) => {
     const mode: unknown = row?.permissionMode
-    if (!(mode === 'buddy' || mode === 'readOnlyAsk' || (mode === 'full' && parseSwarmSkill(row.swarmSkill)))) return row
+    const swarmRole: unknown = (row as { swarmSkill?: unknown })?.swarmSkill
+    if (!(mode === 'buddy' || mode === 'readOnlyAsk' || (mode === 'full' && !!swarmRole && typeof swarmRole === 'object'))) return row
     cleared++
     const { permissionMode: _mode, bypassPermission: _bypass, ...own } = row
     return own
   })
   return { rows: kept, cleared }
+}
+
+/**
+ * A row a build before the Swarm was deleted (2026-11-14) saved may still name its Swarm role (`swarmSkill`). One the Swarm
+ * started, a Claude Code or Codex agent with no mode, comes back in Auto-approve, the mode every Swarm agent had since
+ * 2026-11-12 and a new agent in a tab has. With no mode, discovery would read its mode back off a pane Harness may have
+ * started in full mode before task #4215, and a restart or an Open would skip permissions again. Every other row is as it
+ * was. The role goes at the row's next write (`strictPersistedRow`), so this applies once. Remove on or after 2027-01-07.
+ */
+function withRetiredSwarmMode<T extends Partial<RegisteredSession>>(row: T): T {
+  const swarmRole: unknown = (row as { swarmSkill?: unknown })?.swarmSkill
+  if (!swarmRole || typeof swarmRole !== 'object' || row.permissionMode != null || (row.engine !== 'claude' && row.engine !== 'codex')
+    || row.startedBy !== 'agent' || row.parentAgentId) return row
+  return { ...row, permissionMode: 'auto', bypassPermission: true }
 }
 
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
@@ -691,7 +720,7 @@ function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<Regist
 export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const value = withoutRetiredRuntimes(raw)
   if (!value || typeof value !== 'object') return null
-  const row = value as Partial<RegisteredSession>
+  const row = withRetiredSwarmMode(value as Partial<RegisteredSession>)
   const runtimes = normalizedRuntimes(row.runtimes, row.tmuxPane)
   const primary = typeof row.primaryRuntimeKey === 'string' ? row.primaryRuntimeKey : ''
   const normalizedPrimary = selectedRuntimeKey(runtimes, primary)
@@ -720,23 +749,29 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, ...rest } = row
+  // `swarmSkill` is a Swarm role a build before the Swarm was deleted (2026-11-14) saved: dropped, and gone from the file at
+  // its next write. Remove it from here on or after 2027-01-14.
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: _firstTask, firstTaskTyped: _firstTaskTyped, creationId: rawCreationId, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
   const launchModel = storedLaunchModel(rawLaunchModel)
-  // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
-  // review), and is kept as this release keeps it (project instructions, phase 4).
-  const swarmSkill = parseSwarmSkill(rawSwarmSkill)
   const launchArgs = storedLaunchArgs(rawLaunchArgs)
+  const openclawLocal = storedOpenclawLocal(rawOpenclawLocal)
+  const earlierSessionIds = earlierSessionKeys(rawEarlierSessionIds)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
+    ...storedFirstTask(row),
+    ...(validCreationId(rawCreationId) ? { creationId: rawCreationId } : {}),
+    ...(openclawLocal ? { openclawLocal } : {}),
+    ...(earlierSessionIds ? { earlierSessionIds } : {}),
+    ...storedHermesHomeDerived(row),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
-    ...(swarmSkill ? { swarmSkill } : {}),
     ...(launchArgs ? { launchArgs } : {}),
     ...(rawBrowser === true ? { browser: true as const } : {}),
+    ...(typeof rawQuietTitle === 'string' && rawQuietTitle ? { quietTitle: rawQuietTitle } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -782,6 +817,56 @@ export function parentAgentIdOf(value: unknown): string | null {
 /** Only a non-empty array of strings is a saved flag list; anything else on disk is dropped, never launched with. */
 function storedLaunchArgs(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
+}
+
+/**
+ * Only a non-empty string is a saved first task, and a non-empty text with a real moment a typed one; anything else on
+ * disk is dropped, never typed into a pane. A row with both keeps the typed one, so a task typed once is not typed
+ * again.
+ */
+function storedFirstTask(row: { firstTask?: unknown; firstTaskTyped?: unknown }): Pick<RegisteredSession, 'firstTask' | 'firstTaskTyped'> {
+  const { text, at } = row.firstTaskTyped && typeof row.firstTaskTyped === 'object' ? row.firstTaskTyped as Record<string, unknown> : {}
+  if (typeof text === 'string' && text && typeof at === 'number' && Number.isFinite(at) && at > 0) return { firstTaskTyped: { text, at } }
+  return typeof row.firstTask === 'string' && row.firstTask ? { firstTask: row.firstTask } : {}
+}
+
+/** The mark is kept only as `true` beside a home: anything else on disk is dropped, and the home is exported as before. */
+function storedHermesHomeDerived(row: { hermesHome?: unknown; hermesHomeDerived?: unknown }): { hermesHomeDerived: true } | Record<string, never> {
+  return row.hermesHomeDerived === true && typeof row.hermesHome === 'string' && row.hermesHome ? { hermesHomeDerived: true } : {}
+}
+
+/**
+ * [row] with [from]'s Hermes home, by the rule `register` keeps: the mark goes with the home it was set with, kept from
+ * either row while the home is the same, never left beside another home (RegisteredSession.hermesHomeDerived). A home
+ * copied without its mark would be exported on a resume, the daemon's path of it inside a remapped sandbox.
+ */
+export function withHermesHome<T extends RegisteredSession>(row: T, from: Pick<RegisteredSession, 'hermesHome' | 'hermesHomeDerived'>): T {
+  const { hermesHomeDerived: _mark, ...rest } = row
+  const derived = !!from.hermesHome && (from.hermesHomeDerived || from.hermesHome === row.hermesHome && row.hermesHomeDerived)
+  return { ...rest, hermesHome: from.hermesHome, ...(derived ? { hermesHomeDerived: true as const } : {}) } as T
+}
+
+/** Only a non-empty string is a saved `--local` folder. */
+function storedOpenclawLocal(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
+}
+
+const EARLIER_SESSIONS_MAX = 32
+
+/**
+ * The session keys a row moved off, with [movedOff] put at the front: newest first, each a non-empty key of at most
+ * 256 characters, once, at most EARLIER_SESSIONS_MAX. Anything else on disk is dropped.
+ */
+function earlierSessionKeys(value: unknown, movedOff?: string | null): string[] | undefined {
+  const keys = [movedOff, ...Array.isArray(value) ? value : []]
+    .filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 256)
+  const kept = [...new Set(keys)].slice(0, EARLIER_SESSIONS_MAX)
+  return kept.length ? kept : undefined
+}
+
+/** Says a first task is on the agent's row, by the agent's short id only: the task is the person's words. */
+function firstTaskKept(agentId: string): void {
+  console.log(`[agent] ${sid(agentId)} first task kept`)
 }
 
 /** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
@@ -837,7 +922,8 @@ function normalizedLaunch(value: unknown): AgentLaunch | undefined {
   if (launch.state === 'held') {
     const held = value as { service?: unknown; detail?: unknown }
     if (typeof held.service !== 'string' || !/^[a-z][a-z-]{0,39}$/.test(held.service) || typeof held.detail !== 'string') return undefined
-    return { state: 'held', service: held.service, detail: held.detail.slice(0, 500), ...(nativeToken ? { nativeToken } : {}) }
+    return { state: 'held', service: held.service, detail: held.detail.slice(0, 500), ...(nativeToken ? { nativeToken } : {}),
+      ...((value as { startsAgain?: unknown }).startsAgain === true ? { startsAgain: true as const } : {}) }
   }
   if (launch.state !== 'failed' || typeof launch.error !== 'string' || !launch.error) return undefined
   const error = launch.error.slice(0, 80)
@@ -1019,20 +1105,24 @@ export function mergedForSave(
   currentRows: ReadonlyMap<string, Record<string, unknown>>,
   baselines: ReadonlyMap<string, string>,
   intents: ReadonlyMap<string, ReadonlySet<string>>,
+  fingerprint: (row: Record<string, unknown>) => string = rowFingerprint,
+  identities?: MergeIdentities,
 ): Map<string, Record<string, unknown>> {
   const merged = new Map(latest)
   for (const baselineId of baselines.keys()) {
-    if (!currentRows.has(baselineId)) merged.delete(baselineId)
+    if (!currentRows.has(baselineId)) {
+      merged.delete(baselineId)
+      identities?.remove(baselineId)
+    }
   }
-  // Built on the first changed row, as the scan it replaces first read the rows then: a save with no
-  // changed row reads none of them.
-  let identities: MergeIdentities | null = null
+  // Preparation may transfer its index of the same private latest table. Otherwise build on the first
+  // changed row, as the scan first read rows then: an unchanged save needs no index.
   for (const [agentId, current] of currentRows) {
     const baseline = baselines.get(agentId)
     const intended = intents.get(agentId)
     // An intent on a row this view otherwise left alone never brings back a row another process
     // removed: that agent is gone, and its close plan with it.
-    if (baseline === rowFingerprint(current) && (!intended || !latest.has(agentId))) continue
+    if (baseline === fingerprint(current) && (!intended || !latest.has(agentId))) continue
     let candidate = latest.has(agentId)
       ? threeWayRow(baseline, current, latest.get(agentId)!)
       : current
@@ -1142,7 +1232,7 @@ function readSavedBoot(): string | null {
 function writeBoot(bootId: string): void {
   try {
     secureStateDirectory(env.ADAPTER_DATA_DIR)
-    atomicWriteJson(BOOT_FILE, bootId)
+    atomicWriteJson(BOOT_FILE, bootId, 'trust')
   } catch { /* registry load will remain conservative on the next restart */ }
 }
 
@@ -1164,6 +1254,9 @@ class Registry {
    * are separate: a trust/setup/shell prompt can remain viewable after the engine process goes dormant.
    */
   private terminalAvailableAgents = new Set<string>()
+  private readonly writer = new RegistryWriteQueue()
+  private pendingObservation: Promise<void> | undefined
+  private transactionCompletion: Promise<void> = Promise.resolve()
   private transactionDepth = 0
   private savePending = false
   private readonly afterTransactionCallbacks: Array<{ run: () => void; reject: (error: unknown) => void }> = []
@@ -1209,7 +1302,7 @@ class Registry {
 
   private entered(engine: AgentEngine): void {
     try { this.onEnter?.(engine) }
-    catch (error) { console.warn('[registry] engine entry notification failed:', error) }
+    catch (error) { console.warn('[registry] engine entry notification failed:', errorKind(error)) }
   }
 
   private drop(entry: RegisteredSession | undefined): void {
@@ -1228,10 +1321,7 @@ class Registry {
     }
   }
 
-  private releaseBinding(entry: RegisteredSession): void {
-    if (entry.sessionId && this.sessionIndex.get(entry.sessionId) === entry.agentId) {
-      this.sessionIndex.delete(entry.sessionId)
-    }
+  private clearBinding(entry: RegisteredSession): void {
     delete entry.identityHold
     delete entry.interpretationHold
     entry.evidenceRevision = ++this.evidenceRevision
@@ -1247,6 +1337,7 @@ class Registry {
    *  a reboot, but the agent — its id, cwd, session and pane placement — is what `restoreAgents` rebuilds
    *  a pane for. */
   load(): void {
+    this.writer.assertOpen()
     this.agents.clear()
     this.sessionIndex.clear()
     this.runtimeIndex.clear()
@@ -1262,7 +1353,7 @@ class Registry {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
     } catch (error) {
       this.writeBlocked = true
-      console.error('[registry] unsafe state directory; refusing to load or write state:', error)
+      console.error('[registry] unsafe state directory; refusing to load or write state:', errorKind(error))
       return
     }
     this.loadNames()
@@ -1304,14 +1395,19 @@ class Registry {
       const ownModes = !existsSync(OWN_MODES_FILE)
       if (ownModes) {
         const swept = withoutForcedModes(arr)
-        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) start with their owner's own permission settings again`)
+        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) no longer keep a permission mode Harness forced`)
         arr = swept.rows
       }
+      // After the forced modes are cleared: a Swarm agent full mode was forced on comes back in Auto-approve too.
+      const retired = arr.map(withRetiredSwarmMode)
+      const swarmAuto = retired.some((row, i) => row !== arr[i])
+      if (swarmAuto) console.log(`[registry] ${retired.filter((row, i) => row !== arr[i]).length} agent(s) the Swarm started come back in Auto-approve`)
+      arr = retired
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
-        atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
+        atomicWriteJson(PRE_V2_BACKUP_FILE, stored, 'trust', { exclusive: true })
       }
-      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
+      let changed = strippedRetired || swarmAuto || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
@@ -1425,17 +1521,23 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...storedHermesHomeDerived(raw),
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
+          ...storedFirstTask(raw),
+          ...(validCreationId(raw.creationId) ? { creationId: raw.creationId } : {}),
+          ...(storedOpenclawLocal(raw.openclawLocal) ? { openclawLocal: storedOpenclawLocal(raw.openclawLocal) } : {}),
+          ...(earlierSessionKeys(raw.earlierSessionIds) ? { earlierSessionIds: earlierSessionKeys(raw.earlierSessionIds) } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
-          ...(parseSwarmSkill(raw.swarmSkill) ? { swarmSkill: parseSwarmSkill(raw.swarmSkill) } : {}),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
           ...(raw.browser === true ? { browser: true as const } : {}),
+          ...(typeof raw.quietTitle === 'string' && raw.quietTitle ? { quietTitle: raw.quietTitle } : {}),
+          ...(engine === 'terminal' && parentAgentIdOf(raw.previousAgentId) ? { previousAgentId: raw.previousAgentId as string } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
@@ -1528,13 +1630,16 @@ class Registry {
         return
       }
       if (changed) this.save()
-      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
+      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now(), 'trust')
     } catch (error) {
-      if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
+      // Not the parse error's message: it quotes the rows around the fault, and they hold the person's harness names.
+      if (error instanceof SyntaxError) this.quarantine('is not JSON')
       else if (existsSync(FILE)) {
         this.writeBlocked = true
-        console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
-      } else atomicWriteJson(OWN_MODES_FILE, Date.now())
+        console.error('[registry] registry is unreadable; refusing to overwrite it:', errorKind(error))
+      } else {
+        atomicWriteJson(OWN_MODES_FILE, Date.now(), 'trust')
+      }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
     }
@@ -1560,10 +1665,11 @@ class Registry {
     try {
       renameSync(FILE, aside)
       this.writeBlocked = false
-      console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
+      // Its own name only, Harness's file name and the time, for an operator to find: the folder names the person's home.
+      console.error(`[registry] registry ${reason}; moved it aside to ${basename(aside)} and started empty`)
     } catch (error) {
       this.writeBlocked = true
-      console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
+      console.error(`[registry] registry ${reason}, and it could not be moved aside (${errorKind(error)}); refusing to overwrite it`)
     }
   }
 
@@ -1579,7 +1685,7 @@ class Registry {
   }
 
   /** Create/adopt a process agent before any engine session exists. */
-  openProcessAgent(input: {
+  async openProcessAgent(input: {
     agentId?: string
     engine: AgentEngine
     tmuxPane?: string
@@ -1589,20 +1695,18 @@ class Registry {
     processIdentity: ProcessIdentity
     gateway?: 'ori' | null
     grid?: GridAssignment | null
-    /** Codex only: the CODEX_HOME the process was launched under, read off its environment. Fills a
+    /** Codex only: the CODEX_HOME the process runs under, from the rollout it holds open. Fills a
      *  row that does not know its profile yet; never overwrites one that does (see `codexHome`). */
     codexHome?: string | null
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
     hermesHome?: string | null
     claudeHome?: string | null
-    /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
-    dsh?: string | null
-  }):
+  }, authority: RegistryAuthority = {}): Promise<
     {
       entry: RegisteredSession
       isNew: boolean
       /**
-       * The agent this one took a terminal from, once it has no terminal left.
+       * Every agent this one took its last terminal from, in route order.
        *
        * BOTH IDS, because by the time the caller reads this the agent is ALREADY
        * GONE from the registry — `drop()` removes it and the loop below only
@@ -1611,129 +1715,141 @@ class Registry {
        * state keys on the sessionId, and the caller needs both to finish the
        * removal it was never told to do.
        */
-      evicted: { agentId: string; sessionId: string } | null
-    } | null {
-
+      evicted: RegisteredSession[]
+    } | null> {
+    this.writer.assertOpen()
     if (this.writeBlocked) return null
+    input = structuredClone(input)
     const { engine, processIdentity } = input
     const runtimes = normalizedRuntimes(input.runtimes, input.tmuxPane)
     if (!runtimes.length || !validProcessIdentity(processIdentity)) return null
     if (runtimes.some(runtime => externalResumePending(this.agents.get(this.runtimeIndex.get(terminalRouteKey(runtime)) ?? '')?.externalResume))) return null
     const processAgentId = this.processIndex.get(processIdentityKey(engine, processIdentity))
     const processAgent = processAgentId ? this.agents.get(processAgentId) : undefined
-    const routeAgent = runtimes
-      .map((runtime) => this.byRuntimeEngine(runtime, engine))
-      .find((agent) => agent && (
-        // Before its first engine session, a process-agent is owned by its terminal route. Native
-        // launchers can replace PID/image while showing setup or folder-trust UI; update that agent in
-        // place instead of deleting/recreating its tile. Once bound, process identity remains strict.
-        !agent.sessionId
-        || !agent.processIdentity
-        || sameProcessIdentity(agent.processIdentity, processIdentity)
-      ))
-    const existing = processAgent ?? routeAgent
-    if (existing) {
-      const before = rowFingerprint(persistedRow(existing))
-      this.drop(existing)
-      existing.runtimes = mergeTerminalRuntimes(existing.runtimes, runtimes)
-      existing.tmuxPane = paneProjection(existing.runtimes)
-      existing.primaryRuntimeKey = selectedRuntimeKey(existing.runtimes, input.primaryRuntimeKey || existing.primaryRuntimeKey)
-      // The pane's current path follows a terminal tile around until an engine session is bound to
-      // it; from then on the bind owns the folder (see `register`), and a pane re-observed in the
-      // subfolder its engine `cd`'d into must not move the row there.
-      if (!existing.sessionId || !existing.cwd) existing.cwd = input.cwd ?? existing.cwd
-      existing.processIdentity = processIdentity
-      existing.active = true
-      // The same rule the discovery callback applies on its own door (`cli.ts`): a verified engine
-      // process in this row's pane is what "started" means. Resume-only rows used to be excluded
-      // here, waiting for a startup hook that a resume does not reliably send — which left one
-      // reading "Starting" for 19 hours over a pane its owner could type in. The wrong-conversation
-      // guard in `register` keys on `lastHookAt`, untouched by this method, so it stays armed.
-      if (existing.launch) {
-        const before = existing.launch
-        existing.launch = { state: 'ready' }
-        this.traceLaunch(existing.agentId, before, existing.launch, 'openProcessAgent re-observed')
+    const routeAgent = runtimes.map(runtime => this.byRuntimeEngine(runtime, engine)).find(agent => agent && (
+      !agent.sessionId || !agent.processIdentity || sameProcessIdentity(agent.processIdentity, processIdentity)))
+    const selected = processAgent ?? routeAgent
+    const agentId = selected?.agentId ?? input.agentId ?? randomUUID()
+    const routes = new Map(runtimes.map(runtime => [terminalRouteKey(runtime), this.runtimeIndex.get(terminalRouteKey(runtime))]))
+    const owners = new Map([...new Set([agentId, ...routes.values()].filter((id): id is string => !!id))]
+      .map(id => [id, ownershipIdentity(this.byAgent(id))]))
+    const verify = () => {
+      if (authority.current?.() === false || [...owners].some(([id, owner]) => ownershipIdentity(this.byAgent(id)) !== owner)
+        || [...routes].some(([key, id]) => this.runtimeIndex.get(key) !== id)) {
+        throw new RegistryOwnershipChanged('the discovered ownership group changed before publication')
       }
-      // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
-      // the last good one said rather than silently downgrading a gateway agent to a vendor one.
-      if (input.gateway !== undefined) existing.gateway = input.gateway
-      if (input.grid !== undefined) existing.grid = input.grid
-      if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
-      if (input.claudeHome && !existing.claudeHome) existing.claudeHome = input.claudeHome
-      if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
-      if (input.dsh && !existing.dsh) existing.dsh = input.dsh
-      if (rowFingerprint(persistedRow(existing)) !== before) existing.touchedAt = Date.now()
-      this.index(existing)
-      this.terminalAvailableAgents.add(existing.agentId)
-      this.save()
-      return { entry: existing, isNew: false, evicted: null }
     }
-
-    const agentId = input.agentId || randomUUID()
-    let evicted: { agentId: string; sessionId: string } | null = null
-
-    for (const runtime of runtimes) {
-      const otherId = this.runtimeIndex.get(terminalRouteKey(runtime))
-      const other = otherId ? this.agents.get(otherId) : undefined
-      if (!other) continue
-      this.drop(other)
-      other.runtimes = other.runtimes.filter((candidate) => terminalRouteKey(candidate) !== terminalRouteKey(runtime))
-      other.tmuxPane = paneProjection(other.runtimes)
-      other.primaryRuntimeKey = selectedRuntimeKey(other.runtimes, other.primaryRuntimeKey)
-      other.active = other.runtimes.length > 0
-      if (other.runtimes.length) this.index(other)
-      else this.terminalAvailableAgents.delete(other.agentId)
-      // Only when it has nothing left. An agent that still owns another pane is
-      // alive and simply narrower; it must not be announced as deleted.
-      if (!other.runtimes.length) {
-        evicted ??= { agentId: other.agentId, sessionId: other.sessionId }
+    return this.writer.run(async deadline => {
+      verify()
+      let candidate: RegisteredSession
+      let observationFingerprint: string | undefined
+      const evicted: RegisteredSession[] = []
+      const displaced: Array<{ agentId: string; candidate: RegisteredSession | null }> = []
+      const taken = new Set(routes.keys())
+      for (const id of new Set(routes.values())) {
+        if (!id || id === agentId) continue
+        const captured = structuredClone(this.byAgent(id)!)
+        const other = structuredClone(captured)
+        other.runtimes = other.runtimes.filter(runtime => !taken.has(terminalRouteKey(runtime)))
+        other.tmuxPane = paneProjection(other.runtimes)
+        other.primaryRuntimeKey = selectedRuntimeKey(other.runtimes, other.primaryRuntimeKey)
+        other.active = other.runtimes.length > 0
+        displaced.push({ agentId: id, candidate: other.runtimes.length ? other : null })
+        if (!other.runtimes.length) evicted.push(captured)
       }
-
-    }
-    const now = Date.now()
-    const entry: RegisteredSession = {
-      schemaVersion: 2,
-      active: true,
-      agentId,
-      sessionId: '',
-      boundAt: null,
-      engine,
-      gateway: input.gateway ?? null,
-      grid: input.grid ?? null,
-      // A discovered grid agent has no credential the daemon ever saw: it can be observed, not relaunched.
-      gridLaunch: null,
-      gridWebSearch: null,
-      codexHome: input.codexHome ?? null,
-      hermesHome: input.hermesHome ?? null,
-      claudeHome: input.claudeHome ?? null,
-      dsh: input.dsh ?? null,
-      // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
-      // row cannot relaunch it as one. Fill-only, like `dsh`.
-      agent: null,
-      transcriptPath: null,
-      projectDir: basename(input.cwd ?? '') || agentId,
-      cwd: input.cwd ?? null,
-      runtimes,
-      primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
-      tmuxPane: paneProjection(runtimes),
-      source: null,
-      title: null,
-      model: null,
-      cliVersion: null,
-      processIdentity,
-      registeredAt: now,
-      touchedAt: now,
-      lastHookAt: now,
-      lastTranscriptAt: now,
-    }
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    this.save()
-    return { entry, isNew: true, evicted }
+      if (selected) {
+        candidate = structuredClone(this.byAgent(agentId)!)
+        candidate.runtimes = mergeTerminalRuntimes(candidate.runtimes, runtimes)
+        candidate.tmuxPane = paneProjection(candidate.runtimes)
+        candidate.primaryRuntimeKey = selectedRuntimeKey(candidate.runtimes, input.primaryRuntimeKey || candidate.primaryRuntimeKey)
+        if (!candidate.sessionId || !candidate.cwd) candidate.cwd = input.cwd ?? candidate.cwd
+        candidate.processIdentity = processIdentity
+        candidate.active = true
+        if (candidate.launch) candidate.launch = { state: 'ready' }
+        delete candidate.creationId
+        if (input.gateway !== undefined) candidate.gateway = input.gateway
+        if (input.grid !== undefined) candidate.grid = input.grid
+        if (input.codexHome && !candidate.codexHome) candidate.codexHome = input.codexHome
+        if (input.claudeHome && !candidate.claudeHome) candidate.claudeHome = input.claudeHome
+        if (input.hermesHome && !candidate.hermesHome) candidate.hermesHome = input.hermesHome
+        const fingerprint = rowFingerprint(persistedRow(candidate))
+        if (fingerprint !== rowFingerprint(persistedRow(this.byAgent(agentId)!))) candidate.touchedAt = Date.now()
+        else observationFingerprint = fingerprint
+      } else {
+        const now = Date.now()
+        const entry: RegisteredSession = {
+          schemaVersion: 2,
+          active: true,
+          agentId,
+          sessionId: '',
+          boundAt: null,
+          engine,
+          gateway: input.gateway ?? null,
+          grid: input.grid ?? null,
+          // A discovered grid agent has no credential the daemon ever saw: it can be observed, not relaunched.
+          gridLaunch: null,
+          gridWebSearch: null,
+          codexHome: input.codexHome ?? null,
+          hermesHome: input.hermesHome ?? null,
+          claudeHome: input.claudeHome ?? null,
+          // A DSH is a launch fact Harness records when it creates the agent, never read off a process.
+          dsh: null,
+          // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
+          // row cannot relaunch it as one.
+          agent: null,
+          transcriptPath: null,
+          projectDir: basename(input.cwd ?? '') || agentId,
+          cwd: input.cwd ?? null,
+          runtimes,
+          primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
+          tmuxPane: paneProjection(runtimes),
+          source: null,
+          title: null,
+          model: null,
+          cliVersion: null,
+          processIdentity,
+          registeredAt: now,
+          touchedAt: now,
+          lastHookAt: now,
+          lastTranscriptAt: now,
+        }
+        candidate = entry
+      }
+      const unchanged = (): boolean => {
+        const live = this.byAgent(agentId)
+        return observationFingerprint !== undefined && !!live && displaced.length === 0
+          && this.transactionDepth === 0 && this.unconfirmedBinding === null && !this.intended.has(agentId)
+          && this.persistedBaseline.get(agentId) === observationFingerprint
+          && rowFingerprint(persistedRow(live)) === observationFingerprint
+      }
+      if (unchanged()) {
+        // Discovery still checks the private file, but observing an already-durable owner grants no new binding.
+        await authority.refresh?.()
+        verify()
+        if (!unchanged()) throw new RegistryOwnershipChanged('the discovered row changed during authority refresh')
+        await this.persist(deadline, 'observation')
+        deadline.check()
+        verify()
+        const committed = this.byAgent(agentId)
+        if (!committed || launchIdentity(committed) !== launchIdentity(candidate)) return null
+        this.terminalAvailableAgents.add(agentId)
+        return { entry: structuredClone(committed), isNew: false, evicted }
+      }
+      const previousLaunch = this.byAgent(agentId)?.launch
+      const receipt = await this.persist(deadline, true, false, undefined, {
+        agentId, candidate, displaced, verify, refresh: authority.refresh, allowTransaction: true,
+      })
+      const committed = this.committedOwner(agentId, receipt)
+      if (!committed || launchIdentity(committed) !== launchIdentity(candidate)) return null
+      if (selected) this.traceLaunch(agentId, previousLaunch, committed.launch, 'openProcessAgent re-observed')
+      for (const removed of displaced) if (!this.byAgent(removed.agentId)) this.terminalAvailableAgents.delete(removed.agentId)
+      this.terminalAvailableAgents.add(agentId)
+      return { entry: structuredClone(committed), isNew: !selected, evicted }
+    }, authority.expires)
   }
 
   /** Register a terminal route before its engine process exists. */
-  openPendingAgent(input: {
+  async openPendingAgent(input: {
     /** The id the launch already named its session after (OpenClaw's `harness-<agentId>`); a new one otherwise. */
     agentId?: string
     nativeToken?: string
@@ -1752,7 +1868,6 @@ class Registry {
     claudeHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
-    swarmSkill?: SwarmSkill
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1770,102 +1885,217 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
-    /** Created with Browser ticked — see RegisteredSession.browser. */
+    /** Its Browser is on from the start (an older Desktop's create) — see RegisteredSession.browser. */
     browser?: boolean
-  }): RegisteredSession | null {
-    if (this.writeBlocked) return null
-    const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
-    if (externalResume === null || externalResume && (externalResume.phase !== 'waiting' || externalResume.request.engine !== input.engine
-      || this.externalConflict(externalResumeIds(externalResume)))) return null
-    const runtimes = normalizedRuntimes(input.runtimes)
-    if (!runtimes.length) return null
-    if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
-    const agentId = input.agentId ?? randomUUID()
-    if (this.byAgent(agentId)) return null
-    const now = Date.now()
-    const entry: RegisteredSession = {
-      schemaVersion: 2,
-      active: !externalResume,
-      launch: externalResume ? { state: 'held', service: 'search', detail: 'Waiting for the search service to verify this conversation.' } : { state: 'starting', ...(input.nativeToken ? { nativeToken: input.nativeToken } : {}) },
-      ...(externalResume ? { externalResume } : {}),
-      defaultName: normalizedDefaultName(input.defaultName) ?? this.automaticName(input.label?.trim() || engineLabel(input.engine), new Date(now)),
-      agentId,
-      sessionId: '',
-      boundAt: null,
-      engine: input.engine,
-      gateway: null,
-      grid: input.grid ?? null,
-      gridLaunch: input.gridLaunchRecord?.override ?? null,
-      gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
-      ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
-      ...(storedLaunchModel(input.launchModel) ? { launchModel: storedLaunchModel(input.launchModel) } : {}),
-      codexHome: input.codexHome ?? null,
-      claudeHome: input.claudeHome ?? null,
-      // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
-      // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
-      hermesHome: null,
-      dsh: input.dsh ?? null,
-      dshRuntime: input.dshRuntime ?? null,
-      ...(input.swarmSkill ? { swarmSkill: input.swarmSkill } : {}),
-      agent: normalizedAgentName(input.agent),
-      ...(input.bypassPermission ? { bypassPermission: true } : {}),
-      ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
-      ...(isTerminalEngine(input.engine) ? { terminalHost: true } : {}),
-      ...normalizedForkedFrom(input.forkedFrom),
-      ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
-      ...normalizedParent(input.startedBy, input.parentAgentId),
-      ...(input.guest ? { guest: input.guest } : {}),
-      ...(input.browser ? { browser: true as const } : {}),
-      transcriptPath: null,
-      projectDir: basename(input.cwd ?? '') || agentId,
-      cwd: input.cwd ?? null,
-      runtimes,
-      primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
-      tmuxPane: paneProjection(runtimes),
-      source: null,
-      title: null,
-      model: null,
-      cliVersion: null,
-      processIdentity: null,
-      registeredAt: now,
-      touchedAt: now,
-      lastHookAt: now,
-      lastTranscriptAt: now,
-    }
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    try { this.save(!!externalResume, false, externalResume ? agentId : undefined) } catch {
-      this.drop(entry)
-      this.terminalAvailableAgents.delete(entry.agentId)
+    /** The first task to type once the engine is ready — see RegisteredSession.firstTask. */
+    firstTask?: string
+    /** OpenClaw's `--local` folder — see RegisteredSession.openclawLocal. */
+    openclawLocal?: string
+    /** The creation receipt that made it — see RegisteredSession.creationId. */
+    creationId?: string
+  }): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    input = structuredClone(input)
+    return this.writer.run(async deadline => {
+      if (this.writeBlocked) return null
+      const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
+      if (externalResume === null || externalResume && (externalResume.phase !== 'waiting' || externalResume.request.engine !== input.engine
+        || this.externalConflict(externalResumeIds(externalResume)))) return null
+      const runtimes = normalizedRuntimes(input.runtimes)
+      if (!runtimes.length) return null
+      if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
+      const agentId = input.agentId ?? randomUUID()
+      if (this.byAgent(agentId)) return null
+      const now = Date.now()
+      const entry: RegisteredSession = {
+        schemaVersion: 2,
+        active: !externalResume,
+        launch: externalResume ? { state: 'held', service: 'search', detail: 'Waiting for the search service to verify this conversation.' } : { state: 'starting', ...(input.nativeToken ? { nativeToken: input.nativeToken } : {}) },
+        ...(externalResume ? { externalResume } : {}),
+        defaultName: normalizedDefaultName(input.defaultName) ?? this.automaticName(input.label?.trim() || engineLabel(input.engine), new Date(now)),
+        agentId,
+        sessionId: '',
+        boundAt: null,
+        engine: input.engine,
+        gateway: null,
+        grid: input.grid ?? null,
+        gridLaunch: input.gridLaunchRecord?.override ?? null,
+        gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
+        ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
+        ...(storedLaunchModel(input.launchModel) ? { launchModel: storedLaunchModel(input.launchModel) } : {}),
+        codexHome: input.codexHome ?? null,
+        claudeHome: input.claudeHome ?? null,
+        // A pane Harness opens starts in the default home; `hermes -p` is the person's own doing, and
+        // the row learns it from the session that lands in it. See RegisteredSession.hermesHome.
+        hermesHome: null,
+        dsh: input.dsh ?? null,
+        dshRuntime: input.dshRuntime ?? null,
+        agent: normalizedAgentName(input.agent),
+        ...(input.bypassPermission ? { bypassPermission: true } : {}),
+        ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
+        ...(isTerminalEngine(input.engine) ? { terminalHost: true } : {}),
+        ...normalizedForkedFrom(input.forkedFrom),
+        ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
+        ...normalizedParent(input.startedBy, input.parentAgentId),
+        ...(input.guest ? { guest: input.guest } : {}),
+        ...(input.browser ? { browser: true as const } : {}),
+        ...(input.firstTask ? { firstTask: input.firstTask } : {}),
+        ...(validCreationId(input.creationId) ? { creationId: input.creationId } : {}),
+        // Its store is in that folder from the start: nothing waits for a TUI to be seen holding it.
+        ...(input.openclawLocal ? { openclawLocal: input.openclawLocal, openclawStateDir: input.openclawLocal } : {}),
+        transcriptPath: null,
+        projectDir: basename(input.cwd ?? '') || agentId,
+        cwd: input.cwd ?? null,
+        runtimes,
+        primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
+        tmuxPane: paneProjection(runtimes),
+        source: null,
+        title: null,
+        model: null,
+        cliVersion: null,
+        processIdentity: null,
+        registeredAt: now,
+        touchedAt: now,
+        lastHookAt: now,
+        lastTranscriptAt: now,
+      }
+      const verify = this.ownerGuard(agentId)
+      const receipt = await this.persist(deadline, true, false, externalResume ? agentId : undefined,
+        { agentId, candidate: entry, verify, allowTransaction: true })
+      const committed = this.committedOwner(agentId, receipt)
+      if (!committed) return null
+      this.terminalAvailableAgents.add(entry.agentId)
+      if (entry.firstTask) firstTaskKept(agentId)
+      return structuredClone(committed)
+    }).catch(error => {
+      console.error(`[registry] pending admission failed · ${errorKind(error)}`)
+      // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
+      // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
+      if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
       return null
-    }
-    return this.byAgent(entry.agentId) ?? null
+    })
   }
 
   /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
    * Archived routes/processes are evidence only: none of them may be indexed or signalled here. */
-  resumePendingAgent(saved: RegisteredSession, runtimes: TerminalRuntimeRef[], nativeToken?: string): RegisteredSession | null {
-    if (this.writeBlocked || this.agents.has(saved.agentId)
-      || (saved.sessionId && this.bySession(saved.sessionId))) return null
-    const routes = normalizedRuntimes(runtimes)
-    if (!routes.length || routes.some(route => this.runtimeIndex.has(terminalRouteKey(route)))) return null
-    const entry: RegisteredSession = {
-      ...saved,
-      resumeOnly: true,
-      boundAt: null,
-      lastHookAt: 0,
-      active: true,
-      launch: { state: 'starting', ...(nativeToken ? { nativeToken } : {}) },
-      processIdentity: null,
-      runtimes: routes,
-      primaryRuntimeKey: selectedRuntimeKey(routes, ''),
-      tmuxPane: paneProjection(routes),
-      touchedAt: Date.now(),
+  async resumePendingAgent(saved: RegisteredSession, runtimes: TerminalRuntimeRef[], nativeToken?: string,
+    authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const archived = structuredClone(saved), routes = normalizedRuntimes(structuredClone(runtimes))
+    return this.writer.run(async deadline => {
+      if (this.writeBlocked || this.agents.has(archived.agentId)
+        || (archived.sessionId && this.bySession(archived.sessionId))
+        || !routes.length || routes.some(route => this.runtimeIndex.has(terminalRouteKey(route)))) return null
+      const entry: RegisteredSession = {
+        ...archived,
+        resumeOnly: true,
+        boundAt: null,
+        lastHookAt: 0,
+        active: true,
+        launch: { state: 'starting', ...(nativeToken ? { nativeToken } : {}) },
+        processIdentity: null,
+        runtimes: routes,
+        primaryRuntimeKey: selectedRuntimeKey(routes, ''),
+        tmuxPane: paneProjection(routes),
+        touchedAt: Date.now(),
+      }
+      const verify = this.ownerGuard(entry.agentId, authority.current)
+      const receipt = await this.persist(deadline, true, false, undefined,
+        { agentId: entry.agentId, candidate: entry, verify, refresh: authority.refresh, resumed: true })
+      const committed = this.committedOwner(entry.agentId, receipt)
+      if (!committed) return null
+      this.terminalAvailableAgents.add(entry.agentId)
+      return structuredClone(committed)
+    }).catch((error) => { console.error(`[registry] resume admission failed · ${errorKind(error)}`); return null })
+  }
+
+  /** Readiness, its native process and the launch words are one durable authority change. */
+  async confirmLaunch(agentId: string, input: LaunchPublicationInput, authority: RegistryAuthority = {}): Promise<LaunchPublication> {
+    this.writer.assertOpen()
+    const selected = this.byAgent(agentId)
+    if (!selected || (!isTerminalEngine(selected.engine) && !validProcessIdentity(input.processIdentity))) return { state: 'not-published' }
+    // A peer that recorded this same process while this write waited (discovery's pass over the pane: its confirmation,
+    // active and ready, or the process and the grid its argv names after a retarget) wrote part of this launch, not
+    // another owner's. Read apart, a resume that discovery beat answered RESUME_UNCONFIRMED over its running engine
+    // (e2e/eagerOpenCode.e2e.ts, 2026-11-17). Any other process or field still ends the write.
+    const owners = [selected, { ...selected, processIdentity: input.processIdentity }].map(ownershipIdentity)
+    const grids = input.grid === undefined ? [selected] : [selected, { ...selected, grid: input.grid }]
+    const launches = grids.flatMap(row => [row, { ...row, active: true, launch: { state: 'ready' as const } }]).map(launchIdentity)
+    const requested = structuredClone(input)
+    const expires = Math.min(authority.expires ?? Infinity, performance.now() + REGISTRY_WRITE_DEADLINE_MS)
+    const verify = () => {
+      if (authority.current?.() === false || !owners.includes(ownershipIdentity(this.byAgent(agentId)))) {
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+      if (!launches.includes(launchIdentity(this.byAgent(agentId)))) {
+        throw new RegistryOwnershipChanged('the selected launch changed while its write was being prepared')
+      }
     }
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    this.save()
-    return entry
+    let candidate: RegisteredSession | undefined
+    let uncertain = false
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.writer.run(async deadline => {
+          verify()
+          if (!candidate) {
+            candidate = structuredClone({ ...this.byAgent(agentId)!, processIdentity: requested.processIdentity,
+              active: true, launch: { state: 'ready' as const }, touchedAt: Date.now() })
+            delete candidate.creationId
+            if (requested.grid !== undefined) candidate.grid = requested.grid
+            if (requested.gateway !== undefined) candidate.gateway = requested.gateway
+            if (requested.launchArgs !== undefined) {
+              if (requested.launchArgs.length) candidate.launchArgs = requested.launchArgs
+              else delete candidate.launchArgs
+            }
+            if (requested.gridLaunchRecord !== undefined) {
+              candidate.gridLaunch = requested.gridLaunchRecord?.override ?? null
+              candidate.gridWebSearch = requested.gridLaunchRecord?.webSearch ?? null
+            }
+            if (requested.subscriptionModel !== undefined) candidate.subscriptionModel = requested.subscriptionModel
+            if (requested.runtimes !== undefined) {
+              const routes = normalizedRuntimes(requested.runtimes)
+              if (!routes.length) return { state: 'not-published' as const }
+              candidate.runtimes = routes
+              candidate.primaryRuntimeKey = selectedRuntimeKey(routes, requested.primaryRuntimeKey ?? '')
+              candidate.tmuxPane = paneProjection(routes)
+            }
+          }
+          // Never turn a same-operation recovery into persist's different-intent rollback.
+          if (uncertain) {
+            const pending = this.unconfirmedBinding
+            if (!pending || pending.agentId !== agentId || [...pending.affected].some(id => {
+              const live = this.byAgent(id)
+              return (live ? rowFingerprint(persistedRow(live)) : undefined) !== pending.before.get(id)
+            })) throw new RegistryOwnershipChanged('the unconfirmed launch changed before recovery')
+          }
+          const receipt = await this.persist(deadline, true, false, undefined,
+            { agentId, candidate, verify, refresh: authority.refresh, allowTransaction: true })
+          const committed = this.committedOwner(agentId, receipt)
+          return { state: 'confirmed' as const,
+            entry: committed && launchIdentity(committed) === launchIdentity(candidate) ? structuredClone(committed) : null }
+        }, expires)
+      } catch (error) {
+        if (error instanceof AtomicWriteUnconfirmed) uncertain = true
+        else if (!uncertain) throw error
+        if (attempt === 1 || !(error instanceof AtomicWriteUnconfirmed)) {
+          throw new AtomicWriteUnconfirmed(new Error('launch publication remains unconfirmed'))
+        }
+      }
+    }
+    throw new AtomicWriteUnconfirmed(new Error('launch publication remains unconfirmed'))
+  }
+
+  /**
+   * [agentId] runs again under its own id, and what went with its pane came back with it (its browser, decision 14): no
+   * shell's next agent may take it. One pass over the live rows, at a resume only. Not saved here: the caller's save
+   * carries it.
+   */
+  private forgetPreviousAgent(agentId: string): void {
+    for (const row of this.agents.values()) {
+      if (row.previousAgentId !== agentId) continue
+      delete row.previousAgentId
+      row.touchedAt = Date.now()
+    }
   }
 
   /** Every name an agent on this machine answers to: default names, project names, renames. */
@@ -1892,6 +2122,7 @@ class Registry {
 
   /** A current observation for frames; never persisted as conversation evidence. */
   setIdentityHold(agentId: string, reason?: string): boolean {
+    this.writer.assertOpen()
     const entry = this.agents.get(agentId)
     const detail = reason === undefined ? undefined : reason.slice(0, 1024) || 'Waiting for conversation identity.'
     if (!entry || entry.identityHold === detail) return false
@@ -1903,6 +2134,7 @@ class Registry {
 
   /** Only the attachment that read this revision can complete or explain its recovery. */
   setInterpretationHold(agentId: string, revision: number | undefined, reason?: string, create = false): boolean {
+    this.writer.assertOpen()
     const entry = this.agents.get(agentId)
     if (!entry || entry.identityHold || entry.evidenceRevision !== revision || (!entry.interpretationHold && !(create && reason))) return false
     if (!entry.interpretationHold) entry.evidenceRevision = ++this.evidenceRevision
@@ -1912,29 +2144,35 @@ class Registry {
   }
 
   /** Retry only this saved binding. A failed read leaves all of its prior facts intact. */
-  revalidateBinding(agentId: string): RegisteredSession | null {
-    const entry = this.agents.get(agentId)
-    if (!entry) return null
-    if (!entry.sessionId || !entry.transcriptPath) return entry
-    const proof = savedTranscriptEvidence(entry.engine, entry.sessionId, entry.transcriptPath, entry.codexHome ?? undefined)
-    // Stage the change without releasing the live index. A daemon-down hook may have bound another
-    // conversation since load; a three-way save of this repair must never overwrite that newer bind.
-    const candidate = { ...entry }
-    if (!proof.path) Object.assign(candidate, { sessionId: '', boundAt: null, transcriptPath: null, source: null, lastTranscriptAt: Date.now() })
-    else if (proof.path !== entry.transcriptPath) {
-      candidate.transcriptPath = proof.path
-      candidate.projectDir = basename(dirname(proof.path))
-    }
-    delete candidate.identityHold
-    this.save(true, false, undefined, { agentId, candidate, verify: () => proof.verify() })
-    // save refreshes the indices only after the durable commit. Even same-path recovery is fenced
-    // against another writer and rechecks the native evidence after obtaining the lock.
-    const saved = this.agents.get(agentId)!
-    delete saved.identityHold
-    saved.evidenceRevision = ++this.evidenceRevision
-    if (saved.sessionId) saved.interpretationHold = 'Waiting for transcript interpretation to recover.'
-    else delete saved.interpretationHold
-    return saved
+  async revalidateBinding(agentId: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const verifyOwner = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verifyOwner()
+      const entry = this.agents.get(agentId)
+      if (!entry) return null
+      if (!entry.sessionId || !entry.transcriptPath) return structuredClone(entry)
+      const proof = savedTranscriptEvidence(entry.engine, entry.sessionId, entry.transcriptPath, entry.codexHome ?? undefined)
+      // Stage the change without releasing the live index. A daemon-down hook may have bound another
+      // conversation since load; a three-way save of this repair must never overwrite that newer bind.
+      const candidate = { ...entry }
+      if (!proof.path) Object.assign(candidate, { sessionId: '', boundAt: null, transcriptPath: null, source: null, lastTranscriptAt: Date.now() })
+      else if (proof.path !== entry.transcriptPath) {
+        candidate.transcriptPath = proof.path
+        candidate.projectDir = basename(dirname(proof.path))
+      }
+      delete candidate.identityHold
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate, allowTransaction: true, verify: () => { verifyOwner(); proof.verify() } })
+      // save refreshes the indices only after the durable commit. Even same-path recovery is fenced
+      // against another writer and rechecks the native evidence after obtaining the lock.
+      const saved = this.committedOwner(agentId, receipt)
+      if (!saved) return null
+      delete saved.identityHold
+      saved.evidenceRevision = ++this.evidenceRevision
+      if (saved.sessionId) saved.interpretationHold = 'Waiting for transcript interpretation to recover.'
+      else delete saved.interpretationHold
+      return structuredClone(saved)
+    })
   }
 
   /**
@@ -1944,7 +2182,7 @@ class Registry {
    * showing two tiles. Returns { entry, isNew, evicted } — isNew=false on a re-register (so callers
    * can skip re-announcing), evicted = the sessionId displaced from this pane (caller removes it).
    */
-  register(input: RegisterInput, options: { verifiedNativeSource?: boolean } = {}): {
+  async register(input: RegisterInput, options: RegistryAuthority & { verifiedNativeSource?: boolean } = {}): Promise<{
     entry: RegisteredSession
     isNew: boolean
     evicted: string | null
@@ -1961,12 +2199,11 @@ class Registry {
      * cannot be opened. The caller announces the removal.
      */
     orphaned: { agentId: string; sessionId: string } | null
-  } | null {
-
-    if (this.writeBlocked) throw new IdentityReadUnavailable('the saved session registry is unavailable')
-    const transcriptPath = input.transcriptPath
-    const sessionId =
-      input.sessionId || (transcriptPath ? basename(transcriptPath).replace(/\.jsonl$/, '') : '')
+    /** The `codexHome` the input named was not taken: this session's transcript was not found under it. */
+    refusedHome?: true
+  } | null> {
+    this.writer.assertOpen()
+    input = structuredClone(input)
     const engine = normalizedAgentEngine(input.engine)
     const pane = input.tmuxPane
     // Hooks carry process metadata, not ownership. The already-discovered pane+engine process chooses the
@@ -1984,263 +2221,279 @@ class Registry {
         .filter((agent): agent is RegisteredSession => !!agent)
         .find((agent): agent is RegisteredSession => !!agent))
     const agentId = processAgent?.agentId ?? ''
-    // An inert adoption pane cannot bind a hook before core has admitted its external conversation.
-    if (processAgent?.externalResume && processAgent.externalResume.phase !== 'admitted') return null
-    const admittedAlias = this.list().find(row => row.agentId !== agentId && row.externalResume?.phase === 'admitted'
-      && row.sessionId !== sessionId && externalReservations(row).includes(sessionId))
-    if (admittedAlias) return null
-    if (
-      !sessionId
-      || !agentId
-      || !inputRuntimes.length
-      || (engine === 'grok' && !GROK_SESSION_RE.test(sessionId))
-      // agy's session id IS its conversation id, and it names the directory the transcript lives in.
-      || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
-      // Copilot's session id is a uuid and names the directory its event stream lives in.
-      || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
-      // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
-      || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
-      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
-      // The already-registered agent (opened at agent_create time) already carries its own
-      // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
-    ) return null
+    const verifyOwner = this.ownerGuard(agentId, options.current)
+    return this.writer.run(async deadline => {
+      verifyOwner()
+      if (this.writeBlocked) throw new IdentityReadUnavailable('the saved session registry is unavailable')
+      const transcriptPath = input.transcriptPath
+      const sessionId = input.sessionId || (transcriptPath ? basename(transcriptPath).replace(/\.jsonl$/, '') : '')
+      // An inert adoption pane cannot bind a hook before core has admitted its external conversation.
+      if (processAgent?.externalResume && processAgent.externalResume.phase !== 'admitted') return null
+      const admittedAlias = this.list().find(row => row.agentId !== agentId && row.externalResume?.phase === 'admitted'
+        && row.sessionId !== sessionId && externalReservations(row).includes(sessionId))
+      if (admittedAlias) return null
+      if (
+        !sessionId
+        || !agentId
+        || !inputRuntimes.length
+        || (engine === 'grok' && !GROK_SESSION_RE.test(sessionId))
+        // agy's session id IS its conversation id, and it names the directory the transcript lives in.
+        || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
+        // Copilot's session id is a uuid and names the directory its event stream lives in.
+        || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
+        // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
+        || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
+        || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
+        // The already-registered agent (opened at agent_create time) already carries its own
+        // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
+      ) return null
 
-    const now = Date.now()
-    const existing = this.agents.get(agentId)
-    // `isNew` still means "this SESSION id was not bound here before" — a rotation counts as new, which is
-    // what makes the caller announce the newly bound session. The agent itself may be long-lived.
-    const isNew = !existing || existing.sessionId !== sessionId
-    // A rotation: the same process agent and pane swapping the engine session underneath it.
-    const rebound = existing && existing.sessionId && existing.sessionId !== sessionId ? existing.sessionId : null
+      const now = Date.now()
+      const existing = this.agents.get(agentId)
+      // `isNew` still means "this SESSION id was not bound here before" — a rotation counts as new, which is
+      // what makes the caller announce the newly bound session. The agent itself may be long-lived.
+      const isNew = !existing || existing.sessionId !== sessionId
+      // A rotation: the same process agent and pane swapping the engine session underneath it.
+      const rebound = existing && existing.sessionId && existing.sessionId !== sessionId ? existing.sessionId : null
+      const earlierSessionIds = earlierSessionKeys(existing?.earlierSessionIds, rebound)
 
-    const evicted: string | null = rebound
-    // The same engine session cannot belong to two agents — `claude --resume X` in a second pane. The
-    // newest bind wins; the old process agent remains visible but becomes unbound.
-    let orphaned: { agentId: string; sessionId: string } | null = null
-    const stolenFrom = this.bySession(sessionId)
-    let displaced: { agentId: string; candidate: RegisteredSession | null } | undefined
-    if (stolenFrom && stolenFrom.agentId !== agentId) {
-      const released = { ...stolenFrom, sessionId: '', boundAt: null, transcriptPath: null,
-        source: null, lastTranscriptAt: now }
-      delete released.externalResume; delete released.resumeOnly
-      delete released.identityHold; delete released.interpretationHold
-      displaced = { agentId: stolenFrom.agentId, candidate: stolenFrom.active ? released : null }
-      if (!stolenFrom.active) orphaned = { agentId: stolenFrom.agentId, sessionId }
-    }
+      const evicted: string | null = rebound
+      // The same engine session cannot belong to two agents — `claude --resume X` in a second pane. The
+      // newest bind wins; the old process agent remains visible but becomes unbound.
+      let orphaned: { agentId: string; sessionId: string } | null = null
+      const stolenFrom = this.bySession(sessionId)
+      let displaced: { agentId: string; candidate: RegisteredSession | null } | undefined
+      if (stolenFrom && stolenFrom.agentId !== agentId) {
+        const released = { ...stolenFrom, sessionId: '', boundAt: null, transcriptPath: null,
+          source: null, lastTranscriptAt: now }
+        delete released.externalResume; delete released.resumeOnly
+        delete released.identityHold; delete released.interpretationHold
+        displaced = { agentId: stolenFrom.agentId, candidate: stolenFrom.active ? released : null }
+        if (!stolenFrom.active) orphaned = { agentId: stolenFrom.agentId, sessionId }
+      }
 
 
-    // Command Code announces SessionStart BEFORE writing its transcript, and validTranscriptPath stats the
-    // file — so a real path is rejected at that moment and only arrives with the first Stop hook, AFTER the
-    // first turn. Nothing tailed the transcript for that turn, and a transcript-derived turn_started is the
-    // ONLY thing that tells Command Code a message was accepted: every new session's first message reported
-    // "the agent did not accept this message" and produced no recap. Its layout is deterministic, so derive
-    // the path rather than wait to be told. A file that does not exist yet is fine — the watcher starts at
-    // offset 0 and chokidar fires when it appears.
-    // WHOSE cwd this bind takes. A re-register of the session the row already holds (every
-    // UserPromptSubmit; the SessionStart a resume gets for the row it was opened into) keeps the row's:
-    // Claude reports its tracked SHELL directory, which follows every Bash `cd`, and a row that took
-    // it each time drifted into subfolders, sibling repos and temp dirs — then the next resume,
-    // restore or restart `cd`'d there and ran the engine in the wrong project. A first bind or a
-    // rotation takes the hook's — that is what gives a terminal-turned-claude row its folder at all.
-    const sameSession = !!existing && existing.sessionId === sessionId
-    const baseCwd = sameSession ? existing.cwd ?? input.cwd ?? null : input.cwd ?? existing?.cwd ?? null
-    const derived = !transcriptPath && engine === 'commandcode'
-      ? commandcodeTranscriptPath(baseCwd ?? undefined, sessionId)
-      : !transcriptPath && engine === 'grok' && baseCwd
-        ? join(env.GROK_HOME, 'sessions', encodeURIComponent(baseCwd), sessionId, 'updates.jsonl')
-        // agy's layout is deterministic from the conversation id alone, and its `PreInvocation` hook can
-        // land before the first line is flushed — derive rather than wait a turn for the path.
-        : !transcriptPath && engine === 'agy'
-          ? agyTranscriptPath(env.AGY_HOME, sessionId)
-          // Copilot announces its session before the first event is flushed; its layout is
-          // deterministic, so derive rather than wait a turn for the path.
-          : !transcriptPath && engine === 'copilot'
-            ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
-            : null
-    const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
-    // Native evidence is staged before terminal adoption, displacement or any live publication.
-    const proof = effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
-      processAgent?.codexHome ?? undefined, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
-    if (proof && !proof.valid) {
-      proof.verify()
-      if (!proof.files.file(effectiveTranscriptPath!, true)) throw new IdentityReadUnavailable('the announced transcript is not yet available')
-      return null
-    }
-    const first = sessionStoreOf(engine)?.first
-    if (proof && first) {
-      const meta = proof.files.header(effectiveTranscriptPath!, first)
-      if (meta.isSubagent || meta.id !== sessionId) { proof.verify(); return null }
-    }
-    // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
-    // Two ways to be in that state, and both have to count:
-    //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
-    //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
-    //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook. Reading
-    //    only `launch` here disarmed this guard for exactly the resumes it exists to protect.
-    //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
-    //    `--resume` against a row that kept `lastHookAt` from its previous life.
-    if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))) {
-      // A native startup hook, carrying the verified process, must confirm this exact history —
-      // but only where an exact history was asked for. A resume that opened a NEW conversation (an
-      // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
-      // it did what it was told; failing it there would refuse the resume the caller requested.
-      if (!validProcessIdentity(input.processIdentity)) return null
-      if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
-        const failed: RegisteredSession = { ...existing, active: false, touchedAt: now,
-          launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' } }
-        this.save(true, false, undefined, { agentId, candidate: failed, verify: () => proof?.verify() })
-        this.traceLaunch(agentId, existing.launch, failed.launch, 'resume conversation mismatch')
+      // Command Code announces SessionStart BEFORE writing its transcript, and validTranscriptPath stats the
+      // file — so a real path is rejected at that moment and only arrives with the first Stop hook, AFTER the
+      // first turn. Nothing tailed the transcript for that turn, and a transcript-derived turn_started is the
+      // ONLY thing that tells Command Code a message was accepted: every new session's first message reported
+      // "the agent did not accept this message" and produced no recap. Its layout is deterministic, so derive
+      // the path rather than wait to be told. A file that does not exist yet is fine — the watcher starts at
+      // offset 0 and chokidar fires when it appears.
+      // WHOSE cwd this bind takes. A re-register of the session the row already holds (every
+      // UserPromptSubmit; the SessionStart a resume gets for the row it was opened into) keeps the row's:
+      // Claude reports its tracked SHELL directory, which follows every Bash `cd`, and a row that took
+      // it each time drifted into subfolders, sibling repos and temp dirs — then the next resume,
+      // restore or restart `cd`'d there and ran the engine in the wrong project. A first bind or a
+      // rotation takes the hook's — that is what gives a terminal-turned-claude row its folder at all.
+      const sameSession = !!existing && existing.sessionId === sessionId
+      const baseCwd = sameSession ? existing.cwd ?? input.cwd ?? null : input.cwd ?? existing?.cwd ?? null
+      const derived = !transcriptPath && engine === 'commandcode'
+        ? commandcodeTranscriptPath(baseCwd ?? undefined, sessionId)
+        : !transcriptPath && engine === 'grok' && baseCwd
+          ? join(env.GROK_HOME, 'sessions', encodeURIComponent(baseCwd), sessionId, 'updates.jsonl')
+          // agy's layout is deterministic from the conversation id alone, and its `PreInvocation` hook can
+          // land before the first line is flushed — derive rather than wait a turn for the path.
+          : !transcriptPath && engine === 'agy'
+            ? agyTranscriptPath(env.AGY_HOME, sessionId)
+            // Copilot announces its session before the first event is flushed; its layout is
+            // deterministic, so derive rather than wait a turn for the path.
+            : !transcriptPath && engine === 'copilot'
+              ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
+              : null
+      const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
+      // Native evidence is staged before terminal adoption, displacement or any live publication.
+      const evidenceUnder = (profile: string | undefined) => effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
+        profile, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
+      // A home the hook says of its own environment fills a row that has none, and only once this session's transcript
+      // is found under it. A home that does not hold it, or cannot be read, is no evidence: the transcript is taken as
+      // it would be without it, and the registration goes on.
+      const reportedHome = processAgent?.codexHome ? null : reportedProfileHome(engine, input.codexHome)
+      let proof: ReturnType<typeof evidenceUnder>
+      if (reportedHome) {
+        try { proof = evidenceUnder(reportedHome) } catch (error) { if (!(error instanceof IdentityReadUnavailable)) throw error }
+      }
+      const refusedHome = !!reportedHome && !proof?.valid
+      if (!reportedHome || refusedHome) proof = evidenceUnder(processAgent?.codexHome ?? undefined)
+      if (proof && !proof.valid) {
+        proof.verify()
+        if (!proof.files.file(effectiveTranscriptPath!, true)) throw new IdentityReadUnavailable('the announced transcript is not yet available')
         return null
       }
-    }
-    // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
-    // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
-    // cwd that does not round-trip to that directory name is not this session's folder — the row's own
-    // is kept when it does, else the transcript names the folder itself (`projectFolder` in Claude Code's
-    // discovery contract, engines/kit/projectFolder.ts).
-    const project = !sameSession && effectiveTranscriptPath && input.cwd ? transcriptProject(engine) : null
-    const cwd = project && effectiveTranscriptPath && input.cwd
-        && project.isProjectTranscript(effectiveTranscriptPath) && !project.belongs(input.cwd, effectiveTranscriptPath)
-      ? (existing?.cwd && project.belongs(existing.cwd, effectiveTranscriptPath) ? existing.cwd
-        : project.cwdOf(effectiveTranscriptPath) ?? input.cwd)
-      : baseCwd
-    const retainEvidence = sameSession && existing.engine === engine && existing.transcriptPath === effectiveTranscriptPath
-    const entry: RegisteredSession = {
-      schemaVersion: 2,
-      active: existing && isTerminalEngine(existing.engine) ? true : existing?.active ?? true,
-      ...(existing?.evidenceRevision === undefined ? {} : { evidenceRevision: existing.evidenceRevision }),
-      ...(retainEvidence && existing.identityHold ? { identityHold: existing.identityHold } : {}),
-      ...(retainEvidence && existing.interpretationHold ? { interpretationHold: existing.interpretationHold } : {}),
-      // No `launch`: a hook is the engine reporting for duty, so whatever the launch was — starting,
-      // or failed by a watcher that gave up too early — it is over, and the frame reads `ready`.
-      agentId,
-      sessionId,
-      boundAt: isNew ? now : existing?.boundAt ?? now,
-      engine,
-      // Both are facts about the live process the hook came from, re-read by discovery on every
-      // pass — but a bind must not blank them in between, or the very first SessionStart hook would
-      // announce a grid agent as "on no grid" until the next scan put it back.
-      gateway: existing?.gateway ?? null,
-      grid: existing?.grid ?? null,
-      // The credential-bearing launch. Like codexHome: written once, carried forward, never re-derived.
-      gridLaunch: existing?.gridLaunch ?? null,
-      // What that launch decided — it travels with the launch, or it is lost at the first hook.
-      gridWebSearch: existing?.gridWebSearch ?? null,
-      // The workspace's SCM record, for the same reason: a bind rebuilds the row, and a relaunch
-      // without it would come back without the environment the workspace was created with.
-      ...(existing?.scmLaunch ? { scmLaunch: existing.scmLaunch } : {}),
-      // ⚠️ Carried forward for the same reason, and it was missed once: a bind REBUILDS the row from
-      // named fields, so a field the rebuild does not name survives on disk and vanishes from
-      // memory the moment the engine reports in. The symptom is a move back to the engine's own
-      // login landing on a house default — the remembered model was there, then a hook bind ate it.
-      ...(existing?.subscriptionModel ? { subscriptionModel: existing.subscriptionModel } : {}),
-      // And the model it launches with, for the same reason: a hook bind that forgot it reopened a Product Manager on its
-      // engine's own default (task #3395).
-      ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
-      // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
-      ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
-      // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
-      ...(existing?.browser ? { browser: true as const } : {}),
-      defaultName: existing?.defaultName,
-      transcriptPath: effectiveTranscriptPath,
-      projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
-        ? basename(cwd ?? '') || sessionId
-        : effectiveTranscriptPath
-        ? basename(dirname(effectiveTranscriptPath))
-        : basename(cwd ?? '') || sessionId,
-      cwd,
-      runtimes: mergeTerminalRuntimes(existing?.runtimes ?? [], inputRuntimes),
-      primaryRuntimeKey: '',
-      tmuxPane: '',
-      source: input.source ?? existing?.source ?? null,
-      title: titleDisplayName(input.title ?? existing?.title ?? null),
-      model: modelString(input.model) ?? existing?.model ?? null,
-      cliVersion: input.cliVersion ?? existing?.cliVersion ?? null,
-      // Chosen once at agent_create time and never re-derived (unlike `grid`, which openProcessAgent
-      // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
-      // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
-      codexHome: existing?.codexHome ?? null,
-      claudeHome: existing?.claudeHome ?? null,
-      // The home the gate looked this session up in, or whatever the row already knew. Carried
-      // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
-      // would send the mirror back to the default store (openharness#191).
-      hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
-      // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
-      ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
-      dsh: existing?.dsh ?? null,
-      dshRuntime: existing?.dshRuntime ?? null,
-      ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
-      agent: existing?.agent ?? null,
-      // Carried forward like `agent`: dropped at the first hook, a restart of a harness another agent started came
-      // back without its pull request line (found by e2e/agentClient.e2e.ts).
-      ...(existing?.startedBy ? { startedBy: existing.startedBy } : {}),
-      // And who it was, for the same reason: dropped at the first hook, the windows lost which harness started it.
-      ...(existing?.parentAgentId ? { parentAgentId: existing.parentAgentId } : {}),
-      // Whose guest's it is: dropped at the first hook, the guest would lose its own harness to the owner.
-      ...(existing?.guest ? { guest: existing.guest } : {}),
-      ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
-      ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
-      ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
-      // Keep alias reservations and profile arguments across the first hook and daemon restart.
-      ...(existing?.externalResume && existing.engine === engine ? { externalResume: existing.externalResume } : {}),
-      ...(existing?.terminalHost || existing && isTerminalEngine(existing.engine) ? { terminalHost: true } : {}),
-      processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
-      registeredAt: existing?.registeredAt ?? now,
-      touchedAt: now,
-      lastHookAt: now,
-      lastTranscriptAt: existing?.lastTranscriptAt ?? now,
-      // ⚠️ Carried forward, for the reason the ⚠️ on `subscriptionModel` gives: without this line
-      // the first hook after an open — the next prompt, a `/clear` — erases it from memory, the next
-      // save writes that to disk, and every app's "last used" order forgets the open ever happened.
-      ...(existing?.lastOpenedAt ? { lastOpenedAt: existing.lastOpenedAt } : {}),
-      ...(existing?.closePlan ? { closePlan: existing.closePlan } : {}),
-    }
-    entry.tmuxPane = paneProjection(entry.runtimes)
-    entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
-    const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
-    this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })
-    const committed = this.agents.get(agentId)!
-    // Fileless sources cannot use transcript revalidation. A fresh native hook
-    // source/process check can recover this precise peer-write hold only after
-    // its registration has been committed. It cannot clear unrelated holds.
-    if (!committed.transcriptPath && options.verifiedNativeSource && committed.identityHold === BINDING_RECOVERY_HOLD) {
-      delete committed.identityHold
-      committed.evidenceRevision = ++this.evidenceRevision
-      committed.interpretationHold = 'Waiting for transcript interpretation to recover.'
-    }
-    if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
-    if (promoted) this.terminalAvailableAgents.add(agentId)
-    this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
-    return { entry: committed, isNew, evicted, rebound, orphaned }
+      const first = sessionStoreOf(engine)?.first
+      if (proof && first) {
+        const meta = proof.files.header(effectiveTranscriptPath!, first)
+        if (meta.isSubagent || meta.id !== sessionId) { proof.verify(); return null }
+      }
+      // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
+      // Two ways to be in that state, and both have to count:
+      //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
+      //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
+      //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook.
+      //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
+      //    `--resume` against a row that kept `lastHookAt` from its previous life.
+      // Only a hook carrying the verified process binds it: one without could be any process in the pane, and
+      // cannot speak for the resumed engine. A verified one that names another conversation (a `/clear`, a `/new`,
+      // Codex's first prompt naming a new thread) is a rotation like any other: the running engine is the truth,
+      // and failing the row instead left it "Start failed" over an engine the person was typing into
+      // (docs/plans/2026-11-25-win-hook-admission-design.md, A).
+      if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))
+        && !validProcessIdentity(input.processIdentity)) return null
+      // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
+      // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
+      // cwd that does not round-trip to that directory name is not this session's folder — the row's own
+      // is kept when it does, else the transcript names the folder itself (`projectFolder` in Claude Code's
+      // discovery contract, engines/kit/projectFolder.ts).
+      const project = !sameSession && effectiveTranscriptPath && input.cwd ? transcriptProject(engine) : null
+      const cwd = project && effectiveTranscriptPath && input.cwd
+          && project.isProjectTranscript(effectiveTranscriptPath) && !project.belongs(input.cwd, effectiveTranscriptPath)
+        ? (existing?.cwd && project.belongs(existing.cwd, effectiveTranscriptPath) ? existing.cwd
+          : project.cwdOf(effectiveTranscriptPath) ?? input.cwd)
+        : baseCwd
+      const retainEvidence = sameSession && existing.engine === engine && existing.transcriptPath === effectiveTranscriptPath
+      const hermesHome = input.hermesHome ?? existing?.hermesHome ?? null
+      // The mark goes with the home it was set with: kept while the row keeps that home, taken with a home the input
+      // brings marked, never carried onto another home (which a relaunch would then fail to export).
+      const hermesHomeDerived = !!hermesHome && (!!input.hermesHome && input.hermesHomeDerived
+        || hermesHome === existing?.hermesHome && existing.hermesHomeDerived)
+      const entry: RegisteredSession = {
+        schemaVersion: 2,
+        active: existing && isTerminalEngine(existing.engine) ? true : existing?.active ?? true,
+        ...(existing?.evidenceRevision === undefined ? {} : { evidenceRevision: existing.evidenceRevision }),
+        ...(retainEvidence && existing.identityHold ? { identityHold: existing.identityHold } : {}),
+        ...(retainEvidence && existing.interpretationHold ? { interpretationHold: existing.interpretationHold } : {}),
+        // No `launch`: a hook is the engine reporting for duty, so whatever the launch was — starting,
+        // or failed by a watcher that gave up too early — it is over, and the frame reads `ready`.
+        agentId,
+        sessionId,
+        boundAt: isNew ? now : existing?.boundAt ?? now,
+        engine,
+        // A bind blanks neither, or the very first SessionStart hook would announce a grid agent as "on no grid" until
+        // the next scan put it back. An engine whose hook says its gateway takes the hook's word; a hook that says
+        // nothing (an older one) leaves the last word standing.
+        gateway: HOOK_GATEWAY_ENGINES.has(engine) && input.gateway !== undefined ? input.gateway : existing?.gateway ?? null,
+        grid: existing?.grid ?? null,
+        // The credential-bearing launch. Like codexHome: written once, carried forward, never re-derived.
+        gridLaunch: existing?.gridLaunch ?? null,
+        // What that launch decided — it travels with the launch, or it is lost at the first hook.
+        gridWebSearch: existing?.gridWebSearch ?? null,
+        // The workspace's SCM record, for the same reason: a bind rebuilds the row, and a relaunch
+        // without it would come back without the environment the workspace was created with.
+        ...(existing?.scmLaunch ? { scmLaunch: existing.scmLaunch } : {}),
+        // ⚠️ Carried forward for the same reason, and it was missed once: a bind REBUILDS the row from
+        // named fields, so a field the rebuild does not name survives on disk and vanishes from
+        // memory the moment the engine reports in. The symptom is a move back to the engine's own
+        // login landing on a house default — the remembered model was there, then a hook bind ate it.
+        ...(existing?.subscriptionModel ? { subscriptionModel: existing.subscriptionModel } : {}),
+        // And the model it launches with, for the same reason: a hook bind that forgot it reopened an agent on its
+        // engine's own default (task #3395).
+        ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
+        // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
+        ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
+        // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
+        ...(existing?.browser ? { browser: true as const } : {}),
+        // And the title its engine gave from a quiet line: dropped, a resumed conversation's title would name the agent.
+        ...(existing?.quietTitle ? { quietTitle: existing.quietTitle } : {}),
+        defaultName: existing?.defaultName,
+        transcriptPath: effectiveTranscriptPath,
+        projectDir: engine === 'grok' || engine === 'agy' || engine === 'copilot'
+          ? basename(cwd ?? '') || sessionId
+          : effectiveTranscriptPath
+          ? basename(dirname(effectiveTranscriptPath))
+          : basename(cwd ?? '') || sessionId,
+        cwd,
+        runtimes: mergeTerminalRuntimes(existing?.runtimes ?? [], inputRuntimes),
+        primaryRuntimeKey: '',
+        tmuxPane: '',
+        source: input.source ?? existing?.source ?? null,
+        title: titleDisplayName(input.title ?? existing?.title ?? null),
+        model: modelString(input.model) ?? existing?.model ?? null,
+        cliVersion: input.cliVersion ?? existing?.cliVersion ?? null,
+        // Chosen at agent_create, or filled once for a row with none: from the home its hook reports, when
+        // this session's transcript is under it (above), or from the rollout its process holds open
+        // (openProcessAgent). Never changed once known — a hook-triggered bind must carry it forward or the
+        // very first SessionStart hook would silently wipe the agent's profile.
+        codexHome: existing?.codexHome ?? (refusedHome ? null : reportedHome),
+        claudeHome: existing?.claudeHome ?? null,
+        // The home the gate looked this session up in, or whatever the row already knew. Carried
+        // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
+        // would send the mirror back to the default store (openharness#191).
+        hermesHome,
+        ...(hermesHomeDerived ? { hermesHomeDerived: true as const } : {}),
+        // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
+        ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
+        ...(existing?.openclawLocal && engine === 'openclaw' ? { openclawLocal: existing.openclawLocal } : {}),
+        // And the key it moved off, so a delete still finds what is kept under it.
+        ...(earlierSessionIds ? { earlierSessionIds } : {}),
+        // And the task not yet typed: the bind is what lets it be typed, so dropping it here would lose it every time.
+        ...(existing?.firstTask ? { firstTask: existing.firstTask } : {}),
+        // And the one typed and not yet confirmed: dropped here, a daemon restarted next would not know it was typed.
+        ...(existing?.firstTaskTyped ? { firstTaskTyped: existing.firstTaskTyped } : {}),
+        dsh: existing?.dsh ?? null,
+        dshRuntime: existing?.dshRuntime ?? null,
+        agent: existing?.agent ?? null,
+        // Carried forward like `agent`: dropped at the first hook, a restart of a harness another agent started came
+        // back without its pull request line (found by e2e/agentClient.e2e.ts).
+        ...(existing?.startedBy ? { startedBy: existing.startedBy } : {}),
+        // And who it was, for the same reason: dropped at the first hook, the windows lost which harness started it.
+        ...(existing?.parentAgentId ? { parentAgentId: existing.parentAgentId } : {}),
+        // Whose guest's it is: dropped at the first hook, the guest would lose its own harness to the owner.
+        ...(existing?.guest ? { guest: existing.guest } : {}),
+        ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
+        ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
+        ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
+        // Keep alias reservations and profile arguments across the first hook and daemon restart.
+        ...(existing?.externalResume && existing.engine === engine ? { externalResume: existing.externalResume } : {}),
+        ...(existing?.terminalHost || existing && isTerminalEngine(existing.engine) ? { terminalHost: true } : {}),
+        processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
+        registeredAt: existing?.registeredAt ?? now,
+        touchedAt: now,
+        lastHookAt: now,
+        lastTranscriptAt: existing?.lastTranscriptAt ?? now,
+        // ⚠️ Carried forward, for the reason the ⚠️ on `subscriptionModel` gives: without this line
+        // the first hook after an open — the next prompt, a `/clear` — erases it from memory, the next
+        // save writes that to disk, and every app's "last used" order forgets the open ever happened.
+        ...(existing?.lastOpenedAt ? { lastOpenedAt: existing.lastOpenedAt } : {}),
+        ...(existing?.closePlan ? { closePlan: existing.closePlan } : {}),
+      }
+      entry.tmuxPane = paneProjection(entry.runtimes)
+      entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
+      const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: entry, displaced: displaced ? [displaced] : undefined, replaceLive: true, allowTransaction: true, refresh: options.refresh, verify: () => { verifyOwner(); proof?.verify() } })
+      const committed = this.committedOwner(agentId, receipt)
+      if (!committed) return null
+      // Fileless sources cannot use transcript revalidation. A fresh native hook
+      // source/process check can recover this precise peer-write hold only after
+      // its registration has been committed. It cannot clear unrelated holds.
+      if (!committed.transcriptPath && options.verifiedNativeSource && committed.identityHold === BINDING_RECOVERY_HOLD) {
+        delete committed.identityHold
+        committed.evidenceRevision = ++this.evidenceRevision
+        committed.interpretationHold = 'Waiting for transcript interpretation to recover.'
+      }
+      if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
+      if (promoted) this.terminalAvailableAgents.add(agentId)
+      this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
+      return { entry: structuredClone(committed), isNew, evicted, rebound, orphaned, ...(refusedHome ? { refusedHome: true as const } : {}) }
+    })
   }
 
-  remove(sessionId: string): boolean {
-    const entry = this.bySession(sessionId)
-    if (!entry) return false
-    this.drop(entry)
-    this.terminalAvailableAgents.delete(entry.agentId)
-    this.save()
-    return true
-  }
-
-  /** Release only the mutable session binding; the process-backed agent remains addressable. */
-  unbindSession(sessionId: string): boolean {
-    const entry = this.bySession(sessionId)
-    if (!entry) return false
-    this.releaseBinding(entry)
-    entry.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Drop an agent outright, bound or not. */
-  removeAgent(agentId: string): boolean {
-    const entry = this.agents.get(agentId)
-    if (!entry) return false
-    this.drop(entry)
-    this.terminalAvailableAgents.delete(agentId)
-    this.save()
-    return true
+  /** A session reset is acknowledged only after its exact binding is durably released. */
+  async confirmSessionUnbound(agentId: string, sessionId: string, authority: RegistryAuthority = {}): Promise<LaunchPublication> {
+    this.writer.assertOpen()
+    const selected = this.byAgent(agentId)
+    if (!selected || selected.sessionId !== sessionId) return { state: 'not-published' }
+    const verify = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verify()
+      const candidate = structuredClone(this.byAgent(agentId)!)
+      this.clearBinding(candidate)
+      candidate.touchedAt = Date.now()
+      const receipt = await this.persist(deadline, true, false, undefined, {
+        agentId, candidate, verify, refresh: authority.refresh, allowTransaction: true,
+      })
+      const committed = this.committedOwner(agentId, receipt)
+      return { state: 'confirmed', entry: committed ? structuredClone(committed) : null }
+    }, authority.expires)
   }
 
   has(sessionId: string): boolean {
@@ -2282,7 +2535,7 @@ class Registry {
    * Same agentId, same pane, same tile — the desktop only sees `engine` change on the next
    * `agent_synced`. The process identity is indexed under the NEW engine (the key is engine-scoped),
    * which is what lets the hook that follows (`register`, `byProcess(engine, …)`) land on this row
-   * rather than mint another. `terminalHost` stays set so the exit is recognised (`releaseEngine`).
+   * rather than mint another. `terminalHost` stays set so the exit is recognised (`confirmEngineExit`).
    * Refused for anything but a terminal: an agent already running one engine is never re-labelled.
    */
   /**
@@ -2297,93 +2550,102 @@ class Registry {
    * of its own yet, gives the pane back the same way. Null, changing nothing, for any other row, an archived id that is
    * live, or a conversation bound to another row.
    */
-  reinstateArchived(terminalAgentId: string, saved: RegisteredSession, processIdentity: ProcessIdentity): RegisteredSession | null {
-    const terminal = this.agents.get(terminalAgentId)
-    const holder = !!terminal && (isTerminalEngine(terminal.engine)
-      || (!!terminal.terminalHost && !terminal.sessionId && terminal.engine === saved.engine))
-    if (this.writeBlocked || !terminal || !holder || isTerminalEngine(saved.engine)
-      || this.agents.has(saved.agentId) || (saved.sessionId && this.bySession(saved.sessionId))
-      || !validProcessIdentity(processIdentity)) return null
-    this.drop(terminal)
-    this.terminalAvailableAgents.delete(terminal.agentId)
-    const entry: RegisteredSession = {
-      ...saved,
-      active: true,
-      launch: { state: 'ready' },
-      processIdentity,
-      runtimes: terminal.runtimes,
-      primaryRuntimeKey: terminal.primaryRuntimeKey,
-      tmuxPane: terminal.tmuxPane,
-      touchedAt: Date.now(),
-    }
-    this.traceLaunch(entry.agentId, saved.launch, entry.launch, `reinstateArchived from ${terminal.agentId}`)
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    try { this.save() } catch {
-      this.drop(entry)
-      this.terminalAvailableAgents.delete(entry.agentId)
-      this.index(terminal)
-      this.terminalAvailableAgents.add(terminal.agentId)
-      return null
-    }
-    return entry
+  async reinstateArchived(terminalAgentId: string, saved: RegisteredSession, processIdentity: ProcessIdentity,
+    authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const archived = structuredClone(saved), identity = structuredClone(processIdentity)
+    const verifyHolder = this.ownerGuard(terminalAgentId, authority.current)
+    const verifySaved = this.ownerGuard(archived.agentId)
+    return this.writer.run(async deadline => {
+      verifyHolder(); verifySaved()
+      const terminal = this.byAgent(terminalAgentId)
+      const holder = !!terminal && (isTerminalEngine(terminal.engine)
+        || (!!terminal.terminalHost && !terminal.sessionId && terminal.engine === archived.engine))
+      if (this.writeBlocked || !terminal || !holder || isTerminalEngine(archived.engine)
+        || this.agents.has(archived.agentId) || (archived.sessionId && this.bySession(archived.sessionId)) || !validProcessIdentity(identity)) return null
+      const candidate: RegisteredSession = { ...archived, active: true, launch: { state: 'ready' }, processIdentity: identity,
+        runtimes: structuredClone(terminal.runtimes), primaryRuntimeKey: terminal.primaryRuntimeKey, tmuxPane: terminal.tmuxPane, touchedAt: Date.now() }
+      // Its own engine ran on: the first launch was delivered, and a later one never reads its receipt again.
+      delete candidate.creationId
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId: archived.agentId, candidate,
+        displaced: [{ agentId: terminalAgentId, candidate: null }], allowTransaction: true, resumed: true,
+        verify: () => { verifyHolder(); verifySaved() }, refresh: authority.refresh })
+      const committed = this.committedOwner(archived.agentId, receipt)
+      if (!committed) return null
+      if (!this.byAgent(terminalAgentId)) this.terminalAvailableAgents.delete(terminalAgentId)
+      this.terminalAvailableAgents.add(archived.agentId)
+      return structuredClone(committed)
+    }, authority.expires)
   }
 
-  adoptEngine(agentId: string, engine: AgentEngine, processIdentity?: ProcessIdentity | null): RegisteredSession | null {
-    const entry = this.agents.get(agentId)
-    if (!entry || !isTerminalEngine(entry.engine) || isTerminalEngine(engine)) return null
-    this.drop(entry)
-    entry.engine = engine
-    entry.terminalHost = true
-    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, `adoptEngine ${engine}`)
-    entry.launch = { state: 'ready' }
-    entry.active = true
-    if (validProcessIdentity(processIdentity)) entry.processIdentity = processIdentity
-    entry.touchedAt = Date.now()
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    this.save()
-    return entry
+  async adoptEngine(agentId: string, engine: AgentEngine, processIdentity?: ProcessIdentity | null,
+    authority: RegistryAuthority = {}, observed?: Pick<LaunchPublicationInput, 'runtimes' | 'primaryRuntimeKey' | 'gateway' | 'grid'>): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId, authority.current)
+    const identity = processIdentity ? structuredClone(processIdentity) : null
+    const observation = observed ? structuredClone(observed) : undefined
+    const routes = observation?.runtimes ? normalizedRuntimes(observation.runtimes) : undefined
+    return this.writer.run(async deadline => {
+      verify()
+      const entry = this.byAgent(agentId)
+      if (!entry || !isTerminalEngine(entry.engine) || isTerminalEngine(engine)) return null
+      const candidate = structuredClone(entry)
+      candidate.engine = engine
+      candidate.terminalHost = true
+      if (routes) {
+        if (!routes.length) return null
+        candidate.runtimes = routes
+        candidate.primaryRuntimeKey = selectedRuntimeKey(routes, observation?.primaryRuntimeKey ?? candidate.primaryRuntimeKey)
+        candidate.tmuxPane = paneProjection(routes)
+      }
+      if (observation?.gateway !== undefined) candidate.gateway = observation.gateway
+      if (observation?.grid !== undefined) candidate.grid = observation.grid
+      delete candidate.previousAgentId
+      // An engine runs in the pane: whatever launch the row had is over, and a later one never reads its receipt.
+      delete candidate.creationId
+      candidate.launch = { state: 'ready' }
+      candidate.active = true
+      if (validProcessIdentity(identity)) candidate.processIdentity = identity
+      candidate.touchedAt = Date.now()
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate, verify,
+        refresh: authority.refresh, allowTransaction: true })
+      const committed = this.committedOwner(agentId, receipt)
+      if (!committed) return null
+      this.terminalAvailableAgents.add(agentId)
+      return structuredClone(committed)
+    }, authority.expires)
   }
 
-  /**
-   * The engine in this pane has exited and the pane is a shell now: the row is a terminal.
-   *
-   * For every agent, not only one that began as a terminal — an engine the app launched runs
-   * inside its pane's shell too (engineLaunch.ts `engineRunScript`), and `/exit` or Ctrl-C leaves
-   * that shell at its prompt with the engine's last screen above it.
-   *
-   * What goes is what described the PROCESS and its session — session id, transcript, pid,
-   * gateway, grid assignment, model, title — because the next thing typed into this shell may be a
-   * different engine, and the reconciler hands a pane's engine to a row by its route only when the row
-   * lacks a session or a process (`unboundRouteObservation`). What stays is what describes the PANE's
-   * launch — `gridLaunch`, `codexHome`, `dsh`, `agent`, the permission choice: the tmux session's
-   * environment still carries the grid endpoint and the Codex profile, the workspace is still that
-   * harness's, and a restart or a relaunch after a reboot puts the same engine back with the same shape. Dropping `gridLaunch` in particular made
-   * a released grid agent unrestorable ("credential not persisted"). The row itself, its id, its
-   * pane and its name stay: this is the opposite of dormant, the terminal is live. `terminalHost`
-   * is set from here on, since that is what the pane now is.
-   */
-  releaseEngine(agentId: string, separateShell = false): RegisteredSession | null {
-    const original = this.agents.get(agentId)
-    if (!original || (isTerminalEngine(original.engine) && !separateShell)) return null
-    this.drop(original)
-    this.terminalAvailableAgents.delete(agentId)
+  /** Build the shell without changing the live ownership indices. */
+  private shellEntry(original: RegisteredSession, separateShell: boolean): RegisteredSession {
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, swarmSkill: undefined, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
-    // Its browser is the archived agent's, with that agent's logins: never the shell's.
-    if (separateShell) delete entry.browser
-    this.releaseBinding(entry)
+    // What went with the pane is the archived agent's, its browser's logins among them: never the shell's, which names that
+    // agent for whatever new agent takes this pane (decision 19). A release in place names nobody.
+    if (separateShell) {
+      delete entry.browser
+      entry.previousAgentId = original.agentId
+    }
+    // And its first task: the shell under a new identity would carry a copy beside the archived agent's. A row that stays
+    // has had its launch end before the task was typed, and an engine the person starts in its shell is theirs: one they
+    // typed the task into themselves would get it twice. A typed one goes too: nothing confirms it in a shell.
+    if (entry.firstTask) {
+      delete entry.firstTask
+      if (!separateShell) console.log(`[agent] ${sid(original.agentId)} first task dropped · its engine exited before it was typed`)
+    }
+    delete entry.firstTaskTyped
+    delete entry.creationId
+    this.clearBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null
-    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, 'releaseEngine')
+    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, 'confirmEngineExit')
     entry.launch = { state: 'ready' }
     entry.active = true
     entry.gateway = null
@@ -2394,13 +2656,33 @@ class Registry {
     entry.model = null
     entry.title = null
     entry.touchedAt = Date.now()
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    this.save()
     return entry
   }
 
+  /** Archive/shell announcements follow this durable ownership-group transition. */
+  async confirmEngineExit(agentId: string, disposition: 'shell' | 'successor' | 'remove',
+    authority: RegistryAuthority = {}): Promise<LaunchPublication> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verify()
+      const original = this.byAgent(agentId)
+      if (!original) return { state: 'not-published' }
+      const candidate = disposition === 'remove' ? null : this.shellEntry(structuredClone(original), disposition === 'successor')
+      const target = candidate?.agentId ?? agentId
+      const receipt = await this.persist(deadline, true, false, undefined, {
+        agentId: target, candidate, verify, refresh: authority.refresh, allowTransaction: true,
+        ...(target !== agentId ? { displaced: [{ agentId, candidate: null }] } : {}),
+      })
+      if (!this.byAgent(agentId)) this.terminalAvailableAgents.delete(agentId)
+      const committed = this.committedOwner(target, receipt)
+      if (committed) this.terminalAvailableAgents.add(target)
+      return { state: 'confirmed', entry: committed ? structuredClone(committed) : null }
+    }, authority.expires)
+  }
+
   updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean {
+    this.writer.assertOpen()
     const entry = this.agents.get(agentId)
     const normalized = normalizedRuntimes(runtimes)
     if (!entry || !normalized.length) return false
@@ -2418,6 +2700,7 @@ class Registry {
   }
 
   setActive(agentId: string, active: boolean): boolean {
+    this.writer.assertOpen()
     const entry = this.agents.get(agentId)
     if (!entry || entry.active === active) return !!entry
     entry.active = active
@@ -2443,6 +2726,7 @@ class Registry {
   }
 
   setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null {
+    this.writer.assertOpen()
     const entry = this.agents.get(agentId)
     if (!entry) return null
     const before = entry.launch
@@ -2462,74 +2746,180 @@ class Registry {
       externalReservations(row).some(id => sought.has(id)))
   }
 
-  /** No await between the reservation, ownership transition and durable save. */
-  setExternalResume(agentId: string, value: ExternalResumeIntent): RegisteredSession | null {
-    if (this.writeBlocked) return null
-    const row = this.byAgent(agentId), intent = parseExternalResume(value)
-    if (!row?.externalResume || !intent || row.externalResume.token !== intent.token || row.engine !== intent.request.engine
-      || row.externalResume.request.sessionId !== intent.request.sessionId || row.externalResume.takeOver !== intent.takeOver
-      || this.externalConflict(externalResumeIds(intent), agentId)) return null
-    if (row.externalResume.phase === 'cancelled' && intent.phase !== 'cancelled'
-      || row.externalResume.phase === 'admitted' && intent.phase !== 'admitted') return null
-    const next: RegisteredSession = { ...row, externalResume: intent }
-    if (intent.phase === 'admitted') {
-      const session = intent.session!
-      Object.assign(next, { sessionId: session.sessionId, cwd: session.cwd, title: session.title || row.title,
-        transcriptPath: session.transcriptPath, resumeOnly: true })
-    }
-    this.drop(row)
-    this.index(next)
-    try { this.save(true, false, agentId) } catch (error) {
-      if (!(error instanceof RegistryOwnershipChanged)) { this.drop(next); this.index(row) }
-      throw error
-    }
-    return this.byAgent(agentId) ?? null
+  /** Prepare outside the loop; native authority and durable publication still share one final section. */
+  async setExternalResume(agentId: string, value: ExternalResumeIntent, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const captured = structuredClone(value)
+    const verify = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verify()
+      if (this.writeBlocked) return null
+      const row = this.byAgent(agentId), intent = parseExternalResume(captured)
+      if (!row?.externalResume || !intent || row.externalResume.token !== intent.token || row.engine !== intent.request.engine
+        || row.externalResume.request.sessionId !== intent.request.sessionId || row.externalResume.takeOver !== intent.takeOver
+        || this.externalConflict(externalResumeIds(intent), agentId)) return null
+      if (row.externalResume.phase === 'cancelled' && intent.phase !== 'cancelled'
+        || row.externalResume.phase === 'admitted' && intent.phase !== 'admitted') return null
+      const next: RegisteredSession = { ...row, externalResume: intent }
+      if (intent.phase === 'admitted') {
+        const session = intent.session!
+        Object.assign(next, { sessionId: session.sessionId, cwd: session.cwd, title: session.title || row.title,
+          transcriptPath: session.transcriptPath, resumeOnly: true })
+      }
+      const receipt = await this.persist(deadline, true, false, agentId, { agentId, candidate: next, verify, refresh: authority.refresh })
+      const committed = this.committedOwner(agentId, receipt)
+      return committed ? structuredClone(committed) : null
+    })
   }
 
   /** A cancelled external intent has no owned conversation to archive. Its deletion must be durable. */
-  finishExternalCancellation(agentId: string): boolean {
-    const row = this.byAgent(agentId)
-    if (row?.externalResume?.phase !== 'cancelled') return false
-    const available = this.terminalAvailable(agentId)
-    this.drop(row); this.terminalAvailableAgents.delete(agentId)
-    try { this.save(true, false, agentId) } catch (error) {
-      if (!(error instanceof RegistryOwnershipChanged)) { this.index(row); if (available) this.terminalAvailableAgents.add(agentId) }
-      throw error
-    }
-    return true
+  async finishExternalCancellation(agentId: string): Promise<boolean> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId)
+    return this.writer.run(async deadline => {
+      verify()
+      const row = this.byAgent(agentId)
+      if (row?.externalResume?.phase !== 'cancelled') return false
+      await this.persist(deadline, true, false, agentId, { agentId, candidate: null, verify })
+      if (this.byAgent(agentId)) return false
+      this.terminalAvailableAgents.delete(agentId)
+      return true
+    })
   }
 
-  /** A launch dispatch is durable before tmux may replace the inert shell. */
-  beginExternalDispatch(agentId: string): RegisteredSession | null {
-    const row = this.byAgent(agentId)
-    if (row?.externalResume?.phase !== 'admitted' || row.launch?.state !== 'held') return null
-    const prior = row.launch, active = row.active, intent = row.externalResume
-    row.launch = { state: 'starting' }; row.active = true; row.externalResume = { ...intent, dispatched: true }
-    try { this.save(true, false, agentId) } catch (error) { row.launch = prior; row.active = active; row.externalResume = intent; throw error }
-    return row
+  /** The dispatch and first task are durable before a terminal may replace the inert shell. */
+  async beginExternalDispatch(agentId: string, firstTask?: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verify()
+      const row = this.byAgent(agentId)
+      if (row?.externalResume?.phase !== 'admitted' || row.launch?.state !== 'held') return null
+      const next: RegisteredSession = { ...row, launch: { state: 'starting' }, active: true,
+        externalResume: { ...row.externalResume, dispatched: true }, ...(firstTask ? { firstTask } : {}) }
+      const receipt = await this.persist(deadline, true, false, agentId, { agentId, candidate: next, verify })
+      const committed = this.committedOwner(agentId, receipt)
+      if (committed && firstTask) firstTaskKept(agentId)
+      return committed ? structuredClone(committed) : null
+    })
   }
 
-  setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null): RegisteredSession | null {
-    const entry = this.agents.get(agentId)
-    if (!entry) return null
-    const previous = entry.closePlan
-    if (plan) entry.closePlan = normalizedClosePlan(plan)
-    else delete entry.closePlan
-    const intended = this.intended.get(agentId) ?? new Set<string>()
-    intended.add('closePlan')
-    this.intended.set(agentId, intended)
-    try { this.save(true, false, undefined, undefined, agentId) } catch (error) {
-      if (previous) entry.closePlan = previous
-      else delete entry.closePlan
-      intended.delete('closePlan')
-      if (!intended.size) this.intended.delete(agentId)
-      throw error
-    }
-    return entry
+  /** A backend may leave its guarded shell only after this exact native token is durable. */
+  async beginNativeDispatch(agentId: string, nativeToken: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const verifyOwner = this.ownerGuard(agentId, authority.current)
+    const before = launchIdentity(this.byAgent(agentId))
+    return this.writer.run(async deadline => {
+      const verify = () => {
+        verifyOwner()
+        if (launchIdentity(this.byAgent(agentId)) !== before) throw new RegistryOwnershipChanged('the native launch changed before dispatch')
+      }
+      verify()
+      const row = this.byAgent(agentId), launch = normalizedLaunch({ state: 'starting', nativeToken })
+      if (!row || launch?.state !== 'starting' || launch.nativeToken !== nativeToken) return null
+      const candidate = { ...row, launch, active: true }
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate, verify, refresh: authority.refresh, allowTransaction: true })
+      const committed = this.committedOwner(agentId, receipt)
+      return committed && launchIdentity(committed) === launchIdentity(candidate) ? structuredClone(committed) : null
+    }, authority.expires)
+  }
+
+  /**
+   * The task is returned only after its move to `firstTaskTyped` is durable, to at most one caller. An unbound agent
+   * keeps it, as a task is typed only into a session read, unless its launch failed: nothing types it then
+   * (core/agents/bind.ts `failFirstTask`), so it goes, and a typed one with it, which is never returned.
+   */
+  async takeFirstTask(agentId: string): Promise<string | null> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId)
+    return this.writer.run(async deadline => {
+      verify()
+      const row = this.agents.get(agentId)
+      if (!row) return null
+      const task = row.firstTask
+      const next = { ...row }
+      delete next.firstTask
+      delete next.firstTaskTyped
+      if (row.launch?.state === 'failed') {
+        if (!task && !row.firstTaskTyped) return null
+      } else {
+        if (!row.sessionId || !task) return null
+        next.firstTaskTyped = { text: task, at: Date.now() }
+      }
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
+      if (!this.committedOwner(agentId, receipt)) return null
+      if (next.firstTaskTyped) console.log(`[agent] ${sid(agentId)} first task typed`)
+      return task ?? null
+    })
+  }
+
+  /**
+   * Puts a typed first task back to wait untyped, only while it is [text]: durable before its box is cleared, so a
+   * restart during the clear finds it waiting, typed again only into an empty box. True once that is durable. Called
+   * from the input controller's timers, which can fire mid-pass, so it waits for the pass's transaction to commit.
+   */
+  async untypeFirstTask(agentId: string, text: string): Promise<boolean> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId)
+    return this.afterTransaction(() => this.writer.run(async deadline => {
+      verify()
+      const row = this.agents.get(agentId)
+      if (!row?.firstTaskTyped || row.firstTaskTyped.text !== text) return false
+      const next: RegisteredSession = { ...row, firstTask: text }
+      delete next.firstTaskTyped
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
+      return !!this.committedOwner(agentId, receipt)
+    }))
+  }
+
+  /**
+   * A typed first task leaves the row once its turn is confirmed: true once that is durable, false if it had none. With
+   * [at], only the mark typed then goes: a store read is no evidence about a mark typed again since. Called from the turn
+   * stream, which can fire mid-pass, so it waits for the pass's transaction to commit.
+   */
+  async firstTaskTaken(agentId: string, at?: number): Promise<boolean> {
+    this.writer.assertOpen()
+    const verify = this.ownerGuard(agentId)
+    return this.afterTransaction(() => this.writer.run(async deadline => {
+      verify()
+      const row = this.agents.get(agentId)
+      if (!row?.firstTaskTyped || (at !== undefined && row.firstTaskTyped.at !== at)) return false
+      const next = { ...row }
+      delete next.firstTaskTyped
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify })
+      return !!this.committedOwner(agentId, receipt)
+    }))
+  }
+
+  async setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
+    const captured = plan ? structuredClone(plan) : null
+    const verify = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verify()
+      const entry = this.agents.get(agentId)
+      if (!entry) return null
+      const next = { ...entry }
+      if (captured) next.closePlan = normalizedClosePlan(captured)
+      else delete next.closePlan
+      // Each operation owns its intent object, even a repeated same-value cancellation.
+      const intended = new Set(this.intended.get(agentId))
+      intended.add('closePlan')
+      this.intended.set(agentId, intended)
+      let receipt: string | undefined
+      try { receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate: next, verify, metadata: 'closePlan' }, agentId) }
+      catch (error) {
+        if (this.intended.get(agentId) === intended) this.intended.delete(agentId)
+        throw error
+      }
+      const committed = this.committedOwner(agentId, receipt)
+      return committed ? structuredClone(committed) : null
+    })
   }
 
   /** Mark whether at least one backend placement was verified by this daemon process. */
   setTerminalAvailable(agentId: string, available: boolean): boolean {
+    this.writer.assertOpen()
     if (!this.agents.has(agentId)) return false
     if (available) this.terminalAvailableAgents.add(agentId)
     else this.terminalAvailableAgents.delete(agentId)
@@ -2556,16 +2946,18 @@ class Registry {
     gateway?: 'ori' | null,
     grid?: GridAssignment | null,
   ): boolean {
+    this.writer.assertOpen()
     const session = this.resolve(sessionId)
     if (!session || !validProcessIdentity(processIdentity)) return false
     const before = rowFingerprint(persistedRow(session))
     this.drop(session)
     session.processIdentity = processIdentity
-    // A record written before gateways existed, or by a pass whose probe failed, learns it here — the
-    // env cannot change under a running process, so a successful read is always the truth for this pid.
+    // A Codex's argv, which cannot change under a running process, is the truth for this pid, and an engine with no
+    // gateway Harness can see says null. Undefined (Claude Code, OpenCode and Hermes, whose hook says it, or a
+    // relaunch) keeps what the row knew.
     if (gateway !== undefined) session.gateway = gateway
-    // The grid is read from the same environment and follows the same rule. It matters most right
-    // after a retarget: the respawned pane is a new pid, and this is where its new grid lands.
+    // The grid follows the same rule. It matters most right after a retarget: the respawned pane is a new
+    // pid, and this is where its new grid lands.
     if (grid !== undefined) session.grid = grid
     if (rowFingerprint(persistedRow(session)) !== before) session.touchedAt = Date.now()
     this.index(session)
@@ -2575,6 +2967,7 @@ class Registry {
 
   /** Forget the process an agent was last seen as — its pane is gone, so the pid is gone with it. */
   clearProcessIdentity(agentId: string): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
     if (!session.processIdentity) return true
@@ -2587,6 +2980,7 @@ class Registry {
   }
 
   setBypassPermission(agentId: string, bypassPermission: boolean): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
     if ((session.bypassPermission === true) === bypassPermission) return true
@@ -2602,6 +2996,7 @@ class Registry {
    *  like `setCodexHome`: the mode create recorded is the person's choice and is never re-derived
    *  (the same name again is a no-op). A name that is not a mode is refused, as on load. */
   setPermissionMode(agentId: string, permissionMode: string): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || !permissionModeName(permissionMode)) return false
     if (session.permissionMode) return session.permissionMode === permissionMode
@@ -2611,11 +3006,10 @@ class Registry {
     return true
   }
 
-  /** Fill in the Codex profile a row did not know (discovery read it off the live process). Never
-   *  replaces one it already has — the profile is chosen once, see `codexHome`. */
   /** Put a row back in the folder its transcript belongs to (cwdRepair.ts). Any engine, any value:
    *  the caller has already proved the new folder from the transcript. */
   setCwd(agentId: string, cwd: string): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || session.cwd === cwd) return false
     session.cwd = cwd
@@ -2624,9 +3018,11 @@ class Registry {
     return true
   }
 
-  /** Fill in the profile a row did not know (its CODEX_HOME), for an engine whose sessions follow one (its session
-   *  store's `sessions.profile`). Never overwrites. */
+  /** Fill in the profile a row did not know (its CODEX_HOME, which discovery found from the rollout its process holds
+   *  open), for an engine whose sessions follow one (its session store's `sessions.profile`). Never overwrites: the
+   *  profile is chosen once, see `codexHome`. */
   setCodexHome(agentId: string, codexHome: string): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || !sessionStoreOf(session.engine)?.sessions.profile || session.codexHome) return false
     session.codexHome = codexHome
@@ -2636,12 +3032,17 @@ class Registry {
   }
 
   /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
-   *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
-   *  homes, and a later probe that could not read the process must not take the answer away. */
-  setHermesHome(agentId: string, hermesHome: string): boolean {
+   *  from the store its process holds open. Never overwrites: like `setCodexHome`, a session does not move between
+   *  homes, and a later probe that could not list the process must not take the answer away. `derived`: the home is
+   *  the daemon's path of a sandboxed process's home (RegisteredSession.hermesHomeDerived). A row that has a home is
+   *  never marked either: a descriptor cannot tell an older daemon's row from one Harness launched by name, whose
+   *  relaunch must export its home. */
+  setHermesHome(agentId: string, hermesHome: string, derived = false): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
+    if (derived) session.hermesHomeDerived = true
     session.touchedAt = Date.now()
     this.save()
     return true
@@ -2649,30 +3050,11 @@ class Registry {
 
   /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
   setOpenclawStateDir(agentId: string, stateDir: string): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'openclaw' || session.openclawStateDir === stateDir) return false
+    // A `--local` row's store is its folder: a TUI seen elsewhere never moves it off.
+    if (!session || session.engine !== 'openclaw' || session.openclawLocal || session.openclawStateDir === stateDir) return false
     session.openclawStateDir = stateDir
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** An agent its person attached takes its Swarm role at restart, once; later roster reads cannot replace a saved role. */
-  setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
-    const session = this.agents.get(agentId)
-    if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
-    session.swarmSkill = { ...skill }
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
-   *  replaces one it already has — the harness is chosen once, at creation. */
-  setDsh(agentId: string, dsh: string): boolean {
-    const session = this.agents.get(agentId)
-    if (!session || session.dsh || !DSH_ID_RE.test(dsh)) return false
-    session.dsh = dsh
     session.touchedAt = Date.now()
     this.save()
     return true
@@ -2685,6 +3067,7 @@ class Registry {
    * status, is a row the app would read wrongly.
    */
   setGridLaunch(agentId: string, launch: GridLaunchRecord | null): boolean {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
     session.gridLaunch = launch?.override ?? null
@@ -2694,38 +3077,23 @@ class Registry {
     return true
   }
 
-  /** Remember the engine's own model an agent is leaving behind, so a later move back can restore it.
-   *  Kept even while the agent is on a grid — it is the only record that the previous choice existed. */
-  setSubscriptionModel(agentId: string, model: string | null): boolean {
-    const session = this.agents.get(agentId)
-    if (!session) return false
-    session.subscriptionModel = model
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
   /** Record the model and effort [agentId]'s session relaunches with (RegisteredSession.launchModel); null forgets it. */
-  setLaunchModel(agentId: string, launchModel: LaunchModel | null): boolean {
+  async setLaunchModel(agentId: string, launchModel: LaunchModel | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
-    if (!session) return false
+    if (!session) return null
+    const verify = this.ownerGuard(agentId, authority.current)
     const stored = storedLaunchModel(launchModel)
-    if (stored) session.launchModel = stored
-    else delete session.launchModel
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */
-  setLaunchArgs(agentId: string, args: string[]): boolean {
-    const session = this.agents.get(agentId)
-    if (!session) return false
-    if (args.length) session.launchArgs = [...args]
-    else delete session.launchArgs
-    session.touchedAt = Date.now()
-    this.save()
-    return true
+    return this.writer.run(async deadline => {
+      verify()
+      const candidate = structuredClone(this.byAgent(agentId)!)
+      if (stored) candidate.launchModel = stored
+      else delete candidate.launchModel
+      candidate.touchedAt = Date.now()
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate, verify, allowTransaction: true })
+      const committed = this.committedOwner(agentId, receipt)
+      return committed ? structuredClone(committed) : null
+    }, authority.expires)
   }
 
   /**
@@ -2739,6 +3107,7 @@ class Registry {
    * moved.
    */
   markOpened(agentId: string): RegisteredSession | null {
+    this.writer.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return null
     session.lastOpenedAt = Date.now()
@@ -2747,6 +3116,7 @@ class Registry {
   }
 
   touchTranscript(sessionId: string, at = Date.now()): boolean {
+    this.writer.assertOpen()
     const session = this.bySession(sessionId)
     if (!session) return false
     session.lastTranscriptAt = at
@@ -2755,12 +3125,26 @@ class Registry {
     return true
   }
 
-  updateTitle(sessionId: string, title: string | null): RegisteredSession | null {
+  /**
+   * The engine's title for [sessionId]'s conversation, as the title sync reads it. [quiet]: the agent's last turn was a line typed
+   * for it alone (core/agents/quietTitles.ts), so a title that would name it is that line's: kept as its `quietTitle` and not taken,
+   * then or later. The agent keeps the name it had until its engine titles the conversation anew.
+   */
+  updateTitle(sessionId: string, title: string | null, quiet = false): RegisteredSession | null {
+    this.writer.assertOpen()
     const session = this.resolve(sessionId)
     if (!session) return null
     const next = titleDisplayName(title)
     const current = titleDisplayName(session.title)
     if (next === current) return session
+    // Only a title that changed pays for this: the sync reads every agent's title every 5 s, and most are as they were.
+    const naming = namingTitle(next, session)
+    if (naming && (quiet || naming === session.quietTitle)) {
+      if (naming === session.quietTitle) return session
+      session.quietTitle = naming
+      this.save()
+      return session
+    }
     session.title = next
     session.touchedAt = Date.now()
     this.save()
@@ -2780,31 +3164,37 @@ class Registry {
    * agent back to a default.
    */
   inheritName(fromSessionId: string, toSessionId: string): void {
+    this.writer.assertOpen()
     const name = NAME_OVERRIDES.get(fromSessionId)
     if (!name || NAME_OVERRIDES.has(toSessionId)) return
     NAME_OVERRIDES.set(toSessionId, name)
     this.saveNames()
   }
 
-  rename(id: string, name: string): RegisteredSession | null {
+  async rename(id: string, name: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
+    this.writer.assertOpen()
     const s = this.resolve(id)
     if (!s) return null
     const trimmed = name.trim()
     if (!trimmed) return null
     // Names are stored under the ENGINE session id on purpose: that is what makes `claude --resume <id>`
     // come back wearing the name the user gave it, even though the resume is a brand-new agent.
-    NAME_OVERRIDES.set(s.sessionId || s.agentId, trimmed)
-    this.saveNames()
-    return s
+    const key = s.sessionId || s.agentId
+    const verify = this.ownerGuard(s.agentId, authority.current)
+    return this.writer.run(async deadline => {
+      verify()
+      await this.persistNames(deadline, { key, value: trimmed, verify })
+      verify()
+      return structuredClone(this.byAgent(s.agentId)!)
+    }, authority.expires)
   }
 
-  deleteSavedNames(ids: string[]): void {
-    secureStateDirectory(env.ADAPTER_DATA_DIR)
-    let existing: Record<string, unknown> = {}
-    try { existing = JSON.parse(readPrivateStateFile(NAMES_FILE, 1024 * 1024)) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    for (const id of ids) { delete existing[id]; NAME_OVERRIDES.delete(id) }
-    atomicWriteJson(NAMES_FILE, { ...existing, ...Object.fromEntries(NAME_OVERRIDES) })
+  async deleteSavedNames(ids: string[]): Promise<void> {
+    this.writer.assertOpen()
+    for (const id of ids) { this.deletedNames.add(id); NAME_OVERRIDES.delete(id) }
+    this.namesRevision++
+    this.namesUnsaved = true
+    return this.writer.run(deadline => this.persistNames(deadline))
   }
 
   list(): RegisteredSession[] {
@@ -2828,45 +3218,50 @@ class Registry {
    * that (RECONCILE_PASS_DEADLINE_MS).
    */
   async transaction<T>(apply: () => T | Promise<T>, options: { holdSavesMs?: number } = {}): Promise<T> {
+    this.writer.assertOpen()
     this.transactionDepth++
-    let holding = true
-    const release = (): void => {
-      if (!holding) return
+    let holding = true, completion: Promise<void> = Promise.resolve()
+    const release = (): Promise<void> => {
+      if (!holding) return completion
       holding = false
       this.transactionDepth--
       if (this.transactionDepth === 0) {
-        try {
-          if (this.savePending) {
-            this.savePending = false
-            this.save()
-          }
-        } catch (error) {
+        if (this.savePending) {
+          this.savePending = false
+          completion = this.writer.run(async deadline => { await this.persist(deadline, 'observation') })
+          this.transactionCompletion = completion
+          const batch = completion
+          const settled = () => { if (this.transactionCompletion === batch) this.transactionCompletion = Promise.resolve() }
+          void batch.then(settled, settled)
+        }
+        completion = completion.then(() => {
+          while (this.transactionDepth === 0 && this.afterTransactionCallbacks.length) this.afterTransactionCallbacks.shift()!.run()
+        }, error => {
           for (const callback of this.afterTransactionCallbacks.splice(0)) callback.reject(error)
           throw error
-        }
-        while (this.transactionDepth === 0 && this.afterTransactionCallbacks.length) this.afterTransactionCallbacks.shift()!.run()
+        })
       }
+      return completion
     }
     const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
       console.warn(`[registry] a transaction has held saves back for ${options.holdSavesMs} ms; saving without waiting for it`)
-      release()
+      void release().catch((error) => console.error(`[registry] transaction save failed · ${errorKind(error)}`))
     }, options.holdSavesMs)
     timer?.unref?.()
     try {
+      // Host moves observe a synchronous batch immediately; durability belongs to this Promise.
       const result = apply()
-      // A synchronous batch commits before another microtask can acknowledge a close intent.
       return result instanceof Promise ? await result : result
     } finally {
       clearTimeout(timer)
-      release()
+      await release()
     }
   }
 
   /** Run a durability-sensitive action only after the current discovery batch has committed. */
-  afterTransaction<T>(action: () => T): Promise<T> {
-    if (this.transactionDepth === 0) {
-      try { return Promise.resolve(action()) } catch (error) { return Promise.reject(error) }
-    }
+  async afterTransaction<T>(action: () => T | Promise<T>): Promise<T> {
+    this.writer.assertOpen()
+    if (this.transactionDepth === 0) return this.transactionCompletion.then(action)
     return new Promise<T>((resolve, reject) => {
       this.afterTransactionCallbacks.push({ run: () => {
         try { resolve(action()) } catch (error) { reject(error) }
@@ -2874,9 +3269,59 @@ class Registry {
     })
   }
 
-  flush(options: { exiting?: boolean } = {}): void {
-    this.save(false, options.exiting === true)
-    this.saveNames()
+  flush(options: { exiting?: boolean } = {}): Promise<void> {
+    const write = async (deadline: RegistryWriteDeadline) => {
+      await this.persistNames(deadline)
+      await this.persist(deadline, 'observation', options.exiting === true)
+    }
+    return options.exiting ? this.writer.finish(write) : this.writer.run(write)
+  }
+
+  private ownerGuard(agentId: string, current?: () => boolean): () => void {
+    const identity = ownershipIdentity(this.byAgent(agentId))
+    return () => {
+      if (current?.() === false || ownershipIdentity(this.byAgent(agentId)) !== identity) {
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+    }
+  }
+
+  private committedOwner(agentId: string, receipt: string | undefined): RegisteredSession | null {
+    const row = this.byAgent(agentId)
+    return row && receipt !== undefined && ownershipIdentity(row) === receipt ? row : null
+  }
+
+  private save(): Promise<void> {
+    if (this.transactionDepth > 0) { this.savePending = true; return Promise.resolve() }
+    if (this.pendingObservation) return this.pendingObservation
+    let started = false
+    const pending = this.writer.run(async deadline => {
+      started = true
+      this.pendingObservation = undefined
+      await this.persist(deadline)
+    }).catch((error) => { console.error(`[registry] save failed · ${errorKind(error)}`) })
+    if (!started) this.pendingObservation = pending
+    void pending.finally(() => { if (this.pendingObservation === pending) this.pendingObservation = undefined })
+    return pending
+  }
+
+  private verifyPreparedOwners(before: Map<string, RegisteredSession>, candidates: Map<string, Record<string, unknown>>,
+    changed: Set<string>, target?: string): void {
+    const affected = new Set(changed)
+    if (target) affected.add(target)
+    const claims = (row: RegisteredSession): string[] => [
+      ...(row.processIdentity ? [`p:${processIdentityKey(row.engine, row.processIdentity)}`] : []),
+      ...row.runtimes.map(runtime => `r:${terminalRouteKey(runtime)}`),
+      ...externalReservations(row).map(id => `s:${id}`),
+    ]
+    const wanted = new Set([...affected].flatMap(id => {
+      const row = strictPersistedRow(candidates.get(id))
+      return row ? claims(row) : []
+    }))
+    for (const row of this.list()) if (claims(row).some(claim => wanted.has(claim))) affected.add(row.agentId)
+    for (const id of affected) if (ownershipIdentity(this.byAgent(id)) !== ownershipIdentity(before.get(id))) {
+      throw new RegistryOwnershipChanged('the registry ownership group changed while its write was being prepared')
+    }
   }
 
   /** Adopt a peer's complete ownership group without granting native control. */
@@ -2902,7 +3347,8 @@ class Registry {
     }
     for (const id of affected) {
       const row = strictPersistedRow(latest.get(id))
-      if (row) selected.set(id, row)
+      // The recovered live owner must not share nested values with the locked peer image.
+      if (row) selected.set(id, structuredClone(row))
       else selected.delete(id)
     }
     if (!validatedRows([...selected.values()].map(persistedRow))) {
@@ -2925,13 +3371,13 @@ class Registry {
     this.persistedContents = null
   }
 
-  private save(strict = false, exiting = false, externalAgentId?: string,
-    bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void; replaceLive?: boolean;
-      displaced?: { agentId: string; candidate: RegisteredSession | null } },
-    mutationAgentId = externalAgentId ?? bindingCommit?.agentId): void {
+  private async persist(deadline: RegistryWriteDeadline, strict: boolean | 'observation' = false, exiting = false, externalAgentId?: string,
+    bindingCommit?: { agentId: string; candidate: RegisteredSession | null; verify: () => void; refresh?: () => Promise<void>; replaceLive?: boolean;
+      displaced?: Array<{ agentId: string; candidate: RegisteredSession | null }>; allowTransaction?: boolean; resumed?: boolean; metadata?: 'closePlan' },
+    mutationAgentId = externalAgentId ?? bindingCommit?.agentId): Promise<string | undefined> {
     // Discovery batches observations, but a recovered binding must be durable before interpretation
     // resumes. Commit a complete batch now; an incomplete batch remains held and retries next pass.
-    if (this.transactionDepth > 0 && !exiting && !bindingCommit) {
+    if (this.transactionDepth > 0 && !exiting && !bindingCommit?.allowTransaction) {
       if (strict) throw new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction')
       this.savePending = true
       return
@@ -2941,44 +3387,82 @@ class Registry {
       console.error('[registry] save skipped because the loaded registry requires operator repair')
       return
     }
-    if (this.namesUnsaved) this.saveNames()
+    if (bindingCommit) bindingCommit = { ...bindingCommit,
+      candidate: bindingCommit.candidate ? structuredClone(bindingCommit.candidate) : null,
+      ...(bindingCommit.displaced ? { displaced: bindingCommit.displaced.map(row => ({ ...row,
+        candidate: row.candidate ? structuredClone(row.candidate) : null })) } : {}) }
     const entered: AgentEngine[] = []
+    let committedOwner: string | undefined
     try {
-      secureStateDirectory(env.ADAPTER_DATA_DIR)
+      deadline.check()
       const currentRows = new Map(this.list().map((entry) => {
-        const row = persistedRow(entry) as unknown as Record<string, unknown>
+        const row = structuredClone(persistedRow(entry)) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
-      const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, rowFingerprint(row)]))
-      const intent = bindingCommit ? rowFingerprint({ ...persistedRow(bindingCommit.candidate),
-        touchedAt: 0, boundAt: 0, lastHookAt: 0 }) : undefined
+      // Preserve authority now; unchanged observations never need to serialize it.
+      const beforeOwners = new Map(strict ? this.list().map(row => [row.agentId, {
+        ...currentRows.get(row.agentId), evidenceRevision: row.evidenceRevision,
+      } as unknown as RegisteredSession]) : [])
+      // Only these owned snapshots share comparisons; live rows must be read afresh after preparation.
+      const fingerprints = new WeakMap<Record<string, unknown>, string>()
+      const snapshotFingerprint = (row: Record<string, unknown>): string => {
+        let value = fingerprints.get(row)
+        if (value === undefined) {
+          value = rowFingerprint(row)
+          fingerprints.set(row, value)
+        }
+        return value
+      }
+      const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, snapshotFingerprint(row)]))
+      const capturedIntents = new Map(this.intended)
+      const intentRow = (row: RegisteredSession | null) => row ? { ...persistedRow(row), touchedAt: 0, boundAt: 0, lastHookAt: 0, lastTranscriptAt: 0 } : null
+      const intent = bindingCommit ? rowFingerprint({ candidate: intentRow(bindingCommit.candidate),
+        displaced: bindingCommit.displaced?.map(row => ({ agentId: row.agentId, candidate: intentRow(row.candidate) })) }) : undefined
       let unconfirmed = this.unconfirmedBinding
       let confirming = !!unconfirmed && !!bindingCommit && unconfirmed.agentId === bindingCommit.agentId && unconfirmed.intent === intent
         && [...unconfirmed.affected].every(id => beforeCommit.get(id) === unconfirmed!.before.get(id))
       if (bindingCommit) {
-        currentRows.set(bindingCommit.agentId, persistedRow(bindingCommit.candidate) as unknown as Record<string, unknown>)
-        const displaced = bindingCommit.displaced
-        if (displaced?.candidate) currentRows.set(displaced.agentId, persistedRow(displaced.candidate) as unknown as Record<string, unknown>)
-        else if (displaced) currentRows.delete(displaced.agentId)
+        if (bindingCommit.candidate) currentRows.set(bindingCommit.agentId, structuredClone(persistedRow(bindingCommit.candidate)) as unknown as Record<string, unknown>)
+        else currentRows.delete(bindingCommit.agentId)
+        for (const displaced of bindingCommit.displaced ?? []) {
+          if (displaced.candidate) currentRows.set(displaced.agentId, structuredClone(persistedRow(displaced.candidate)) as unknown as Record<string, unknown>)
+          else currentRows.delete(displaced.agentId)
+        }
+        if (bindingCommit.resumed) for (const [id, row] of currentRows) {
+          if (row.previousAgentId !== bindingCommit.agentId) continue
+          const { previousAgentId: _previous, ...resumed } = row
+          currentRows.set(id, { ...resumed, touchedAt: bindingCommit.candidate!.touchedAt })
+        }
       }
       // A discovery batch may be awaiting a reader after acknowledging a complete binding. Exit cannot
       // wait for it. Check BEFORE merge conflict resolution: an incomplete pane swap must never be
       // made to look valid by evicting its other owner. Its last durable snapshot remains untouched.
       if (exiting && !validatedRows([...currentRows.values()])) throw new Error('Cannot flush an incomplete registry transaction at exit')
-      if (bindingCommit && !validatedRows([...currentRows.values()])) throw new IdentityReadUnavailable('the registry observation batch is incomplete')
+      if (bindingCommit && !validatedRows([...currentRows.values()])) throw new IdentityReadUnavailable(OBSERVATION_BATCH_INCOMPLETE)
+      if (this.namesUnsaved) await this.persistNames(deadline)
+      await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
+      deadline.check()
       // Discovery still calls save on an unchanged observation so a daemon-down hook's commit is
       // noticed. If neither side changed, avoid the lock's process probe and all three fsyncs.
       // Read through the normal ownership/mode/no-symlink checks; timestamps cannot prove equality.
       // A concurrent commit after this read is picked up on the next pass, as after a locked save.
       // Close intents always take the durable path, even when an identical request is retried.
-      if (!strict && this.persistedContents !== null
+      if (strict !== true && this.persistedContents !== null
         && currentRows.size === this.persistedBaseline.size
-        && [...currentRows].every(([id, row]) => this.persistedBaseline.get(id) === rowFingerprint(row))
-        && existsSync(FILE) && readPrivateStateFile(FILE) === this.persistedContents) return
-      withRegistryFileLock(() => {
-        const latestValues: unknown[] = (() => {
-          if (!existsSync(FILE)) return []
-          const stored = JSON.parse(readPrivateStateFile(FILE)) as unknown
+        && [...currentRows].every(([id]) => this.persistedBaseline.get(id) === beforeCommit.get(id))
+        && await readPrivateRegistryFile(FILE).catch(error => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw error
+        }) === this.persistedContents) return
+      await registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
+        const latestValues: unknown[] = await (async () => {
+          const contents = await readPrivateRegistryFile(FILE).catch(error => {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+            throw error
+          })
+          deadline.check()
+          if (contents === null) return []
+          const stored = JSON.parse(contents) as unknown
           if (!Array.isArray(stored)) throw new Error('registry root changed to a non-array value')
           const parsed = withoutRetiredRows(stored).rows
           if (parsed.some(hasUnknownRowSchema) || parsed.some(value => !!value && typeof value === 'object'
@@ -3011,11 +3495,12 @@ class Registry {
           this.reconcileUnconfirmed(latest, unconfirmed.affected)
           for (const id of unconfirmed.affected) {
             const row = this.agents.get(id)
-            if (row) currentRows.set(id, persistedRow(row) as unknown as Record<string, unknown>)
+            // Recovery exposed this row after the initial capture; preparation needs its own snapshot too.
+            if (row) currentRows.set(id, structuredClone(persistedRow(row)) as unknown as Record<string, unknown>)
             else currentRows.delete(id)
           }
           const revoked = mutationAgentId !== undefined && unconfirmed.affected.has(mutationAgentId)
-            || bindingCommit?.displaced !== undefined && unconfirmed.affected.has(bindingCommit.displaced.agentId)
+            || bindingCommit?.displaced?.some(row => unconfirmed!.affected.has(row.agentId)) === true
           this.unconfirmedBinding = unconfirmed = null
           confirming = false
           if (revoked) throw new RegistryOwnershipChanged('the unconfirmed binding has a different durable owner; retry with fresh evidence')
@@ -3036,33 +3521,48 @@ class Registry {
             else currentRows.delete(id)
           }
         }
-        if (bindingCommit && !confirming) {
+        if (bindingCommit?.metadata && !confirming) {
+          const baseline = this.persistedBaseline.get(bindingCommit.agentId)
+          const prior = baseline ? strictPersistedRow(JSON.parse(baseline)) : null
+          const latestOwner = strictPersistedRow(latest.get(bindingCommit.agentId))
+          if (latestOwner && ownershipIdentity(latestOwner) !== ownershipIdentity(prior ?? undefined)) {
+            throw new RegistryOwnershipChanged('the close intent has a different durable owner')
+          }
+          if (!latestOwner) currentRows.delete(bindingCommit.agentId)
+        }
+        // Reconciliation is finished. These checks and the first merge read this private table without
+        // yielding; the post-refresh live merge must construct its own index.
+        let identities: MergeIdentities | undefined
+        if (bindingCommit && !bindingCommit.metadata && !confirming) {
           if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
             !== this.persistedBaseline.get(bindingCommit.agentId)) {
-            throw new IdentityReadUnavailable('the saved binding changed while its evidence was being read')
+            throw externalAgentId ? new RegistryOwnershipChanged('The durable adoption changed while it was being prepared')
+              : new IdentityReadUnavailable(SAVED_BINDING_CHANGED)
           }
-          const displaced = bindingCommit.displaced
-          if (displaced && (latest.has(displaced.agentId) ? rowFingerprint(latest.get(displaced.agentId)) : undefined)
-            !== this.persistedBaseline.get(displaced.agentId)) {
-            throw new IdentityReadUnavailable('the displaced binding changed while its evidence was being read')
+          const displacedIds = new Set(bindingCommit.displaced?.map(row => row.agentId))
+          for (const displaced of bindingCommit.displaced ?? []) {
+            if ((latest.has(displaced.agentId) ? rowFingerprint(latest.get(displaced.agentId)) : undefined)
+              !== this.persistedBaseline.get(displaced.agentId)) {
+              throw new IdentityReadUnavailable('the displaced binding changed while its evidence was being read')
+            }
           }
           const candidate = bindingCommit.candidate
-          const routes = new Set(candidate.runtimes.map(terminalRouteKey))
-          for (const [otherId, other] of new MergeIdentities(latest).sharing(candidate.agentId,
-            candidate.processIdentity?.pid, candidate.sessionId, routes)) {
-            if (otherId === displaced?.agentId) continue
+          const routes = new Set(candidate?.runtimes.map(terminalRouteKey) ?? [])
+          identities = new MergeIdentities(latest)
+          for (const [otherId, other] of identities.sharing(bindingCommit.agentId,
+            candidate?.processIdentity?.pid, candidate?.sessionId ?? '', routes)) {
+            if (!candidate || displacedIds.has(otherId)) continue
             if ((other.engine === candidate.engine && sameProcessIdentity(other.processIdentity, candidate.processIdentity))
               || (!!candidate.sessionId && other.sessionId === candidate.sessionId)
               || other.runtimes.some(runtime => routes.has(terminalRouteKey(runtime)))) {
-              throw new IdentityReadUnavailable('the conversation or terminal has a different durable owner')
+              throw externalAgentId ? new RegistryOwnershipChanged('The external conversation has another durable owner')
+                : new IdentityReadUnavailable('the conversation or terminal has a different durable owner')
             }
           }
         }
-        bindingCommit?.verify()
-
         if (externalAgentId && (latest.has(externalAgentId) ? rowFingerprint(latest.get(externalAgentId)) : undefined)
           !== this.persistedBaseline.get(externalAgentId)) {
-          throw new Error('The durable adoption changed while it was being prepared')
+          throw new RegistryOwnershipChanged('The durable adoption changed while it was being prepared')
         }
         // Adoption never uses the normal winner/eviction policy. A daemon-down hook may have
         // claimed its conversation since the core's last read; refuse admission inside this lock.
@@ -3076,17 +3576,20 @@ class Registry {
             if (otherId === id) continue
             const other = strictPersistedRow(otherValue)
             if (other && externalReservations(other).some(claim => claims.has(claim))) {
-              throw new Error('The external conversation has another durable owner')
+              throw new RegistryOwnershipChanged('The external conversation has another durable owner')
             }
           }
         }
         // A binding may flush an already-staged discovery batch. Every changed row
         // must still own what the observation claims, not only the hook's own row.
-        const changed = new Set([...this.persistedBaseline.keys(), ...currentRows.keys()].filter(id =>
-          this.persistedBaseline.get(id) !== (currentRows.has(id) ? rowFingerprint(currentRows.get(id)) : undefined)))
+        const changed = new Set(strict || bindingCommit
+          ? [...new Set([...this.persistedBaseline.keys(), ...currentRows.keys()])].filter(id =>
+            this.persistedBaseline.get(id) !== (currentRows.has(id) ? snapshotFingerprint(currentRows.get(id)!) : undefined))
+          : [])
         if (bindingCommit) {
-          const identities = new MergeIdentities(latest)
+          identities ??= new MergeIdentities(latest)
           for (const id of changed) {
+            if (bindingCommit.metadata && id === bindingCommit.agentId) continue
             if (confirming && unconfirmed!.affected.has(id)) continue
             if ((latest.has(id) ? rowFingerprint(latest.get(id)) : undefined) !== this.persistedBaseline.get(id)) {
               throw new IdentityReadUnavailable('a staged registry observation has a different durable owner')
@@ -3104,11 +3607,43 @@ class Registry {
             }
           }
         }
-        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, this.intended).values()]
+        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities).values()]
         const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
-        const serialized = rows.map(persistedRow)
-        try { atomicWriteJson(FILE, serialized) }
+        // Exact prepared objects may survive the fresh live rebase unchanged; their normalized rows
+        // are still private. Changed/live-derived objects must be parsed again after refresh.
+        const preparedRows = new Map<object, RegisteredSession>()
+        const serialized = rows.map(row => {
+          const saved = persistedRow(row)
+          preparedRows.set(saved, row)
+          return saved
+        })
+        const contents = JSON.stringify(serialized, null, 2)
+        const prepared = await prepareRegistryImage(FILE, contents, deadline)
+        let rebased: RegisteredSession[]
+        try {
+          await bindingCommit?.refresh?.()
+          deadline.check()
+          checkOwner()
+          if (strict) this.verifyPreparedOwners(beforeOwners, currentRows, changed, mutationAgentId)
+          bindingCommit?.verify()
+          // This rebase and installation never yield; only the earlier preparation needs deep copies.
+          // A row this write removes stays removed. Its owner was verified just above, so what changed on it meanwhile (an
+          // attach finishing late set the engine's version) was said of a row now gone; rebased as a newer live change, it
+          // brought the row back, and the Stop that wrote the removal failed (e2e/enginehomes.e2e.ts).
+          const removed = new Set([...bindingCommit ? [bindingCommit] : [], ...bindingCommit?.displaced ?? []]
+            .filter(row => !row.candidate).map(row => row.agentId))
+          const liveRows = new Map(this.list().filter(row => !removed.has(row.agentId))
+            .map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
+          const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
+          const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
+          rebased = [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
+            const row = preparedRows.get(value) ?? strictPersistedRow(value)
+            if (!row) throw new IdentityReadUnavailable('a live registry observation changed to an invalid row')
+            return row
+          })
+          prepared.publish()
+        }
         catch (error) {
           if ((bindingCommit || unconfirmed) && error instanceof AtomicWriteUnconfirmed) {
             const prior = new Map(latest)
@@ -3118,7 +3653,7 @@ class Registry {
               else prior.delete(id)
             }
             const image = new Map(serialized.map(row => [rowId(row), row]))
-            const affected = new Set([...prior.keys(), ...image.keys()].filter(id =>
+            const affected = new Set([...new Set([...prior.keys(), ...image.keys()])].filter(id =>
               (prior.has(id) ? rowFingerprint(prior.get(id)) : undefined)
                 !== (image.has(id) ? rowFingerprint(image.get(id)) : undefined)))
             this.unconfirmedBinding = {
@@ -3129,11 +3664,12 @@ class Registry {
               before: beforeCommit, affected,
             }
           }
+          await prepared.discard()
           throw error
         }
         this.unconfirmedBinding = null
-        this.persistedContents = JSON.stringify(serialized, null, 2)
-        this.intended.clear()
+        this.persistedContents = contents
+        for (const [id, intent] of capturedIntents) if (this.intended.get(id) === intent) this.intended.delete(id)
 
         // External refresh keeps controller references. Registration replaces its target only now:
         // deferred readers must keep the former home/binding, never inherit the newly admitted one.
@@ -3142,7 +3678,7 @@ class Registry {
         this.sessionIndex.clear()
         this.runtimeIndex.clear()
         this.processIndex.clear()
-        for (const row of rows) {
+        for (const row of rebased) {
           const prior = previous.get(row.agentId)
           const entry = prior && bindingCommit?.replaceLive && bindingCommit.agentId === row.agentId ? { ...prior } : prior ?? row
           if (entry !== row) {
@@ -3166,14 +3702,17 @@ class Registry {
           this.index(entry, false)
           entered.push(entry.engine)
         }
+        committedOwner = bindingCommit ? ownershipIdentity(this.byAgent(bindingCommit.agentId)) : undefined
         this.persistedBaseline = new Map(serialized.map((row) => [rowId(row), rowFingerprint(row)]))
+        if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== rowFingerprint(persistedRow(row)))) void this.save()
       })
     } catch (err) {
-      if (strict) throw err
-      console.error('[registry] save failed:', err)
+      if (strict) throw persistenceFailure(err)
+      console.error(`[registry] save failed · ${errorKind(err)}`)
     }
-    // Optional engine startup observes the complete durable publication, outside the write lock.
+    // Optional engine startup observes the complete durable publication, outside its no-yield section.
     for (const engine of entered) this.entered(engine)
+    return committedOwner
   }
 
   /**
@@ -3183,24 +3722,60 @@ class Registry {
    * next rename (found end to end, e2e/diskfull.e2e.ts).
    */
   private namesUnsaved = false
+  private namesRevision = 0
+  private pendingNames: Promise<void> | undefined
+  private readonly deletedNames = new Set<string>()
 
   private saveNames(): void {
-    try {
-      secureStateDirectory(env.ADAPTER_DATA_DIR)
-      let existing: Record<string, string> = {}
-      try {
-        const obj = JSON.parse(readPrivateStateFile(NAMES_FILE, 1024 * 1024)) as Record<string, unknown>
-        existing = Object.fromEntries(Object.entries(obj).filter(([, v]) => typeof v === 'string')) as Record<string, string>
-      } catch {
-        // no file yet / unreadable — write the in-memory overrides
-      }
-      atomicWriteJson(NAMES_FILE, { ...existing, ...Object.fromEntries(NAME_OVERRIDES) })
-      this.namesUnsaved = false
-    } catch (err) {
-      this.namesUnsaved = true
-      console.error('[registry] save names failed:', err)
-    }
+    this.namesUnsaved = true
+    this.namesRevision++
+    if (this.pendingNames) return
+    let started = false
+    const pending = this.writer.run(async deadline => {
+      started = true
+      this.pendingNames = undefined
+      await this.persistNames(deadline)
+    }).catch((error) => { this.namesUnsaved = true; console.error(`[registry] save names failed · ${errorKind(error)}`) })
+    if (!started) this.pendingNames = pending
+    void pending.finally(() => { if (this.pendingNames === pending) this.pendingNames = undefined })
   }
+
+  private async persistNames(deadline: RegistryWriteDeadline, intent?: { key: string; value: string; verify: () => void }): Promise<void> {
+    try {
+      const revision = this.namesRevision
+      const names = Object.fromEntries(NAME_OVERRIDES)
+      if (intent) names[intent.key] = intent.value
+      const deleted = new Set(this.deletedNames)
+      await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
+      deadline.check()
+      let existing: Record<string, string> = {}
+      let contents: string | undefined
+      try {
+        contents = await readPrivateRegistryFile(NAMES_FILE, 1024 * 1024)
+        const obj = JSON.parse(contents) as Record<string, unknown>
+        existing = Object.fromEntries(Object.entries(obj).filter(([, value]) => typeof value === 'string')) as Record<string, string>
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      deadline.check()
+      // Equal bytes can still be an unconfirmed rename. Only a clean observation may omit publication.
+      if (!intent && !this.namesUnsaved && deleted.size === 0 && revision === this.namesRevision
+        && contents === JSON.stringify(names, null, 2)) return
+      for (const id of deleted) delete existing[id]
+      const prepared = await prepareRegistryImage(NAMES_FILE, JSON.stringify({ ...existing, ...names }, null, 2), deadline)
+      try { intent?.verify(); prepared.publish() }
+      catch (error) { await prepared.discard(); throw error }
+      // A deletion admitted while this image waited is later intent. Installing the
+      // older rename must not resurrect its name before that queued deletion runs.
+      if (intent && (revision === this.namesRevision || !this.deletedNames.has(intent.key))) {
+        NAME_OVERRIDES.set(intent.key, intent.value)
+        if (revision === this.namesRevision) this.deletedNames.delete(intent.key)
+      }
+      if (revision === this.namesRevision) {
+        this.namesUnsaved = false
+        for (const id of deleted) this.deletedNames.delete(id)
+      }
+    } catch (error) { this.namesUnsaved = true; throw persistenceFailure(error, true) }
+  }
+
 }
 
 export const registry = new Registry()

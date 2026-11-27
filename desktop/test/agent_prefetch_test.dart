@@ -10,6 +10,7 @@ import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/bootstrap/setup_progress.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/state/app_state.dart';
@@ -18,6 +19,7 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/guest_app.dart';
+import 'support/scratch_home_look.dart';
 
 /// An installer that exits when the test says so.
 class _MemoryStore implements LocalKeyValueStore {
@@ -618,10 +620,46 @@ void main() {
       void touch(String path) =>
           File('${home.path}/$path')..createSync(recursive: true);
 
+      /// A Linux computer that is this home alone: the rule's default XDG
+      /// folders are in it, on any host.
+      HomeLook linux() => scratchHomeLook(home.path);
+
       test('a bare home has none', () {
         expect(
           AgentPrefetch.alreadyHasAnAgent(home.path, prefixes: const []),
           isFalse,
+        );
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(
+            home.path,
+            prefixes: const [],
+            look: linux(),
+          ),
+          isFalse,
+        );
+      });
+
+      test('on Linux, Harness\'s CLI in the XDG data folder counts', () {
+        touch('.local/share/harness/cli/cli.js');
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(
+            home.path,
+            prefixes: const [],
+            look: linux(),
+          ),
+          isTrue,
+        );
+      });
+
+      test('on Linux, a home not moved yet counts by ~/.harness/cli', () {
+        touch('.harness/cli/cli.js');
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(
+            home.path,
+            prefixes: const [],
+            look: linux(),
+          ),
+          isTrue,
         );
       });
       for (final path in [

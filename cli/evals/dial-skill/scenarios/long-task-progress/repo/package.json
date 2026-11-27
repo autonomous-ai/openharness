@@ -1,0 +1,9 @@
+{
+  "name": "ledger-reports",
+  "version": "1.8.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/test.js"
+  }
+}

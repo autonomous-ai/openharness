@@ -1,10 +1,17 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { LEAN_CORE_ENTRY, LEAN_ENTRY, readLeanBundle } from '../harnessd/leanBundle.js'
 
-const { atVersion, withFault, withLean } = await import('../../e2e/harness/release.js' as string) as {
+const { atVersion, buildWithLean, withFault, withLean } = await import('../../e2e/harness/release.js' as string) as {
   atVersion: (bundle: string, from: string, to: string) => string
+  buildWithLean: (dir: string, bundle: string, files: Record<string, string>) => string
   withFault: (bundle: string, code: string) => string
   withLean: (bundle: string, files: Record<string, string>) => string
+}
+const { assertHookScriptBeside } = await import('../../e2e/harness/daemon.js' as string) as {
+  assertHookScriptBeside: (scriptPath: string) => void
 }
 const { leanBlock } = await import('../../scripts/lib/leanBlock.mjs' as string) as {
   leanBlock: (files: Record<string, string>, options?: { quality: number }) => string
@@ -51,5 +58,27 @@ describe('release fixtures keep the real lean bundle contract', () => {
     expect(decoded(withLean(bundle, { [LEAN_ENTRY]: '// replacement\n' }))).toEqual({ [LEAN_ENTRY]: '// replacement\n' })
     expect(atVersion(header, '43.0.1', '43.0.2')).toBe(header.replaceAll('43.0.1', '43.0.2'))
     expect(withFault(header, 'throw Error("test fault")')).toBe(header.replace('\n', '\nthrow Error("test fault")\n'))
+  })
+})
+
+describe('a build laid out for a daemon under test', () => {
+  it('has its notify.mjs beside the cli.js from buildWithLean, and a cli.js alone is refused by name', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'release-fixtures-'))
+    try {
+      const build = join(scratch, 'build')
+      mkdirSync(build)
+      writeFileSync(join(build, 'cli.js'), '#!/usr/bin/env node\n')
+      writeFileSync(join(build, 'notify.mjs'), '// the hook script\n')
+      const laidOut = buildWithLean(join(scratch, 'laid-out'), join(build, 'cli.js'), { [LEAN_ENTRY]: '// replacement\n' })
+      expect(laidOut).toBe(join(scratch, 'laid-out', 'cli.js'))
+      expect(readFileSync(join(scratch, 'laid-out', 'notify.mjs'), 'utf8')).toBe('// the hook script\n')
+      expect(() => assertHookScriptBeside(laidOut)).not.toThrow()
+
+      const alone = join(scratch, 'alone', 'cli.js')
+      mkdirSync(join(scratch, 'alone'))
+      writeFileSync(alone, '#!/usr/bin/env node\n')
+      expect(() => assertHookScriptBeside(alone)).toThrow(
+        `${alone} has no notify.mjs beside it: its daemon refuses every hook install (lay it out with buildWithLean)`)
+    } finally { rmSync(scratch, { recursive: true, force: true }) }
   })
 })

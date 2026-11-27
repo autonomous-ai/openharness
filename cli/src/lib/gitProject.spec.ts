@@ -6,11 +6,22 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
-import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
+import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './branchNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
-import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
+import { validProjectPath } from './projectPath.js'
+import { prepareGitProject, readGitProject } from './gitProject.js'
+import { prepareGitFolder } from './gitProjectFolder.js'
+import { parseProjectFolder, type GitProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
+import { writeExecutable } from '../testing/executableFixture.js'
+
+// gitPath keeps the git it finds for the process, and asks the login shell when PATH has none; these tests change PATH
+// between runs, so each run looks on PATH alone, again. The git is this computer's, even where a test stubs the platform.
+vi.mock('./gitOnPath.js', async (original) => {
+  const real = await original<typeof import('./gitOnPath.js')>()
+  const platform = process.platform
+  return { ...real, gitPath: () => real.createProgramPath('git', () => real.findGit({ platform, loginShell: async () => null }))() }
+})
 
 const exec = promisify(execFile)
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
@@ -44,22 +55,9 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
   afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) })
   const options = () => ({ root: join(root, 'harnesses'), label: 'Codex', now: () => new Date(2026, 8, 21, 12, 0) })
   const prepare = (source: 'worktree' | 'branch', branchRef = 'refs/heads/feature', path = repo, extra: Record<string, unknown> = {}) =>
-    prepareProjectFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra })!, options())
+    prepareGitFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra }) as GitProjectFolder, options())
   const worktrees = () => join(root, 'harnesses', 'worktrees', 'project with spaces')
   const current = async (path: string) => (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
-
-  // 2026-10-30: the desktop's New Swarm makes its PM's worktree itself; the daemon trusts it for Claude Code only on this.
-  it('knows a worktree Harness made from the person\'s own checkout and worktrees', async () => {
-    const harnesses = join(root, 'harnesses')
-    const made = await prepareGitProject(repo, { root: harnesses, worktree: true, branchName: 'tidy-badger' })
-    expect(await harnessMadeWorktree(made, harnesses)).toBe(true)
-    const own = join(harnesses, 'worktrees', 'own')
-    await git('worktree', 'add', '-b', 'mine', own)
-    expect(await harnessMadeWorktree(own, harnesses)).toBe(false)
-    expect(await harnessMadeWorktree(repo, harnesses)).toBe(false)
-    expect(await harnessMadeWorktree(join(harnesses, 'worktrees'), harnesses)).toBe(false)
-    expect(await harnessMadeWorktree(join(root, 'missing'), harnesses)).toBe(false)
-  })
 
   it('encrypts Git metadata requests and replies', () => {
     expect(encryptDownFrame('git_project_info')).toBe(true)
@@ -180,7 +178,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
       const bin = join(root, 'bin')
       await mkdir(bin)
-      await writeFile(join(bin, 'git'), `#!/bin/sh
+      writeExecutable(join(bin, 'git'), `#!/bin/sh
 case " $* " in *" worktree add "*|*" branch -m "*)
   repo=; prev=; for arg in "$@"; do [ "$prev" = -C ] && repo=$arg; prev=$arg; done
   echo "start $repo" >> '${log()}'
@@ -190,7 +188,7 @@ case " $* " in *" worktree add "*|*" branch -m "*)
   exit $code;;
 esac
 exec '${realGit}' "$@"
-`, { mode: 0o755 })
+`)
       vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
     })
     const lines = async () => (await readFile(log(), 'utf8')).trim().split('\n')
@@ -293,6 +291,21 @@ exec '${realGit}' "$@"
       expect(branch).toMatch(/^[a-z]+-[a-z]+(-\d+)?$/)
       expect(path).toBe(join(worktrees(), worktreeFolderName(branch)))
       expect(await git('config', '--get', `branch.${branch}.harness`)).toBe('placeholder')
+    }
+  })
+
+  it('says a branch it could not mark as Harness\'s by the failure\'s kind, never the branch a person named', async () => {
+    // A held lock on the repository's config: the mark, the one config write of this start, fails.
+    await writeFile(join(repo, '.git', 'config.lock'), '')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const named = await prepare('worktree', 'refs/heads/feature', repo, { branchName: 'fix/sentinel-login' })
+      expect(await current(named)).toBe('fix/sentinel-login')
+      const lines = error.mock.calls.map(call => call.map(String).join(' '))
+      expect(lines.join('\n')).not.toContain('sentinel')
+      expect(lines).toEqual(["[worktree] could not mark its branch as Harness's, so it is not renamed after its session: Error"])
+    } finally {
+      error.mockRestore()
     }
   })
 
@@ -438,94 +451,6 @@ exec '${realGit}' "$@"
     expect((await exec('git', ['-C', tracking, 'rev-parse', '--abbrev-ref', '@{upstream}'])).stdout.trim()).toBe('origin/fix/typo')
   })
 
-  describe('a Swarm start that names no branch', () => {
-    // A Swarm host clones a project once and reuses that checkout for every Builder, so its HEAD falls behind the
-    // remote. `branchBase: 'default'` is what a Swarm start without `branchRef` asks for.
-    let origin: string, managed: string
-    const identity = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null']
-    const inClone = (...args: string[]) => exec('git', ['-C', managed, ...args]).then(out => out.stdout.trim())
-    /** What the worktree a Swarm start made shows of `src/value`. */
-    const swarmStart = async (extra: Record<string, unknown> = {}, path = managed) =>
-      readFile(join(await prepareProjectFolder(parseProjectFolder({ projectSource: 'worktree', gitSource: path, branchName: 'super-tab/start-1',
-        branchBase: 'default', ...extra })!, options()), 'src', 'value'), 'utf8')
-    beforeEach(async () => {
-      origin = join(root, 'origin.git'); managed = join(root, 'managed')
-      await exec('git', ['clone', '--quiet', '--bare', repo, origin])
-      await exec('git', ['clone', '--quiet', origin, managed])
-    })
-    /** Someone pushes to the remote's default branch after the managed clone was made. */
-    const pushToOrigin = async (value: string) => {
-      const pusher = join(root, 'pusher')
-      await exec('git', ['clone', '--quiet', origin, pusher])
-      await writeFile(join(pusher, 'src', 'value'), value)
-      await exec('git', ['-C', pusher, ...identity, 'commit', '-qam', value])
-      await exec('git', ['-C', pusher, 'push', '--quiet', 'origin', 'main'])
-    }
-
-    it('starts from the remote default branch, fetched first, and leaves the checkout\'s own branch where it was', async () => {
-      const before = await inClone('rev-parse', 'HEAD')
-      await pushToOrigin('pushed')
-      expect(await swarmStart()).toBe('pushed')
-      expect(await inClone('rev-parse', 'HEAD')).toBe(before)
-      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
-    })
-
-    it('starts from what the checkout has when the fetch fails', async () => {
-      await pushToOrigin('pushed')
-      await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
-      expect(await swarmStart()).toBe('main')
-    })
-
-    it('starts from HEAD in a repository with no remote default branch', async () => {
-      const local = join(root, 'local-only')
-      await mkdir(local)
-      await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
-      await mkdir(join(local, 'src'))
-      await writeFile(join(local, 'src', 'value'), 'trunk')
-      await exec('git', ['-C', local, 'add', '.'])
-      await exec('git', ['-C', local, ...identity, 'commit', '-qm', 'initial'])
-      expect(await swarmStart({}, local)).toBe('trunk')
-    })
-
-    it('names the default branch when the remote has no origin/HEAD but has main', async () => {
-      await pushToOrigin('pushed')
-      await inClone('remote', 'set-head', 'origin', '--delete')
-      expect(await swarmStart()).toBe('pushed')
-    })
-
-    it('starts from the branch it is given, not the default one', async () => {
-      await pushToOrigin('pushed')
-      expect(await swarmStart({ branchBase: undefined, branchRef: 'refs/remotes/origin/feature' })).toBe('feature')
-    })
-
-    it('is not what a start from Desktop or the CLI does: without the flag the checkout\'s HEAD is used and nothing is fetched', async () => {
-      const before = await inClone('rev-parse', 'refs/remotes/origin/main')
-      await pushToOrigin('pushed')
-      expect(await swarmStart({ branchBase: undefined })).toBe('main')
-      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).toBe(before)
-    })
-
-    it('is accepted only for a worktree that names no branch', () => {
-      const parse = (extra: Record<string, unknown>) => () => parseProjectFolder({ projectSource: 'worktree', gitSource: managed,
-        branchName: 'super-tab/start-1', ...extra })
-      expect(parse({ branchBase: 'default' })()).toMatchObject({ source: 'worktree', fromDefaultBranch: true })
-      expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default' })).toMatchObject({ fromDefaultBranch: true })
-      expect(parse({})()).not.toHaveProperty('fromDefaultBranch')
-      expect(parse({ branchBase: 'default', branchRef: 'refs/remotes/origin/main' })).toThrow()
-      expect(parse({ branchBase: 'main' })).toThrow()
-      expect(parse({ branchBase: true })).toThrow()
-      expect(() => parseProjectFolder({ projectSource: 'branch', gitSource: managed, branchRef: 'refs/heads/main', branchBase: 'default' })).toThrow()
-    })
-
-    it('does not change a direct prepareGitProject call', async () => {
-      await pushToOrigin('pushed')
-      const path = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'plain' })
-      expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
-      const asked = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'asked', fromDefaultBranch: true })
-      expect(await readFile(join(asked, 'src', 'value'), 'utf8')).toBe('pushed')
-    })
-  })
-
   describe('a worktree whose git is slow or fails', () => {
     const harnesses = () => join(root, 'harnesses')
     const listed = () => git('worktree', 'list', '--porcelain')
@@ -546,7 +471,7 @@ exec '${realGit}' "$@"
       const hooks = join(root, 'hooks')
       await mkdir(hooks)
       const pidFile = join(root, 'hook.pid')
-      await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`, { mode: 0o755 })
+      writeExecutable(join(hooks, 'post-checkout'), `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`)
       await git('config', 'core.hooksPath', hooks)
       const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'slow', worktreeTimeout: 1_500 })
       expect(path).toBe(join(worktrees(), 'slow'))
@@ -572,15 +497,15 @@ exec '${realGit}' "$@"
       expect(await listed()).not.toContain('cut')
     }, 20_000)
 
-    it('says why git failed, without credentials, and leaves no partial folder or new branch', async () => {
+    it('says how git failed, none of what it printed, and leaves no partial folder or new branch', async () => {
       const said = vi.spyOn(console, 'error').mockImplementation(() => {})
       await filtered('broken', "echo 'cannot reach https://robot:s3cret-token@example.invalid/lfs' >&2; exit 1")
       await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'broken' }))
         .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
       const lines = said.mock.calls.map(call => call.join(' ')).filter(line => line.startsWith('[worktree]'))
       expect(lines).toHaveLength(1)
-      expect(lines[0]).toContain('exit 128')
-      expect(lines[0]).toContain('cannot reach https://')
+      expect(lines[0]).toMatch(/^\[worktree\] git worktree add failed \(exit 128\) at the worktree · stderr \d+ B$/)
+      expect(lines[0]).not.toContain('cannot reach')
       expect(lines[0]).not.toContain('s3cret-token')
       await expect(realpath(join(worktrees(), 'broken'))).rejects.toThrow()
       expect(await git('branch', '--list', 'broken')).toBe('')
@@ -608,8 +533,8 @@ exec '${realGit}' "$@"
       const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
       const bin = join(root, 'bin'), made = join(root, 'person-made-it')
       await mkdir(bin)
-      await writeFile(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
-        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`, { mode: 0o755 })
+      writeExecutable(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
+        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`)
       vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
       await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'mine' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
       expect(await git('rev-parse', 'mine')).toBe(await git('rev-parse', 'feature'))
@@ -617,28 +542,34 @@ exec '${realGit}' "$@"
       expect(await listed()).not.toContain('worktrees/project with spaces/mine')
     })
 
-    it('logs none of a stateless GitHub token git printed', async () => {
+    it('a git that cannot be stopped is logged by how it failed', async () => {
       const said = vi.spyOn(console, 'error').mockImplementation(() => {})
-      const payload = 'eyJpc3MiOiIxMjM0NTYifQ', signature = `${'s'.repeat(470)}-x_y`
-      await filtered('leaky', `echo 'remote refused (token "ghs_123456_eyJhbGciOiJSUzI1NiJ9.${payload}.${signature}"), retry.' >&2; exit 1`)
-      await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'leaky' })).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
-      const line = said.mock.calls.map(call => call.join(' ')).find(text => text.startsWith('[worktree]'))!
-      expect(line).toContain('remote refused (token "')
-      expect(line).not.toContain('ghs_123456_')
-      expect(line).not.toContain(payload)
-      expect(line).not.toContain('ssssssss')
-      expect(line).not.toContain('-x_y')
-    })
+      const kill = process.kill.bind(process)
+      const groups: number[] = []
+      // The first stop of git's group is refused with words naming a folder; the group is ended for real afterwards.
+      vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
+        if (pid < 0 && signal === 'SIGKILL' && !groups.length) {
+          groups.push(pid)
+          throw Object.assign(new Error('kill EPERM /Users/sentinel/x'), { code: 'EPERM' })
+        }
+        return kill(pid, signal)
+      })
+      await filtered('slow', 'sleep 60; cat')
+      try {
+        await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'unstoppable', worktreeTimeout: 1_500 }))
+          .rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
+      } finally {
+        for (const group of groups) { try { kill(group, 'SIGKILL') } catch { /* already gone */ } }
+      }
+      const lines = said.mock.calls.map(call => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toContain('[worktree] could not stop git and what it started: EPERM')
+    }, 20_000)
 
     describe('on Windows, where taskkill cannot stop what git started', () => {
       const platform = process.platform
-      beforeEach(async () => {
-        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
-        const bin = join(root, 'bin')
-        await mkdir(bin)
-        await writeFile(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n', { mode: 0o755 })
-        vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
-      })
+      // taskkill is System32's, which is not here: it fails to stop git as it does where git's tree has moved on.
+      beforeEach(() => { Object.defineProperty(process, 'platform', { value: 'win32', configurable: true }) })
       afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })
       /** git checks out and exits; its post-checkout hook leaves a process behind, holding git's stderr, that ends once
        *  [wait] (shell) returns by touching `ended`. */
@@ -662,7 +593,7 @@ exec '${realGit}' "$@"
         const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'outlived', worktreeTimeout: 1_500 })
         expect(await readFile(join(root, 'ended'), 'utf8')).toBe('')
         expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
-        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*could not be terminated/)
+        expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] could not stop git.*taskkill/)
       }, 20_000)
 
       it('removes nothing while something git started may still be writing', async () => {
@@ -754,13 +685,13 @@ exec '${realGit}' "$@"
     await mkdir(empty)
     await exec('git', ['-C', empty, 'init', '-b', 'main'])
     expect(await read(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
-    await expect(prepareProjectFolder({ source: 'worktree', gitSource: empty }, options()))
+    await expect(prepareGitFolder({ source: 'worktree', gitSource: empty }, options()))
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 
   it('validates source paths and requires an exact local branch when isolation is disabled', async () => {
     for (const path of [null, 7, '', 'relative', '/bad\npath', '/bad\0path', `/${'x'.repeat(4096)}`]) {
-      expect(validGitPath(path)).toBe(false)
+      expect(validProjectPath(path)).toBe(false)
       expect(() => parseProjectFolder({ projectSource: 'worktree', gitSource: path })).toThrow()
     }
     await expect(prepareGitProject('relative', { ...options(), worktree: true }))
@@ -823,7 +754,7 @@ exec '${realGit}' "$@"
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 
-  it('removes a worktree whose checkout hook fails, so a retry starts clean, and logs what the hook said', async () => {
+  it('removes a worktree whose checkout hook fails, so a retry starts clean, and logs how git failed', async () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     const hooks = join(root, 'hooks')
     await mkdir(hooks)
@@ -833,7 +764,9 @@ exec '${realGit}' "$@"
     await expect(prepare('worktree')).rejects.toMatchObject({ code: 'WORKTREE_FAILED' })
     expect(await git('worktree', 'list', '--porcelain')).not.toContain('/worktrees/')
     expect(await git('for-each-ref', '--format=%(refname)', 'refs/heads')).toBe(before)
-    expect(said.mock.calls.map(call => call.join(' ')).join('\n')).toMatch(/\[worktree\] git worktree add failed \(exit 1\).*hook refused/)
+    const lines = said.mock.calls.map(call => call.join(' ')).join('\n')
+    expect(lines).toMatch(/\[worktree\] git worktree add failed \(exit 1\) at the worktree · stderr \d+ B/)
+    expect(lines).not.toContain('hook refused')
     expect(await git('branch', '--show-current')).toBe('main')
     said.mockRestore()
   })

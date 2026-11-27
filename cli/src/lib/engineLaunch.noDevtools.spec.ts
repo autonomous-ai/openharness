@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildEngineLaunchArgv, engineFallbackPrelude, noDevtoolsPrelude, shellSingleQuote } from './engineLaunch.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -20,8 +21,7 @@ function mac() {
   const xcode = join(root, 'xcode')
   const asked = join(root, 'asked')
   const xcodeSelect = join(root, 'bin', 'xcode-select')
-  writeFileSync(xcodeSelect, `#!/bin/sh\necho >>${shellSingleQuote(asked)}\n[ -e ${shellSingleQuote(xcode)} ] && { echo /Applications/Xcode.app/Contents/Developer; exit 0; }\nexit 2\n`)
-  chmodSync(xcodeSelect, 0o755)
+  writeExecutable(xcodeSelect, `#!/bin/sh\necho >>${shellSingleQuote(asked)}\n[ -e ${shellSingleQuote(xcode)} ] && { echo /Applications/Xcode.app/Contents/Developer; exit 0; }\nexit 2\n`)
   const places = {
     xcodeSelect,
     commandLineTools: join(root, 'CommandLineTools'),

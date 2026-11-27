@@ -102,9 +102,9 @@
       }
     ],
     "logs": [
-      "[search] hermes sessions not read: store unavailable",
-      "[search] hermes sessions not read: store unavailable",
-      "[search] hermes sessions not read: store unavailable"
+      "[search] hermes sessions not read: Error",
+      "[search] hermes sessions not read: Error",
+      "[search] hermes sessions not read: Error"
     ],
     "missing": null,
     "busy/claude": false,
@@ -712,9 +712,9 @@
       }
     ],
     "logs": [
-      "[search] hermes sessions not read: store unavailable",
-      "[search] hermes sessions not read: store unavailable",
-      "[search] hermes sessions not read: store unavailable"
+      "[search] hermes sessions not read: Error",
+      "[search] hermes sessions not read: Error",
+      "[search] hermes sessions not read: Error"
     ],
     "missing": null,
     "busy/claude": false,

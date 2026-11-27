@@ -6,7 +6,6 @@
  * ends on time and every agent goes on; a turn they missed has no recap; and once they are back, the next
  * turn's recap comes as before. The core itself never restarts.
  */
-import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -44,12 +43,9 @@ async function recapped(client: LocalClient, agentId: string, word: string): Pro
   return summary
 }
 
-/** This daemon's edge host: titled `harnessd-edge` AND started by its own master, by the pid it logged. */
+/** This daemon's edge host: started by its own master, by the pid it logged, and still its child. */
 function edgePids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service edge started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-edge' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('edge')
 }
 const recapsConnections = (d: IsolatedDaemon): number => d.log().split('[services] recaps connected').length - 1
 const restarts = (d: IsolatedDaemon) => d.log().split('\n').filter((line) => /\[harnessd\] service edge started .* restart \d+/.test(line)).length

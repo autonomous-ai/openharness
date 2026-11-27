@@ -6,6 +6,7 @@ import type { ScreenReader } from '../../lib/screenReader.js'
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 7: docs/design/2026-10-03-harnessd.md).
  */
+import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { RuntimeActivityReader, activityRuntimeKey } from '../../lib/runtimeActivity.js'
@@ -22,9 +23,15 @@ export interface TurnActivityDeps {
   drain: (sessionId: string) => Promise<void>
   /** What the engine's own server says (Codex's app-server, read in its worker: core/engines/nativeControls.ts). */
   nativeActivity: (session: RegisteredSession) => Promise<ActivityState>
+  /** Working is withheld: the turn waits on the person, or the session's turns end by hook and none is open. */
+  withheld: (sessionId: string) => boolean
+  /** Work is known to go on with nothing in the transcript: the lead's subagents run. */
+  atWork: (sessionId: string) => boolean
+  /** The session turned working with no turn open (TurnActivity's `claimed`): the heartbeats watch it (heartbeats.ts). */
+  claimed?: (sessionId: string) => void
 }
 
-export function createTurnActivity({ readScreen, terminals, bySession, sessionTurnOpen, drain, nativeActivity }: TurnActivityDeps) {
+export function createTurnActivity({ readScreen, terminals, bySession, sessionTurnOpen, drain, nativeActivity, withheld, atWork, claimed }: TurnActivityDeps) {
   const runtimeActivity = new RuntimeActivityReader({
     readScreen,
     codex: session => nativeActivity(session),
@@ -36,18 +43,43 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
   const turnActivity = new TurnActivity({
     runtime: sessionId => {
       const session = bySession(sessionId)
-      return session?.active ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId) } : undefined
+      return session?.active
+        ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId), withheld: withheld(sessionId) }
+        : undefined
     },
     drain: sessionId => drain(sessionId),
-    probe: async sessionId => {
-      const session = bySession(sessionId)
-      return session?.active ? runtimeActivity.read(session) : 'unknown'
-    },
+    probe: sessionId => probe(sessionId, session => runtimeActivity.read(session)),
+    // An OpenClaw draws its run a moment after the run's end lands in its store: that last timer, read by a pass against
+    // one the turn's heartbeat read, would claim work for the lease after the answer. The next run's timers start anew.
+    ended: sessionId => runtimeActivity.forget(sessionId),
+    claimed,
   })
+  async function probe(sessionId: string, read: (session: RegisteredSession) => Promise<ActivityState>): Promise<ActivityState> {
+    // The hooks know better than the pane: a wait shows no spinner's end, and a lead's subagents run off screen.
+    if (withheld(sessionId)) return 'unknown'
+    if (atWork(sessionId)) return 'working'
+    const session = bySession(sessionId)
+    return session?.active ? read(session) : 'unknown'
+  }
+  /**
+   * A pane the binding pass captured (OpenClaw's, core/agents/bind.ts) is read as the probe would read it. With no turn
+   * open nothing probes the runtime, while an OpenClaw run shows on its pane before its first row and through a quiet
+   * step: the pass's capture is that reading, and no second capture is taken. The capture is older than what lands after
+   * it: [revision] is the activity's revision read before capturing, the one at this call when not given.
+   */
+  const paneRead = async (session: RegisteredSession, capture: string,
+    revision = turnActivity.snapshot(session.sessionId)?.revision): Promise<void> => {
+    // Every pass reads a bound pane: an open turn the heartbeat probes already, and a pane with no run can claim no work,
+    // so neither polls the store. Its run is forgotten, as a reading with none would leave it: the next run's first timer
+    // is not compared with it.
+    if (sessionTurnOpen(session.sessionId)) return
+    if (readOpenclawScreen(capture).state !== 'busy') return runtimeActivity.forget(session.sessionId)
+    await turnActivity.check(session.sessionId, () => probe(session.sessionId, active => runtimeActivity.observe(active, capture)), revision)
+  }
   /** The activity the app shows for an agent; none for a plain terminal. */
   const activityFrame = (session: RegisteredSession): ActivityFrame | null =>
     isTerminalEngine(session.engine) ? null : turnActivity.snapshot(session.sessionId) ?? null
-  return { runtimeActivity, turnActivity, activityFrame }
+  return { runtimeActivity, turnActivity, activityFrame, paneRead }
 }
 
 /**

@@ -20,8 +20,13 @@ export const adoption: AdoptionContract = {
     id: { field: first.id[first.id.length - 1], pattern: /^[A-Za-z0-9-]{8,80}$/ },
     cwd: first.cwd[first.cwd.length - 1],
     // A terminal, or the Codex app (`vscode` from "Codex Desktop") and the editor extensions. `exec` is a script,
-    // and a sub-agent's source is another thread's helper.
-    origin: { field: 'source', values: { cli: 'terminal', vscode: { field: 'originator', is: 'Codex Desktop', then: 'codex-app', otherwise: 'editor' } } },
+    // and a sub-agent's source is another thread's helper. Codex 0.167+ runs a `codex` typed in a terminal as a client
+    // of its daemon (`codex app-server`), which writes that rollout as a server's, `vscode`, from the TUI's own
+    // originator: a terminal's still (Diego, CLI 0.6.90, 2026-11-26).
+    origin: { field: 'source', values: {
+      cli: 'terminal',
+      vscode: { field: 'originator', values: { 'Codex Desktop': 'codex-app', 'codex-tui': 'terminal' }, otherwise: 'editor' },
+    } },
   },
   titles: { file: 'session_index.jsonl', id: 'id', title: 'thread_name' },
   // Codex keeps no process record, but holds its rollout open while it runs, so `lsof` names the owner. A server

@@ -19,7 +19,7 @@ export function ExploreIntro() {
     <h1>What people make with agents</h1>
     <p>Open the output, read the conversation that made it, and fork the project into Harness to make your own version.</p>
     {signedIn !== true && <div className={styles.cta}>
-      <Link className={styles.get} href="/desktop" onClick={() => countHub('hub_get_app')}>Get the Harness desktop app</Link>
+      <Link className={styles.get} href="/download" onClick={() => countHub('hub_get_app')}>Get the Harness desktop app</Link>
       <a className={styles.signIn} href={webAppPath} onClick={() => { countHub('hub_sign_in_prompt_click'); rememberHubReturn(); }}>Sign in</a>
     </div>}
   </section>;

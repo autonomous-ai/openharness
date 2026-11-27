@@ -10,6 +10,9 @@ import { SessionGitHistoryStore, sessionGitHistory } from './sessionGitHistory.j
 import { readSessionGitPullRequest } from './sessionGitPullRequest.js'
 import * as github from './gitPullRequest.js'
 import type { RegisteredSession } from './registry.js'
+import type { AgentLife, AgentView } from '../core/api.js'
+import { fakeCore } from '../testing/fakeCore.js'
+import { startWorkspaceFrames } from '../services/workspaceFrames.js'
 
 describe('session work from transcript through Git and PR history', () => {
   let directory: string, home: string, ship: string, agent: RegisteredSession
@@ -22,6 +25,8 @@ describe('session work from transcript through Git and PR history', () => {
     head: { ref: branch, repo: { full_name: 'acme/app' } }, base: { ref: 'main' },
   })
   let rows: ReturnType<typeof pr>[]
+  let workspaceFrames: ReturnType<typeof startWorkspaceFrames>, followed: (event: AgentLife) => void
+  let published: Readonly<Record<string, unknown>>, publications: number
   const execute = async (command: string, args: string[], cwd: string) => {
     if (command === 'git') return git(cwd, ...args)
     const endpoint = args.at(-1)!
@@ -45,7 +50,15 @@ describe('session work from transcript through Git and PR history', () => {
     usage.changed(agent); await usage.settled()
     for (const path of [home, ship, join(ship, 'tui')]) forgetAgentProject(path)
   }
-  const frame = () => agentFrame(agent, { selectedModel: null, terminalAvailable: true, tokenUsage: usage.get(agent) })
+  const frame = async () => {
+    const source = { ...agent, frameEpoch: 'fixture:1' } as AgentView
+    const before = publications
+    // Git/history observation is the workspaces producer's. Frames consume its completed publication.
+    workspaceFrames.refresh(source)
+    followed({ kind: 'running', session: source })
+    await vi.waitFor(() => expect(publications).toBeGreaterThan(before), { timeout: 10_000 })
+    return agentFrame(agent, { selectedModel: null, terminalAvailable: true, tokenUsage: usage.get(agent), parts: () => published })
+  }
   beforeEach(async () => {
     directory = await realpath(await mkdtemp(join(tmpdir(), 'session-work-e2e-')))
     home = join(directory, 'silent-beacon'); ship = join(directory, 'ship-hn')
@@ -68,9 +81,20 @@ describe('session work from transcript through Git and PR history', () => {
     vi.spyOn(github, 'readBranchPullRequest').mockImplementation(github.createBranchPullRequestReader(execute, () => now))
     vi.spyOn(github, 'readPullRequestUrl').mockImplementation(github.createPullRequestUrlReader(execute, () => now))
     rows = [pr(12, 'hn/nfc'), pr(13, 'hn/preview')]
+    publications = 0
+    const core = fakeCore({ agents: {
+      byAgent: () => agent,
+      follow: listener => { followed = listener; return () => {} },
+      publishFrame: (_source, fields) => {
+        if (!Object.hasOwn(fields, 'gitContext')) return // Wait past a changed-view placeholder.
+        published = fields; publications++
+      },
+    } })
+    core.usage = async () => usage.get(agent)
+    workspaceFrames = startWorkspaceFrames(core)
   })
   afterEach(async () => {
-    usage.dispose(); await usage.settled(); await history.settled()
+    workspaceFrames.stop(); usage.dispose(); await usage.settled(); await history.settled()
     vi.restoreAllMocks(); await rm(directory, { recursive: true, force: true })
   })
 

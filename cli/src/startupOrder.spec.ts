@@ -87,7 +87,8 @@ function callArguments(source: string, call: string): { text: string; at: number
 const STARTUP_CALLS = ['await repairProjectCwds({', 'await restoreAgents({']
 
 /** What the prologue is allowed to do before the master's update is listened for: nothing that can throw. */
-const PROLOGUE_CALLS = new Set(['installTimestampedConsole'])
+// errorKind never throws (lib/log.ts) and runs only when a fatal handler fires.
+const PROLOGUE_CALLS = new Set(['installTimestampedConsole', 'errorKind'])
 const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'function'])
 
 describe('the core\'s start-up order (core/main.ts)', () => {
@@ -147,15 +148,14 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect(source).toContain('installedHooks?.close()')
   })
 
-  it('points the installed copy\'s launcher and service at the Node the core runs on, and settles the Node record', () => {
-    // Not current-node, which can name a Node no probation judged (lib/nodeReferences.ts); and a core on Node 24 has
-    // nothing left holding it back (lib/nodeMigration.ts `settleNodeMigration`).
+  it('settles the installed copy\'s Node record, and leaves the launcher and the service to the master', () => {
+    // A core on Node 24 has nothing left holding it back (lib/nodeMigration.ts `settleNodeMigration`). Pointing the
+    // launcher and the service definition at the Node it runs on is the master's, once this core is up
+    // (masterProcess.ts `coreUp`, lib/nodeReferences.ts): the core loaded the platform's launchd, systemd and Task
+    // Scheduler code for it, 1,100 lines it ran once a start (the audit of 2026-11-12).
     const source = code(SOURCE)
-    const from = source.indexOf('if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {')
-    expect(from, 'core/main.ts still follows the Node for the installed copy only').toBeGreaterThan(-1)
-    const block = source.slice(from, source.indexOf('\n  }', from))
-    expect(block).toMatch(/refreshNodeReferences\(\(line\) =>/)
-    expect(block).toContain('settleNodeMigration(env.ADAPTER_CLI_DIR)')
+    expect(source).toContain('if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) settleNodeMigration(env.ADAPTER_CLI_DIR)')
+    expect(source).not.toContain('refreshNodeReferences')
   })
 
   it('keeps the prologue itself incapable of throwing', () => {
@@ -174,16 +174,24 @@ describe('the core\'s start-up order (core/main.ts)', () => {
       .toEqual([])
   })
 
-  it('protects acknowledged bindings on every exit after registry ownership, before startup can yield', () => {
+  it('drains durable registry work after producers stop and before releasing successor ownership', () => {
     const source = code(SOURCE)
-    const owned = source.indexOf('await refuseServedDataFolder(')
-    const loaded = source.indexOf('registry.load()')
-    const exiting = source.indexOf("process.on('exit', () => registry.flush({ exiting: true }))")
-    expect(loaded).toBeGreaterThan(owned)
-    expect(exiting).toBeGreaterThan(loaded)
-    // An update can exit before full teardown is constructed. Install the synchronous safeguard
-    // before the first yield after load, while a duplicate daemon still exits without touching disk.
-    expect(exiting).toBeLessThan(source.indexOf('\n  await ', loaded))
+    expect(source.indexOf('registry.load()')).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
+    // A process exit event cannot await storage; every acknowledged authority operation is already durable.
+    expect(source).not.toContain("process.on('exit', () => registry.flush(")
+    const update = source.slice(source.indexOf('const updateTeardown ='), source.indexOf('daemonBoot.applyStagedUpdate ='))
+    const shutdown = source.slice(source.indexOf('const shutdown ='), source.indexOf('daemonBoot.stopHere = (why)'))
+    for (const teardown of [update, shutdown]) {
+      const flushed = teardown.indexOf('registry.flush({ exiting: true })')
+      for (const stopped of ['agentReconciler.stop()', 'questionWatcher.stopAll()', 'cursorDiscovery.stop()',
+        'runtimeProfiles.stop()', 'watcher.stop()', 'localWsServer.close()', 'hookServer.close()', 'backend.stop()']) {
+        expect(teardown.indexOf(stopped), stopped).toBeGreaterThan(-1)
+        expect(teardown.indexOf(stopped), stopped).toBeLessThan(flushed)
+      }
+      expect(flushed).toBeGreaterThan(-1)
+      expect(teardown.indexOf('dataFolderClaim?.release()')).toBeGreaterThan(flushed)
+      expect(teardown.indexOf('localSocket?.close()')).toBeGreaterThan(flushed)
+    }
   })
 
   it('on Windows, claims the data folder once no daemon serves it, before reading or listening, and gives it up with the socket', () => {
@@ -294,7 +302,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // `publishStoppedAgent` reads these while restoring agents and in the first reconcile, and those
     // frames go out whether or not requests are open.
     const restore = at('await restoreAgents({')
-    for (const provider of ['activityFrameProvider', 'runtimeProfileProvider', 'dshFrameProvider']) {
+    for (const provider of ['activityFrameProvider', 'runtimeProfileProvider', 'framePartsProvider']) {
       expect(at(`backend.${provider} =`), `backend.${provider} must be bound before restoreAgents`).toBeLessThan(restore)
     }
   })

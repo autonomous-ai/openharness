@@ -1,15 +1,26 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, agentSettingsPath, ownsAgentSettings, readAgentSettings, saveAgentSettings } from './agentSettings.js'
 import { clearAuthSession, writeAuthSession, type AuthSession } from './authSession.js'
+
+// Pass-through, recording what reaches each file: opened, written, or renamed onto.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(`write ${String(args[0])}`); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'agent-settings-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); clearAuthSession() })
 
-const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
+const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false, hachi: false }
 const session = (over: Partial<AuthSession> = {}): AuthSession =>
   ({ version: 1, accessToken: 't', autonomousEnv: 'prod', computerId: 'c', machineId: 'm1', updatedAt: 0, ...over })
 const owner = { accountId: 'acct', machineId: 'm1' }
@@ -20,7 +31,7 @@ describe('what the person lets agents do', () => {
     expect(readAgentSettings(dir, session())).toEqual(OFF)
     expect(readAgentSettings(dir, null)).toEqual(OFF)
     expect(AGENT_SETTING_NAMES).toEqual({ 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary', 'programs-reply': 'programsReply' })
-    expect(AGENT_SETTING_EXPERIMENTS).toEqual({ agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents', programsReply: 'programs_reply' })
+    expect(AGENT_SETTING_EXPERIMENTS).toEqual({ agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents', programsReply: 'programs_reply', hachi: 'hachi' })
   })
 
   it('reads the copy kept for the account signed in here, written whole and private', () => {
@@ -36,7 +47,7 @@ describe('what the person lets agents do', () => {
   })
 
   it('never turns one account\'s experiments on for another, or for no one', () => {
-    saveAgentSettings(dir, owner, { agentsStartAgents: true, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: true, agentsTellAgents: true, programsReply: true })
+    saveAgentSettings(dir, owner, { agentsStartAgents: true, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: true, agentsTellAgents: true, programsReply: true, hachi: true })
     // Signed out, signed in with no machine yet, to another account's machine, or to another account.
     expect(readAgentSettings(dir, null)).toEqual(OFF)
     expect(readAgentSettings(dir, session({ machineId: undefined }))).toEqual(OFF)
@@ -69,5 +80,21 @@ describe('what the person lets agents do', () => {
       answer({ features: {} }), answer({ accountId: '', features: {} }), answer({ accountId: 'acct' }), answer({ accountId: 'acct', features: 'on' })]) {
       expect(agentSettingsFromAnswer(refused)).toBeNull()
     }
+  })
+})
+
+describe('agent-settings.json on disk', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const file = agentSettingsPath(dir)
+    disk.events = []
+    saveAgentSettings(dir, owner, OFF)
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const planted = `${agentSettingsPath(dir)}.${process.pid}.tmp`
+    writeFileSync(planted, 'planted')
+    saveAgentSettings(dir, owner, OFF)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
   })
 })

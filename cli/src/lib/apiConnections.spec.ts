@@ -167,7 +167,7 @@ describe('saved API connections', () => {
     vi.mocked(fs.renameSync).mockImplementationOnce(() => { throw new Error(secret) })
     expect(() => store.save({ ...store.list()[0], apiKey: 'new-key' })).toThrow('could not be saved')
     expect(readFileSync(join(directory, 'api-connections', 'connections.json'), 'utf8')).toBe(previous)
-    expect(fs.readdirSync(join(directory, 'api-connections'))).toEqual(['connections.json'])
+    expect(fs.readdirSync(join(directory, 'api-connections')).sort()).toEqual(['connections.json', 'list.json'])
     vi.mocked(fs.fsyncSync).mockImplementationOnce(() => { throw new Error(secret) })
     expect(() => store.save({ ...store.list()[0], apiKey: 'new-key' })).toThrow('could not be saved')
     expect(readFileSync(join(directory, 'api-connections', 'connections.json'), 'utf8')).toBe(previous)
@@ -180,7 +180,7 @@ describe('saved API connections', () => {
   })
 
   it('refuses non-files, duplicate stored ids, oversized storage and too many connections', () => {
-    mkdirSync(join(directory, 'api-connections'))
+    mkdirSync(join(directory, 'api-connections'), { mode: 0o700 })
     expect(store.list()).toEqual([])
     const path = join(directory, 'api-connections', 'connections.json')
     mkdirSync(path)
@@ -208,5 +208,45 @@ describe('saved API connections', () => {
     vi.spyOn(store, 'list').mockImplementation(() => { throw new Error(secret) })
     const failed = apiConnectionsRequest(store, { action: 'list' })
     expect(failed).toEqual({ error: 'API_CONNECTIONS_FAILED', detail: 'APIs are unavailable. Try again.' })
+  })
+})
+
+// The list a launch reads (./apiConnectionMetadata.ts), kept in step by the store.
+describe('the list of saved APIs without their keys', () => {
+  const list = () => JSON.parse(readFileSync(join(directory, 'api-connections', 'list.json'), 'utf8'))
+
+  it('follows every save and removal', () => {
+    const saved = store.save(custom)
+    expect(list()).toEqual({ version: 1, connections: [saved] })
+    store.remove(saved.id)
+    expect(list()).toEqual({ version: 1, connections: [] })
+  })
+
+  // Rollback: an older build put back reads and writes the store as it always did, and never the list.
+  it('takes in a store an older build changed, at the store\'s next read', () => {
+    store.save(custom)
+    const file = join(directory, 'api-connections', 'connections.json')
+    const disk = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...disk, connections: [] }))
+    expect(list().connections).toHaveLength(1)
+    expect(new ApiConnections(directory).list()).toEqual([])
+    expect(list()).toEqual({ version: 1, connections: [] })
+  })
+
+  it('says a list it could not write, keeps the saved key, and writes the list at the next read', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { renameSync } = vi.mocked(fs)
+    const actual = renameSync.getMockImplementation()!
+    renameSync.mockImplementation((from, to) => {
+      if (String(to).endsWith('list.json')) throw new Error(secret)
+      actual(from, to)
+    })
+    const saved = store.save(custom)
+    expect(store.toolEnvironment(saved.id).MY_IMAGES_API_KEY).toBe(secret)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[apis] The list of saved APIs'))
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(secret)
+    renameSync.mockImplementation(actual)
+    expect(store.list()).toEqual([saved])
+    expect(list()).toEqual({ version: 1, connections: [saved] })
   })
 })

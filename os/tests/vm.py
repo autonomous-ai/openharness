@@ -308,6 +308,15 @@ class VM:
             raise RuntimeError(f'Guest file transfer is incomplete: {path}')
         return base64.b64decode(''.join(match.group(1).splitlines()), validate=True)
 
+    def write_file(self, path, data):
+        """Write exact bytes to a guest file, in pieces a serial command line takes."""
+        encoded = base64.b64encode(data).decode()
+        scratch = shlex.quote(str(path) + '.base64')
+        self.command(': > ' + scratch)
+        for start in range(0, len(encoded), 1800):
+            self.command('printf %s ' + encoded[start:start + 1800] + ' >> ' + scratch)
+        self.command('base64 -d ' + scratch + ' > ' + shlex.quote(str(path)) + ' && rm ' + scratch)
+
     def login_installed(self, config, unlock_delay=0, wait_workspace=True):
         if config['encrypt']:
             self.unlock_count += 1

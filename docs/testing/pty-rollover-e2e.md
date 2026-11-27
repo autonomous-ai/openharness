@@ -42,7 +42,7 @@ used. Only the arm64 platform is in the manifests.
 | 8 | The terminal is not touched by the mover | Passed |
 | 9 | Closing the last pane: the old host exits and its folder goes | Passed, after a held pane was killed (see Findings) |
 | 10 | Claude agent | Not run: not installed (installer blocked by the fake CDN names; not signed in anyway) |
-| 11 | A tile on screen not moved; another super tab moved; minimize/tray | Not run: needs the desktop UI |
+| 11 | A tile on screen not moved; another tab moved; minimize/tray | Not run: needs the desktop UI |
 | 12 | Dial on COM3 through the new `harness-serial.exe` | Not run: the owner skipped the x64 PC |
 
 ## Results

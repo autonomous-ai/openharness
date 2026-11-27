@@ -3,6 +3,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/crash_log.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 void main() {
   test('an error reaches the log with its stack', () {
@@ -33,6 +37,39 @@ void main() {
       reason: 'the stack is the whole point — a message alone names no line',
     );
     file.deleteSync();
+  });
+
+  // A refusal nobody caught still reaches errors.log, and its detail can quote
+  // a prompt or a name: the file keeps the code, as the app log does.
+  test('a refusal reaches errors.log by its code, not its detail', () {
+    final directory = Directory.systemTemp.createTempSync(
+      'harness-v2-crash-test-',
+    );
+    final file = File('${directory.path}/errors.log');
+    CrashLog.testFile = file;
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() {
+      appLog = previousLog;
+      CrashLog.testFile = null;
+      directory.deleteSync(recursive: true);
+    });
+
+    CrashLog.record(
+      const WsRequestFailure(
+        responseType: 'agent_create_result',
+        code: 'SPAWN_FAILED',
+        detail: 'could not start zebra-orchard',
+      ),
+      StackTrace.empty,
+      context: 'async',
+    );
+
+    final text = file.readAsStringSync();
+    expect(text, contains('[async] agent_create_result: SPAWN_FAILED'));
+    expect(text, isNot(contains('zebra-orchard')));
+    expect(stream.entries.single.error, 'agent_create_result: SPAWN_FAILED');
   });
 
   test('installing keeps the handler that was already there', () {

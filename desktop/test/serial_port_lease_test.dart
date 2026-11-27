@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/harness_file_store.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/core/serial_port_lease.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
@@ -62,7 +63,7 @@ void main() {
         ),
         HarnessFileStore.defaultDirectoryPath(
           environment: {'HOME': '/h', 'USERPROFILE': '/h'},
-          name: 'flasher',
+          entry: HarnessEntry.flasher,
         ),
       );
     },
@@ -107,6 +108,13 @@ void main() {
   });
 
   test('the daemon is not spawned while the port is leased', () async {
+    // A scratch flasher folder and identity, never this computer's: a lease in
+    // the real folder stopped every other test worker, and the developer's
+    // running app, from supervising their daemon for as long as this ran.
+    final scratch = Directory.systemTemp.createTempSync('flasher-lease-');
+    addTearDown(() => scratch.deleteSync(recursive: true));
+    final identityFile = File('${scratch.path}/computer-id')
+      ..writeAsStringSync('0123456789abcdef0123456789abcdef');
     var spawned = false;
     final discovery = LocalCliDiscovery(
       // Points at a port nothing is listening on, so discovery finds no daemon
@@ -115,18 +123,18 @@ void main() {
         apiBaseUrl: 'https://harness-api.autonomous.ai',
         localCliBaseUrl: 'http://127.0.0.1:1',
       ),
+      identity: LocalMachineIdentity(computerIdFile: identityFile),
       spawnCommand: () async => spawned = true,
+      flashing: () => SerialPortLease.heldByAnotherProcess(
+        environment: {'HARNESS_FLASHER_CACHE': scratch.path},
+      ),
     );
 
-    // A run-id lease of its own in the real flasher folder, so a flash the
-    // machine may really be running keeps its shared flag untouched.
-    final dir = Directory(SerialPortLease.flasherDirectory())
-      ..createSync(recursive: true);
-    final lease = File('${dir.path}/flashing.${'e' * 32}')
-      ..writeAsStringSync('${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n');
-    addTearDown(() {
-      if (lease.existsSync()) lease.deleteSync();
-    });
+    // A run-id lease as a flash writes it, so the real lease check holds the
+    // spawn end to end through the file.
+    File(
+      '${scratch.path}/flashing.${'e' * 32}',
+    ).writeAsStringSync('${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n');
 
     // Flashing stops the daemon first, so discovery finds nothing and the
     // old code went straight on to start it again — taking back the port

@@ -81,7 +81,7 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
   }), { changed: tell })
 
   const run = options.run ?? runServiceProcess
-  return run({
+  const link = run({
     name: 'recaps',
     socketPath: options.socketPath,
     machineId: options.machineId,
@@ -99,4 +99,7 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
     },
     onDisconnected: () => { core = null },
   })
+  // A stop, an update and a handover all stop this process through its host (services/process.ts `hostServices`):
+  // the recaps' saves are not flushed, so the last one is, before the process goes.
+  return { stop: () => { recaps.mirror.saveBeforeStop(); return link.stop() } }
 }

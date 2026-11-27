@@ -1,5 +1,6 @@
 import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
+import 'support/resource_picker.dart';
 
 import 'dart:async';
 
@@ -592,6 +593,34 @@ void main() {
     expect(tab.capacity, AppNotifier.maxPanes);
     expect(tab.canCreate, isTrue);
     expect(tab.actionLabel(tab.selected), 'Open in new tab');
+  });
+
+  // QA 2026-11-12: a full tab's footer said only "No room for another harness."; it says why, and what to do.
+  testWidgets('a full tab says so in the picker, and how to add more', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    for (var i = 0; i < AppNotifier.maxPanes; i++) {
+      await app.addAgentToSwarm('m', 'a$i');
+    }
+    await mount(tester, app);
+    await openHarnessPicker(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      'Agent 69',
+    );
+    await tester.pump();
+    expect(resourceSearch(tester).selected?.agentId, 'a69');
+    expect(
+      find.text('This tab is full. Open a new tab to add more.'),
+      findsOneWidget,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(app.activeSwarm.panes, hasLength(AppNotifier.maxPanes));
+    expect(app.activeSwarm.panes.any((pane) => pane.agentId == 'a69'), isFalse);
+    await tester.pumpWidget(const SizedBox());
   });
 
   test(

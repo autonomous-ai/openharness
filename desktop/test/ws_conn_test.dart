@@ -32,6 +32,9 @@ class FakeHub {
   final List<WebSocket> clients = [];
   Map<String, dynamic> closeResponse = {'activity': 'idle'};
 
+  /// Canned success replies by request type, answered before the refusals below.
+  final Map<String, Map<String, dynamic>> replies = {};
+
   FakeHub._(this.server, this.rejectOldToken, this.closeCodeOnSelect);
   int get port => server.port;
 
@@ -91,6 +94,16 @@ class FakeHub {
               'payload': {'machineId': machineId},
             }),
           );
+        } else if (hub.replies[frame['type']] case final reply?) {
+          ws.add(
+            jsonEncode({
+              'type': '${frame['type']}_result',
+              'payload': {
+                ...reply,
+                'requestId': (frame['payload'] as Map)['requestId'],
+              },
+            }),
+          );
         } else if (frame['type'] == 'agent_create') {
           // A REFUSAL — the shape every CLI-side "no" arrives in: a `<type>_result` frame carrying
           // an error code, never a returned map with an `error` key. See WsRequestFailure.
@@ -114,7 +127,7 @@ class FakeHub {
               'payload': {
                 'requestId': request['requestId'],
                 'error': request['refuseWith'] ?? 'MESSAGES_OFF',
-                'detail': 'refused by the fixture',
+                'detail': request['refuseDetail'] ?? 'refused by the fixture',
               },
             }),
           );
@@ -271,16 +284,77 @@ void main() {
         if (e.message.endsWith('failed')) '${e.message} ${e.error}': e.level,
     };
     expect(failures, {
-      '← agent_messages failed agent_messages_result: MESSAGES_OFF — '
-              'refused by the fixture':
+      '← agent_messages failed agent_messages_result: MESSAGES_OFF':
           AppLogLevel.debug,
-      '← agent_messages failed agent_messages_result: UNKNOWN_ACTION — '
-              'refused by the fixture':
+      '← agent_messages failed agent_messages_result: UNKNOWN_ACTION':
           AppLogLevel.debug,
-      '← agent_create failed agent_create_result: UNSUPPORTED_ON_REMOTE — '
-              'this machine cannot create agents':
+      '← agent_create failed agent_create_result: UNSUPPORTED_ON_REMOTE':
           AppLogLevel.warn,
     });
+  });
+
+  // The daemon's detail can quote a prompt or a name: the UI shows it, the
+  // logs keep only the frame and the code.
+  test('a refusal is logged by its code, in the file and the Debug pane', () async {
+    final dir = Directory.systemTemp.createTempSync('harness-ws-refusal-');
+    final file = DailyLogFile(dir, 'app');
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = FanoutAppLog([FileAppLog(file), StreamAppLog(stream)]);
+    addTearDown(() {
+      file.flush();
+      appLog = previousLog;
+      dir.deleteSync(recursive: true);
+    });
+    hub = await FakeHub.start();
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'test',
+      machineId: 'fixture',
+      accessTokenProvider: (_, _) async => 'fixture-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    await conn!.connect();
+    Future<WsRequestFailure> refused(Map<String, dynamic> payload) async {
+      try {
+        await conn!.request('agent_messages', payload: payload);
+      } on WsRequestFailure catch (failure) {
+        return failure;
+      }
+      fail('agent_messages was not refused');
+    }
+
+    final shown = await refused({
+      'action': 'shares',
+      'refuseWith': 'NOT_ALLOWED',
+      'refuseDetail': 'tab zebra-orchard is shared',
+    });
+    expect(shown.toString(), contains('zebra-orchard'));
+    await refused({
+      'action': 'shares',
+      'refuseWith': 'no such zebra-orchard',
+    });
+    // The logging listener runs after the caller's own error handler.
+    await pumpEventQueue();
+    file.flush();
+
+    final failures = [
+      for (final e in stream.entries.reversed)
+        if (e.message == '← agent_messages failed') e.error,
+    ];
+    expect(failures, [
+      'agent_messages_result: NOT_ALLOWED',
+      'agent_messages_result: <21 chars>',
+    ]);
+    for (final e in stream.entries) {
+      expect(e.message, isNot(contains('zebra-orchard')));
+      expect(e.error ?? '', isNot(contains('zebra-orchard')));
+    }
+    final text = file.currentFile.readAsStringSync();
+    expect(text, contains('err=agent_messages_result: NOT_ALLOWED'));
+    expect(text, isNot(contains('zebra-orchard')));
   });
 
   // Browser settings carry a proxy's host, its login and its exit address.
@@ -915,5 +989,360 @@ void main() {
     );
     expect(flat.isClosed, isTrue);
     await pool.closeAll();
+  });
+
+  // A frame line is written to ~/.harness/logs in release builds and kept for
+  // weeks: it may show what happened, never what anybody typed, said or named.
+  group('frame lines hold no content', () {
+    const sentinel = 'zebra-orchard';
+    late LogStream stream;
+    late Map<String, Completer<void>> seen;
+
+    Future<void> connect() async {
+      final previousLog = appLog;
+      stream = LogStream();
+      appLog = StreamAppLog(stream);
+      addTearDown(() => appLog = previousLog);
+      seen = {};
+      hub = await FakeHub.start();
+      final ready = Completer<void>();
+      conn = WsConn(
+        wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+        autonomousEnv: 'test',
+        machineId: 'fixture',
+        accessTokenProvider: (_, _) async => 'fixture-token',
+        onAuthFailure: (_) {},
+        onStatus: (status) {
+          if (status == ConnectionStatus.connected && !ready.isCompleted) {
+            ready.complete();
+          }
+        },
+        onEvent: (frame) {
+          final arrived = seen[frame['type']];
+          if (arrived != null && !arrived.isCompleted) arrived.complete();
+        },
+      );
+      await conn!.connect();
+      await ready.future.timeout(const Duration(seconds: 5));
+    }
+
+    void expectNoContent() {
+      for (final entry in stream.entries) {
+        expect(entry.message, isNot(contains(sentinel)));
+        expect(entry.error ?? '', isNot(contains(sentinel)));
+      }
+    }
+
+    Iterable<String> linesStarting(String prefix) => stream.entries
+        .map((e) => e.message)
+        .where((message) => message.startsWith(prefix));
+
+    final agent = {
+      'id': 'a1',
+      'name': 'the zebra-orchard agent',
+      'engine': 'claude',
+      'status': 'running',
+      'cwd': '/Users/dev/zebra-orchard',
+      'sessionId': 's1',
+      'terminalAvailable': true,
+    };
+
+    // The shapes the AppNotifier senders send and the daemon answers.
+    final requests = <(String, Map<String, dynamic>, Map<String, dynamic>)>[
+      (
+        'agent_create',
+        {
+          'engine': 'claude',
+          'cwd': '/Users/dev/zebra-orchard',
+          'bypassPermission': true,
+          'permissionMode': 'default',
+          'prompt': 'fix the zebra-orchard login',
+          'name': 'the zebra-orchard agent',
+          'creationId': 'c1',
+        },
+        {'creationId': 'c1', 'agent': agent},
+      ),
+      (
+        'agent_fork',
+        {
+          'creationId': 'c2',
+          'agentId': 'a1',
+          'name': 'the zebra-orchard fork',
+          'prompt': 'try zebra-orchard again',
+        },
+        {'creationId': 'c2', 'agent': agent},
+      ),
+      (
+        'agent_update',
+        {'agentId': 'a1', 'name': 'the zebra-orchard agent'},
+        {
+          'agent': {
+            'id': 'a1',
+            'name': 'the zebra-orchard agent',
+            'lastOpenedAt': 1763251200000,
+          },
+        },
+      ),
+      (
+        'cloud_send',
+        {'agentId': 'a1', 'text': 'ship the zebra-orchard fix'},
+        {'ok': true},
+      ),
+      (
+        'session_search',
+        {'query': 'where is zebra-orchard', 'limit': 20, 'from': 0, 'to': 1},
+        {
+          'hits': [
+            {'sessionId': 's1', 'snippet': 'the zebra-orchard bug'},
+          ],
+          'ready': true,
+        },
+      ),
+      (
+        'session_tail',
+        {'sessionId': 's1', 'beforeTurn': 3, 'maxChars': 4000},
+        {
+          'rows': [
+            {'text': 'about zebra-orchard'},
+          ],
+          'hasMore': true,
+          'total': 9,
+          'lastAsk': {
+            'turn': 7,
+            'at': 1,
+            'ask': 'why is zebra-orchard slow',
+            'answer': 'zebra-orchard waits on a lock',
+            'tools': 'read zebra-orchard logs',
+          },
+          'external': {'open': true, 'openIn': 'terminal'},
+        },
+      ),
+      (
+        'agent_messages',
+        {
+          'action': 'share_tab',
+          'tabId': 'desk_1',
+          'name': 'the zebra-orchard tab',
+        },
+        {'sharedTabId': 'st1'},
+      ),
+      (
+        'git_pull_request',
+        {
+          'agentId': 'a1',
+          'context': {
+            'branch': 'fix/zebra-orchard login',
+            'remote': 'git@github.com:acme/zebra-orchard.git',
+          },
+        },
+        {
+          'status': 'found',
+          'number': 12,
+          'url': 'https://github.com/acme/zebra-orchard/pull/12',
+          'state': 'Open',
+          'title': 'Fix the zebra-orchard login',
+          'headBranch': 'fix/zebra-orchard login',
+          'baseBranch': 'main',
+        },
+      ),
+    ];
+
+    for (final (type, payload, reply) in requests) {
+      test('$type shows its keys, not their content', () async {
+        await connect();
+        hub.replies[type] = reply;
+
+        await conn!.request(type, payload: payload);
+        // The logging listener runs after the caller's own.
+        await pumpEventQueue();
+
+        final sent = linesStarting('→ $type ');
+        expect(sent, hasLength(1));
+        for (final key in payload.keys) {
+          expect(sent.single, contains('$key: '));
+        }
+        expect(linesStarting('← $type '), hasLength(1));
+        expectNoContent();
+      });
+    }
+
+    test('route_decide is never logged', () async {
+      await connect();
+      hub.replies['route_decide'] = {
+        'decided': 'session',
+        'id': 's1',
+        'reason': 'it mentions zebra-orchard',
+        'trace': 'picked zebra-orchard',
+      };
+
+      await conn!.request(
+        'route_decide',
+        payload: {
+          'text': 'open the zebra-orchard session',
+          'sessions': {
+            's1': {'title': 'the zebra-orchard session'},
+          },
+        },
+      );
+      await pumpEventQueue();
+
+      expect(
+        stream.entries.where(
+          (e) =>
+              e.message.contains('route_decide') ||
+              e.message.contains(sentinel),
+        ),
+        isEmpty,
+      );
+    });
+
+    // The shapes `_handleEvent`, `SessionPreviewStore.ingest`, `DaemonBrain`
+    // and the CLI's engine events (`cli/src/engines/kit/events.ts`) carry.
+    final events = <(String, Map<String, dynamic>)>[
+      (
+        'voice_route_request',
+        {'voiceId': 'v1', 'text': 'open zebra-orchard', 'cmd': 'route'},
+      ),
+      (
+        'turn_started',
+        {'agentId': 'a1', 'userMessage': 'fix the zebra-orchard login'},
+      ),
+      ('user_message', {'agentId': 'a1', 'content': 'and zebra-orchard too'}),
+      ('text_delta', {'agentId': 'a1', 'content': 'Looking at zebra-orchard'}),
+      (
+        'thinking_delta',
+        {
+          'agentId': 'a1',
+          'content': 'zebra-orchard is slow because',
+          'thinkingId': 't1',
+        },
+      ),
+      (
+        'thinking_title',
+        {'agentId': 'a1', 'thinkingId': 't1', 'title': 'Reading zebra-orchard'},
+      ),
+      (
+        'tool_start',
+        {
+          'agentId': 'a1',
+          'id': 'tu1',
+          'tool': 'Bash',
+          'input': {'command': 'grep -r zebra-orchard src'},
+        },
+      ),
+      (
+        'tool_end',
+        {
+          'agentId': 'a1',
+          'id': 'tu1',
+          'tool': 'Bash',
+          'output': 'src/zebra-orchard.ts: 3 matches',
+          'outputTail': 'end of zebra-orchard',
+          'isError': false,
+          'summary': 'found zebra-orchard',
+        },
+      ),
+      ('done', {'agentId': 'a1', 'result': 'fixed the zebra-orchard login'}),
+      (
+        'turn_summary',
+        {
+          'agentId': 'a1',
+          'recap': 'fixed zebra-orchard',
+          'text': 'the zebra-orchard login works',
+          'notification': {'id': 'n1', 'kind': 'done'},
+        },
+      ),
+      (
+        'agent_created',
+        {
+          'agent': {
+            'id': 'a1',
+            'name': 'the zebra-orchard agent',
+            'engine': 'claude',
+            'status': 'is zebra-orchard',
+            'cwd': '/Users/dev/zebra-orchard',
+            'terminal': {'runtimes': <Object>[]},
+          },
+        },
+      ),
+      (
+        'agent_synced',
+        {
+          'agent': {
+            'id': 'a1',
+            'name': 'the zebra-orchard agent',
+            'engine': 'claude',
+            'cwd': '/Users/dev/zebra-orchard',
+            'terminalAvailable': true,
+          },
+        },
+      ),
+      ('agent_renamed', {'agentId': 'a1', 'name': 'zebra-orchard'}),
+      (
+        'daemon_say',
+        {
+          'id': 'say1',
+          'line': 'zebra-orchard is done',
+          'reply': 'nice, zebra-orchard',
+          'mood': 'say',
+          'from': 'pair',
+          'about': {'machineId': 'm1', 'agentId': 'a1'},
+          'harness': {
+            'name': 'the zebra-orchard agent',
+            'machineId': 'm1',
+            'agentId': 'a1',
+          },
+        },
+      ),
+      (
+        'daemon_brief',
+        {
+          'line': 'two on zebra-orchard',
+          'items': [
+            {
+              'id': 'b1',
+              'kind': 'agent',
+              'line': 'zebra-orchard waits',
+              'name': 'the zebra-orchard agent',
+            },
+          ],
+        },
+      ),
+      (
+        'daemon_talk_result',
+        {
+          'requestId': 'tr1',
+          'ok': false,
+          'error': 'could not reach zebra-orchard',
+          'detail': 'zebra-orchard is offline',
+          'agentId': 'a1',
+        },
+      ),
+    ];
+
+    for (final (type, payload) in events) {
+      test('$type shows its keys, not their content', () async {
+        await connect();
+        final arrived = seen[type] = Completer<void>();
+
+        hub.clients.single.add(jsonEncode({'type': type, 'payload': payload}));
+        await arrived.future.timeout(const Duration(seconds: 5));
+
+        final received = linesStarting('↓ $type ');
+        expect(received, hasLength(1));
+        switch (type) {
+          case 'agent_renamed':
+            expect(
+              received.single,
+              '↓ agent_renamed {agentId: a1, name: <13 chars>}',
+            );
+          case 'daemon_talk_result':
+            expect(received.single, contains('error: <29 chars>'));
+          case 'agent_created':
+            expect(received.single, contains('status: <16 chars>'));
+        }
+        expectNoContent();
+      });
+    }
   });
 }

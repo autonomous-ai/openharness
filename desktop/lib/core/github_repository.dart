@@ -99,8 +99,8 @@ class GitHubRepository {
   String get slug => '$owner/$name';
 
   /// The address to hand anyone but this computer's own git: an alias means
-  /// something only in this computer's `~/.ssh/config`, so a Swarm, a cloud
-  /// agent or a teammate gets the HTTPS link instead.
+  /// something only in this computer's `~/.ssh/config`, so a cloud agent or a
+  /// teammate gets the HTTPS link instead.
   String get shareableUrl =>
       alias == null ? url : 'https://github.com/$slug.git';
 }
@@ -108,18 +108,11 @@ class GitHubRepository {
 /// One repository however git spells its address: `github.com/owner/repo`
 /// for `https://github.com/Owner/Repo.git/`, `git@github.com:owner/repo`,
 /// `ssh://git@github.com:22/owner/repo.git` and `git://…`, credentials and
-/// ports left out. Lowercased: host names are case-insensitive, and so are
-/// GitHub's owner and repository names, the only host a clone is asked for.
-/// Null for a local path or anything else that names no host. Mirrors
-/// `repositoryIdentity` in cli/src/lib/githubRepository.ts.
-String? repositoryIdentity(String address) {
-  final parts = _hostAndPath(address);
-  return parts == null ? null : '${parts.$1}/${parts.$2}'.toLowerCase();
-}
-
-/// [repositoryIdentity] with an SSH alias read as the host it stands for, so
-/// a checkout cloned through `git@gh-work:org/repo` is the repository a
-/// browser link names. [resolveHost] answers null for a host it cannot read.
+/// ports left out, and an SSH alias read as the host it stands for, so a
+/// checkout cloned through `git@gh-work:org/repo` is the repository a browser
+/// link names. Lowercased: host names are case-insensitive, and so are
+/// GitHub's owner and repository names. Null for a local path or anything else
+/// that names no host. [resolveHost] answers null for a host it cannot read.
 Future<String?> resolvedRepositoryIdentity(
   String address,
   Future<String?> Function(String host) resolveHost,

@@ -3,8 +3,9 @@ import type { RegisteredSession } from '../registry.js'
 import type { TerminalBackend } from '../terminalBackend.js'
 import type { ProcessIdentity, TerminalInventoryResult, TerminalRuntimeRef } from '../terminalTypes.js'
 import { terminalRouteKey } from '../terminalRuntime.js'
-import { MoveGate } from './gate.js'
-import { MOVE_MARKER_ENV, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
+import { HOLD_WAIT_MS, MoveGate } from './gate.js'
+import { AtomicWriteUnconfirmed } from '../secureState.js'
+import { MOVE_MARKER_ENV, MOVE_STEP_TIMEOUT_MS, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
 
 const OLD: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2', paneId: '%1' }
 const NEW: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2-1.2.3', paneId: '%7' }
@@ -44,7 +45,8 @@ function harness(overrides: Partial<MoveAgentDeps> = {}) {
     prepareResume: vi.fn(async () => { events.push('prepare') }),
     respawn: vi.fn(async () => { events.push('respawn'); return { ok: true } }),
     probeProcess: vi.fn(async () => ID),
-    swap: vi.fn((_agentId: string, runtime: TerminalRuntimeRef) => { events.push('swap'); row.runtime = runtime }),
+    swap: vi.fn(async (_agentId: string, runtime: TerminalRuntimeRef) => { events.push('swap'); row.runtime = runtime; return { state: 'confirmed' as const, entry: { ...session(), runtimes: [runtime] } } }),
+    complete: vi.fn(),
     retarget: vi.fn(async (_agentId: string, to: TerminalRuntimeRef) => {
       events.push(row.runtime === to ? 'retarget(row names it)' : 'retarget(row names the old pane)')
     }),
@@ -74,6 +76,41 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('moveAgent', () => {
+  it('awaits destination publication before moving streams or releasing either pane', async () => {
+    let entered!: () => void, publish!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const pending = new Promise<void>(resolve => { publish = resolve })
+    const h = harness()
+    h.deps.swap = vi.fn(async () => { entered(); await pending; h.row.runtime = NEW; return { state: 'confirmed' as const, entry: { ...session(), runtimes: [NEW] } } })
+    const moving = moveAgent(session(), h.deps)
+    await vi.advanceTimersByTimeAsync(500)
+    await started
+    try {
+      expect(h.deps.retarget).not.toHaveBeenCalled()
+      expect(h.deps.releaseHold).not.toHaveBeenCalled()
+      expect(h.deps.killPane).not.toHaveBeenCalled()
+    } finally { publish(); await vi.advanceTimersByTimeAsync(300_000); await moving }
+  })
+
+  it('keeps both panes and refuses input when destination publication is unconfirmed', async () => {
+    const h = harness({ swap: vi.fn(() => { throw new AtomicWriteUnconfirmed(new Error('directory sync unconfirmed')) }) })
+    const delivered = vi.fn(async () => {})
+    h.deps.stopEngine = vi.fn(async () => { h.gate.enqueue('a1', delivered); return 'terminated' as const })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(h.deps.killPane).not.toHaveBeenCalled()
+    expect(h.deps.relaunchOld).not.toHaveBeenCalled()
+    expect(h.deps.releaseHold).not.toHaveBeenCalled()
+    expect(delivered).not.toHaveBeenCalled()
+    expect([...h.routes.keys()]).toEqual([terminalRouteKey(NEW), terminalRouteKey(OLD)])
+  })
+
+  it('reports a confirmed destination whose hold could not be released as incomplete', async () => {
+    const h = harness({ releaseHold: vi.fn(async () => { throw new Error('release failed') }) })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(h.deps.relaunchOld).not.toHaveBeenCalled()
+    expect(h.deps.killPane).not.toHaveBeenCalled()
+  })
+
   it('moves an idle conversation agent and keeps its id', async () => {
     const h = harness()
     const outcome = await run(h.deps)
@@ -137,11 +174,11 @@ describe('moveAgent', () => {
     expect(h.events).not.toContain('hold')
   })
 
-  // Security review 1 of #2255: an old Buddy whose Swarm role cannot be read is never relaunched without its guard; its
+  // Security review 1 of #2255: an agent whose launch a service holds is never relaunched without what it waits for; its
   // move does not happen and its engine goes on where it is (core/agents/restoreLaunch.ts).
-  it('a launch held for the Swarm\'s role leaves the agent where it is', async () => {
-    const h = harness({ buildLaunch: vi.fn(async () => ({ held: 'superTabs', detail: 'Waiting for the Swarm to confirm this agent\'s role.' })) })
-    expect(await run(h.deps)).toEqual({ moved: false, reason: expect.stringContaining('superTabs'), fellBack: false })
+  it('a held launch leaves the agent where it is', async () => {
+    const h = harness({ buildLaunch: vi.fn(async () => ({ held: 'store', detail: 'Waiting for the Store to prepare this harness.' })) })
+    expect(await run(h.deps)).toEqual({ moved: false, reason: expect.stringContaining('store'), fellBack: false })
     expect(h.deps.createSeeded).not.toHaveBeenCalled()
     expect(h.events).not.toContain('stop')
   })
@@ -252,25 +289,26 @@ describe('moveAgent', () => {
     }
   })
 
-  it('the hold, and the whole move, end well under two minutes when every step is slow or hangs', async () => {
+  it('the hold, and the whole move, end within their bounds when every step is slow or hangs', async () => {
     const slowest = harness({
       capture: vi.fn(() => after(4_000, 'old')),
       buildLaunch: vi.fn(() => after(9_000, LAUNCH)),
-      createSeeded: vi.fn(() => after(4_000, { ok: true as const, runtime: NEW })),
+      createSeeded: vi.fn(() => after(14_000, { ok: true as const, runtime: NEW })),
       stopEngine: vi.fn(() => after(9_000, 'terminated' as const)),
       prepareResume: vi.fn(() => after(4_000, undefined)),
-      respawn: vi.fn(() => after(4_000, { ok: true })),
+      respawn: vi.fn(() => after(14_000, { ok: true })),
       probeProcess: vi.fn(() => never<ProcessIdentity | null>()),
       killPane: vi.fn(() => after(4_000, true)),
       relaunchOld: vi.fn(() => never<boolean>()),
     })
     await run(slowest.deps)
-    // Held: stop 9 + prepare 4 + respawn 4 + probe 30 + closing the new pane 4 + relaunch 20. Before it: 4 + 9 + 4.
-    // Every bound was waited out, and no more.
-    expect(slowest.heldMs()!).toBeGreaterThan(65_000)
-    expect(slowest.heldMs()!).toBeLessThan(80_000)
-    expect(movedMs).toBeGreaterThan(80_000)
-    expect(movedMs).toBeLessThan(100_000)
+    // Held: stop 9 + prepare 4 + respawn 14 + probe 30 + closing the new pane 4 + relaunch 20. Before it: 4 + 9 + 14.
+    // Every bound was waited out, and no more: the hold within what a control waits for it (gate.ts), the move within
+    // the mailbox's 120 s.
+    expect(slowest.heldMs()!).toBeGreaterThan(80_000)
+    expect(slowest.heldMs()!).toBeLessThan(HOLD_WAIT_MS)
+    expect(movedMs).toBeGreaterThan(105_000)
+    expect(movedMs).toBeLessThan(120_000)
 
     const hangs = harness({
       stopEngine: vi.fn(() => never<'terminated'>()),
@@ -283,7 +321,7 @@ describe('moveAgent', () => {
     const movedButSlow = harness({
       retarget: vi.fn(() => never<void>()), releaseHold: vi.fn(() => never<void>()), killPane: vi.fn(() => never<boolean>()),
     })
-    expect(await run(movedButSlow.deps)).toEqual({ moved: true, resumed: true })
+    expect(await run(movedButSlow.deps)).toEqual({ moved: false, fellBack: false, reason: 'the confirmed destination remains held' })
     expect(movedButSlow.heldMs()!).toBeLessThan(100_000)
   })
 
@@ -297,6 +335,16 @@ describe('moveAgent', () => {
     expect(h.events).not.toContain('hold')
     expect(h.holdRoute).not.toHaveBeenCalled()
     expect(h.routes.size).toBe(0)
+  })
+
+  // The host client gives create and respawn the host's own waits and a cold start (ptyHost/client.ts); a move onto a
+  // host just installed is that cold start, and a shorter bound here would win.
+  it('a create or a respawn the host answers after 6 s still moves', async () => {
+    for (const slow of [{ createSeeded: vi.fn(() => after(6_000, { ok: true as const, runtime: NEW })) },
+      { respawn: vi.fn(() => after(6_000, { ok: true })) }]) {
+      const h = harness(slow)
+      expect(await run(h.deps), Object.keys(slow)[0]).toEqual({ moved: true, resumed: true })
+    }
   })
 
   it('a create answered after its bound closes the pane it made', async () => {
@@ -320,6 +368,21 @@ describe('moveAgent', () => {
       expect(unconfirmed.deps.prepareResume).not.toHaveBeenCalled()
       expect(unconfirmed.deps.respawn).not.toHaveBeenCalled()
     }
+  })
+
+  // The repair reads a long conversation a chunk at a time now (engines/kit/resumeRepair.ts): left to run past the
+  // step's bound, it went on beside the fallback. It is told to stop a second before, and the agent moves as it is.
+  it('lets the conversation\'s repair run until a second before its step\'s bound, then has it stop', async () => {
+    const seen: boolean[] = []
+    const h = harness({ prepareResume: vi.fn(async (_session: RegisteredSession, waiting: () => boolean) => {
+      seen.push(waiting())
+      await after(MOVE_STEP_TIMEOUT_MS - 1_001, undefined)
+      seen.push(waiting())
+      await after(2, undefined)
+      seen.push(waiting())
+    }) })
+    expect(await run(h.deps)).toMatchObject({ moved: true })
+    expect(seen).toEqual([true, true, false])
   })
 
   it('a failed preparation falls back to the old pane', async () => {

@@ -8,6 +8,7 @@ import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
+import 'program_path.dart';
 import 'repository_clone.dart';
 
 class GitBranch {
@@ -1007,13 +1008,15 @@ Future<({int code, String output, String errorOutput})> runLocalGit(
   String source,
   List<String> arguments, {
   Duration timeout = const Duration(seconds: 4),
-}) => _git(source, arguments, timeout: timeout);
+  String Function() program = gitProgram,
+}) => _git(source, arguments, timeout: timeout, program: program);
 
 Future<({int code, String output, String errorOutput})> _git(
   String source,
   List<String> arguments, {
   Duration timeout = const Duration(seconds: 4),
   GitProcessStarter? startProcess,
+  String Function() program = gitProgram,
 }) async {
   final environment = Map<String, String>.of(Platform.environment)
     ..removeWhere(
@@ -1037,7 +1040,7 @@ Future<({int code, String output, String errorOutput})> _git(
     process =
         await (startProcess?.call(argv, environment) ??
             Process.start(
-              'git',
+              program(),
               argv,
               environment: environment,
               includeParentEnvironment: false,

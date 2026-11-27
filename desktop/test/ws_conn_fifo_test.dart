@@ -6,6 +6,8 @@ import 'package:harness/core/models.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/loopback_websocket.dart';
+
 void main() {
   test('async encrypt/send and decrypt/dispatch remain FIFO', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -13,7 +15,8 @@ void main() {
     final received = <Map<String, dynamic>>[];
     unawaited(
       server.forEach((request) async {
-        final socket = await WebSocketTransformer.upgrade(request);
+        final socket = await acceptWebSocket(request);
+        if (socket == null) return;
         if (!socketReady.isCompleted) socketReady.complete(socket);
         socket.listen((raw) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;

@@ -8,7 +8,7 @@ Harness Desktop — a Flutter app that lists Harness machines and attaches xterm
 agents running on them. **macOS and Linux (Ubuntu) are both real, released targets** — first-run
 provisioning (`lib/bootstrap/environment_provisioner.dart`), self-update
 (`lib/update/desktop_updater.dart`), and packaging (`scripts/upload-desktop.sh` /
-`scripts/upload-desktop-linux.sh`, see RELEASE.md) all branch per-OS internally rather than being
+`scripts/package-desktop-linux.sh`, see RELEASE.md) all branch per-OS internally rather than being
 separate code paths.
 
 Windows is a local desktop too, not a viewer (`lib/core/viewer_mode.dart`): `homeDir()`
@@ -120,8 +120,8 @@ make terminal-local-e2e
 make terminal-prod-e2e       # opt-in, refuses without PROD_TERMINAL_E2E=1 + release evidence vars
 ```
 
-Release (`make release-desktop` from the repo root, which tags `vX.Y.Z_desktop` and lets CI build; `make upload-desktop VERSION=…` and
-`make upload-desktop-linux` are the by-hand escape hatches, the latter on an Ubuntu host only) is
+Release (`make release-desktop` from the repo root, which tags `vX.Y.Z_desktop` and lets CI build; `make upload-desktop VERSION=…` is the macOS
+by-hand escape hatch; Linux has none, since only `release-desktop.yml` holds the key that signs it) is
 documented in RELEASE.md. **macOS ships TWO builds of one universal app**, differing only in
 `FLTEnableImpeller`: Intel on Skia under the old `desktop-macos` key (which every older install and the
 website download also read), Apple Silicon on Impeller under `desktop-macos-arm64`, both built by
@@ -163,9 +163,8 @@ web, and do not copy shared screens into `lib/web/` — add a seam instead.
 
 **A browser downloads the app in parts** (`lib/web/parts/`, `DeferredPart`/`DeferredPartView`): the
 signed-in workspace (`web_entry.dart` → `workspace_part.dart`, fetched once the first frame is up, so a
-first visit's sign-in page skips its 4.4 MB), the Finder and its editor (`pane_grid.dart`), and the chat's
-text viewer (`attachment_chips.dart`). Shared code reaches the last two through a compile-time import
-switch (`if (dart.library.js_interop)`, as `main.dart` picks the web entry), so a computer compiles the
+first visit's sign-in page skips its 4.4 MB), and the Finder and its editor (`pane_grid.dart`). Shared
+code reaches the Finder through a compile-time import switch (`if (dart.library.js_interop)`, as `main.dart` picks the web entry), so a computer compiles the
 same files as ever (`test/pane_grid_finder_test.dart`). Importing one of these libraries directly from
 shared code puts it back in `main.dart.js`. Check a real build with `tool/web_ux/deferred-parts.mjs`.
 
@@ -353,16 +352,16 @@ Terminal launch behave identically. One implementation, shared with everyone who
 a terminal, instead of a second copy here that had to keep its own pinned checksums in step.
 **tmux** on Linux is the one dependency still taken from the OS package manager, and the only reason
 the setup screen ever opens a terminal: `apt-get install` needs a password prompt on a real tty. On
-macOS it is a managed runtime (or the Homebrew one, if Homebrew is already there) and needs neither.
+macOS it is a managed runtime and needs neither; a tmux Homebrew already installed is found, and
+Homebrew is never run.
 
 **Readiness is the list of commands the app runs, nothing more** (`EnvironmentStep`: tmux — plus `ps`
-on Linux — the Harness CLI, and on a Linux desktop the clipboard helper). Homebrew, the Apple developer
-tools, apt and the curl/tar/sed/awk/sha256sum the CLI installer downloads Node with are *recipes* for a
+on Linux — the Harness CLI, and on a Linux desktop the clipboard helper). The managed tmux download,
+apt and the curl/tar/sed/awk/sha256sum the CLI installer downloads Node with are *recipes* for a
 missing command, kept in `EnvironmentReadiness.plan` and probed top-down only while the command is
-missing: a Mac with tmux is never asked about Homebrew, and a Linux box with a managed runtime never
-about curl. The ladder itself is implemented once, in `cli/scripts/install.sh` (`--host` runs just
-that half): on macOS tmux comes from the Homebrew already present or, failing that, the managed
-build downloaded into `~/.harness/runtime` — no compiler, no package manager, no password, so the
+missing: a Linux box with a managed runtime is never asked about curl. The ladder itself is implemented once, in `cli/scripts/install.sh` (`--host` runs just
+that half): on macOS a tmux Homebrew already installed is found, Homebrew is never run, and a Mac
+without tmux gets the managed build downloaded into `~/.harness/runtime` — no compiler, no package manager, no password, so the
 app runs `--host` in-app and never opens a Terminal window there. Linux keeps the app's own apt
 transaction (its clock-skew repair) and the one Terminal handoff. Gating readiness on the recipes
 was what sent a computer whose tmux ran fine into Terminal to reinstall developer tools after a macOS
@@ -477,10 +476,7 @@ rebuild unchanged row controls and arrows rebuild only changed highlights. The c
 invalidates for row metadata, availability, action, geometry, theme, and font changes. Keep focus,
 semantics, and traversal on the row; do not replace them with paint-only search results.
 Creation and draft precedence are documented in `design/new-harness-entry-rules.md` and exercised
-by its listed tests. A Swarm's New project and New agent never hold their person (anh Dee, 2026-11-10): once the
-start is under way (`HarnessLaunchIntegration.onStarted`) the form closes and its controller goes to
-`AppNotifier.swarmStarts` (`super_tabs/swarm_starts.dart`), which waits for its start, follows a held request and
-gives it a `starting` row in the left pane; a `failed` row opens that same controller again. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
+by its listed tests. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
 product and machine. `test/benchmarks/swarm_benchmark.dart` measures large synthetic inventories;
 its headless debug timings do not establish native display or network latency.
 
@@ -563,6 +559,14 @@ add a kind there, not at the call site.
   colours with `integration_test/finder_native_test.dart`. Only `LocalFinderFiles`/`LocalFinderGit`
   exist, so other machines and the browser offer the row disabled (`canOpenFinderOn`) until the
   daemon serves listings, reads, writes and Git.
+- **An agent's Browser is a tile too** (`PaneKind.browser`, `lib/browser/`): its own Chrome, drawn
+  by `BrowserPanel` left of the agent's terminal as a viewer sits, and moving and closing with it.
+  The way in is the globe in the terminal's header (`BrowserButton`) and ⇧⌘P Toggle Browser, both
+  `AppNotifier.toggleBrowserPane`, offered by `offersBrowser`: a running agent on the person's own
+  machine, never a plain shell, the web build or Windows. It is never saved. `BrowserTiles` keeps
+  this run's opened and closed tiles, and the agent's frame says whether its browser is on, which is
+  what brings the tile back after a restart (`_syncBrowserPane`). Out of sight, a tile ends its
+  stream. Its requests go to the daemon's agentBrowser service; the daemon's core has no part in it.
 - `third_party/xterm` is a **vendored, patched** xterm 4.0.0 (atomic `replaceRange` fix for scroll
   regions — see its `README.autonomous.md`). Do not replace it with the pub package; the regression
   lives in `test/terminal_session_test.dart`.
@@ -602,9 +606,7 @@ add a kind there, not at the call site.
 - **Type** is `AppType` (`lib/shared/theme/app_type.dart`): system sans for app
   headings, labels, fields, navigation, and prose; explicit mono for code, paths,
   logs, and identifiers. Ordinary UI is independent of terminal zoom and respects
-  accessibility text scaling, except the Swarm's panes: a chat, a task's or pull request's chat
-  and an agent's instructions read at the terminal's size beside them (`SwarmType.sizeOf`, anh Dee
-  2026-11-10: "one consistent font across all panes"). The terminal grid, in-pane composer, and in-pane
+  accessibility text scaling. The terminal grid, in-pane composer, and in-pane
   find keep the selected terminal font and size. Compact pane/status bars retain
   their established `workspaceBarTextStyle()` and user-selected status themes.
   Native menus use the system menu font. Do not measure desktop UI in terminal cells.
@@ -616,9 +618,6 @@ add a kind there, not at the call site.
 - All local state is in `HarnessFileStore` (`~/.harness/desktop-app/state.json`, mode 0600, keyed
   strings behind `LocalKeyValueStore`): connection config, skipped update version, theme, font, pane
   layout. `~/.harness/computer-id` is the machine identity shared with the CLI.
-  A Swarm's saved view (up to 512 KB of chat) is never in it: each is a private file of its own in
-  `swarm-views/` beside it (`super_tabs/view_store_native.dart`), and the first use moves out any
-  that Desktop builds from 1.3.27 on left in `state.json`. Tests that pass a memory store keep views there.
 - The window is frameless on macOS via `window_manager` (`lib/core/desktop_window.dart`, same size and
   `TitleBarStyle.hidden` as Grid). On macOS the tabs are native, in the title bar beside the traffic
   lights (`SwarmTitlebar.swift`); the pane headers are a `DragToMoveArea`. A screen that
@@ -828,7 +827,11 @@ add a kind there, not at the call site.
   precisely to stay out of argv. The Dio clients carry `attachHttpLog`, one `api` line per finished request, method and
   URL only. **What a child PRINTS can still be a credential**, so CLI output and URLs go through
   `redactSecretsInText` (`logging/redact.dart`, beside the frame-level `redactValue`) before
-  anything is written. The Debug pane is a **mirror** of those sinks, not a second stream
+  anything is written. **No log holds what a person typed, said or named**: a WS frame line shows
+  its keys, numbers, list counts and `<n chars>` for a string, the string itself only for an id,
+  code or version key holding a short token (`redactValue`); every error a log writes goes through
+  `logErrorText` (`logging/log_safe_error.dart`), so a refusal shows its code, never the daemon's
+  `detail`. The Debug pane is a **mirror** of those sinks, not a second stream
   (`log_stream.dart` + `log_stream_sinks.dart`): a bounded ring of the last 500 entries that
   `installFileLogs` tees into. Routine DEBUG records use a one-second flush deadline,
   256 entries or 64 Ki characters. INFO/WARN and admitted ERROR records flush their preceding context;
@@ -913,10 +916,11 @@ add a kind there, not at the call site.
 - The app has no flash UI: the dial is flashed with `harness flash`. `SerialPortLease` sees that
   flash's lease file and pauses daemon supervision so `harness start` cannot steal the port mid-write.
 - `lib/update/desktop_updater.dart` self-updates from the GCS manifest (sha256-verified, strictly
-  newer only, and on macOS and Windows signed by the running app's own publisher:
-  `lib/update/update_signature.dart`, RELEASE.md "How a running app self-updates"). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
-  variant table in `scripts/publish-macos-variant.sh`, `desktop-linux-<arch>` the `OTA_KEY` in
-  `scripts/upload-desktop-linux.sh`. An Intel Mac reads only `desktop-macos` (the Skia build); Apple
+  newer only, on macOS and Windows signed by the running app's own publisher:
+  `lib/update/update_signature.dart`, and on Linux carrying Harness's Tauri signature for that file and version,
+  checked against the key pinned in `lib/update/tauri_signature.dart`; RELEASE.md "How a running app self-updates"). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
+  variant table in `scripts/publish-macos-variant.sh`, `desktop-linux-<arch>` the parts
+  `scripts/upload-desktop-linux.sh` writes. An Intel Mac reads only `desktop-macos` (the Skia build); Apple
   Silicon takes the newer of `desktop-macos-arm64` and `desktop-macos`, arm64 winning a tie.
 
 ## Testing conventions

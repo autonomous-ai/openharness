@@ -1,0 +1,106 @@
+name: Set up the CLI's end-to-end tests
+description: Node, tmux, zsh and lsof, the runner fixes the daemons under test need, the CLI's packages and, if asked, the real backend
+inputs:
+  node-version:
+    description: The managed runtime the CLI ships on
+    required: true
+  packages:
+    description: More apt packages, or local .deb files, separated by spaces
+    default: ''
+  real-backend:
+    description: "'true' sets up the real backend and its in-memory Mongo and Redis"
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: cli/package-lock.json
+    - name: Install tmux, zsh and lsof, and fix the runner for the daemons under test
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        read -ra packages <<<"$PACKAGES"
+        # Through a mirror outage: one DNS outage failed every shard here before any test ran (#4186).
+        sudo bash scripts/apt-install.sh tmux zsh lsof "${packages[@]}"
+        # Every daemon watches its data folder and the engines' transcript folders, and a file
+        # starts dozens of daemons one after another; the runner's default instance limit is 128.
+        sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+        tmux -V && zsh --version
+        # Ubuntu's global zshrc runs compinit, which stops at "insecure directories ... continue [y]
+        # or abort compinit [n]?" when a completion folder is writable by others or owned by someone
+        # else, and the runner image ships /usr/share/zsh and its vendor-completions that way: every
+        # zsh agent's pane waited at that question and no engine started. A person's machine has
+        # none, or they fix it as zsh says, which is this. Fails here if any is left.
+        insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+        if [ -n "$insecure" ]; then
+          echo "$insecure" | xargs sudo chown root:root
+          echo "$insecure" | xargs sudo chmod g-w,o-w
+        fi
+        zsh -fc 'autoload -U compaudit && compaudit'
+    - shell: bash
+      working-directory: cli
+      run: npm ci --no-audit --no-fund
+    # The specs that run against the real backend (e2e/harness/realBackend.ts: shared tabs, socket
+    # churn, the two-account spike) need it and its in-memory Mongo and Redis. Without them they
+    # skip, and they did here until 2026-11-10: Desktop's Swarm then broke twice in production
+    # behind tests whose fake backend still answered the old way.
+    #
+    # mongod comes from a cache keyed by the installed mongodb-memory-server, which picks its version: on 2026-11-16
+    # fastdl.mongodb.org answered 504 for the ubuntu2204-7.0.24 tarball and one shard of run 43902144004 failed at test
+    # time. Only main saves it, as backend-cache.yml does (#2804, #2822): a cache saved on main is visible to every PR,
+    # one saved on a PR to that PR alone. The specs find it through MONGOMS_DOWNLOAD_DIR, which mongodb-memory-server
+    # reads.
+    - name: Set up the real backend and its in-memory Mongo and Redis
+      id: services
+      if: inputs.real-backend == 'true'
+      shell: bash
+      working-directory: cli
+      run: |
+        sudo bash ../scripts/apt-install.sh redis-server
+        (cd ../backend && npm ci --no-audit --no-fund)
+        mkdir -p "$RUNNER_TEMP/test-services" && cd "$RUNNER_TEMP/test-services"
+        echo '{"name":"test-services","private":true}' > package.json
+        MONGOMS_DISABLE_POSTINSTALL=1 REDISMS_DISABLE_POSTINSTALL=1 npm install --no-audit --no-fund mongodb-memory-server@10 redis-memory-server@0.12
+        echo "mongodb-memory-server=$(node -p "require('mongodb-memory-server/package.json').version")" >> "$GITHUB_OUTPUT"
+        echo "MONGOMS_DOWNLOAD_DIR=${{ runner.temp }}/mongodb-binaries" >> "$GITHUB_ENV"
+        echo "HARNESS_E2E_SERVICES_DIR=$RUNNER_TEMP/test-services" >> "$GITHUB_ENV"
+        echo "HARNESS_E2E_REDIS_SERVER=$(command -v redis-server)" >> "$GITHUB_ENV"
+    - id: mongod
+      if: inputs.real-backend == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/mongodb-binaries
+        key: cli-e2e-mongod-${{ steps.services.outputs.mongodb-memory-server }}-${{ runner.os }}-${{ runner.arch }}
+    # mongodb-memory-server retries only 416, 429, 500 and 503, and fastdl answered 504. Only the real-backend specs
+    # need mongod, so a download that keeps failing warns and the shard goes on; those specs then try once more. Each
+    # attempt is bounded too: the package sets no deadline of its own, and a stalled one would hold the shard to its 45 min.
+    - name: Download mongod
+      id: mongod-download
+      if: inputs.real-backend == 'true' && steps.mongod.outputs.cache-hit != 'true'
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ runner.temp }}/test-services
+      run: |
+        ATTEMPTS=3
+        wait_s=15
+        for attempt in $(seq "$ATTEMPTS"); do
+          if timeout 300 node -e "require('mongodb-memory-server').MongoBinary.getPath().then(path => console.log(path))"; then
+            exit 0
+          fi
+          echo "mongod: attempt $attempt of $ATTEMPTS could not download"
+          if [ "$attempt" -lt "$ATTEMPTS" ]; then
+            sleep "$wait_s"
+            wait_s=$((wait_s * 2))
+          fi
+        done
+        echo "::warning title=mongod::mongod could not download after $ATTEMPTS attempts; the real-backend specs will try again"
+        exit 1
+    - if: inputs.real-backend == 'true' && steps.mongod-download.outcome == 'success' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/mongodb-binaries
+        key: cli-e2e-mongod-${{ steps.services.outputs.mongodb-memory-server }}-${{ runner.os }}-${{ runner.arch }}

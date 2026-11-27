@@ -6,21 +6,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
-import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/usage_page.dart';
 import 'package:harness_mobile/phone/welcome/your_computer.dart';
-import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
-import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/usage/usage_accounts.dart';
 import 'package:harness_mobile/viewer/device_log.dart';
 import 'package:harness_mobile/viewer/device_log_sync.dart';
 
-import 'swarm/swarm_fixture.dart' hide settle;
 import 'viewer_app_fixture.dart';
-import 'voice_fakes.dart' show MemoryKeyValueStore;
 
 /// The phone in a pocket (`paused`, `hidden`) asks nothing on a timer — of the backend or of a
 /// machine. Android keeps a backgrounded app running, so the OS suspending it is not to be counted
@@ -282,66 +276,6 @@ void main() {
 
         await tester.pumpWidget(const SizedBox());
         rig.app.dispose();
-      },
-    );
-
-    testWidgets(
-      'leaderboard: paused — no request for 3 intervals; resumed — one read',
-      (tester) async {
-        const board = '/api/super-tabs/$tab/leaderboard?projectId=$project';
-        final fake = FakeSwarm();
-        fake.routes['/api/super-tabs/list'] = (_) => {
-          'tabs': [
-            {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-          ],
-          'next': null,
-        };
-        fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
-          ...firstLoad(),
-          'members': [part(me, 1, person(me))],
-        };
-        fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-            changes(cursor: 'c2');
-        fake.routes[board] = (_) => leaderboardData();
-        final account = ValueNotifier<String?>(me);
-        final host = SwarmHost(
-          accountId: () => account.value,
-          account: account,
-          request: fake.request,
-          notices: SilentSystemNotices(),
-          features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
-            ..value = {PhoneExperiment.swarm},
-        )..foreground = false;
-        addTearDown(host.dispose);
-        await host.session!.inbox.refresh();
-        await tester.pumpWidget(
-          MaterialApp(
-            builder: (context, child) =>
-                SwarmScope(notifier: host, child: child!),
-            home: const SwarmLeaderboardPage(swarmId: tab, projectId: project),
-          ),
-        );
-        await tester.pump();
-        int boards() => fake.paths.where((p) => p.startsWith(board)).length;
-        final before = boards();
-        expect(before, 1, reason: 'read on opening');
-
-        // The shell tells Swarm the app went behind (`PhoneShell`); the page hears the lifecycle.
-        _toBackground(tester);
-        host.foreground = false;
-        await tester.pump(const Duration(minutes: 5) * 3);
-        expect(boards(), before, reason: 'nothing asked from a pocket');
-
-        host.foreground = true;
-        _toFront(tester);
-        await tester.pump();
-        expect(boards(), before + 1, reason: 'one read at once');
-
-        await tester.pump(const Duration(minutes: 5));
-        expect(boards(), before + 2, reason: 'then on its interval again');
-
-        host.foreground = false;
-        await tester.pumpWidget(const SizedBox());
       },
     );
   });

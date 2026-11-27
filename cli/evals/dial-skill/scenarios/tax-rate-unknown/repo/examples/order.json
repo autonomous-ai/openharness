@@ -1,0 +1,7 @@
+{
+  "lines": [
+    { "sku": "MUG-01", "unitCents": 1290, "quantity": 3 },
+    { "sku": "TEE-07", "unitCents": 1999, "quantity": 2, "discountPercent": 15 },
+    { "sku": "PIN-12", "unitCents": 245, "quantity": 7 }
+  ]
+}

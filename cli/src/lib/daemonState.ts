@@ -6,14 +6,15 @@
  * which would execute the command dispatcher.
  */
 
-import { readFileSync } from 'fs'
+import { readFileSync, rmSync, statSync } from 'fs'
 import { homedir, hostname } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
-import { savedDaemonPort } from './daemonEndpoint.js'
-import { pidIn, unreachableText } from './unreachable.js'
+import { savedDaemonPort } from './daemonRecord.js'
+import { errorKind } from './log.js'
+import { atomicWriteFile, probeState, StateFileUnreadable, unreadableSentence } from './secureState.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 /** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
@@ -28,11 +29,57 @@ export function daemonPort(): number {
   return savedDaemonPort(env.ADAPTER_DATA_DIR, env.PORT)
 }
 
+export type PidFileRead = { state: 'pid'; pid: number } | { state: 'missing' } | { state: 'unreadable' }
+
+/** Digits with whitespace around them, a safe integer above 0; anything else is no pid. */
+export function parsePid(text: string): number | null {
+  const digits = text.trim()
+  if (!/^\d+$/.test(digits)) return null
+  const pid = Number(digits)
+  // 0 names a process group: kill(0, 0) always succeeds.
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+}
+
+/** [parsePid] for the state readers (secureState.ts), which take a file whose text is no pid as unreadable. */
+export function pidOrThrow(text: string): number {
+  const pid = parsePid(text)
+  if (pid === null) throw new TypeError('not a pid')
+  return pid
+}
+
+/** The pid file: a pid, missing, or unreadable, which is never "no daemon": a file mid-write, or a broken one, can
+ *  belong to a daemon that runs. Read with the retry; logs nothing and moves nothing, since only the daemon can say
+ *  whether the file is its own. */
+export function readPidFile(file: string = PID_FILE): PidFileRead {
+  const read = probeState(file, pidOrThrow)
+  if (read.state === 'ok') return { state: 'pid', pid: read.value }
+  return { state: read.state }
+}
+
+/** Written whole: a reader in another process never finds it empty or half there. */
+export function writePidFile(pid: number, file: string = PID_FILE): void {
+  atomicWriteFile(file, `${pid}\n`, 'cache')
+}
+
+let answeredPid: number | null = null
+
+/** The master pid the daemon itself answered with while its pid file could not be read; null takes it back. */
+export function setAnsweredPid(pid: number | null): void {
+  answeredPid = pid
+}
+
+/** The pid file's pid; for a file that cannot be read, the answered pid; else null. */
 export function readPid(): number | null {
-  try {
-    const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10)
-    return Number.isFinite(pid) ? pid : null
-  } catch { return null }
+  const read = readPidFile()
+  if (read.state === 'pid') return read.pid
+  return read.state === 'unreadable' ? answeredPid : null
+}
+
+/** When the pid file was written; null when there is none, or when the pid in use is the daemon's answer. On Windows
+ *  the time tells the master from a process given its pid since: a file that cannot be read was not its claim. */
+export function pidFileWrittenMs(): number | null {
+  if (readPidFile().state !== 'pid') return null
+  try { return statSync(PID_FILE).mtimeMs } catch { return null }
 }
 
 export function isAlive(pid: number): boolean {
@@ -67,16 +114,43 @@ export function processAlive(pid: number, deps: ProcessAliveDeps = {}): boolean 
 /** Whether a durable SSO session exists for this computer. */
 export function hasSavedAuthSession(): boolean { return hasAuthSession() }
 
-/** What to say when this shell cannot reach the daemon of [dataDir]: stopped, or out of reach in a sandbox
- *  (lib/unreachable.ts). The agent verbs reach the daemon that made their pane, whose folder may not be this CLI's. */
-export function daemonUnreachableText(error?: unknown, dataDir: string = env.ADAPTER_DATA_DIR): string {
-  return unreachableText({ error, pid: pidIn(dataDir) })
+/** Remove the pid file only if it still names `pid`. A spawner that deletes unconditionally after ITS
+ *  child failed can erase the record of the daemon that actually won the port. */
+export function removePidFileIf(pid: number | undefined, deps: { readPid: () => number | null } = { readPid }): boolean {
+  if (pid === undefined || deps.readPid() !== pid) return false
+  try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
+  return true
 }
 
-/** Is the background daemon process alive right now? (pid file present AND that pid still exists) */
-export function isDaemonRunning(): boolean {
-  const pid = readPid()
-  return pid !== null && isAlive(pid)
+/** What a failed start says when another daemon serves its data folder, in fixed words: the error's own words name
+ *  the socket's path. */
+const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
+
+/** How a daemon's start fails: `harness start --foreground`, which launchd and systemd run, and the core's, which does
+ *  not stay up (core/main.ts), also one a command runs in its own process (`runCoreInForeground`). What either prints
+ *  is the daemon's log, which Export logs sends. So an error says its kind, never its words, its stack or a path; the
+ *  one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words. */
+export const failForegroundStart = (err: unknown, code = 1): never =>
+  exitSaying(err, code, () => {
+    const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
+    console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
+  })
+
+/** How a start or a command fails: say why ([sayFault], or which trust file cannot be read and why), let go of the pid
+ *  file if it is this process's, and exit. A command's own way is lib/commandFailure.ts `onError`. */
+export function exitSaying(err: unknown, code: number, sayFault: () => void): never {
+  // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
+  // file's full path is in `harness status`, kept out of the error itself. Said from its fields, its own file's name,
+  // why and what to do, not its message: a daemon's start says it in the daemon's log too.
+  if (err instanceof StateFileUnreadable) {
+    console.error(`✗ ${unreadableSentence(err.base, err.failure, err.readFailed)}`)
+    console.error('  harness status shows where it is')
+  } else {
+    sayFault()
+  }
+  // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
+  removePidFileIf(process.pid)
+  process.exit(code)
 }
 
 // Pre-rename name. Adopted (renamed, keeping the inode) the first time a daemon opens the log, so a

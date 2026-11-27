@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const REAL_PATH = process.env.PATH
 const REAL_HOME = process.env.HOME
@@ -26,7 +27,7 @@ function fakeHomeWithOpencode(): string {
   return home
 }
 
-describe('opencodeBin', () => {
+describe('opencodeBinAsync', () => {
   it('finds the install when PATH does not have it', async () => {
     // The daemon is started by the desktop app, so it gets the GUI's PATH — no shell profile, and
     // therefore not the ~/.opencode/bin entry OpenCode's installer appends there. Every recap spun
@@ -36,8 +37,8 @@ describe('opencodeBin', () => {
     process.env.USERPROFILE = process.env.HOME
     process.env.PATH = '/usr/bin:/bin'
 
-    const { opencodeBin } = await import('./engineBin.js')
-    expect(opencodeBin()).toBe(join(home, '.opencode', 'bin', 'opencode'))
+    const { opencodeBinAsync } = await import('./engineBin.js')
+    expect(await opencodeBinAsync()).toBe(join(home, '.opencode', 'bin', 'opencode'))
   })
 
   it('leaves a PATH install alone', async () => {
@@ -50,8 +51,8 @@ describe('opencodeBin', () => {
     process.env.USERPROFILE = process.env.HOME
     process.env.PATH = `${dir}:/usr/bin`
 
-    const { opencodeBin } = await import('./engineBin.js')
-    expect(opencodeBin()).toBe('opencode')
+    const { opencodeBinAsync } = await import('./engineBin.js')
+    expect(await opencodeBinAsync()).toBe(file)
   })
 
   it('returns an absolute path for an install only the login shell can see', async () => {
@@ -68,11 +69,10 @@ describe('opencodeBin', () => {
 
     // A shell that answers the resolver's probe with a PATH this process lacks.
     const fakeShell = join(mkdtempSync(join(tmpdir(), 'oc-sh-')), 'shell');
-    writeFileSync(
+    writeExecutable(
       fakeShell,
       `#!/bin/sh\nprintf '\\n__HARNESS_ENGINE_PATH__=%s\\n' "${shellOnly}"\n`,
     );
-    chmodSync(fakeShell, 0o755);
 
     process.env.HOME = home;
     process.env.USERPROFILE = process.env.HOME;
@@ -81,8 +81,8 @@ describe('opencodeBin', () => {
     const realNodeEnv = process.env.NODE_ENV;
     delete process.env.NODE_ENV;   // the interactive probe is skipped under test
     try {
-      const { opencodeBin } = await import('./engineBin.js');
-      expect(opencodeBin()).toBe(file);
+      const { opencodeBinAsync } = await import('./engineBin.js');
+      expect(await opencodeBinAsync()).toBe(file);
     } finally {
       if (realNodeEnv !== undefined) process.env.NODE_ENV = realNodeEnv;
     }
@@ -93,7 +93,7 @@ describe('opencodeBin', () => {
     process.env.USERPROFILE = process.env.HOME
     process.env.PATH = '/nonexistent'
 
-    const { opencodeBin } = await import('./engineBin.js')
-    expect(opencodeBin()).toBe('opencode')
+    const { opencodeBinAsync } = await import('./engineBin.js')
+    expect(await opencodeBinAsync()).toBe('opencode')
   })
 })

@@ -23,7 +23,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
 import '../state/essential_harness_controller.dart';
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
@@ -1182,7 +1182,7 @@ class _ProductPageState extends State<_ProductPage> {
     final local = widget.notifier.localMachineState;
     if (local == null ||
         local.machine.machineId != machineId ||
-        _machineHarness(local, widget.entry.id)?.hasUpdate != true ||
+        _machineHarness(local, widget.entry.id)?.canUpdate != true ||
         _busy.contains(machineId)) {
       return;
     }
@@ -1316,7 +1316,7 @@ class _ProductPageState extends State<_ProductPage> {
     final operationId = _operationId(local, entry.id);
     final hasUpdate =
         workspace == null &&
-        _machineHarness(local, entry.id)?.hasUpdate == true;
+        _machineHarness(local, entry.id)?.canUpdate == true;
     final base = entry.engine.isNotEmpty
         ? entry.engine
         : (knownHarnessBase[entry.id] ?? '');
@@ -1764,7 +1764,9 @@ class _InstallLine extends StatelessWidget {
       ].whereType<String>().join('\n');
       if (words.isNotEmpty) failureTooltip = words;
     } else if (installed) {
-      status = row?.linked == true
+      status = row?.needsSetup == true
+          ? 'Needs setup'
+          : row?.linked == true
           ? 'Installed · linked to a checkout'
           : row?.hasUpdate == true
           ? 'Update available'

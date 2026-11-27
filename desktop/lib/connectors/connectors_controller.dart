@@ -81,6 +81,52 @@ class ConnectorsController extends ChangeNotifier {
   /// Whether a connection made here reaches the account's other computers (`list` `shared`).
   bool shared = false;
 
+  /// The agent engines on that computer that connect Gmail, Calendar and Drive through their own account
+  /// (`connectors` `elsewhere`, cli/src/lib/connectors/elsewhere.ts): `claude`, `codex`. Only those are offered.
+  Set<String> engines = const {};
+
+  /// Per service, its state through each engine: `connected`, `reconnect`, `installed` (Codex) or `not_connected`.
+  Map<String, Map<String, String>> via = const {};
+
+  /// Per service, what each engine's way lets an agent do.
+  Map<String, Map<String, String>> scopes = const {};
+
+  /// Services only an engine connects (Microsoft 365), which the Harness list has no card for (`elsewhere` `services`).
+  List<ConnectorCard> viaOnly = const [];
+
+  /// Per service Codex splits (Microsoft 365), each of its plugins (`elsewhere` `parts`): ChatGPT connects each on
+  /// its own, so each is offered on its own. A daemon from before says none, and the service is one Codex row.
+  Map<String, List<ViaPart>> parts = const {};
+
+  /// The cards to show: the Harness list, and the engine-only services it does not have.
+  List<ConnectorCard> get shownCards => [
+    ...cards,
+    for (final card in viaOnly)
+      // Only where that computer has an engine to connect it through.
+      if (!cards.any((c) => c.code == card.code) && hasWays(card.code)) card,
+  ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+  /// Whether Harness's own sign-in is a way into [code]; not for an engine-only service.
+  bool harnessWay(String code) => scopes[code]?.containsKey('harness') ?? true;
+
+  /// Whether [code] can be connected through Claude Code or Codex on that computer.
+  bool hasWays(String code) => via[code]?.keys.any(engines.contains) ?? false;
+
+  /// Whether [code] is connected, or installed, through an engine.
+  bool connectedVia(String code) =>
+      via[code]?.entries.any(
+        // Codex's plugin installed counts: whether its account is signed in is ChatGPT's to know.
+        (e) => engines.contains(e.key) && e.value != 'not_connected',
+      ) ??
+      false;
+
+  /// Per service, its own page in each engine's account (`elsewhere` `pages`): claude.ai's connector, or the
+  /// Codex plugin's page on ChatGPT, where an account is added or its settings changed once it is in.
+  Map<String, Map<String, String>> pages = const {};
+
+  /// [page], one of [pages] or a [ViaPart]'s, in the browser.
+  Future<void> openPage(String page) => openInBrowser(Uri.parse(page));
+
   /// What the last action came to. It goes away on its own: Settings keeps this page alive, and a
   /// "disconnected" from days ago was still standing there.
   String get notice => _notice;
@@ -121,10 +167,13 @@ class ConnectorsController extends ChangeNotifier {
 
   String? get _target => machineId ?? app.localMachineState?.machine.machineId;
 
-  Future<Map<String, dynamic>> _ask(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> _ask(
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
     final target = _target;
     if (target == null) throw StateError('This computer is not connected yet.');
-    final answer = await app.connectors(target, payload);
+    final answer = await app.connectors(target, payload, timeout: timeout);
     final failure = answer['error'];
     if (failure != null) {
       throw _Refused(
@@ -141,11 +190,19 @@ class ConnectorsController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  Future<void> refresh() async {
+  /// [sync]: the Refresh button. The computer exchanges the account's connections first, so one made on
+  /// another computer (or this computer only just added to the account) is here when it answers.
+  Future<void> refresh({bool sync = false}) async {
     loading = true;
     _changed();
     try {
-      final answer = await _ask({'action': 'list'});
+      // A Sync waits on the account's connections first (up to 15 s there).
+      final answer = await _ask(
+        {'action': 'list', if (sync) 'sync': true},
+        timeout: sync
+            ? const Duration(minutes: 1)
+            : const Duration(seconds: 20),
+      );
       cards = [
         for (final row in (answer['connections'] as List? ?? const []))
           if (row is Map) ConnectorCard.fromJson(row.cast<String, dynamic>()),
@@ -159,7 +216,198 @@ class ConnectorsController extends ChangeNotifier {
       loading = false;
       _changed();
     }
+    // Slower (it asks Claude Code and Codex), so after the list is on screen.
+    if (error == null) unawaited(refreshVia());
   }
+
+  /// What Claude Code and Codex on that computer hold. A daemon too old to say leaves the three
+  /// services to Harness alone, as before.
+  Future<void> refreshVia() {
+    final loading = _readVia();
+    viaLoading = loading;
+    return loading.whenComplete(() {
+      if (viaLoading == loading) viaLoading = null;
+    });
+  }
+
+  /// [refreshVia] under way: a click on Gmail before its answer waits for it ([afterChecking]),
+  /// rather than going straight to Harness's own sign-in.
+  Future<void>? viaLoading;
+
+  /// The services a computer may offer through Claude Code or Codex (cli/src/lib/connectors/elsewhere.ts).
+  static const wayCodes = {
+    'gmail',
+    'google_calendar',
+    'google_drive',
+    'microsoft_365',
+  };
+
+  /// Still asking whether [code] connects through Claude Code or Codex.
+  bool checking(String code) =>
+      viaLoading != null && wayCodes.contains(code) && !hasWays(code);
+
+  /// Once the computer has said what its engines have: whether [code] has ways.
+  Future<bool> afterChecking(String code) async {
+    await viaLoading;
+    return hasWays(code);
+  }
+
+  Future<void> _readVia() async {
+    try {
+      final answer = await _ask({'action': 'elsewhere'});
+      Map<String, Map<String, String>> table(Object? raw) => {
+        if (raw is Map)
+          for (final MapEntry(:key, :value) in raw.entries)
+            if (value is Map)
+              '$key': {
+                for (final MapEntry(key: k, value: v) in value.entries)
+                  if (v is String) '$k': v,
+              },
+      };
+      final said = answer['engines'];
+      engines = {
+        if (said is Map)
+          for (final MapEntry(:key, :value) in said.entries)
+            if (value == true) '$key',
+      };
+      via = table(answer['connections']);
+      scopes = table(answer['scopes']);
+      pages = table(answer['pages']);
+      parts = {
+        if (answer['parts'] case final Map raw)
+          for (final MapEntry(:key, :value) in raw.entries)
+            if (value is List)
+              '$key': [
+                for (final part in value)
+                  if (part case {
+                    'plugin': final String plugin,
+                    'name': final String name,
+                  })
+                    ViaPart(
+                      plugin,
+                      name,
+                      part['state'] is String
+                          ? part['state'] as String
+                          : 'not_connected',
+                      part['page'] is String ? part['page'] as String : null,
+                      part['icon'] is String ? part['icon'] as String : null,
+                    ),
+              ],
+      };
+      viaOnly = [
+        for (final row in (answer['services'] as List? ?? const []))
+          if (row is Map)
+            ConnectorCard.fromJson({
+              ...row.cast<String, dynamic>(),
+              'state': 'not_connected',
+              'auth': 'elsewhere',
+            }),
+      ];
+      _changed();
+    } catch (_) {
+      // Unknown action on an older CLI, or the computer unreachable: nothing to offer through an engine.
+    }
+  }
+
+  /// How long connect_via and disconnect_via are waited for, as the phone waits. Codex adds or removes
+  /// a service's plugins one after another (Microsoft 365 is three), a few seconds each and longer the
+  /// first time; waited for 20 s, a Mac's first Connect gave up while the plugins went on installing,
+  /// and ChatGPT never opened (2026-11-12).
+  static const viaWait = Duration(seconds: 150);
+
+  /// What [pending] holds while [card] connects through [engine], or through one [part] of it.
+  static String viaKey(ConnectorCard card, String engine, [ViaPart? part]) =>
+      '${card.code}:$engine${part == null ? '' : ':${part.plugin}'}';
+
+  /// [card]'s state through [engine], or through one [part] of it.
+  String viaState(ConnectorCard card, String engine, [ViaPart? part]) {
+    if (part == null) return via[card.code]?[engine] ?? 'not_connected';
+    for (final p in parts[card.code] ?? const <ViaPart>[]) {
+      if (p.plugin == part.plugin) return p.state;
+    }
+    return 'not_connected';
+  }
+
+  /// Connect [card] through [engine]'s own account, or one [part] of it: Codex installs its plugin first. The
+  /// page the person signs in on opens in the browser; the card follows what the engine says for a few minutes.
+  Future<void> connectVia(
+    ConnectorCard card,
+    String engine, [
+    ViaPart? part,
+  ]) async {
+    final key = viaKey(card, engine, part);
+    final name = part?.name ?? card.name;
+    notice = engine == 'codex' ? 'Installing the $name plugin in Codex…' : '';
+    pending.add(key);
+    _changed();
+    try {
+      final answer = await _ask({
+        'action': 'connect_via',
+        'connector': card.code,
+        'via': engine,
+        'plugin': ?part?.plugin,
+      }, timeout: viaWait);
+      final url = answer['url'] as String?;
+      final who = engineName(engine);
+      if (url != null && !await openInBrowser(Uri.parse(url))) {
+        notice = 'Open this address to connect $name for $who: $url';
+      } else {
+        notice = engine == 'codex'
+            ? 'Codex has the $name plugin. Connect $name in ChatGPT; Codex asks for sign-in the first time it uses it.'
+            : 'Connect $name on claude.ai. Claude Code on this computer gets it in a moment.';
+      }
+    } catch (e) {
+      notice = '$name: ${_message(e)}';
+      pending.remove(key);
+      _changed();
+      return;
+    }
+    pending.remove(key);
+    await refreshVia();
+    // Back from the browser: the card shows it as soon as the engine does.
+    final deadline = DateTime.now().add(_signInFor);
+    while (!_disposed &&
+        viaState(card, engine, part) == 'not_connected' &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(pollEvery * 10);
+      await refreshVia();
+    }
+  }
+
+  /// Remove [engine]'s way to [card], or one [part] of it. Codex's plugin is removed on that computer, and
+  /// that is all: no page opens (one nobody asked for, on every Remove, was in the way, 2026-11-12). Claude's
+  /// connector is claude.ai's, and neither Claude Code nor Harness can take it out (`claude mcp remove` knows
+  /// only the computer's own servers): Remove opens its page there, where Disconnect is.
+  Future<void> disconnectVia(
+    ConnectorCard card,
+    String engine, [
+    ViaPart? part,
+  ]) async {
+    if (engine == 'claude') {
+      if (pages[card.code]?['claude'] case final page?) await openPage(page);
+      notice = 'Disconnect ${card.name} on claude.ai.';
+      return;
+    }
+    final name = part?.name ?? card.name;
+    try {
+      await _ask({
+        'action': 'disconnect_via',
+        'connector': card.code,
+        'via': engine,
+        'plugin': ?part?.plugin,
+      }, timeout: viaWait);
+      notice = 'Codex stopped using $name.';
+    } catch (e) {
+      notice = '$name: ${_message(e)}';
+    }
+    await refreshVia();
+  }
+
+  static String engineName(String engine) => switch (engine) {
+    'claude' => 'Claude',
+    'codex' => 'Codex',
+    _ => engine,
+  };
 
   Future<void> connect(ConnectorCard card) async {
     notice = '';
@@ -276,6 +524,24 @@ class ConnectorsController extends ChangeNotifier {
 }
 
 /// The computer answered, and said no: a reason to stop, unlike a request that did not get through.
+/// One of the plugins Codex splits a service into (Microsoft 365: Outlook mail, Outlook calendar, SharePoint).
+class ViaPart {
+  const ViaPart(this.plugin, this.name, this.state, [this.page, this.icon]);
+
+  /// PLUGIN@MARKETPLACE, as the daemon names it in `connect_via` `plugin`.
+  final String plugin;
+  final String name;
+
+  /// `installed` or `not_connected`.
+  final String state;
+
+  /// Its own page on ChatGPT, where an account is added once it is in.
+  final String? page;
+
+  /// Its icon's code in [connectorIcons] (Outlook's, SharePoint's).
+  final String? icon;
+}
+
 class _Refused implements Exception {
   const _Refused(this.message);
 

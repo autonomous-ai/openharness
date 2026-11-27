@@ -9,10 +9,14 @@
  * sign-in. Every removal is written to harness.log with the command and the processes above it.
  */
 import { execFileSync } from 'child_process'
-import { appendFileSync, existsSync, mkdirSync, readlinkSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readlinkSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
+import { redactArgv } from './agentCreateDiagnosis.js'
+import { redactSecretsInText } from './redactSecrets.js'
 import { clearAuthSession } from './authSession.js'
+import { atomicWriteFile } from './secureState.js'
+import { encodedCommandArgs, modulesByPath, powershellPath, withPrelude } from './windows/powershell.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
 export const SIGN_OUT_BUTTON_FLAG = '--from-sign-out-button'
@@ -74,13 +78,17 @@ export function ancestors(depth = 3): Asker[] {
   return found
 }
 
+/** Windows: [pid]'s parent and command line, one line of JSON. */
+export function windowsProcessQuery(pid: number): string {
+  return `${modulesByPath('CimCmdlets')}
+Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ParentProcessId,CommandLine | ConvertTo-Json -Compress`
+}
+
 function readProcess(pid: number): { parent: number; command: string } | null {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-Command',
-        `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ParentProcessId,CommandLine | ConvertTo-Json -Compress`,
-      ], { encoding: 'utf8', timeout: 5_000, windowsHide: true })
+      const out = execFileSync(powershellPath(), encodedCommandArgs(withPrelude(windowsProcessQuery(pid))),
+        { encoding: 'utf8', timeout: 5_000, windowsHide: true })
       const row = JSON.parse(out) as { ParentProcessId?: number; CommandLine?: string | null }
       return { parent: row.ParentProcessId ?? 0, command: row.CommandLine ?? '' }
     }
@@ -125,11 +133,56 @@ function stamp(at: Date): string {
  * cannot be written does not keep the person signed in.
  */
 export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => readonly Asker[] = ancestorsOnce()): void {
+  let line: string | null = null
   try {
     const self = { pid: process.pid, command: process.argv.join(' ') }
+    line = removalLine({ reason, asked, self, ancestors: chain() })
     // `harness reset` has just emptied the folder the log lives in.
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
-    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain() }) + '\n')
+    // Redacted and cut as the kept file has it (AGENTS.md standard 7: no secret reaches a log).
+    // not a state file: the removal line, appended to the log
+    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), keptLine(line) + '\n')
   } catch { /* the log is a record, not a gate */ }
+  if (line) keepRemoval(line)
   clearAuthSession()
+}
+
+/** The file in the data folder that keeps the last [REMOVALS_KEPT] removals' lines apart from harness.log, which trims its oldest
+ *  lines at its cap: anh Dee's Mac, 2026-11-12, lost its line to a flood of "Not signed in" lines, and nobody could tell what had
+ *  signed the person out. Never trimmed but by this. */
+export const REMOVALS_FILE = 'sign-in-removals.log'
+const REMOVALS_KEPT = 20
+/** The most of one removal's line kept, in bytes: a process's command line can be any length. */
+const REMOVAL_LINE_MAX = 2_048
+
+/** A removal's line as the file keeps it: through the redaction of logs and of command lines, cut to [REMOVAL_LINE_MAX] bytes. */
+function keptLine(line: string): string {
+  const said = redactArgv(redactSecretsInText(line))
+  return Buffer.byteLength(said) > REMOVAL_LINE_MAX ? cutTo(said, REMOVAL_LINE_MAX) : said
+}
+
+/** [line] cut on a whole character to at most [max] bytes, its ellipsis counted. */
+function cutTo(line: string, max: number): string {
+  const ellipsis = '…', room = max - Buffer.byteLength(ellipsis)
+  let kept = '', bytes = 0
+  for (const character of line) {
+    const size = Buffer.byteLength(character)
+    if (bytes + size > room) break
+    kept += character
+    bytes += size
+  }
+  return kept + ellipsis
+}
+
+/** Written whole, so a crash or a second removal at once never leaves it half written (the review of #4221); its person's
+ *  alone, whatever mode a file there had before. */
+function keepRemoval(line: string): void {
+  const file = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+  try {
+    const before = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
+    // Every line kept, those from before too: no secret a command line carried, and at most [REMOVAL_LINE_MAX] bytes (the third
+    // review of #4221: the file keeps command lines with no age limit).
+    const kept = [...before.slice(-(REMOVALS_KEPT - 1)), line].map(keptLine)
+    atomicWriteFile(file, kept.join('\n') + '\n', 'cache')
+  } catch { /* a record, not a gate, as harness.log's line is */ }
 }

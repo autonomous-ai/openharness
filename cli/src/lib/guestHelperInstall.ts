@@ -13,8 +13,9 @@ import { tmpdir, userInfo } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
 import { env } from '../config/env.js'
-import { HOOK_SCRIPT } from '../engines/kit/notifyHooks.js'
-import { GUEST_HELPER_PATH, runGuestCommand, type GuestRunner } from './guestAccounts.js'
+import { HOOK_SCRIPT, missingHookScript } from '../engines/kit/notifyHooks.js'
+import { GUEST_HELPER_PATH } from './guestAccounts.js'
+import { runGuestCommand, type GuestRunner } from './guestRunner.js'
 import { guestHelperScript, guestSudoersTemplate, helperScriptVersion } from './guestHelperAssets.js'
 import { managedNodePath } from './nodeRuntime.js'
 import type { RunAdmin } from './windows/elevated.js'
@@ -150,7 +151,7 @@ export async function installGuestHelper(options: GuestHelperInstallOptions = {}
     return { ok: false, code: 'FAILED', message: (error as Error).message }
   }
   const nodeRuntimeDir = options.nodeRuntimeDir === undefined ? managedNodeRuntimeDir() : options.nodeRuntimeDir
-  const hookScript = options.hookScript === undefined ? (existsSync(HOOK_SCRIPT) ? HOOK_SCRIPT : null) : options.hookScript
+  const hookScript = options.hookScript === undefined ? (missingHookScript() ? null : HOOK_SCRIPT) : options.hookScript
 
   // Private to this account until root copies it (mkdtemp is 0700): nobody else can swap a file in between.
   const stageDir = mkdtempSync(join(tmpdir(), 'harness-guest-'))

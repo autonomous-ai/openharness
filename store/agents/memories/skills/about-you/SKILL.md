@@ -6,7 +6,7 @@ description: Build or update the person's About You — a short profile of how t
 # About You
 
 A short profile of how this person works, written so that any agent could read it before helping them.
-It lives at `~/.harness/memory/about-you.md`; the Memories pane shows it, line by line, with sources.
+It lives at `~/.harness/memory/about-you.md` (on Linux `~/.local/share/harness/memory/about-you.md`); the Memories pane shows it, line by line, with sources.
 
 ## What counts as evidence
 

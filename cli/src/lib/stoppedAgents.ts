@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
-import { atomicWriteJson, projectDisplayName, strictPersistedRow, type RegisteredSession } from './registry.js'
-import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { projectDisplayName, strictPersistedRow, withHermesHome, type RegisteredSession } from './registry.js'
+import { atomicWriteJson, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { conversationKey } from './conversationIdentity.js'
 
@@ -25,7 +25,11 @@ export class StoppedAgentStore {
   private readonly catalogCache = new Map<string, { fingerprint: string; bytes: number; at: number; session: RegisteredSession }>()
   private catalogCacheBytes = 0
 
-  constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents')) {}
+  constructor(
+    private readonly directory = join(env.ADAPTER_DATA_DIR, 'stopped-agents'),
+    // Only tests pass another: going past the real bound would take 2,049 files on disk.
+    private readonly cacheRecords = CATALOG_CACHE_RECORDS,
+  ) {}
 
   get(agentId: string): RegisteredSession | null {
     if (!SAFE_ID.test(agentId)) return null
@@ -93,7 +97,7 @@ export class StoppedAgentStore {
     this.forgetCatalogRecord(agentId)
     const session = this.get(agentId)
     const bytes = Number(before.size)
-    if (session && this.catalogCache.size < CATALOG_CACHE_RECORDS
+    if (session && this.catalogCache.size < this.cacheRecords
       && this.catalogCacheBytes + bytes <= CATALOG_CACHE_BYTES
       && catalogFingerprint(lstatSync(file, { bigint: true })) === fingerprint) {
       this.catalogCache.set(agentId, { fingerprint, bytes, at: now, session: structuredClone(session) })
@@ -112,7 +116,7 @@ export class StoppedAgentStore {
   save(session: RegisteredSession): void {
     if (!SAFE_ID.test(session.agentId)) throw new Error('Invalid stopped harness identity.')
     // An exited engine leaves its pane as a shell. Stopping that shell must keep
-    // the conversation saved before releaseEngine cleared its binding/profile.
+    // the conversation saved before confirmEngineExit cleared its binding/profile.
     const previous = this.get(session.agentId)
     if (isTerminalEngine(session.engine) && previous) return
     // A temporarily unbound observation of the SAME process cannot erase a known conversation.
@@ -123,8 +127,8 @@ export class StoppedAgentStore {
       && (!session.hermesHome || session.hermesHome === previous.hermesHome)
       && sameProcessIdentity(session.processIdentity, previous.processIdentity)
       && session.processIdentity!.executable === previous.processIdentity!.executable) {
-      session = { ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
-        hermesHome: previous.hermesHome, boundAt: previous.boundAt, source: previous.source }
+      session = withHermesHome({ ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
+        boundAt: previous.boundAt, source: previous.source }, previous)
     }
     // With optional readers absent, Stop can capture a path the live row has not learned.
     // Hooks during its checkpoint and the final forget both save that pathless row. They
@@ -143,7 +147,9 @@ export class StoppedAgentStore {
     const snapshot = {
       ...session,
       active: false,
-      launch: { state: 'ready' },
+      // A failed launch started nothing, and its reason is what the person reads of it once it is stopped; any other
+      // launch is over, and a resume starts a new one. An unconfirmed resume is not a failure: its engine may have run.
+      launch: session.launch?.state === 'failed' && session.launch.error !== 'RESUME_UNCONFIRMED' ? session.launch : { state: 'ready' },
       defaultName: projectDisplayName(session),
       touchedAt: Date.now(),
     }
@@ -154,21 +160,23 @@ export class StoppedAgentStore {
     delete snapshot.identityHold
     delete snapshot.interpretationHold
     delete snapshot.evidenceRevision
+    // The agent that ended in a shell's pane belongs to that pane; a stopped shell opened again is a new pane.
+    delete snapshot.previousAgentId
     // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
-    atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })
+    atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot }, 'trust')
     this.forgetCatalogRecord(session.agentId)
   }
 
   /** Correct one field of an archive in place — the folder a Claude row drifted out of (cwdRepair.ts).
-   *  Not `save`: that recomputes the name and stamps `touchedAt`, and a repair must not reorder the
+   *  Not `save`: that recomputes the name and stamps `touchedAt`, and a patch must not reorder the
    *  catalog or rename anything. Nothing else on the row changes. */
   patch(agentId: string, patch: Partial<Pick<RegisteredSession, 'cwd'>>): boolean {
     const saved = this.get(agentId)
     if (!saved) return false
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
-    atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } })
+    atomicWriteJson(join(this.directory, `${agentId}.json`), { version: 1, session: { ...saved, ...patch } }, 'trust')
     this.forgetCatalogRecord(agentId)
     return true
   }
@@ -184,6 +192,7 @@ export class StoppedAgentStore {
     try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null; throw error }
     const token = randomUUID()
+    // not a state file: an O_EXCL reservation, filled and flushed; the plan's follow-up moves it to the helper
     try { writeFileSync(fd, JSON.stringify({ token })); fsyncSync(fd) } finally { closeSync(fd) }
     this.syncDirectory()
     return token

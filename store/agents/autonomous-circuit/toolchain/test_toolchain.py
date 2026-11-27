@@ -127,7 +127,8 @@ class Wrapper(unittest.TestCase):
             (self.pkg / "toolchain" / name).symlink_to(TOOLCHAIN / name)
         self.pin(self.upstream.first)
         self.home = self.tmp / "home"
-        self.home.mkdir()
+        # A home still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too (runtimes.sh's rule).
+        (self.home / ".harness").mkdir(parents=True)
         self.calls = self.tmp / "calls.log"
         self.calls.touch()
         self.bin = self.tmp / "bin"

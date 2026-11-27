@@ -16,7 +16,7 @@ whose epoch moved is dropped and read from Mongo again.
 **Spec:** River's addition to task #3041 (11-05): a short in-memory cache per pod for the sign-in lookups, signing out and
 revoking clearing it at once, two security reviews, Atlas ops before and after.
 
-This plan is written and carried out by its Engineer, test first; there is no execution handoff.
+This plan is written and carried out test first; there is no execution handoff.
 
 ## The rules it keeps
 

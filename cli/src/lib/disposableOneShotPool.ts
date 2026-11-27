@@ -1,3 +1,5 @@
+import { errorKind } from './log.js'
+
 export type OneShotEngine = 'claude' | 'codex' | 'cursor' | 'opencode' | 'pi' | 'commandcode' | 'kilo'
 
 const ONE_SHOT_ENGINES: readonly OneShotEngine[] = ['claude', 'codex', 'cursor', 'opencode', 'pi', 'commandcode', 'kilo']
@@ -276,7 +278,7 @@ export class DisposableOneShotPool<Options, Result> {
         // not narrate the same sentence every second until the log is 9MB.
         if (delay < RETRY_CAP_MS || state.failures === CAP_ANNOUNCE_AT) {
           this.log(
-            `[one-shot-pool] ${engine} warm spawn failed (${state.failures}): ${err instanceof Error ? err.message : String(err)}`
+            `[one-shot-pool] ${engine} warm spawn failed (${state.failures}): ${errorKind(err)}`
             + (delay >= RETRY_CAP_MS ? ` · backing off to ${RETRY_CAP_MS / 1000}s and staying quiet` : ` · retry in ${delay}ms`),
           )
         }

@@ -1,11 +1,12 @@
 /** Hook preparation owns only a verified file version. Unknown contents are
  * never an empty configuration, and a completed write includes its directory. */
 import { randomUUID } from 'node:crypto'
-import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
+import { settingsText } from '../../lib/settingsText.js'
 import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 import { HookPreparationHeld } from './hookHeld.js'
 // Every importer of the class from here keeps working; windowsFiles.ts imports it from the leaf, with no cycle.
@@ -26,14 +27,45 @@ export interface HookPreparationProof {
 const MAX_BYTES = 1024 * 1024
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
 
+/**
+ * The directories each attempt has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush (25-35 ms on an
+ * Intel Mac, several times that loaded), and every write flushed its folder's whole chain to the root: the four grid
+ * config publications of gridConfigCompatibility.golden.spec.ts made 202 flushes, 4.5 s of its 6.6 s. A flush makes
+ * durable the names a directory holds when it runs, so one per directory state is what crash safety needs: a directory
+ * is flushed again only once the attempt has changed its names since (`directoryChanged`). An attempt starts with
+ * none, so names an earlier, failed attempt left are confirmed by its first flush, as before.
+ */
+const directoryFlushes = new WeakMap<HookPreparationAttempt, { flushed: Set<string>; changes: number }>()
+
+/** [attempt] created, renamed, linked or removed a name in [directory]: its next sync flushes it again. */
+export function directoryChanged(attempt: HookPreparationAttempt, directory: string): void {
+  const state = directoryFlushes.get(attempt)
+  if (!state) return
+  state.changes++
+  // Followed, as the flush opened it resolved: an alias names the directory it leads to. One no longer there to name
+  // forgets every flush, as nothing else says which one it was.
+  try { state.flushed.delete(fileIdentity(statSync(directory, { bigint: true }))) } catch { state.flushed.clear() }
+}
+
+/** Flush the directory open as [fd], unless [attempt] flushed it and has changed none of its names since. */
+export async function flushDirectory(attempt: HookPreparationAttempt, fd: number): Promise<void> {
+  // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
+  if (!directorySyncSupported()) return
+  const state = directoryFlushes.get(attempt), identity = fileIdentity(fstatSync(fd, { bigint: true }))
+  if (state?.flushed.has(identity)) return
+  const changes = state?.changes
+  await attempt.flush(fd)
+  // A change made while the flush was in flight may have missed it.
+  if (state && state.changes === changes) state.flushed.add(identity)
+}
+
 async function syncDirectory(path: string, attempt: HookPreparationAttempt): Promise<void> {
   attempt.check()
   const expected = fileIdentity(lstatSync(path, { bigint: true }))
   const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     if (fileIdentity(fstatSync(fd, { bigint: true })) !== expected) throw new HookPreparationHeld('the directory changed before sync')
-    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
-    if (directorySyncSupported()) await attempt.flush(fd)
+    await flushDirectory(attempt, fd)
     if (fileIdentity(lstatSync(path, { bigint: true })) !== expected) throw new HookPreparationHeld('the directory changed during sync')
   } finally { closeSync(fd) }
 }
@@ -61,6 +93,7 @@ function ensureDirectory(path: string, attempt: HookPreparationAttempt): void {
     ensureDirectory(dirname(path), attempt)
     attempt.verify(); attempt.check()
     try { mkdirSync(path) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    directoryChanged(attempt, dirname(path))
   }
 }
 
@@ -87,7 +120,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   const facts = paths.snapshot()
   const directory = directoryPath(dirname(file))
   const target = located?.path ?? join(directory, basename(file))
-  let before: string | null = null, content: string | null = null, mode = defaultMode
+  let before: string | null = null, content: string | null = null, mode = defaultMode, bom = false
   if (located) {
     const fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     try {
@@ -106,7 +139,8 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
         offset += read
       }
       if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings file changed while being read')
-      content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+      content = settingsText(bytes)
+      bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
     } finally { closeSync(fd) }
   }
   const verify = () => {
@@ -124,11 +158,13 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     try { now = lstatSync(target, { bigint: true }) } catch (error) { if (!missing(error)) throw error; now = null }
     if ((now ? version(now) : null) !== before) throw new HookPreparationHeld('the settings file changed before publication')
   }
+  // Codex reads its hooks.json with serde_json, which refuses a BOM: the same text after one is a change, written without it.
+  const unchanged = (next: string | null) => content === next && !bom
   const prepare = (next: string | null) => {
     verify()
     if (next !== null && Buffer.byteLength(next) > MAX_BYTES) throw new HookPreparationHeld('the prepared settings exceed their size limit')
     if (next === null && content !== null && lstatSync(file).isSymbolicLink()) throw new HookPreparationHeld('the plugin entry is an alias')
-    if (content === next) return
+    if (unchanged(next)) return
     if (content !== null && next !== null && (mode & 0o200) === 0) throw new HookPreparationHeld('the settings file is read-only')
     let parent = dirname(target)
     for (let depth = 0; depth < 256; depth++) {
@@ -146,7 +182,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     async replace(next: string, attempt: HookPreparationAttempt, exclusive = false): Promise<HookFilePublication> {
       attempt.verify(); prepare(next)
       if (exclusive && content !== null) throw new HookPreparationHeld('another owner already published this claim')
-      if (content === next) {
+      if (unchanged(next)) {
         // A previous rename may have succeeded before directory sync failed.
         // Equality alone cannot turn that uncertainty into a durable success.
         const flags = unchangedFlushFlags(mode)
@@ -208,6 +244,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
           throw new HookPreparationHeld('the published settings changed before sync')
         }
         attempt.observe(file, committed.verify)
+        directoryChanged(attempt, parent)
         await syncDirectoryChain(parent, attempt)
         attempt.verify()
         verifyNativePathFacts(facts.filter(fact => fact.identity !== null && fact.path !== target))
@@ -231,7 +268,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       // shared target. A leaf alias requires the owner to resolve that conflict.
       if (content !== null && lstatSync(file).isSymbolicLink()) throw new HookPreparationHeld('the plugin entry is an alias')
       attempt.check()
-      if (content !== null) unlinkSync(target)
+      if (content !== null) { unlinkSync(target); directoryChanged(attempt, dirname(target)) }
       attempt.observe(file, inspectHookFile(file).verify)
       let parent = dirname(target)
       for (let depth = 0; depth < 256; depth++) {
@@ -397,6 +434,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
       check()
     },
   }
+  directoryFlushes.set(attempt, { flushed: new Set(), changes: 0 })
   let timer: ReturnType<typeof setTimeout> | undefined
   const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), waiters: 0 }
   pendingPreparations.add(pending)

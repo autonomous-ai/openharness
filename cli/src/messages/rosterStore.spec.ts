@@ -1,10 +1,27 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { b64e, newIdentity, sign } from '../lib/e2ee/core.js'
 import { encodeRoster, keyChangeBytes, rosterBytes, type Roster } from './roster.js'
 import { ALERT_WINDOW_MS, RosterStore, type RosterAlertCode } from './rosterStore.js'
+
+// Pass-through, noting each open, write and rename by path, until a test fills the disk: a write then stops part way,
+// as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, touched: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.touched.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      disk.touched.push(`write ${String(args[0])}`)
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.touched.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
 
 const owner = newIdentity(), stranger = newIdentity()
 const TAB = 'a1b2c3d4e5f6a1b2c3d4e5f6'
@@ -22,7 +39,26 @@ const signed = (version: number, by = owner) => {
 describe('the roster store', () => {
   let dir: string, path: string
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'rosters-')); path = join(dir, 'rosters.json') })
-  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => { disk.full = false; disk.touched = []; rmSync(dir, { recursive: true, force: true }) })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const store = new RosterStore(path)
+    store.pin(TAB, b64e(owner.pub))
+    disk.touched = []
+    store.offer(signed(2))
+    expect(disk.touched.filter((t) => t.endsWith(` ${path}`))).toEqual([`rename ${path}`])
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary file', () => {
+    const store = new RosterStore(path)
+    store.pin(TAB, b64e(owner.pub))
+    disk.full = true
+    expect(() => store.offer(signed(2))).toThrow(/ENOSPC/)
+    disk.full = false
+    expect(new RosterStore(path).pinned(TAB)).toBe(b64e(owner.pub))
+    expect(RosterStore.readRosters(path)).toEqual([])
+    expect(readdirSync(dir)).toEqual(['rosters.json'])
+  })
 
   it('says it changed after every save, so that Share derives its observers again, and not when nothing was saved', () => {
     let changes = 0

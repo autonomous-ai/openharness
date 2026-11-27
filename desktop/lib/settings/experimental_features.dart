@@ -57,19 +57,31 @@ enum ExperimentalFeature {
     'agents_tell_agents',
     'Agents can give more work to harnesses they started',
     'Turn on to let an agent send a harness it started its next task with harness tell, in the same conversation, on any of your machines.',
+  ),
+
+  /// Hachi (docs/design/2026-11-12-hachi.md): the person's own Claude Code or Codex that starts and
+  /// follows their other harnesses, in the first tab. Turned on only on a computer, as the creature.
+  hachi(
+    'hachi',
+    'Hachi',
+    // No key here: Windows shows this line too, and its key is Alt+Shift+H. The welcome hint and the
+    // palette name the key each platform takes.
+    'Turn on to get Hachi, a Claude Code or Codex of yours that starts and follows harnesses for you.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);
   final String id, label, description;
 
-  /// Super Tab owns coordination. Keep the old wire values readable for existing
-  /// clients and sessions, without asking people to assemble the feature here.
-  bool get visibleInSettings => this == focusBarCreature || this == shareButton;
+  /// Only these are offered in Settings. The old wire values stay readable for
+  /// existing clients and sessions.
+  bool get visibleInSettings =>
+      this == focusBarCreature || this == shareButton || this == hachi;
 
   /// The switch shows the opposite of the stored value.
   bool get inverted => this == agentMessagesHideSummary;
   bool get available => switch (this) {
     focusBarCreature => !kIsWeb && !kViewerMode,
+    hachi => !kIsWeb,
     shareButton ||
     agentsStartAgents ||
     agentPullRequestLine ||
@@ -146,6 +158,9 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
   ExperimentalFeature? savingFeature, errorFeature;
   Future<void>? _reading;
   Timer? _poll;
+
+  /// A switch the person turned here, once the server took it: what a switch's measures count.
+  void Function(ExperimentalFeature feature, bool on)? onTurned;
 
   bool enabled(ExperimentalFeature feature) => choice(feature) == true;
   bool? choice(ExperimentalFeature feature) =>
@@ -297,6 +312,7 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
       final result = await _transport!.write(accountId!, feature, on);
       if (!_current(generation)) return;
       _apply(result);
+      onTurned?.call(feature, on);
     } catch (_) {
       if (!_current(generation)) return;
       error =

@@ -1,10 +1,10 @@
 /**
- * The model and effort a new agent is launched with, for that session only (`EngineLaunch.modelArgs`). A routed
- * Super Tab start used to type `/model` into the new pane, which Claude Code saves as the person's default model
- * in their own settings.json (manual run 2, 2026-10-19). A flag on the command line is not saved anywhere.
+ * The model and effort a new agent is launched with, for that session only (`EngineLaunch.modelArgs`). A start once
+ * typed `/model` into the new pane, which Claude Code saves as the person's default model in their own settings.json
+ * (manual run 2, 2026-10-19). A flag on the command line is not saved anywhere.
  */
 import { fill } from '../engines/kit/launchArgs.js'
-import { engineLaunches, launchContract } from '../engines/launches.js'
+import { launchContract } from '../engines/launches.js'
 
 export interface LaunchModel { model: string | null; effort: string | null }
 
@@ -72,9 +72,4 @@ export function launchModelArgs(engine: string, launchModel: LaunchModel): strin
     ...(model ? contract.model.map((arg) => fill(arg, 'value', model)) : []),
     ...(effort ? contract.effort.map((arg) => fill(arg, 'value', effort)) : []),
   ]
-}
-
-/** The engines that take a launch model: what `super_tabs capacity` tells a Lead's machine. */
-export function launchModelEngines(): string[] {
-  return Object.entries(engineLaunches).filter(([, launch]) => launch.modelArgs).map(([name]) => name)
 }

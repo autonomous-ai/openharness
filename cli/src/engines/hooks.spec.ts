@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
-import { admitHook, engineHooks, hookContracts, hooksFor } from './hooks.js'
+import { admitHook, engineHooks, hookContracts, hooksFor, startsNewConversation } from './hooks.js'
 import { engineFor } from './registry.js'
 import { liveFor } from './live.js'
 
@@ -19,9 +19,35 @@ it('declares each engine\'s hooks once, for the full engine interface and the ho
   expect(admitHook('claude', {})).toEqual({ accepted: true })
 })
 
-it('composes only what a contract declares: Claude Code corrects transcripts and closes turns, Codex admits', () => {
+// A Codex Stop closes nothing: Codex waits for it before it writes the turn's end (core/turns/turnHooks.ts).
+it('composes only what a contract declares: Claude Code corrects transcripts and its Stop closes turns, Codex admits', () => {
   expect(Object.keys(engineHooks.claude).sort()).toEqual(['install', 'installIn', 'onStop', 'transcriptFor'])
   expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn'])
+})
+
+// The turn's end, its interrupt and its waits on the person (facts-codex §2). No SubagentStart or SubagentStop: Codex's
+// SubagentStop fires per child turn and never for an interrupted or failed one, so a count of them is not exact.
+it('declares Codex\'s events, and no subagent event', () => {
+  expect(hookContracts.codex.settings.events).toEqual([
+    { event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
+    { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }])
+})
+
+// Only the engine's own word for a conversation that starts with no history replays its first turn after a rebind
+// (lib/firstTurnReplay.ts): a resume, a compaction or a fork carries history, and a hook with no source says nothing.
+it('names a new conversation only by the engine\'s own SessionStart source', () => {
+  for (const [engine, source] of [['claude', 'clear'], ['codex', 'startup'], ['codex', 'clear']]) {
+    expect(startsNewConversation(engine, 'SessionStart', source)).toBe(true)
+  }
+  expect(startsNewConversation('claude', 'SessionStart', 'startup')).toBe(false)
+  for (const engine of ['claude', 'codex']) {
+    for (const source of ['resume', 'compact', 'fork', undefined, null]) expect(startsNewConversation(engine, 'SessionStart', source)).toBe(false)
+    expect(startsNewConversation(engine, 'UserPromptSubmit', 'clear')).toBe(false)
+    expect(startsNewConversation(engine, undefined, 'clear')).toBe(false)
+  }
+  for (const engine of ['hermes', 'copilot', 'opencode', 'future', '__proto__']) {
+    expect(startsNewConversation(engine, 'SessionStart', 'clear')).toBe(false)
+  }
 })
 
 it('keeps every contract plain data: nothing in it runs', () => {
@@ -38,13 +64,38 @@ it('installs Claude hooks into the requested home through its facet', async () =
     const file = join(home, 'settings.json')
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
-    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUse'])
+    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification',
+      'PreToolUse', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop', 'PostToolUse'])
+    // Only the notices that wait for the person run the hook (hook/notify.mjs NEEDS_INPUT), not the idle one after each turn.
+    expect(settings.hooks.Notification[0].matcher).toBe('permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale')
     const command = settings.hooks.Stop[0].hooks[0].command as string
     expect(command).toContain('--port 19473')
     expect(command).toContain(fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url)))
     expect(command).not.toContain('--engine')
     await engineHooks.claude.installIn(19473, home)
     expect(readFileSync(file, 'utf8')).toBe(first)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+// Variant P (facts-claude §1): PermissionRequest and Elicitation say a dialog waits as it opens, and PreToolUse only for
+// AskUserQuestion, so no hook runs for any other tool. SubagentStart and SubagentStop count a lead's open subagents.
+it('installs Claude Code\'s wait and subagent hooks beside the person\'s own', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-hook-waits-'))
+  const own = { matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard' }] }
+  try {
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [own] } }))
+    await engineHooks.claude.installIn(19473, home)
+    const settings = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))
+    expect(Object.keys(settings.hooks)).toEqual(['PreToolUse', 'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure',
+      'Notification', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop', 'PostToolUse'])
+    expect(settings.hooks.PreToolUse).toHaveLength(2)
+    expect(settings.hooks.PreToolUse[0]).toEqual(own)
+    expect(settings.hooks.PreToolUse.at(-1)).toMatchObject({ matcher: 'AskUserQuestion' })
+    for (const event of ['PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop']) {
+      expect(settings.hooks[event]).toHaveLength(1)
+      expect(settings.hooks[event][0].matcher).toBeUndefined()
+      expect(settings.hooks[event][0].hooks[0].command).toContain('--port 19473')
+    }
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
@@ -62,14 +113,15 @@ it('rejects Codex delegated rollouts without rejecting a main session or an unwr
 })
 
 it('rejects a hook when its engine admission check throws, and leaves other engines available', () => {
-  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(engineHooks.codex, 'admit')
-    .mockImplementationOnce(() => { throw new Error('reader failed') })
-    .mockImplementationOnce(() => { throw 'reader failed again' })
+    .mockImplementationOnce(() => { throw new Error('could not read /Users/dee/.codex/sessions/rollout-1.jsonl') })
+    .mockImplementationOnce(() => { throw 'reader failed on /Users/dee/.codex' })
   expect(admitHook('codex', {})).toEqual({ accepted: false, reason: 'engine_hook_failed' })
   expect(admitHook('codex', {})).toEqual({ accepted: false, reason: 'engine_hook_failed' })
   expect(admitHook('claude', {})).toEqual({ accepted: true })
-  expect(console.warn).toHaveBeenCalledWith('[hooks] codex admission failed:', 'reader failed')
+  expect(warn.mock.calls).toEqual([['[hooks] codex admission failed:', 'Error'], ['[hooks] codex admission failed:', 'string']])
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/dee')
 })
 
 it('does not emit an end when core rejects a stale closure proposal', async () => {
@@ -80,6 +132,7 @@ it('does not emit an end when core rejects a stale closure proposal', async () =
   await engineHooks.claude.onStop!({
     turnState: () => parser.snapshot(), closeTurn, latestPromptAt: () => undefined,
     drain: async () => {}, noteEngineStopped: () => {}, emit, graceMs: 0,
+    heldEnd: () => undefined, awaitEnd: () => {}, deliverHeldEnd: () => false, subagentsRun: () => false, heldBeforeHook: false,
   }, { sessionId: 'session' })
   expect(closeTurn).toHaveBeenCalledWith('session', parser.snapshot().identity)
   expect(emit).not.toHaveBeenCalled()

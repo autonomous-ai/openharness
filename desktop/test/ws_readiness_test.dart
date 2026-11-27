@@ -9,10 +9,13 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/loopback_websocket.dart';
+
 class _Hub {
   _Hub(this.server) {
     server.listen((request) async {
-      final ws = await WebSocketTransformer.upgrade(request);
+      final ws = await acceptWebSocket(request);
+      if (ws == null) return;
       ws.listen((raw) {
         final frame = jsonDecode(raw as String) as Map<String, dynamic>;
         frames.add(frame);

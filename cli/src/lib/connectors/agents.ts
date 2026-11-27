@@ -5,15 +5,20 @@
  * needs no config change, and an agent already running keeps working.
  *
  * Only entries Harness made are changed or removed: their names are recorded in projections.json, so a
- * server the person added by hand keeps its name and contents. A config that is not plain JSON (comments)
- * is left exactly as it is. Configs are replaced through a symlink, as engines/kit/folderTrust.ts does.
+ * server the person added by hand keeps its name and contents. A config that is not plain JSON (comments), or not
+ * UTF-8, is left exactly as it is; one saved with a BOM is read past it (settingsText.ts). Configs are replaced through
+ * a symlink, as engines/kit/folderTrust.ts does.
  */
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { defaultCodexHome, listCodexProfiles } from '../codexProfiles.js'
+import { errorKind } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
+import { ownProcessRuns } from '../ownProcess.js'
+import { atomicWriteFile } from '../secureState.js'
+import { settingsText } from '../settingsText.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
@@ -119,14 +124,6 @@ export function bridgePipeRecord(vault: Store): string {
 }
 
 /**
- * Whether this account's process [pid] runs. The bridge is this account's, so a pid that answers EPERM is another account's
- * process, one that took the pid since the bridge exited and could have made a pipe of its name: no bridge.
- */
-function ownProcessRuns(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch { return false }
-}
-
-/**
  * The bridge's pipe and token on Windows, or null when there is nothing to dial: no record, a name that is not a local Harness
  * pipe (`isPipePath`: never another computer's), a token that is not 32 bytes, or a recorded process that no longer runs as
  * this account. Read for each request, so a bridge that restarted under a new name is followed.
@@ -152,11 +149,7 @@ export type McpEntry = { url: string } | { command: string; args: string[] }
 function writeShim(vault: Store): string {
   const path = join(vault.root, 'mcp-shim.mjs')
   mkdirSync(vault.root, { recursive: true, mode: 0o700 })
-  if (!existsSync(path) || readFileSync(path, 'utf8') !== MCP_SHIM_SOURCE) {
-    const staged = `${path}.${process.pid}.tmp`
-    writeFileSync(staged, MCP_SHIM_SOURCE, { mode: 0o600 })
-    renameSync(staged, path)
-  }
+  if (!existsSync(path) || readFileSync(path, 'utf8') !== MCP_SHIM_SOURCE) atomicWriteFile(path, MCP_SHIM_SOURCE, 'cache')
   return path
 }
 
@@ -173,6 +166,7 @@ function replace(file: string, text: string): void {
   const target = existsSync(file) ? realpathSync(file) : file
   const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600
   const tmp = `${target}.harness-${process.pid}.tmp`
+  // not a state file: the engine's own config, written with its mode and through its link
   writeFileSync(tmp, text, { mode })
   renameSync(tmp, target)
 }
@@ -210,7 +204,7 @@ class JsonAgent implements Agent {
     if (this.profile && !within(this.profile, this.path)) return owned
     let data: Record<string, unknown> = {}
     if (existsSync(this.path)) {
-      try { data = JSON.parse(readFileSync(this.path, 'utf8')) } catch { return owned }
+      try { data = JSON.parse(settingsText(readFileSync(this.path))) } catch { return owned }
       if (!data || typeof data !== 'object' || Array.isArray(data)) return owned
     }
     const current = data[this.key]
@@ -245,7 +239,7 @@ class CodexAgent implements Agent {
     if (this.profile && !within(this.profile, this.path)) return owned
     let lines: string[] = []
     if (existsSync(this.path)) {
-      try { lines = readFileSync(this.path, 'utf8').split('\n') } catch { return owned }
+      try { lines = settingsText(readFileSync(this.path)).split('\n') } catch { return owned }
       if (lines.at(-1) === '') lines.pop()
     }
     const kept: string[] = []
@@ -362,7 +356,7 @@ function project(vault: Store, env: NodeJS.ProcessEnv, list: (record: Record<str
     }
     // One agent whose config cannot be written (a read-only home) leaves the others, and what was recorded, as they are.
     const attempt = (agent: Agent, work: () => void): void => {
-      try { work() } catch (error) { console.warn(`[connections] could not update ${agent.name}: ${error instanceof Error ? error.message : String(error)}`) }
+      try { work() } catch (error) { console.warn(`[connections] could not update ${agent.name}: ${errorKind(error)}`) }
     }
     const changed: Record<string, string[]> = {}
     for (const agent of targets) {

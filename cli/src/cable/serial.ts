@@ -6,12 +6,14 @@
 // puts it in raw mode, and that is the whole of what this needs.
 // On Windows a COM port is neither, so harness-serial.exe (serial/) holds it and this file talks to its stdio
 // (windowsSerial.ts): still no native module.
-import { execFile } from 'node:child_process'
-import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
+import { execFile, type ChildProcess } from 'node:child_process'
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, watch } from 'node:fs'
 import { basename } from 'node:path'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { promisify } from 'node:util'
+import { errorKind } from '../lib/log.js'
+import { portAccessProblem } from './portAccess.js'
 import { portStream } from './portStream.js'
 import type { CommandFor } from './windowsSerial.js'
 
@@ -46,6 +48,15 @@ const DARWIN_O_EXLOCK = 0x20
 /** The SoC's own USB peripheral. The dial exposes this and nothing else — measured, see findDialPort. */
 export const DIAL_VENDOR_ID = 0x303a
 export const DIAL_PRODUCT_ID = 0x1001
+
+/**
+ * The one way a log line prints a dial's serial port, unchanged: the port's name (`/dev/cu.usbmodem1101`, `COM4`) is a
+ * device's name, not the person's content (the 2026-11-19 log sweep's answer 5, kept by the 2026-11-21 log spec), and
+ * it is what someone needs to tell two dials apart. architecture.failureLogs.spec.ts reads this call as safe by name.
+ */
+export function serialPortName(path: string): string {
+  return path
+}
 
 export interface DialPort {
   path: string
@@ -86,6 +97,98 @@ export async function findDialPorts(): Promise<DialPort[]> {
   return []
 }
 
+type WatchDir = (dir: string, options: { persistent: boolean }, listener: (event: string, name: string | null) => void) =>
+  { on(event: 'error', listener: (error: Error) => void): unknown; close(): void }
+
+declare const __DARWIN_DEV_WATCH__: string | undefined
+
+/** Starts the macOS /dev watch helper; null at once when the build pins none. */
+export type SpawnDevWatch = () => Promise<ChildProcess> | null
+
+/** The /dev watch helper build-bundle.mjs pins. devWatch.ts is imported late, as windowsSerial.ts is: it brings the
+ * CLI's config with it, which the real-port fixtures bundled from this file never need. */
+export function spawnBundledDevWatch(): Promise<ChildProcess> | null {
+  if (typeof __DARWIN_DEV_WATCH__ !== 'string') return null
+  const source = __DARWIN_DEV_WATCH__
+  return import('./devWatch.js').then((devWatch) => devWatch.startDevWatch(source))
+}
+
+// The helper prints only its header and `dev`: a partial line longer than this is neither, and is dropped up to its
+// newline, so what the parser keeps stays bounded.
+const DEV_WATCH_MAX_LINE = 64
+
+/**
+ * Calls `signal` when the OS says a serial device may have arrived, so the fleet scans at once rather than at its
+ * next tick (a replug's slow ring, #4580). Returns the unsubscribe, or undefined where there is no cheap signal.
+ * The tick stays on every OS: it finds the dial when a watch fails.
+ */
+export function watchDialArrivals(signal: () => void, log: (line: string) => void,
+                                  deps: { platform: NodeJS.Platform; watch: WatchDir; spawnDevWatch: SpawnDevWatch } =
+                                    { platform: process.platform, watch, spawnDevWatch: spawnBundledDevWatch }): (() => void) | undefined {
+  if (deps.platform === 'linux') {
+    // A dial is ttyACMn, one behind a USB-serial bridge ttyUSBn. Not persistent: the watch alone never keeps the daemon up.
+    // Only a node made or removed ('rename'): before Linux 6.19 (fsnotify 635bc4de) every write to a device in /dev is
+    // a 'change' too, so the daemon's own writes to an attached dial would each start a scan.
+    const watcher = deps.watch('/dev', { persistent: false }, (event, name) => {
+      if (event === 'rename' && name && /^tty(ACM|USB)\d/.test(name)) signal()
+    })
+    watcher.on('error', (error) => {
+      log(`cable: /dev watch failed (${errorKind(error)}) — a new dial is found by the next scan`)
+      watcher.close()
+    })
+    return () => watcher.close()
+  }
+  if (deps.platform === 'win32') {
+    // harness-serial's watch prints a line on each COM port arrival or removal (CM_Register_Notification).
+    // An import that fails is said by the scan, which imports the same file.
+    let off: (() => void) | undefined
+    let ended = false
+    windows().then((win) => { if (!ended) off = win.windowsDialWatch().onChange(signal) }, () => {})
+    return () => { ended = true; off?.() }
+  }
+  // macOS: fs.watch('/dev') hears nothing on devfs, so a helper of our own (native/darwin-dev-watch.c) blocks in
+  // kevent() on /dev and prints `dev` each time a node there is made or removed. It only says when to look:
+  // createDarwinDialFinder's /dev fingerprint still decides whether ioreg runs. A build with no helper has the tick alone.
+  const started = deps.spawnDevWatch()
+  if (!started) return undefined
+  let child: ChildProcess | undefined
+  let stopped = false
+  let ended = false
+  // Said once, and not for the daemon's own kill: the tick finds a new dial from here on, and no respawn follows.
+  const end = (kind: string) => {
+    if (ended || stopped) return
+    ended = true
+    log(`cable: /dev watch ended (${kind}) — a new dial is found by the next scan`)
+  }
+  // Its stdin's end alone lets the helper exit 0; the kill makes sure.
+  const stop = (helper: ChildProcess) => { helper.stdin?.end(); helper.kill() }
+  started.then((helper) => {
+    child = helper
+    // Heard even when the unsubscribe came first: a failed spawn's 'error' comes after the child is handed back,
+    // and an 'error' nobody hears throws. Its stdin's EPIPE once it has gone is said by its exit.
+    helper.on('error', (error) => end(errorKind(error)))
+    helper.on('exit', (code, killedBy) => end(code !== null ? `exit ${code}` : String(killedBy)))
+    helper.stdin?.on('error', () => {})
+    if (stopped) { stop(helper); return }
+    let partial = ''
+    let dropping = false
+    helper.stdout?.setEncoding('utf8')
+    helper.stdout?.on('data', (chunk: string) => {
+      const lines = (partial + chunk).split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        if (dropping) dropping = false
+        else if (line === 'dev' && !ended && !stopped) signal()
+      }
+      if (partial.length > DEV_WATCH_MAX_LINE) { partial = ''; dropping = true }
+    })
+  }, (error) => end(errorKind(error)))
+  return () => {
+    stopped = true
+    if (child) stop(child)
+  }
+}
+
 /**
  * Is another process holding this tty open right now?
  *
@@ -115,11 +218,13 @@ function depthOf(line: string): number {
   return m ? m[0].length : 0
 }
 
-// `ioreg` cost ~150 ms CPU every 2 s (~7.5% of a core, measured 2026-10-06) even with no dial attached, so
-// it runs only when /dev/cu.* changes (~0.3 ms to fingerprint two cu.* nodes, same measurement).
+// `ioreg` costs CPU on every run, even with no dial attached: ~150 ms for the whole-USB query on 2026-10-06
+// (~7.5% of a core at a scan every 2 s), 7.5 s of kernel time for it on a Mac with DriverKit HID devices on
+// 2026-11-14, and still ~70 ms for the serial-port query that replaced it (runIoreg below, the same Mac). So it
+// runs only when /dev/cu.* changes (~0.3 ms to fingerprint two cu.* nodes, measured 2026-10-06).
 // `ino` is in the fingerprint because a re-plug makes a new devfs node, and that attachment is what moves
 // `session`. No mtime/ctime: I/O on an open tty bumps them, defeating the gate exactly when a dial is
-// attached. Every 5 min is a safety net (~0.05%); no name filter, so an odd name is never invisible.
+// attached. Every 5 min is a safety net (~0.02%); no name filter, so an odd name is never invisible.
 // devfs and the IORegistry do not change atomically, so a scan on a plug/unplug edge can see a missing or
 // phantom port; a scan that followed a change, or that lists a port whose /dev node is gone, is therefore
 // confirmed by another (one extra ioreg per edge, and one per call while the IORegistry lags an unplug).
@@ -149,8 +254,13 @@ const findDarwin = createDarwinDialFinder({
   }),
   runIoreg: async () => {
     try {
-      // Keep each USB device's children (the tty lives below its vendor/product IDs), but skip the rest of the IOService plane.
-      return (await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024, timeout: TOOL_TIMEOUT_MS })).stdout
+      // Only the serial ports, each with the chain of nodes above it (-t): the USB device node in that chain carries
+      // the ids, the serial number and the sessionID. Asking for every USB device with its whole subtree
+      // (-c IOUSBHostDevice) also read the DriverKit HID drivers below a keyboard and a trackpad: 7.7 s wall, 7.5 s
+      // of it in the kernel, 4.5 MB. The 5 s timeout ended every scan and no dial attached (2,282 failed scans in
+      // one day's log, daemon 0.6.56, 2026-11-14). This query took 0.07 s wall, 0.06 s in the kernel and 336 KB on
+      // the same Mac.
+      return (await runFile('ioreg', ['-r', '-c', 'IOSerialBSDClient', '-t', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024, timeout: TOOL_TIMEOUT_MS })).stdout
     } catch {
       throw new Error('Could not enumerate USB dials')
     }
@@ -166,6 +276,7 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
   let armedSerial: string | undefined
   let armedSession: string | undefined
   let serialNumber: string | undefined
+  let session: string | undefined
   let sawVendor = false
   let sawProduct = false
   let nodeDepth = 0
@@ -179,6 +290,7 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
       sawVendor = false
       sawProduct = false
       serialNumber = undefined
+      session = undefined
       continue
     }
 
@@ -188,9 +300,14 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
       serialNumber = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
       if (armedAt === nodeDepth) armedSerial = serialNumber
     }
-    // The USB device node's own sessionID (the interfaces below it carry ones of their own).
-    if (line.includes('"sessionID"') && armedAt === nodeDepth) armedSession = line.split('=')[1]?.trim()
-    if (sawVendor && sawProduct && armedAt === null) { armedAt = nodeDepth; armedSerial = serialNumber }
+    // The USB device node's own sessionID (the interfaces below it carry ones of their own). Kept as it is read,
+    // like the serial number, because the node may list it before its ids: the real dump of 2026-11-14 does, and
+    // a parser that waited for the match never set `session` on macOS.
+    if (line.includes('"sessionID"')) {
+      session = line.split('=')[1]?.trim()
+      if (armedAt === nodeDepth) armedSession = session
+    }
+    if (sawVendor && sawProduct && armedAt === null) { armedAt = nodeDepth; armedSerial = serialNumber; armedSession = session }
 
     if (armedAt !== null && line.includes('"IOCalloutDevice"')) {
       const path = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
@@ -259,9 +376,9 @@ export class SerialLink {
     stream.on('data', (chunk: Buffer) => {
       if (this.closed) return
       try { this.onData(chunk) }
-      catch (error) { void this.close((error as NodeJS.ErrnoException).code ?? String(error)) }
+      catch (error) { void this.close(errorKind(error)) }
     })
-    stream.on('error', (error: NodeJS.ErrnoException) => { void this.close(error.code ?? String(error)) })
+    stream.on('error', (error: Error) => { void this.close(errorKind(error)) })
     stream.once('end', () => { void this.close('end of stream') })
     stream.once('close', () => {
       this.streamClosed = true
@@ -279,6 +396,9 @@ export class SerialLink {
     onClosed: (why: string) => void,
   ): Promise<SerialLink> {
     if (process.platform === 'win32') return SerialLink.openWindows(path, onData, onClosed)
+    // Before stty, whose "Permission denied" says nothing a person can act on.
+    const denied = portAccessProblem(path)
+    if (denied) throw denied
     // Keep the claim on a separate open description: libuv reopens/replaces
     // the stream's descriptor and would otherwise release this advisory lock.
     // Acquire it before stty can change a port another Harness is using.

@@ -344,6 +344,9 @@ async function findCases(): Promise<Record<string, unknown>> {
   write(join(root, 'claude', 'sessions', '109.json'), '{not json')
   const local = Date.parse(procStart)
   const utcMs = Date.parse(utc)
+  // Claude Code on Windows: no `procStart`, the start as a decimal FILETIME (100 ns ticks since 1601) in `procStartFt`.
+  record('claude', 111, { procStart: undefined, procStartFt: String((BigInt(utcMs) + 11_644_473_600_000n) * 10_000n) })
+  record('claude', 112, { procStart: undefined, procStartFt: '12x' })
   for (const moved of [false, true]) {
     if (moved) adoptMoved(); else forgetMoved()
     for (const [pid, cwd, startedAt, name] of [
@@ -352,6 +355,7 @@ async function findCases(): Promise<Record<string, unknown>> {
       [104, work('a'), local, 'another folder'], [105, work('a'), local, 'no id'], [106, work('a'), local, 'no transcript'], [107, work('a'), local, 'no start'],
       [108, work('c'), local, 'moved home'], [109, work('a'), local, 'unreadable'], [110, work('a'), local, 'no record'], [-1, work('a'), local, 'bad pid'],
       [101, work('a'), Number.NaN, 'bad start'],
+      [111, work('a'), utcMs, 'filetime start'], [111, work('a'), utcMs + 1, 'filetime, another start'], [112, work('a'), utcMs, 'filetime, bad value'],
     ] as const) {
       cases[`process record · ${moved ? 'moved homes' : 'default homes'} · ${name}`] = await attempt(() => s.processSessionOf('claude', pid, cwd, startedAt))
     }
@@ -541,6 +545,7 @@ async function registryCases(): Promise<Record<string, unknown>> {
         chmodSync(file, 0o644)
         logs.length = 0
         m.registry.registry.load()
+        await m.registry.registry.flush()
         const persisted = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
         cases[`${moved ? 'moved homes' : 'default homes'} · ${name}`] = norm({
           loaded: m.registry.registry.list().map(project),

@@ -78,8 +78,8 @@ function engineLaunchIn(value: unknown): GridEngineLaunch | null {
   const dir = value.configDir
   if (dir !== undefined) {
     if (!isRecord(dir) || !Array.isArray(dir.files)) return null
-    // Pointed at by exactly one of a variable or a flag (`GridEngineLaunch.configDir`).
-    const pointers = [dir.envVar, dir.arg].filter((pointer) => pointer !== undefined)
+    // Pointed at by exactly one of a variable, a flag or a config key (`GridEngineLaunch.configDir`).
+    const pointers = [dir.envVar, dir.arg, dir.cliConfigKey].filter((pointer) => pointer !== undefined)
     if (pointers.length !== 1 || !isText(pointers[0])) return null
     if (!dir.files.every((file) => isRecord(file) && isText(file.name) && isText(file.content))) return null
     if (dir.pointAt !== undefined && !isText(dir.pointAt)) return null

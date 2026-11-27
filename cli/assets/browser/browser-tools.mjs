@@ -1,10 +1,10 @@
-// The agent's browser tools: a stdio MCP server (one JSON-RPC message per line) that runs inside the browser's
-// container as `node /opt/harness-browser/browser-tools.mjs`, started by `podman exec` from `harness browser-mcp`.
-// It drives the Chrome the person also sees, over CDP, with public playwright-core API only.
-import { readFileSync } from 'node:fs'
+// The agent's browser tools: a line server (one JSON-RPC message per line, no MCP handshake) that runs inside the
+// browser's container as `node /opt/harness-browser/browser-tools.mjs`, started by the daemon's `podman exec -i`. It
+// answers `tools/call`, one per command the agent runs, and `window`, which sizes Chrome's window to the person's
+// panel. It drives the Chrome the person also sees, over CDP, with public playwright-core API only.
 import { createInterface } from 'node:readline'
 import { chromium } from 'playwright-core'
-import { connectWithRetry, navigable, roleSnapshot, withTimeout } from './browser-tools-lib.mjs'
+import { answer, connectWithRetry, navigable, roleSnapshot, setWindow, withTimeout } from './browser-tools-lib.mjs'
 import { CHALLENGE_ELEMENTS, detectChallenge, frameKind, withChallenge } from './challenge.mjs'
 import { humanInput, modeOf } from './human-input.mjs'
 
@@ -17,7 +17,6 @@ const CHALLENGE_MS = 3_000
 const STALE = 'Element not found; take a new snapshot'
 // The tools after which the page may be asking for a person.
 const CHECKED = new Set(['browser_navigate', 'browser_click', 'browser_type', 'browser_snapshot'])
-const TOOLS = JSON.parse(readFileSync(new URL('./browser-tools.json', import.meta.url), 'utf8')).tools
 
 let browser = null
 let current = null
@@ -165,14 +164,17 @@ async function call({ name, arguments: args = {}, _harness }) {
   }
 }
 
-async function answer(message) {
-  if (message.method === 'initialize') {
-    return { protocolVersion: message.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'browser', version: '1' } }
-  }
-  if (message.method === 'tools/list') return { tools: TOOLS }
-  if (message.method === 'tools/call') return await call(message.params ?? {})
-  if (message.method === 'ping') return {}
-  return null
+/** Chrome's window takes the panel's size, through a CDP session of its own that ends with the call. */
+async function window({ width, height }) {
+  return withTimeout((async () => {
+    const p = await page()
+    const session = await p.context().newCDPSession(p)
+    try {
+      return await setWindow((method, params) => session.send(method, params), { width, height })
+    } finally {
+      await session.detach().catch(() => {})
+    }
+  })(), TOOL_MS, 'window')
 }
 
 const send = message => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
@@ -183,8 +185,14 @@ createInterface({ input: process.stdin })
     try { message = JSON.parse(line) } catch { return send({ id: null, error: { code: -32700, message: 'Parse error' } }) }
     // A notification (no id) is never answered.
     if (message.id === undefined) return
-    const result = await answer(message)
+    let result
+    try {
+      result = await answer(message, { call, window })
+    } catch (error) {
+      // Only `window` throws (a call answers its failure as isError): the daemon reads an error as the window not set.
+      return send({ id: message.id, error: { code: -32000, message: error instanceof Error ? error.message.split('\n')[0] : String(error) } })
+    }
     send(result === null ? { id: message.id, error: { code: -32601, message: `Unknown method ${message.method}` } } : { id: message.id, result })
   })
-  // The relay closed stdin: exit without browser.close(), which on a CDP connection would close the person's Chrome.
+  // The daemon closed stdin: exit without browser.close(), which on a CDP connection would close the person's Chrome.
   .on('close', () => process.exit(0))

@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createDevicesLink, DEVICES_WAIT_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
+import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
 
 const STATE: DevicesState = {
   desk: ['a1'], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: ['claude'], commanders: false,
@@ -19,13 +19,24 @@ function link(answer: Record<string, unknown> = {}) {
 }
 
 describe('what the core tells the devices', () => {
+  it('carries a paneless agent\'s hook event as a notice of kind observed', () => {
+    const { sent, port } = link()
+    port.observed({ engine: 'claude', sessionId: 's1', event: 'turn-stop', callerPid: 9, hostHints: {} })
+    expect(sent).toEqual([{ type: 'service_event', payload: { engine: 'claude', sessionId: 's1', event: 'turn-stop', callerPid: 9, hostHints: {}, kind: 'observed' } }])
+  })
+
+  it('says whether the devices heard a paneless agent\'s hook event, so the core counts one lost while they are down', () => {
+    const event = { engine: 'claude', sessionId: 's1', event: 'turn-stop', callerPid: 9, hostHints: {} } as const
+    expect(link().port.observed(event)).toBe(true)
+    const down = createDevicesLink({ core: fakeCore(), notify: () => false, call: vi.fn(), state: () => STATE, log: vi.fn() })
+    expect(down.port.observed(event)).toBe(false)
+  })
+
   it('is a notice for each, by kind, carrying what the windows said', () => {
     const { sent, port } = link()
     port.card({ type: 'commander_event', agentId: 'a1' })
     port.desk(['a1'], false)
     port.swarms(null)
-    port.swarmCards([])
-    port.swarmCardRecap({ tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false })
     port.unread([])
     port.appFocus('m1', 'a1')
     port.seen('a1')
@@ -33,7 +44,6 @@ describe('what the core tells the devices', () => {
     port.settings('usb', { brightness: 3 })
     port.windowFocus({ voice: null, form: null })
     port.windowReply('form', 'w1', 'm1', { ok: true })
-    port.voiceReply('v1', { t: 'taken' })
     port.windowGone('w1')
     port.scroll('move', 2, 9)
     port.engines(['codex'])
@@ -42,8 +52,6 @@ describe('what the core tells the devices', () => {
       { kind: 'card', frame: { type: 'commander_event', agentId: 'a1' } },
       { kind: 'desk', agentIds: ['a1'], foreground: false },
       { kind: 'swarms', swarms: null },
-      { kind: 'swarmCards', items: [] },
-      { kind: 'swarmCardRecap', recap: { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false } },
       { kind: 'unread', items: [] },
       { kind: 'appFocus', machineId: 'm1', agentId: 'a1' },
       { kind: 'seen', agentId: 'a1' },
@@ -51,7 +59,6 @@ describe('what the core tells the devices', () => {
       { kind: 'settings', id: 'usb', patch: { brightness: 3 } },
       { kind: 'windowFocus', focus: { voice: null, form: null } },
       { kind: 'windowReply', which: 'form', connId: 'w1', machineId: 'm1', reply: { ok: true } },
-      { kind: 'voiceReply', voiceId: 'v1', reply: { t: 'taken' } },
       { kind: 'windowGone', connId: 'w1' },
       { kind: 'scroll', phase: 'move', dy: 2, velocity: 9 },
       { kind: 'engines', engines: ['codex'] },
@@ -71,6 +78,12 @@ describe('what the core tells the devices', () => {
     expect(started.engines).toHaveBeenCalledWith(['claude'])
     expect(started.commanders).toHaveBeenCalledWith(false)
     expect(sent).toEqual([])
+  })
+
+  it('tells them a mod\'s poll that went first, as the notice inbox.gone', () => {
+    const { sent, port } = link()
+    port.inboxGone('p1')
+    expect(sent).toEqual([{ type: 'service_event', payload: { pollId: 'p1', kind: 'inbox.gone' } }])
   })
 
   it('says everything again when they connect, and nothing to stop: the master stops their process', async () => {
@@ -105,6 +118,30 @@ describe('what the core asks of the devices', () => {
     expect(await port.routeTask('fix it')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable', candidates: [] })
     expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'the devices service is unavailable' })
     expect(await port.stepFocus('next')).toBe('no_agents')
+  })
+
+  // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): nothing asks the devices for an approval.
+  it('has no approval call or notice', () => {
+    const { port } = link()
+    expect(Object.keys(port).filter((member) => /approval/i.test(member))).toEqual([])
+  })
+
+  // Past the devices' own 25 s hold, so a hold that runs out is their empty answer, which the mod follows at once.
+  it('asks for the mod\'s poll with a 27 s wait and keeps only a string text; an error is { off: true }', async () => {
+    const poll = { pollId: 'p1', sessionId: 's1' }
+    const { call, port } = link({ text: 'run the tests' })
+    expect(INBOX_CALL_MS).toBe(27_000)
+    expect(await port.inboxPoll(poll)).toEqual({ text: 'run the tests' })
+    expect(call).toHaveBeenLastCalledWith('inboxPoll', poll, INBOX_CALL_MS)
+    for (const answer of [{}, { text: 7, extra: 'x' }, { off: 'yes' }]) {
+      call.mockResolvedValueOnce(answer)
+      expect(await port.inboxPoll(poll), JSON.stringify(answer)).toEqual({})
+    }
+    // Their inbox failed in their process: no device, never an empty hold.
+    call.mockResolvedValueOnce({ off: true })
+    expect(await port.inboxPoll(poll)).toEqual({ off: true })
+    call.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
+    expect(await port.inboxPoll(poll)).toEqual({ off: true })
   })
 })
 
@@ -218,56 +255,5 @@ describe('what the devices tell the core', () => {
     createDevicesLink({ core: fakeCore(), notify: () => true, call: async () => ({}), state: () => STATE }).notice({ kind: 'shout' })
     expect(warn).toHaveBeenCalledWith('[services] devices said shout, which the core does not hear')
     warn.mockRestore()
-  })
-})
-
-describe('the devices\' Swarm card requests to the Super Tab service', () => {
-  it('hands the core only the fields of the card requests (the core allows those and no other action)', async () => {
-    const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
-    const core = fakeCore()
-    core.superTabRequest = superTabRequest
-    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
-    expect(await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: ['t1'], extra: 1 })).toMatchObject({ echoed: { action: 'cardsWanted', on: true, include: ['t1'] } })
-    expect(await devices.answer('super_tabs', { action: 'cardsWanted', on: 'yes' })).toMatchObject({ echoed: { action: 'cardsWanted', on: false } })
-    expect(await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', extra: 1 })).toMatchObject({ echoed: { action: 'cardRecap', tabId: 't1', leadId: 'l1' } })
-    expect(await devices.answer('super_tabs', { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null })).toMatchObject({ echoed: { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null } })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', tabId: 't1' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
-    expect((await devices.answer('super_tabs', { action: 'cardWorker', machineId: 'm2', harnessId: 'h1', text: 'x', tabId: 't1' })).echoed).toEqual({ action: 'cardWorker', machineId: 'm2', harnessId: 'h1' })
-    // A core with no way to the service says so.
-    const bare = createDevicesLink({ core: fakeCore(), notify: () => true, call: vi.fn(), state: () => STATE })
-    expect(await bare.answer('super_tabs', { action: 'cardsWanted', on: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
-  })
-
-  it('passes the window\'s focus with the wish and a swarmChat dial\'s chat flag, and only when they are there', async () => {
-    const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
-    const core = fakeCore()
-    core.superTabRequest = superTabRequest
-    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
-    const focus = { tabId: 't1', conversationId: 'g1' }
-    expect((await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: ['t1'], focus })).echoed).toEqual({ action: 'cardsWanted', on: true, include: ['t1'], focus })
-    expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true })
-    expect((await devices.answer('super_tabs', { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: 'l1', chat: true })).echoed).toEqual({ action: 'cardOpen', session: 'c1', tabId: 't1', leadId: 'l1', chat: true })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })
-    // Anything but a literal true is no chat, and a missing focus is none: today's requests exactly.
-    expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1' })
-    expect((await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: [] })).echoed).toEqual({ action: 'cardsWanted', on: true, include: [] })
-  })
-
-  it('passes a swarmBuddy dial\'s buddy flag, as it passes the other card requests', async () => {
-    const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
-    const core = fakeCore()
-    core.superTabRequest = superTabRequest
-    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
-    expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: true })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1', reviewed: 'yes' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 'pm1' })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chatId: 7 })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
-    // An older dial's words may still name a thread (swarmThread, #2756): it is not passed on (task #3908).
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'b0', thread: 'm9', threaded: true })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'b0' })
-    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', thread: null })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
-    // An older dial's side is no request any more (task #3908): it reaches the service as an unknown action.
-    expect((await devices.answer('super_tabs', { action: 'cardSide', tabId: 't1', side: 'buddy', leadId: 'l1', text: 'x' })).echoed).toEqual({ action: 'cardSide', tabId: 't1', leadId: 'l1' })
   })
 })

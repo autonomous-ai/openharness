@@ -8,4 +8,4 @@ export { parseGrokFooterProfile } from './runtimeProfile.js'
 export { findGrokTranscript } from './session.js'
 export { grokProvider } from '../../lib/sessionSearch/externals/grok.js'
 
-export { createRuntimeProfileReader } from './profileReader.js'
+export { createRuntimeProfileReader, transcriptEvidence } from './profileReader.js'

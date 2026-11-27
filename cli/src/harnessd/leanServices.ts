@@ -63,7 +63,7 @@ export function leanServices(deps: LeanServicesDeps): LeanServices {
   let said: string | null = null
   /** Why the lean bundle cannot be used now; null when it can. */
   const unusable = (lean: string): string | null => {
-    if (!deps.sameBundle()) return `${scriptPath} is no longer the bundle it came from`
+    if (!deps.sameBundle()) return 'cli.js is no longer the bundle it came from'
     if (deps.leanFingerprint === undefined) return deps.exists(lean) ? null : 'it is gone'
     const found = deps.folderFingerprint(dirname(lean))
     return found === deps.leanFingerprint ? null : found === null ? 'it is gone' : 'its files changed'
@@ -75,7 +75,7 @@ export function leanServices(deps: LeanServicesDeps): LeanServices {
       const why = unusable(leanPath)
       if (why === null) { said = null; return name === CORE ? join(dirname(leanPath), LEAN_CORE_ENTRY) : leanPath }
       // Said once per reason, not on every restart.
-      if (said !== why) deps.log(`[harnessd] the lean bundle ${leanPath} cannot be used (${why}): the core and the services start from ${scriptPath}`)
+      if (said !== why) deps.log(`[harnessd] the lean bundle cannot be used (${why}): the core and the services start from cli.js`)
       said = why
       return scriptPath
     },
@@ -93,7 +93,7 @@ export function leanServices(deps: LeanServicesDeps): LeanServices {
         const deaths = (earlyDeaths.get(name) ?? 0) + 1
         earlyDeaths.set(name, deaths)
         if (deaths === LEAN_EARLY_DEATHS) {
-          deps.log(`[harnessd] ${named(name)} died ${deaths} times from the lean bundle before it beat: it starts from ${scriptPath} from now on`)
+          deps.log(`[harnessd] ${named(name)} died ${deaths} times from the lean bundle before it beat: it starts from cli.js from now on`)
         }
       })
     },

@@ -1,5 +1,6 @@
 /** Verify a resumable launch before asking an external terminal to quit. */
 import { engineHooks } from '../../engines/hooks.js'
+import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
@@ -27,12 +28,12 @@ export function createExternalPreflight(deps: {
     const refused = await refusePermissionFlagIfUnsupported(row.engine, row, undefined, native)
     if (!current()) return changed
     if (refused) return refused
-    if (native && !await native.prepareHooks(deps.hooksDisabled ? 0 : deps.hookPort, owner)) return { detail: 'Waiting to confirm the external conversation’s native hooks.' }
+    if (native && !await native.prepareHooks(deps.hooksDisabled ? 0 : deps.hookPort, owner)) return { detail: hooksHeldDetail(row.engine, 'Waiting to confirm the external conversation’s native hooks.') }
     if (!native && row.engine === 'opencode' && !deps.hooksDisabled && !await deps.installOpencodePlugin(deps.hookPort)) {
       return { detail: 'Waiting for OpenCode’s launch support to become available.' }
     }
     if (!native && row.codexHome && !deps.hooksDisabled && !await engineHooks.codex.installIn(deps.hookPort, row.codexHome)) {
-      return { detail: 'Waiting to confirm Codex’s hooks in the selected profile.' }
+      return { detail: hooksHeldDetail('codex', 'Waiting to confirm Codex’s hooks in the selected profile.') }
     }
     if (!current()) return changed
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): held, saying why.

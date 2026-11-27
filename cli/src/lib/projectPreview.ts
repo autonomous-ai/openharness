@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { insideGitCheckout } from './gitProject.js'
+import { gitPath } from './gitOnPath.js'
 import { withinRoots } from './pathContainment.js'
 
 const exec = promisify(execFile)
@@ -39,7 +40,7 @@ export async function projectPreview(path: string, knownRoots: string[] = []) {
     const git = async (args: string[]) => {
       if (!checkout) return undefined
       try {
-        return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', target, ...args], {
+        return (await exec(await gitPath(), ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', target, ...args], {
           timeout: 2000, maxBuffer: 32 * 1024,
           // Without the GIT_* the daemon may have inherited, so git finds what insideGitCheckout found.
           env: Object.fromEntries(Object.entries({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' })

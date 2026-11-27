@@ -15,6 +15,8 @@ import 'package:harness/measurement/speed_marks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/profile_cache.dart';
+import 'package:harness/viewer/viewer_key_store.dart';
+import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 // Task #3561: the signed-in check (`harness auth status`, ~245 ms on a release build) no longer holds up the window.
@@ -61,6 +63,7 @@ class _Cli extends CliLogin {
   final answer = Completer<CliAuthStatus>();
   bool fails = false;
   int asked = 0;
+  int logins = 0;
   @override
   Future<CliAuthStatus> checkStatus() async {
     asked++;
@@ -72,12 +75,17 @@ class _Cli extends CliLogin {
   Future<void> login({
     void Function(String url)? onAuthorizeUrl,
     SignInProvider? provider,
-  }) async {}
+  }) async {
+    logins++;
+  }
+
   @override
   Future<void> logout() async {}
 }
 
+/// Setup, ready at once. It runs the CLI (`node cli.js version`) and may install it, so [runs] counts it.
 class _Environment extends EnvironmentProvisioner {
+  int runs = 0;
   @override
   Future<EnvironmentReadiness> ensureReady({
     required void Function(EnvironmentReadiness value) onProgress,
@@ -85,6 +93,7 @@ class _Environment extends EnvironmentProvisioner {
     bool install = true,
     EnvironmentSetupMode? mode,
   }) async {
+    runs++;
     final ready = EnvironmentReadiness(
       steps: {
         for (final step in EnvironmentStep.values)
@@ -98,7 +107,8 @@ class _Environment extends EnvironmentProvisioner {
 }
 
 class _Discovery extends LocalCliDiscovery {
-  _Discovery() : super(config: AppConfig.dev);
+  _Discovery({super.uninstalling, super.flashing})
+    : super(config: AppConfig.dev);
   @override
   Future<String?> computerId() async => null;
   @override
@@ -107,15 +117,23 @@ class _Discovery extends LocalCliDiscovery {
 }
 
 class _App extends AppNotifier {
-  _App(_Cli cli, LocalKeyValueStore storage)
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        cliLogin: cli,
-        environmentProvisioner: _Environment(),
-        localCliDiscovery: _Discovery(),
-        paneLayoutStore: PaneLayoutStore(storage: storage),
-      );
+  _App(
+    _Cli cli,
+    LocalKeyValueStore storage, {
+    bool Function()? uninstalling,
+    bool Function()? flashing,
+    super.viewer,
+  }) : super(
+         config: AppConfig.dev,
+         authSession: AuthSession(),
+         cliLogin: cli,
+         environmentProvisioner: _Environment(),
+         localCliDiscovery: _Discovery(
+           uninstalling: uninstalling,
+           flashing: flashing,
+         ),
+         paneLayoutStore: PaneLayoutStore(storage: storage),
+       );
   Completer<void>? daemon;
   @override
   Future<void> ensureCliDaemonReady() async {
@@ -123,8 +141,10 @@ class _App extends AppNotifier {
   }
 }
 
-class _Speed implements AppLog {
-  _Speed(this.lines);
+/// The app log's lines of one category.
+class _Recorded implements AppLog {
+  _Recorded(this.category, this.lines);
+  final String category;
   final List<String> lines;
   @override
   void record(
@@ -134,7 +154,7 @@ class _Speed implements AppLog {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    if (category == 'speed') lines.add(message);
+    if (category == this.category) lines.add(message);
   }
 }
 
@@ -167,12 +187,22 @@ void main() {
   late _Cli cli;
   late _Api api;
   late _App app;
+  // Whether `harness uninstall` holds its marker, and whether a dial is being flashed, asked each time.
+  late bool Function() uninstalling;
+  late bool Function() flashing;
 
   setUp(() {
     storage = _Memory();
     cli = _Cli();
     api = _Api();
-    app = _App(cli, storage)..api = api;
+    uninstalling = () => false;
+    flashing = () => false;
+    app = _App(
+      cli,
+      storage,
+      uninstalling: () => uninstalling(),
+      flashing: () => flashing(),
+    )..api = api;
     // The CLI's sign-in file is on this computer.
     app.cliSessionOnDisk = () => true;
   });
@@ -187,7 +217,7 @@ void main() {
       await keptFrom('machine-a');
       final before = appLog;
       final speed = <String>[];
-      appLog = _Speed(speed);
+      appLog = _Recorded('speed', speed);
       addTearDown(() => appLog = before);
       speedMarks.restart();
 
@@ -320,6 +350,151 @@ void main() {
       await _ticks();
       expect(_screen(app), 'login');
       expect(app.currentUser, isNull);
+    },
+  );
+
+  // `harness uninstall` holds its marker while it removes the CLI: a `harness auth status` run then starts a CLI out
+  // of the files being removed, and on Windows holds them so the removal fails.
+  test(
+    'a launch while uninstall holds its marker runs no harness auth status and ends on the sign-in page',
+    () async {
+      uninstalling = () => true;
+      // What the CLI would say if it were asked.
+      cli.answer.complete(const CliAuthStatus(loggedIn: true));
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.lastError, isNull);
+    },
+  );
+
+  test(
+    'a launch while uninstall holds its marker says why in the app log, a few lines at most',
+    () async {
+      final before = appLog;
+      final lines = <String>[];
+      appLog = _Recorded('auth', lines);
+      addTearDown(() => appLog = before);
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      expect(lines, isNotEmpty);
+      expect(lines.length, lessThanOrEqualTo(3));
+      expect(lines.toSet().single, contains('harness uninstall'));
+    },
+  );
+
+  test(
+    'a launch while uninstall holds its marker runs no setup, which would run the CLI or install it again',
+    () async {
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      expect((app.environmentProvisioner! as _Environment).runs, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.lastError, isNull);
+    },
+  );
+
+  test(
+    'a kept sign-in while uninstall holds its marker is not confirmed by harness auth status',
+    () async {
+      await keptFrom('machine-a');
+      uninstalling = () => true;
+      cli.answer.complete(
+        const CliAuthStatus(loggedIn: true, machineId: 'machine-a'),
+      );
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 0);
+      expect(app.status, AppStatus.unauthenticated);
+    },
+  );
+
+  test(
+    'a kept window whose check failed asks no second check once uninstall holds its marker',
+    () async {
+      await keptFrom('machine-a');
+      cli.fails = true;
+      // The uninstall starts right after setup has run: held any earlier, the launch ends before the window opens.
+      uninstalling = () =>
+          (app.environmentProvisioner! as _Environment).runs > 0;
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
+      expect(app.status, AppStatus.unauthenticated);
+    },
+  );
+
+  // A viewer has no CLI on this computer for an uninstall to remove: its sign-in check is its own.
+  test(
+    'a viewer still asks its sign-in check while uninstall holds its marker',
+    () async {
+      final viewer = _App(
+        cli,
+        storage,
+        uninstalling: () => true,
+        viewer: ViewerServices(
+          config: AppConfig.dev,
+          session: AuthSession(),
+          keys: ViewerKeyStore(storage: _Memory()),
+        ),
+      )..api = api;
+      addTearDown(viewer.dispose);
+      cli.answer.complete(const CliAuthStatus(loggedIn: false));
+      await viewer.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
+    },
+  );
+
+  // A flash holds the daemon down so esptool can have the port; the CLI is still there to answer.
+  test(
+    'a launch while a dial is being flashed still asks harness auth status',
+    () async {
+      flashing = () => true;
+      cli.answer.complete(const CliAuthStatus(loggedIn: true));
+      await app.bootstrap();
+      await _ticks();
+      expect(cli.asked, 1);
+      expect(_screen(app), 'workspace');
+    },
+  );
+
+  // `harness login --force` runs the CLI too, so Sign in on the sign-in page a held launch ended on runs nothing.
+  test(
+    'Sign in while uninstall holds its marker runs no harness login and stays on the sign-in page',
+    () async {
+      final before = appLog;
+      final lines = <String>[];
+      appLog = _Recorded('auth', lines);
+      addTearDown(() => appLog = before);
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      lines.clear();
+      await app.login(SignInProvider.google);
+      await _ticks();
+      expect(cli.logins, 0);
+      expect(app.status, AppStatus.unauthenticated);
+      expect(app.signingIn, isFalse);
+      expect(app.lastError, isNull);
+      expect(lines.single, contains('harness uninstall'));
+    },
+  );
+
+  test(
+    'Sign in once uninstall has released its marker runs harness login once',
+    () async {
+      uninstalling = () => true;
+      await app.bootstrap();
+      await _ticks();
+      uninstalling = () => false;
+      cli.answer.complete(const CliAuthStatus(loggedIn: true));
+      await app.login(SignInProvider.google);
+      await _ticks();
+      expect(cli.logins, 1);
     },
   );
 

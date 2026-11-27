@@ -61,9 +61,12 @@ export function ensureUtf8Locale(env: NodeJS.ProcessEnv = process.env): void {
  *   - `LC_TIME=C` gives the parser the shape it documents.
  *   - `LC_CTYPE` stays UTF-8 so Linux procps keeps returning raw bytes rather than `?` for every
  *     character it cannot print (see `ensureUtf8Locale` and `repairMangledRows`).
+ *
+ * `COMMAND_MODE=unix2003`: in legacy mode macOS `ps -e` displays every process's environment (ps(1), LEGACY
+ * DESCRIPTION), and the daemon never reads one (cli/AGENTS.md, rule 4), whatever mode the person set.
  */
 export function psEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const configured = env.LC_ALL || env.LC_CTYPE || env.LANG
   const ctype = configured && /utf-?8/i.test(configured) ? configured : 'C.UTF-8'
-  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C' }
+  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C', COMMAND_MODE: 'unix2003' }
 }

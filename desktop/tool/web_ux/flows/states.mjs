@@ -1,11 +1,8 @@
-// Flows for error and empty states, device bands, outside links, Settings pages and the Super Tab.
+// Flows for error and empty states, device bands, outside links and Settings pages.
 //
 // Fix group: 6, error states, bands and copy. Each group keeps its flows here, so parallel groups never
 // edit the same file; load-flows.mjs reads every file in this folder.
 import { settings } from './steps.mjs';
-
-// The Super Tab flows run on tool/super_tab_mobile_fixture.dart (FIXTURE=super-tab).
-const superTab = (name, scenario, more = {}) => ({ fixture: 'super-tab', name, scenario, ...more });
 
 export const FLOWS = [
   { name: 'error-banner', scenario: 'error-banner' },
@@ -17,23 +14,4 @@ export const FLOWS = [
     'Tab invites', 'Experimental', 'About'].map(settings),
   // Usage in a browser with the account's subscriptions read (P6).
   { ...settings('Usage'), name: 'settings-usage-subscriptions', scenario: 'subscriptions' },
-  superTab('super-tab', 'rich'),
-  superTab('super-tab-group', 'rich', { path: '/?group=wg-blocked' }),
-  superTab('super-tab-one', 'one'),
-  superTab('super-tab-empty', 'empty'),
-  superTab('super-tab-viewer', 'viewer'),
-  superTab('super-tab-offline', 'offline'),
-  // People stay in a phone's header bar: one tap, as on a computer.
-  superTab('super-tab-roster', 'rich', { steps: [['click', 'Members']] }),
-  superTab('super-tab-conversations', 'rich', { only: 'compact', steps: [['click', 'Conversations']] }),
-  // On a phone these views are in the header's ⋮ menu, by name.
-  superTab('super-tab-terminals', 'rich', {
-    steps: [['click', 'Group terminals']],
-    compact: [['click', ' options'], ['click', 'Group terminals']],
-  }),
-  superTab('super-tab-pull-requests', 'rich', {
-    steps: [['click', 'Pull requests']],
-    compact: [['click', ' options'], ['click', 'Pull requests']],
-  }),
-  superTab('super-tab-menu', 'rich', { only: 'compact', steps: [['click', ' options']] }),
 ];

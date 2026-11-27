@@ -155,6 +155,12 @@ export const LAUNCH_ERROR_CODES = [
   // The engine itself: preparing it (engines/nativeLaunch.ts) and its start (core/agents/newPane.ts).
   'engine_cannot_run', 'engine_install_failed', 'engine_did_not_start', 'engine_not_installed', 'start_timeout',
   'engine_launch_refused',
+  // A local OpenClaw's own folder: refused as no folder, gone, not prepared, or held by another harness
+  // (core/agents/launches.ts, create.ts, newPane.ts, lib/launchOverrides.ts).
+  'invalid_local_folder', 'openclaw_folder_gone', 'openclaw_local_unprepared', 'openclaw_folder_in_use',
+  // An OpenClaw that started with no gateway token (core/agents/newPane.ts, discovery.ts), or did not take its first
+  // task (core/agents/bind.ts).
+  'openclaw_no_token', 'first_task_not_taken',
   // A Codex launch the owner's subscription relay could not sign in. The relay is gone (#4137) and nothing sends it; kept
   // because the contract is published and only extended.
   'owner_relay_unavailable',
@@ -169,7 +175,7 @@ export const LAUNCH_ERROR_CODES = [
   'missing_agent_id', 'delete_in_progress', 'agent_busy', 'agent_not_found', 'agent_changed', 'resume_failed', 'resume_unavailable',
   'resume_preparation_failed', 'grid_credential_required', 'permission_change_requires_stop', 'identity_unavailable',
   'restart_failed', 'restart_unsupported_backend', 'retarget_unsupported_backend', 'fork_on_grid_unsupported',
-  'no_active_process', 'opencode_sqlite_missing', 'unavailable', 'missing_name', 'missing_update',
+  'fork_unsupported', 'no_active_process', 'opencode_sqlite_missing', 'unavailable', 'missing_name', 'missing_update',
   'invalid_close_request', 'invalid_delete_request', 'close_failed', 'delete_failed',
   // A Stop (`agent_delete`) the machine could not confirm, or whose harness changed while it saved
   // (lib/stopAgentService.ts): 3 of the phone's 4 stops on 2026-10-19 were refused as `other`, the kind it falls under.
@@ -230,7 +236,25 @@ export const PRODUCT_USAGE_AGENT_BROWSER_METRICS = ['agent_browser_enabled', 'ag
   'agent_browser_start_ok', 'agent_browser_start_failed', ...AGENT_BROWSER_FAILED_STATES.map(state => `agent_browser_failed_${state}` as const),
   'agent_browser_limit_dropped', 'agent_browser_proxy_set', 'agent_browser_proxy_removed',
   'agent_browser_proxy_test_ok', 'agent_browser_proxy_test_failed', 'agent_browser_stream_opened',
-  ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened'] as const
+  ...AGENT_BROWSER_CLOSE_REASONS.map(reason => `agent_browser_stream_closed_${reason}` as const), 'agent_browser_opened',
+  'agent_browser_started', 'agent_browser_stopped', 'agent_browser_command_ok', 'agent_browser_command_failed',
+  'agent_browser_notice_failed'] as const
+/** Hachi's counters (docs/design/2026-11-12-hachi.md, Measures), named here before the App and the daemon send them.
+ * Counts only, no goal text, harness, machine, project or id. A Hachi launch is a twin of the launch counters, by the
+ * started harness's engine, so Hachi's share of all launches reads off them as the `launch_agent_*` twins' does. How soon a
+ * harness Hachi started got the person's answer is bucketed beside the same buckets for the person's own harnesses. */
+export const PRODUCT_USAGE_HACHI_LAUNCH_ENGINES = ['claude', 'codex', 'other'] as const
+export const PRODUCT_USAGE_HACHI_METRICS = [
+  'ui_desktop_hachi_switch_on', 'ui_desktop_hachi_switch_off', 'hachi_person_turn_days',
+  ...(['shortcut', 'tab', 'palette', 'welcome'] as const).map(opening => `ui_desktop_hachi_open_${opening}` as const),
+  ...(['started', 'created', 'failed', 'refused'] as const).flatMap(outcome =>
+    PRODUCT_USAGE_HACHI_LAUNCH_ENGINES.map(engine => `launch_hachi_${outcome}_${engine}` as const)),
+  'hachi_goal_opened', 'hachi_goal_done', 'hachi_goal_left', 'hachi_closed_started', 'hachi_handed_to_person',
+  'hachi_turns_person', 'hachi_turns_wake', 'hachi_wake_needs_person', 'hachi_wake_done', 'hachi_wake_stopped',
+  'hachi_wake_dropped_limit', 'hachi_wake_dropped_off', 'hachi_notice_goal_done',
+  ...(['under_1m', '1m_to_15m', 'over_15m'] as const).map(bucket => `hachi_needs_person_answer_${bucket}` as const),
+  'hachi_open_failed_home_asleep', 'hachi_open_failed_create_failed', 'hachi_mailbox_failed',
+] as const
 export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_HEALTH_METRICS,
   'active_installation_days', 'working_installation_days', 'first_work_installations',
@@ -245,7 +269,7 @@ export const PRODUCT_USAGE_METRICS = [
   'launch_late_failed',
   // A create turned down because the request was wrong, not because Harness failed (the Oct 26 report counted
   // opening a conversation that is already a harness, and a cloud agent with no task, as failures): never also
-  // a launch_failed. The agent twins count the launches an agent or a Swarm started (the create's `startedBy`),
+  // a launch_failed. The agent twins count the launches an agent started (the create's `startedBy`),
   // so a person's own launches are the total less those.
   'launch_refused', 'launch_agent_started', 'launch_agent_created', 'launch_agent_failed', 'launch_agent_refused',
   'launch_wait_install', 'launch_wait_model', 'launch_wait_native', 'launch_wait_other',
@@ -270,6 +294,7 @@ export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS,
   'ui_phone_first_open',
   ...PRODUCT_USAGE_AGENT_BROWSER_METRICS,
+  ...PRODUCT_USAGE_HACHI_METRICS,
   // Written by the backend itself: a report that named counters this backend does not know yet, which
   // it kept without them (routes/productUsage.ts). One per report, never the names.
   'health_cli_report_unknown_metric', 'health_desktop_report_unknown_metric', 'health_phone_report_unknown_metric',

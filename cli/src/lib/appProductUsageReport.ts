@@ -1,20 +1,17 @@
 import { cleanUsageContext, HEALTH_MEASURES, CLI_REPORT_FAILURES } from './productHealthContract.js'
-import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS, PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS,
+import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS, PRODUCT_USAGE_HACHI_METRICS, PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS,
   type ProductUsageReport } from './productUsageContract.js'
 
-/** The contract revision this proxy forwards, sent on each of its answers as `x-harness-usage-vocabulary`.
- * 2: the Desktop's frame-phase counters (`frame_slow_*`, `frame_long_collector`). 3: its Add Phone card
- * (`ui_desktop_phone_offer_*`) and the ways Add Phone opened (`ui_desktop_add_phone_*`). 4: the card offered
- * after work or after time away (`ui_desktop_phone_offer_after_work_*`, `ui_desktop_phone_offer_away_*`). The
- * Desktop sends a name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one.
- * 5: first-arrival episodes and shared-tab invitation outcomes.
- * 6: returning-account phone offers, offer skip reasons and Add Phone pairing sources.
- * 7: Import an agent running on this Mac (`ui_desktop_agent_import_*`, task #2379).
- * 8: How a Team account's removal from the computer ended (`ui_desktop_team_account_removal_*`, 2026-11-10).
- * 9: an agent's Browser panel opened (`agent_browser_opened`).
- * Raise it with each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 9
-export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
+// The revision of the names this check forwards is on every answer of its route, the door's own too (core/api.ts
+// `APP_USAGE_VOCABULARY`): raise it there with each name the Desktop gates on it, beside the names here. The gateway
+// runs this check (gateway/accountRoutes.ts); the core's process loads none of it.
+
+/** The Hachi counters a window counts; the rest of `PRODUCT_USAGE_HACHI_METRICS` are the daemon's own. */
+const APP_HACHI_METRICS = [
+  'ui_desktop_hachi_switch_on', 'ui_desktop_hachi_switch_off', 'ui_desktop_hachi_open_shortcut', 'ui_desktop_hachi_open_tab',
+  'ui_desktop_hachi_open_palette', 'ui_desktop_hachi_open_welcome', 'hachi_notice_goal_done',
+  'hachi_open_failed_home_asleep', 'hachi_open_failed_create_failed',
+] as const satisfies readonly (typeof PRODUCT_USAGE_HACHI_METRICS)[number][]
 
 // hn's counts reach the daemon's own queue only through hn's `product_observe`; no app can file them.
 const uiMetrics = new Set<string>(PRODUCT_USAGE_UI_METRICS.filter(metric => !metric.startsWith('ui_tui_')))
@@ -25,6 +22,7 @@ const desktopMetrics = new Set<string>([
   ...PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS,
   // The only agent browser name an app files; the rest are the daemon's own.
   'agent_browser_opened',
+  ...APP_HACHI_METRICS,
   ...HEALTH_MEASURES.map(measure => `health_desktop_${measure}`),
   ...CLI_REPORT_FAILURES.map(reason => `health_desktop_report_failure_${reason}`),
 ])

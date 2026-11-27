@@ -2,14 +2,15 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { DEVICES_HARNESS_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_BUILTIN_SOURCE, MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
+import { DEVICES_HARNESS_ID, HACHI_BUILTIN_SOURCE, HACHI_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_BUILTIN_SOURCE, MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import type { InstalledDshRecord } from '../dsh/installed.js'
+import { setAgentSettingsForTest } from '../testing/agentSettings.js'
 import { bundledPending, createViewersWake, VIEWER_LEDGER, VIEWERS_ON_DEMAND, wakeViewers, type BundledState } from './viewersWake.js'
 
 const record = (over: Partial<InstalledDshRecord>): InstalledDshRecord =>
   ({ id: MODEL_MANAGER_ID, dir: '/dsh/x', source: MODEL_MANAGER_BUILTIN_SOURCE, ref: null, commit: null, revision: 'r1', linked: false, installedAt: 1, ...over }) as InstalledDshRecord
 
-const state = (index: InstalledDshRecord[], over: Partial<BundledState> = {}): BundledState =>
+const state = (index: InstalledDshRecord[], over: Partial<BundledState> = {}): Partial<BundledState> =>
   ({ revisions: { models: 'r1' }, index: () => index, broken: () => false, ...over })
 
 describe('the release\'s own harnesses, as the core checks them for the Store', () => {
@@ -32,6 +33,13 @@ describe('the release\'s own harnesses, as the core checks them for the Store', 
     const revisions = { models: 'r1', memories: 'm1' }
     expect(bundledPending(state([record({}), record({ id: MEMORIES_ID, source: MEMORIES_BUILTIN_SOURCE, revision: 'm1' })], { revisions }))).toBeNull()
     expect(bundledPending(state([record({})], { revisions }))).toBe('Memories to put in place')
+  })
+
+  it('counts Hachi only while its switch is on: off, no package of it is generated', () => {
+    const revisions = { hachi: 'h1' }
+    expect(bundledPending(state([], { revisions }))).toBeNull()
+    expect(bundledPending(state([], { revisions, hachi: true }))).toBe('Hachi to put in place')
+    expect(bundledPending(state([record({ id: HACHI_ID, source: HACHI_BUILTIN_SOURCE, revision: 'h1' })], { revisions, hachi: true }))).toBeNull()
   })
 
   it('leaves a developer\'s linked checkout and a package of another source to the Store, which never replaces them', () => {
@@ -111,6 +119,15 @@ describe('the viewers\' process as the core starts', () => {
     const ask = vi.fn()
     wakeViewers({ wake: { ask }, agents: () => [], dataDir: data(), bundled: state([]) })
     expect(ask.mock.calls).toEqual([['store', 'Model Manager to put in place']])
+    ask.mockClear()
+    // Hachi, as this computer keeps the account's switch: nothing while it is off, the Store once it is on.
+    const dir = data()
+    const hachi = state([], { revisions: { hachi: 'h1' } })
+    wakeViewers({ wake: { ask }, agents: () => [], dataDir: dir, bundled: hachi })
+    expect(ask).not.toHaveBeenCalled()
+    setAgentSettingsForTest(dir, { hachi: true })
+    wakeViewers({ wake: { ask }, agents: () => [], dataDir: dir, bundled: hachi })
+    expect(ask.mock.calls).toEqual([['store', 'Hachi to put in place']])
     ask.mockClear()
     // The real index and this build's revisions, a throwaway folder and none: nothing.
     wakeViewers({ wake: { ask }, agents: () => [{ dsh: null }], dataDir: data() })

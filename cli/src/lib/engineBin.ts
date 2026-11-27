@@ -5,16 +5,18 @@
  * colliding `agent` alias is never assigned from its basename alone.
  */
 
-import { execFile, execFileSync } from 'node:child_process'
-import { accessSync, constants, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { accessSync, constants, readlinkSync, realpathSync, statSync, type BigIntStats } from 'node:fs'
+import { access, lstat, opendir, readlink, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, delimiter, isAbsolute, join, normalize, sep } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
-import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
-import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
+import { ENGINES, PROCESS_ENGINES, type AgentEngine, type ProcessEngine } from '../engines/types.js'
+import { ENGINE_INSTALL, engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
-import { windowsLaunchCommand } from './binaryOnPath.js'
+import { resolveBinaryOnPath, windowsLaunchCandidates, windowsLaunchCommand } from './binaryOnPath.js'
 import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
+import { errorKind } from './log.js'
 
 // Keep this historical import surface for callers, but never duplicate the
 // catalog here. `engines/types.ts` is the one iterable source of truth.
@@ -93,40 +95,60 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
   terminal: [],
 }
 
-let interactivePathCache: { shell: string; daemonPath: string; value: string[] } | null = null
+/** The code is the error's `code` as well as its words: a log line names a failure by its code (`errorKind`). */
+const engineFailure = (code: string): Error => Object.assign(new Error(code), { code })
 
-/**
- * Resolve commands from the same shell startup context used by New Agent.
- *
- * A GUI/launchd/systemd daemon commonly lacks ~/.local/bin, Homebrew, nvm and vendor installer edits.
- * Looking only at its PATH made an installed native binary impossible to identify even though the pane
- * launched it successfully. Tests deliberately use their injected PATH and never read a developer's rc.
- */
-function interactivePathEntries(): string[] {
-  if (process.env.NODE_ENV === 'test') return []
-  const shell = currentUserShell()
-  if (!shell) return []
-  const daemonPath = process.env.PATH ?? ''
-  if (interactivePathCache?.shell === shell && interactivePathCache.daemonPath === daemonPath) {
-    return interactivePathCache.value
+let interactivePathCache: { shell: string; daemonPath: string; value: string[]; retryAt: number } | null = null
+let interactivePathFlight: Promise<string[]> | null = null
+let interactivePathFlightKey = ''
+
+/** Match pane startup: bash reads -ic, zsh reads -lic. The one-shot credential capture has a different context. */
+function warmInteractivePath(): Promise<string[]> {
+  if (process.env.NODE_ENV === 'test') return Promise.resolve([])
+  const shell = currentUserShell(), daemonPath = process.env.PATH ?? ''
+  if (!shell) return Promise.resolve([])
+  const key = `${shell}\0${daemonPath}`
+  if (interactivePathFlight) return interactivePathFlightKey === key ? interactivePathFlight : Promise.reject(engineFailure('ENGINE_PATH_CHANGED'))
+  if (interactivePathCache?.shell === shell && interactivePathCache.daemonPath === daemonPath && Date.now() < interactivePathCache.retryAt) {
+    return Promise.resolve(interactivePathCache.value)
   }
-  try {
+  interactivePathFlightKey = key
+  interactivePathFlight = new Promise<string[]>(done => {
+    let child: ReturnType<typeof execFile> | undefined, settled = false
+    const finish = (value: string[], failure?: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (failure) {
+        console.error(`[engine] ${failure}: interactive PATH unavailable; using daemon PATH`)
+        child?.kill('SIGKILL'); child?.stdout?.destroy(); child?.stderr?.destroy()
+      }
+      interactivePathCache = { shell, daemonPath, value, retryAt: failure ? Date.now() + 30_000 : Infinity }
+      done(value)
+    }
+    const timer = setTimeout(() => finish([], 'ENGINE_PATH_TIMEOUT'), 5_000)
     const flag = basename(shell).toLowerCase() === 'zsh' ? '-lic' : '-ic'
     const marker = '__HARNESS_ENGINE_PATH__='
-    const stdout = execFileSync(shell, [flag, `printf '\n${marker}%s\n' "$PATH"`], {
-      encoding: 'utf8',
-      timeout: 5_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    // Shell startup files are allowed to print banners. Read only our final marked line.
-    const path = stdout.split('\n').reverse().find((line) => line.startsWith(marker))?.slice(marker.length) ?? ''
-    const value = path.split(delimiter).filter(Boolean)
-    interactivePathCache = { shell, daemonPath, value }
-    return value
-  } catch {
-    interactivePathCache = { shell, daemonPath, value: [] }
-    return []
-  }
+    try {
+      child = execFile(shell, [flag, `printf '\\n${marker}%s\\n' "$PATH"`], {
+        encoding: 'utf8', timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true,
+      }, (error, stdout) => {
+        if (error) { finish([], 'ENGINE_PATH_FAILED'); return }
+        const value = stdout.split('\n').reverse().find(line => line.startsWith(marker))?.slice(marker.length)
+        finish(value?.split(delimiter).filter(Boolean) ?? [], value === undefined ? 'ENGINE_PATH_INVALID' : undefined)
+      })
+      child.stdin?.end()
+    } catch { finish([], 'ENGINE_PATH_FAILED') }
+  }).finally(() => { interactivePathFlight = null })
+  return interactivePathFlight
+}
+
+/** Synchronous compatibility readers never start a blocking shell. Async discovery awaits the first capture. */
+function interactivePathEntries(): string[] {
+  if (process.env.NODE_ENV === 'test') return []
+  void warmInteractivePath().catch(() => {})
+  return interactivePathCache && interactivePathCache.shell === currentUserShell() && interactivePathCache.daemonPath === (process.env.PATH ?? '')
+    ? interactivePathCache.value : []
 }
 
 /** Only what a spawned child inherits. A hit here is safe to return as a bare name. */
@@ -219,17 +241,21 @@ export function hermesBootFileKey(launcher: string): string | null {
   return root ? executableFileIdentity(hermesBootFile(root))?.fileKey ?? null : null
 }
 
-/** Build once per process-table pass; callers pass the snapshot through every row comparison. */
-export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
+function ownershipInput() {
+  const commands = new Map(PROCESS_ENGINES.map(engine => {
+    const configured = enginePathOverride(engine)
+    return [engine, [...(configured ? [configured] : []), ...ENGINE_CLI_ALIASES[engine], ...vendorFallbackCommands(engine)]]
+  }))
+  return { commands, cursor: env.CURSOR_PATH, grok: env.GROK_PATH, grokHome: join(env.GROK_HOME, 'bin', 'grok'),
+    hermes: enginePathOverride('hermes') || 'hermes', paths: pathEntries() }
+}
+
+type OwnershipInput = ReturnType<typeof ownershipInput>
+function ownershipSnapshot(input: OwnershipInput, commandCandidates: (command: string) => ExecutableFileIdentity[], hermesBoot: string | null): AgentCommandOwnershipSnapshot {
   const engineCandidates = new Map<AgentEngine, ExecutableFileIdentity[]>()
   const engineFileKeys = new Map<AgentEngine, Set<string>>()
   for (const engine of PROCESS_ENGINES) {
-    const configured = enginePathOverride(engine)
-    const commands = [
-      ...(configured ? [configured] : []),
-      ...ENGINE_CLI_ALIASES[engine],
-      ...vendorFallbackCommands(engine),
-    ]
+    const commands = input.commands.get(engine)!
     const candidates = uniqueIdentities(commands.flatMap(commandCandidates))
     engineCandidates.set(engine, candidates)
     engineFileKeys.set(engine, new Set(candidates.map((candidate) => candidate.fileKey)))
@@ -238,7 +264,6 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
   // (lib/windows/hermesLaunch.ts), so the pane's Hermes is that file, as surely as the launcher it stands in for.
   // Not a candidate: nothing runs it by name. Without it a Hermes pane was never confirmed (DESKTOP-0TFH0OJ, 2026-11-09).
   // The launcher is found as the launch finds it (lib/windows/launch.ts): `hermes` alone names no file on Windows.
-  const hermesBoot = hermesBootFileKey(windowsLaunchCommand(enginePathOverride('hermes') || 'hermes'))
   if (hermesBoot) engineFileKeys.get('hermes')?.add(hermesBoot)
 
   const agentCandidates = commandCandidates('agent')
@@ -252,12 +277,12 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
 
   // Existing explicit overrides are ownership declarations, but a declaration that resolves to the
   // other vendor's canonical binary becomes a conflict below instead of silently winning by basename.
-  if (env.CURSOR_PATH) addAll(cursorFileKeys, commandCandidates(env.CURSOR_PATH))
-  if (env.GROK_PATH) addAll(grokFileKeys, commandCandidates(env.GROK_PATH))
+  if (input.cursor) addAll(cursorFileKeys, commandCandidates(input.cursor))
+  if (input.grok) addAll(grokFileKeys, commandCandidates(input.grok))
 
   // Grok's own state-root override already describes its standard installer root. This seed keeps
   // discovery correct when the daemon PATH differs from an interactive tmux shell's PATH.
-  const grokHomeBin = commandCandidates(join(env.GROK_HOME, 'bin', 'grok'))[0]
+  const grokHomeBin = commandCandidates(input.grokHome)[0]
   if (grokHomeBin) {
     grokFileKeys.add(grokHomeBin.fileKey)
     if (!grokCandidates.some((candidate) => candidate.path === grokHomeBin.path)) grokCandidates.push(grokHomeBin)
@@ -290,6 +315,228 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
     cursorAgentCandidates,
     grokCandidates,
   }
+}
+
+/** Compatibility for synchronous callers; live terminal discovery uses the async snapshot below. */
+export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
+  const input = ownershipInput(), memo = new Map<string, ExecutableFileIdentity[]>()
+  const lookup = (command: string) => {
+    if (!memo.has(command)) memo.set(command, commandCandidates(command))
+    return memo.get(command)!
+  }
+  return ownershipSnapshot(input, lookup, hermesBootFileKey(windowsLaunchCommand(input.hermes)))
+}
+
+/** The wanted names a PATH folder holds; `unlisted` and `skipped` are error kinds, never a path. */
+type FolderRead = { names: Set<string>; unlisted?: string; skipped?: string }
+
+/** Directory generations cache names only. Chmod, symlink targets and executable replacements are checked per pass. */
+const candidateDirectories = new Map<string, { stamp: string; wanted: string; read: FolderRead }>()
+const directoryStamp = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.mtimeNs}:${info.ctimeNs}`
+const absent = (error: unknown) => ['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')
+
+/** A folder that cannot be listed may still let a file in it be read by its name (traverse-only), so each wanted name is
+ *  looked up in it. One at a time: a folder holds at most one filesystem thread. Skipped only when every lookup fails. */
+async function probeByName(directory: string, probeNames: readonly string[]): Promise<FolderRead> {
+  const names = new Set<string>()
+  let answered = false, failure: string | undefined
+  for (const name of probeNames) {
+    try {
+      await lstat(join(directory, name))
+      names.add(name.toLowerCase()); answered = true
+    } catch (error) {
+      if (absent(error)) answered = true
+      else failure ??= errorKind(error)
+    }
+  }
+  return answered || !failure ? { names } : { names, skipped: failure }
+}
+
+/** One rule for every error a folder's read gives: ENOENT and ENOTDIR are a folder with nothing in it, any other is a
+ *  folder probed by name (Windows run 44758521149: `opendir` EPERM on a folder the user cannot list failed every pass,
+ *  and no engine was ever confirmed). Never throws. */
+async function candidateNames(directory: string, wanted: Set<string>, wantedKey: string, probeNames: readonly string[]): Promise<FolderRead> {
+  let names: Set<string> | null = null, unlisted: string | undefined, stamp: string | undefined
+  try {
+    const before = await stat(directory, { bigint: true }), generation = directoryStamp(before)
+    if (!before.isDirectory()) return { names: new Set() }
+    const known = candidateDirectories.get(directory)
+    if (known?.stamp === generation && known.wanted === wantedKey) return known.read
+    try {
+      const listed = new Set<string>()
+      let count = 0
+      for await (const entry of await opendir(directory)) {
+        // A huge folder is probed by name instead, and not counted.
+        if (++count > 16_384) break
+        const name = entry.name.toLowerCase()
+        if (wanted.has(name)) listed.add(name)
+      }
+      if (count <= 16_384) names = listed
+    } catch (error) {
+      if (absent(error)) throw error
+      unlisted = errorKind(error)
+    }
+    // A folder that changed while it was listed is probed by name, and not cached.
+    if (directoryStamp(await stat(directory, { bigint: true })) === generation) stamp = generation
+    else names = null
+  } catch (error) {
+    if (absent(error)) return { names: new Set() }
+    names = null; unlisted ??= errorKind(error)
+  }
+  const probed = names ? { names } : await probeByName(directory, probeNames)
+  if (probed.skipped) return probed
+  // The kind is cached with the names, so a cache hit counts the folder again and the PATH line does not flap.
+  const read = unlisted ? { names: probed.names, unlisted } : { names: probed.names }
+  if (stamp) {
+    if (candidateDirectories.size >= 128 && !candidateDirectories.has(directory)) candidateDirectories.delete(candidateDirectories.keys().next().value!)
+    candidateDirectories.set(directory, { stamp, wanted: wantedKey, read })
+  }
+  return read
+}
+
+/** A folder's whole read, its probes by name included, has this long: a dead network share or a hung junction is then
+ *  skipped for the pass, never the end of it. A local folder reads in milliseconds, SMB in under half a second. */
+export const PATH_ENTRY_TIMEOUT_MS = 2_000
+/** Folders whose read has not settled. A pass skips one that is still being read, so a hung folder never holds more than
+ *  one of Node's filesystem threads. A pass reads at most the 1,024 folders a PATH may name. */
+const foldersReading = new Set<string>()
+
+function boundedCandidateNames(directory: string, wanted: Set<string>, wantedKey: string, probeNames: readonly string[]): Promise<FolderRead> {
+  const hung: FolderRead = { names: new Set(), skipped: 'TIMEOUT' }
+  if (foldersReading.has(directory)) return Promise.resolve(hung)
+  foldersReading.add(directory)
+  let timer!: ReturnType<typeof setTimeout>
+  const bound = new Promise<FolderRead>(done => { timer = setTimeout(() => done(hung), PATH_ENTRY_TIMEOUT_MS) })
+  // The read goes on past its bound; its answer is not used, and the next pass after it settles reads the folder again.
+  const read = candidateNames(directory, wanted, wantedKey, probeNames).finally(() => {
+    clearTimeout(timer)
+    foldersReading.delete(directory)
+  })
+  return Promise.race([read, bound])
+}
+
+let pathLine = '[engine] PATH: every folder read'
+/** Kinds only (a folder's name is personal), and only when the line changes: a pass runs every 5 s. */
+function reportPathFolders(unlisted: string[], skipped: string[]): void {
+  const part = (kinds: string[], state: string, then = '') => kinds.length
+    ? [`${kinds.length} ${kinds.length > 1 ? 'folders' : 'folder'} ${state} (${[...new Set(kinds)].sort().join(', ')})${then}`] : []
+  const parts = [...part(unlisted, 'not listed', ', probed by name'), ...part(skipped, 'skipped')]
+  const line = `[engine] PATH: ${parts.length ? parts.join('; ') : 'every folder read'}`
+  if (line === pathLine) return
+  pathLine = line
+  console.warn(line)
+}
+
+let ownershipFlight: Promise<AgentCommandOwnershipSnapshot> | null = null
+let ownershipFlightKey = ''
+// No process.cwd(): it throws once the start folder is deleted (the firmware flash's worktree), failing every pass.
+// A relative PATH entry still resolves against the working folder at read time.
+const ownershipKey = () => JSON.stringify([process.env.PATH, currentUserShell(), homedir(), env.GROK_HOME,
+  process.platform, ...PROCESS_ENGINES.map(enginePathOverride)])
+
+const ownershipUnavailable = (error: unknown): Promise<never> => {
+  console.error(`[engine] ${errorKind(error)}: executable ownership unavailable`)
+  return Promise.reject(error)
+}
+
+/** Fresh identities per pass, eight filesystem reads at once, one pass shared by concurrent panes. */
+export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwnershipSnapshot> {
+  // Callers chain on the promise: a synchronous throw would escape their catch, and no flight is left set.
+  let key: string
+  try { key = ownershipKey() } catch (error) { return ownershipUnavailable(error) }
+  if (ownershipFlight) return key === ownershipFlightKey ? ownershipFlight : Promise.reject(engineFailure('ENGINE_LOOKUP_CHANGED'))
+  ownershipFlightKey = key
+  let expired = false
+  const work = (async () => {
+    await warmInteractivePath()
+    if (key !== ownershipKey()) throw engineFailure('ENGINE_LOOKUP_CHANGED')
+    const input = ownershipInput()
+    if (input.paths.length > 1_024) throw engineFailure('ENGINE_LOOKUP_PATH_LIMIT')
+    const windowsCandidates = windowsLaunchCandidates(input.hermes), windowsFiles = new Set(windowsCandidates)
+    const commands = new Set([...input.commands.values()].flat().concat(windowsCandidates, ['agent', 'cursor-agent', 'grok', input.grokHome],
+      input.cursor ? [input.cursor] : [], input.grok ? [input.grok] : []))
+    // The names the pass looks up in a folder, once each whatever their case, as the listing compares them.
+    const probeNames = [...new Map([...commands].filter(command => !looksLikePath(command))
+      .concat(windowsCandidates.map(file => basename(file))).map(name => [name.toLowerCase(), name])).values()]
+    const wanted = new Set(probeNames.map(name => name.toLowerCase()))
+    const wantedKey = [...wanted].sort().join('\0'), folderReads = new Map<string, FolderRead>()
+    // Windows names a folder in any case: CODEX_PATH may say c:\users\ken\... of the PATH folder C:\Users\Ken\...
+    const folderKey = (folder: string) => process.platform === 'win32' ? folder.toLowerCase() : folder
+    const folders = new Map<string, string>(), unlisted: string[] = [], skipped: string[] = []
+    for (const entry of input.paths) {
+      // A relative entry resolves against the working folder. When that is gone (the firmware flash's deleted worktree)
+      // the entry is skipped under its kind, never the pass, and left out so nothing later resolves it again.
+      try { folders.set(entry, resolve(entry)) } catch (error) { skipped.push(errorKind(error)) }
+    }
+    const directories = [...new Set(folders.values())]
+    let directoryIndex = 0
+    await Promise.all(Array.from({ length: Math.min(8, directories.length) }, async () => {
+      while (!expired && directoryIndex < directories.length) {
+        const directory = directories[directoryIndex++], read = await boundedCandidateNames(directory, wanted, wantedKey, probeNames)
+        folderReads.set(folderKey(directory), read)
+        if (read.skipped) skipped.push(read.skipped)
+        else if (read.unlisted) unlisted.push(read.unlisted)
+      }
+    }))
+    if (expired) throw engineFailure('ENGINE_LOOKUP_TIMEOUT')
+    const visible = (folder: string, command: string) => {
+      const read = folderReads.get(folderKey(folder))
+      // A skipped folder gives no candidate file, not even one the listing cannot rule out: in a folder that hung, its
+      // read would hold the pass in turn.
+      return !read || (!read.skipped && (/[^\x00-\x7f]/.test(command) || read.names.has(command.toLowerCase())))
+    }
+    // A file named by its path (an engine's own path, an install location such as ~/.local/bin/codex) in a folder this
+    // pass skipped is not read either, for the same reason. A Windows launch candidate must also be in its folder's
+    // listing. A file in a relative folder that no longer resolves has nothing to find.
+    const fileVisible = (file: string) => {
+      try {
+        const folder = resolve(dirname(file))
+        return windowsFiles.has(file) ? visible(folder, basename(file)) : !folderReads.get(folderKey(folder))?.skipped
+      } catch { return false }
+    }
+    const byCommand = new Map([...commands].map(command => [command,
+      looksLikePath(command)
+        ? (fileVisible(command) ? [command] : [])
+        : [...folders].filter(([, folder]) => visible(folder, command)).map(([entry]) => join(entry, command))]))
+    const paths = [...new Set([...byCommand.values()].flat())]
+    if (paths.length > 32_768) throw engineFailure('ENGINE_LOOKUP_PATH_LIMIT')
+    const identities = new Map<string, ExecutableFileIdentity>()
+    let next = 0
+    await Promise.all(Array.from({ length: Math.min(8, paths.length) }, async () => {
+      while (!expired && next < paths.length) {
+        const file = paths[next++]
+        try {
+          await access(file, windowsFiles.has(file) ? constants.F_OK : constants.X_OK)
+          const info = await stat(file, { bigint: true })
+          if (!info.isFile()) continue
+          let realPath: string
+          try { realPath = await realpath(file) } catch {
+            try { realPath = await readlink(file) } catch { realPath = normalize(file) }
+          }
+          identities.set(file, { path: normalize(file), realPath, fileKey: `${info.dev}:${BigInt.asUintN(64, info.ino)}` })
+        } catch {
+          // A file that cannot be read is no engine here, never the end of every engine's confirmation.
+        }
+      }
+    }))
+    if (expired) throw engineFailure('ENGINE_LOOKUP_TIMEOUT')
+    if (key !== ownershipKey()) throw engineFailure('ENGINE_LOOKUP_CHANGED')
+    reportPathFolders(unlisted, skipped)
+    return ownershipSnapshot(input, command => (byCommand.get(command) ?? []).flatMap(file => identities.get(file) ?? []),
+      hermesBootFileKey(windowsCandidates.find(file => identities.has(file)) ?? input.hermes))
+  })()
+  // Do not start another pass while a timed-out filesystem read is still outstanding.
+  let timer: ReturnType<typeof setTimeout>
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { expired = true; reject(engineFailure('ENGINE_LOOKUP_TIMEOUT')) }, 10_000)
+  })
+  const result = Promise.race([work, deadline]).catch(ownershipUnavailable)
+  ownershipFlight = result
+  void work.finally(() => {
+    clearTimeout(timer)
+    if (ownershipFlight === result) ownershipFlight = null
+  }).catch(() => {})
+  return result
 }
 
 /** Historical name retained while callers migrate; the snapshot now covers every engine. */
@@ -345,95 +592,14 @@ export function cursorRuntimeBin(snapshot = agentCommandOwnershipSnapshot()): st
   return null
 }
 
-/**
- * Where OpenCode is, for the processes this daemon spawns.
- *
- * It installs itself to `~/.opencode/bin` and puts that on PATH by editing the user's SHELL profile —
- * which a GUI-launched process never reads. This daemon is started by the desktop app, so `opencode`
- * is simply not on its PATH: the recap pool logged `spawn opencode ENOENT` once a second and the
- * model catalog came back empty every time, while the same command worked fine from a terminal.
- *
- * ONE answer for the whole daemon, because there were two and they disagreed: the recap path honoured
- * `OPENCODE_PATH` and the catalog fetch did not.
- *
- * `OPENCODE_PATH` wins; a bare `opencode` remains the last answer, so a genuinely missing install
- * still fails with the message it always did.
- */
-export function opencodeBin(): string {
-  if (env.OPENCODE_PATH) return env.OPENCODE_PATH
-  // THE CHILD'S PATH FIRST, and only that one may answer with a bare name.
-  //
-  // `pathEntries()` searches the interactive login shell's PATH as well as this
-  // process's, and a spawned child inherits only the latter. A hit in a
-  // shell-only directory therefore resolved here and then failed to spawn with
-  // `ENOENT` — which is how the fallback below, added for exactly this bug, was
-  // being skipped: the loop kept FINDING opencode and kept returning a name the
-  // child could not resolve. Measured on a live daemon: 44 entries in the
-  // process PATH, 48 in the interactive one, and `~/.opencode/bin` among the
-  // four that only the shell knows about.
-  for (const entry of processPathEntries()) {
-    try {
-      accessSync(join(entry, 'opencode'), constants.X_OK)
-      return 'opencode'
-    } catch { /* keep looking */ }
-  }
-  // Anywhere else it is reachable, it travels as an absolute path.
-  for (const entry of pathEntries()) {
-    const candidate = join(entry, 'opencode')
-    try {
-      accessSync(candidate, constants.X_OK)
-      return candidate
-    } catch { /* keep looking */ }
-  }
-  const installed = join(homedir(), '.opencode', 'bin', 'opencode')
-  try {
-    accessSync(installed, constants.X_OK)
-    return installed
-  } catch {
-    return 'opencode'
-  }
-}
-
 /** Launch control must not run the synchronous interactive-shell fallback.
  * Resolve one captured environment asynchronously; the version probe then owns
  * and verifies the selected executable before it publishes an answer. */
 export async function opencodeBinAsync(): Promise<string> {
   const configured = env.OPENCODE_PATH
   if (configured) return configured
-  const ownPath = processPathEntries(), shell = currentUserShell(), daemonPath = process.env.PATH ?? ''
-  const installed = join(homedir(), '.opencode', 'bin', 'opencode')
-  for (const entry of ownPath) {
-    const file = join(entry, 'opencode')
-    try { accessSync(file, constants.X_OK); return file } catch { /* next candidate */ }
-  }
-  let extra: string[] = []
-  if (process.env.NODE_ENV !== 'test' && shell) {
-    if (interactivePathCache?.shell === shell && interactivePathCache.daemonPath === daemonPath && interactivePathCache.value.length) {
-      extra = interactivePathCache.value
-    } else {
-      extra = await new Promise<string[]>(done => {
-        const flag = basename(shell).toLowerCase() === 'zsh' ? '-lic' : '-ic'
-        const marker = '__HARNESS_ENGINE_PATH__='
-        try {
-          const child = execFile(shell, [flag, `printf '\\n${marker}%s\\n' "$PATH"`], {
-            encoding: 'utf8', timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
-          }, (error, stdout) => {
-            if (error) { done([]); return }
-            const path = stdout.split('\n').reverse().find(line => line.startsWith(marker))?.slice(marker.length)
-            done(path?.split(delimiter).filter(Boolean) ?? [])
-          })
-          child.stdin?.end()
-        } catch { done([]) }
-      })
-      // Failed captures remain retryable. A later launch may find a repaired shell.
-      if (extra.length) interactivePathCache = { shell, daemonPath, value: extra }
-    }
-  }
-  for (const entry of extra) {
-    const file = join(entry, 'opencode')
-    try { accessSync(file, constants.X_OK); return file } catch { /* next candidate */ }
-  }
-  try { accessSync(installed, constants.X_OK); return installed } catch { return 'opencode' }
+  const snapshot = await agentCommandOwnershipSnapshotAsync()
+  return snapshot.engineCandidates?.get('opencode')?.[0]?.path ?? 'opencode'
 }
 
 /** Resolve an installed executable for real-engine verification without trusting a colliding alias. */
@@ -473,6 +639,34 @@ export function enginePathOverride(engine: AgentEngine): string | undefined {
     case 'openclaw': return env.OPENCLAW_PATH
     case 'terminal': return undefined
   }
+}
+
+/**
+ * [engine] where the daemon's lookup looks with no shell started: its path override, its install names on PATH, then the
+ * folders its installer uses; null when none is there. Not engineBin's synchronous lookup, which starts the login shell
+ * again once its last read failed. On Windows each is tried with Windows' extensions (a name that already ends in one,
+ * as it is), and never `cmd`, the command processor there; a file counts only when it can be read as one (a Store
+ * app's alias cannot).
+ */
+export function engineNearby(engine: ProcessEngine, options: { platform?: NodeJS.Platform; environment?: NodeJS.ProcessEnv; home?: string } = {}): string | null {
+  const { platform = process.platform, environment = process.env, home = homedir() } = options
+  const recipe = ENGINE_INSTALL[engine]
+  const names = platform === 'win32' ? recipe.executable.names.filter((name) => name !== 'cmd') : recipe.executable.names
+  const commands = [enginePathOverride(engine), ...names, ...engineInstallPaths(recipe, home, platform, environment.LOCALAPPDATA)]
+  const found = (path: string): boolean => executableFileIdentity(path) !== null
+  for (const command of commands) {
+    if (!command) continue
+    if (platform !== 'win32') {
+      const bin = resolveBinaryOnPath(command, environment, found)
+      if (bin) return bin
+      continue
+    }
+    // No candidates: the name already ends in a program's extension, so it is tried as it is.
+    const candidates = windowsLaunchCandidates(command, environment, platform)
+    const bin = (candidates.length ? candidates : [command]).find(found)
+    if (bin) return bin
+  }
+  return null
 }
 
 export function engineBin(engine: AgentEngine, platform: NodeJS.Platform = process.platform): string {

@@ -1,0 +1,292 @@
+// Tier A's world (world.ts) with a recording start in place of the devices: what it hands them, and how it records
+// each command, raise and send they make. Every folder is a temp one, on virtual time.
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
+import type { TabsLine } from '../../../cable/hosts/tabsLines.js'
+import { tabsTyping } from '../../../cable/hosts/tabsType.js'
+import { env } from '../../../config/env.js'
+import type { CoreApi, CorePorts, DevicesPort } from '../../../core/api.js'
+import type { DevicesDeps, startDevices } from '../../../services/devices.js'
+import { claudeSessions, orcaSession, scenario, threads, vscode } from '../catalog.js'
+import type { Platform, Scenario } from '../types.js'
+import { installClock } from './clock.js'
+import { machine } from './machine.js'
+import { World } from './world.js'
+
+const S1 = scenario({ id: 'W1', app: 'chatgpt', title: 'Eval world', dims: ['D3'], steps: [], checks: [], probes: [],
+  sessions: [...claudeSessions(['a']), ...threads(['t1'])] })
+
+const worlds: World[] = []
+beforeEach(() => { installClock() })
+afterEach(() => {
+  for (const world of worlds.splice(0)) world.remove()
+  vi.useRealTimers()
+  vi.unstubAllEnvs()
+})
+
+/** A world on that platform, and what it handed the devices. */
+function worldOn(platform: Platform, of: Scenario = S1): { world: World; core: CoreApi; deps: DevicesDeps } {
+  let handed: { core: CoreApi; deps: DevicesDeps } | undefined
+  const start = ((core: CoreApi, _ports: unknown, deps: DevicesDeps) => {
+    handed = { core, deps }
+    return {}
+  }) as unknown as typeof startDevices
+  const world = new World(of, platform, start)
+  worlds.push(world)
+  return { world, ...handed! }
+}
+
+describe("tier A's world", () => {
+  it('records each command with whether it ran to a good end', async () => {
+    const { world, deps } = worldOn('darwin')
+    world.answer((argv) => (argv.includes('codex://threads/eval-refused') ? { code: 1 } : undefined))
+    await deps.orca!.run('/usr/bin/open', ['-b', 'com.openai.codex', 'codex://threads/eval-refused'], 1_000)
+    await deps.orca!.run('/usr/bin/open', ['-b', 'com.openai.codex'], 1_000)
+    expect(world.seen([]).commands.map(({ argv, ok }) => [argv.at(-1), ok])).toEqual([
+      ['codex://threads/eval-refused', false], ['com.openai.codex', true],
+    ])
+  })
+
+  it("records Windows' raises and links with the helper's answer", async () => {
+    const { world, deps } = worldOn('win32')
+    world.answer((argv) => (argv[1] === 'raise' ? { code: 1 } : undefined))
+    expect(await deps.windowsRaise!.app('com.openai.codex')).toBe(false)
+    expect(await deps.windowsRaise!.link('codex://threads/eval', 'com.openai.codex')).toBe(true)
+    expect(world.seen([]).commands.map(({ argv, ok }) => [argv[1], ok])).toEqual([['raise', false], ['open-link', true]])
+  })
+
+  it('closes what a step held open as it closes, while its folder is still there', async () => {
+    const { world } = worldOn('darwin')
+    const closed: boolean[] = []
+    world.onClose(() => closed.push(existsSync(world.codexHome.home)))
+    expect(closed).toEqual([])
+    await world.close()
+    expect(closed).toEqual([true])
+  })
+
+  it("speaks the same language on every host: the devices' voice language follows LANG", () => {
+    vi.stubEnv('LANG', 'vi_VN.UTF-8')
+    worldOn('darwin')
+    expect(process.env.LANG).toBe('en_US.UTF-8')
+  })
+
+  it("a world whose codexHome is the app's runs the devices with CODEX_HOME at the app's Codex home, and puts it back at close", async () => {
+    const before = env.CODEX_HOME
+    let started: string | undefined
+    const start = (() => {
+      started = env.CODEX_HOME
+      return {}
+    }) as unknown as typeof startDevices
+    const world = new World({ ...S1, world: { codexHome: 'app' } }, 'darwin', start)
+    worlds.push(world)
+    expect([started, world.folders.codexSessions]).toEqual([world.codexHome.home, join(world.codexHome.home, 'sessions')])
+    await world.close()
+    expect(env.CODEX_HOME).toBe(before)
+  })
+
+  it("the core's turns.send reaches no session: tier A has no Harness agent, so a real core would refuse it", () => {
+    const { world, core } = worldOn('darwin')
+    core.turns.send(world.agentId('a'), 'Eval words for alpha.')
+    expect(world.seen([]).deliveries).toEqual([{ at: 0, path: 'turns', target: null, text: 'Eval words for alpha.' }])
+  })
+})
+
+describe("tier A's world records every send, failing closed", () => {
+  const WORDS = 'Eval words for one.'
+
+  it("a send of the devices' own Codex queue is a codex delivery to its thread", async () => {
+    const { world, deps } = worldOn('darwin')
+    const queue = createCodexQueue({ ...deps.codex!, cwd: '/eval-cwd' })
+    expect(await queue.send(world.session('t1').id, WORDS, true, '/eval-codex-home')).toEqual({ outcome: 'queued' })
+    expect(world.seen([]).deliveries).toEqual([{ at: 0, path: 'codex', target: 't1', text: WORDS }])
+  })
+
+  it('a codex queue run that failed queued nothing', async () => {
+    const { world, deps } = worldOn('darwin')
+    world.answer((argv) => (argv.includes('queue') ? { code: 1 } : undefined))
+    const queue = createCodexQueue({ ...deps.codex!, cwd: '/eval-cwd' })
+    expect(await queue.send(world.session('t1').id, WORDS, true, '/eval-codex-home')).toMatchObject({ outcome: 'failed', reason: 'exit 1' })
+    expect(world.seen([]).deliveries).toEqual([])
+  })
+
+  it('a codex queue run it cannot read, or to a thread the scenario has not, is a delivery to no session', async () => {
+    const { world, deps } = worldOn('darwin')
+    const run = (args: string[]) => deps.codex!.run('/opt/eval/bin/codex', args, { cwd: '/eval-cwd', env: {}, timeoutMs: 1_000 })
+    await run(['queue', `--message=${WORDS}`])
+    await run(['queue', '--thread', '00000000-0000-4000-a000-00000000ffff', `--message=${WORDS}`])
+    await run(['queue', '--thread', world.session('t1').id])
+    expect(world.seen([]).deliveries.map(({ target, text }) => [target, text])).toEqual([[null, WORDS], [null, WORDS], [null, '']])
+  })
+
+  it('words herdr, Herdr Core, opencode or cmux are asked to put in a pane are typed into no session', async () => {
+    const { world, deps } = worldOn('darwin')
+    await deps.herdr!.prompt('w1:p1', 'agent', WORDS)
+    await deps.hc!.prompt('eval-terminal', 'agent', WORDS)
+    await deps.opencode!.prompt('eval-session', WORDS, 'eval-message')
+    await deps.cmux!.paste('eval-workspace', 'eval-surface', WORDS)
+    expect(world.seen([]).deliveries).toEqual(Array.from({ length: 4 }, () => ({ at: 0, path: 'typed', target: null, text: WORDS })))
+  })
+
+  it("the core's turns.deliver and its question answers reach no session", async () => {
+    const { world, core } = worldOn('darwin')
+    const agentId = world.agentId('a')
+    core.turns.deliver(agentId, WORDS, 'eval-delivery')
+    core.questions.answer(agentId, 'eval-request', { q1: 'Eval yes.' })
+    await core.questions.answerReviewed({ agentId, requestId: 'eval-request', questions: [], answers: { q1: 'Eval no.' }, selections: {} })
+    expect(world.seen([]).deliveries.map(({ path, target, text }) => [path, target, text])).toEqual([
+      ['turns', null, WORDS], ['turns', null, 'Eval yes.'], ['turns', null, 'Eval no.'],
+    ])
+  })
+
+  it('a command tier A does not answer is a gap that names its program', async () => {
+    const { world, deps } = worldOn('linux')
+    for (const argv of [['/usr/bin/open', '-b', 'com.openai.codex'], ['/usr/bin/xdg-open', 'codex://threads/eval'],
+      ['/usr/bin/xdg-mime', 'query', 'default', 'x-scheme-handler/codex'], ['harness-pty', 'raise', 'com.openai.codex']]) {
+      await deps.orca!.run(argv[0]!, argv.slice(1), 1_000)
+    }
+    await deps.codex!.run('/opt/eval/bin/codex', ['queue', '--thread', world.session('t1').id, `--message=${WORDS}`],
+      { cwd: '/eval-cwd', env: {}, timeoutMs: 1_000 })
+    expect(world.gaps).toEqual([])
+    await deps.orca!.run('/usr/bin/osascript', ['-e', 'eval'], 1_000)
+    await deps.orca!.run('/usr/bin/osascript', ['-e', 'eval'], 1_000)
+    await deps.codex!.run('/opt/eval/bin/codex', ['login'], { cwd: '/eval-cwd', env: {}, timeoutMs: 1_000 })
+    expect(world.gaps).toEqual(['a command tier A does not answer: osascript', 'a command tier A does not answer: codex'])
+  })
+
+  it("herdr and the lsof and ps of herdr's client lookup are answered on iTerm2's machine alone: a Claude world's ps is a gap",
+    async () => {
+    const { world, deps } = worldOn('darwin', { ...S1, app: 'claude' })
+    await deps.orca!.run('/bin/ps', ['-o', 'pid=,tty=', '-p', '41000'], 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: ps'])
+  })
+
+  it('tmux is answered on an Orca world whose session runs under tmux, on macOS and Linux; on Windows it is not installed and a run is a gap',
+    async () => {
+    const underTmux = scenario({ id: 'W2', app: 'orca', title: 'Eval an Orca agent under tmux', dims: ['D1'], steps: [], checks: [],
+      probes: [], sessions: [orcaSession('a', { worktree: 'w1', tab: 0 }), orcaSession('c', { worktree: 'w1', tab: 1, tmux: true })] })
+    const listPanes = ['list-panes', '-a', '-F', '#{pane_id}']
+    for (const platform of ['linux', 'darwin'] as const) {
+      machine.reset()
+      const { world, deps } = worldOn(platform, underTmux)
+      expect(machine.installed.get('tmux'), platform).toBe('/opt/eval/bin/tmux')
+      await deps.orca!.run('/opt/eval/bin/tmux', listPanes, 1_000)
+      expect(world.gaps, platform).toEqual([])
+      // herdr's lookup's ps stays iTerm2's.
+      await deps.orca!.run('/bin/ps', ['-o', 'pid=,tty=', '-p', '41000'], 1_000)
+      expect(world.gaps, platform).toEqual(['a command tier A does not answer: ps'])
+    }
+    machine.reset()
+    const { world, deps } = worldOn('win32', underTmux)
+    expect(machine.installed.has('tmux')).toBe(false)
+    await deps.orca!.run('/opt/eval/bin/tmux', listPanes, 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: tmux'])
+  })
+
+  it("tmux is Orca's world's alone: a VS Code session under tmux finds no tmux, and a run is a gap", async () => {
+    const underTmux = scenario({ id: 'W3', app: 'vscode', title: 'Eval a VS Code agent under tmux', dims: ['D1'], steps: [],
+      checks: [], probes: [], sessions: [vscode('a', { tmux: true })] })
+    machine.reset()
+    const { world, deps } = worldOn('darwin', underTmux)
+    expect(machine.installed.has('tmux')).toBe(false)
+    await deps.orca!.run('/opt/eval/bin/tmux', ['list-panes', '-a', '-F', '#{pane_id}'], 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: tmux'])
+  })
+
+  // PM decision 1 (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md): ps's start, a tab's process and lsof's
+  // readers are not readable here, so no tab is typed into in the eval.
+  it("an iTerm2 agent's tab has no proof and takes no words: the tabs probes are not readable", async () => {
+    machine.reset()
+    const { deps } = worldOn('darwin', { ...S1, app: 'iterm' })
+    machine.start({ pid: 41_000, ppid: 1, executable: 'claude', tty: 'ttys003' })
+    expect(await deps.tty!(41_000)).toEqual({ tty: '/dev/ttys003' })
+    expect(await deps.tabProcess!(41_000)).toBeUndefined()
+    expect(await deps.ttyReaders!('/dev/ttys003')).toBeUndefined()
+    // Even a pane given a proof by hand gets no line: its process is not read.
+    const sent: unknown[] = []
+    const line: TabsLine = {
+      writable: () => true,
+      ready: async () => true,
+      send: (typing) => {
+        sent.push(typing)
+        return { answer: Promise.resolve('ok'), settled: Promise.resolve() }
+      },
+      ended: new AbortController().signal,
+    }
+    const typing = tabsTyping({ line: () => line, shared: () => false, process: deps.tabProcess!, readers: deps.ttyReaders!,
+      processes: async () => [], after: () => () => {} })
+    const pane = { adapter: 'tabs', id: 'ghostty:/dev/ttys003', proof: { pid: 41_000, start: 'ps:1' } }
+    expect(await typing.type(pane, WORDS, 'claude', () => true)).toEqual({ notSent: 'process' })
+    expect(sent).toEqual([])
+  })
+
+  it("Cursor's CLI is answered only on a folder, as Linux's folder row runs it: any other run is a gap", async () => {
+    const { world, deps } = worldOn('linux')
+    await deps.orca!.run('/opt/eval/bin/cursor', ['/work/eval-a'], 1_000)
+    expect(world.gaps).toEqual([])
+    await deps.orca!.run('/opt/eval/bin/cursor', ['agent', '-p', 'Eval words for one.'], 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: cursor'])
+  })
+})
+
+describe("tier A's world across the devices' restart", () => {
+  it('restartDevices stops the devices and starts them on the same root, dial and sessions', async () => {
+    machine.reset()
+    const said: string[] = []
+    const handed: Array<{ core: CoreApi; deps: DevicesDeps }> = []
+    // Each start's devices open a listener of their own, and stop on virtual time.
+    const start = ((core: CoreApi, ports: CorePorts, deps: DevicesDeps) => {
+      const n = handed.push({ core, deps })
+      said.push(`start ${n}`)
+      if (n === 1) void deps.listen!({ front: { maxBytes: 64, perSecond: 1, handle: () => undefined } }, () => {})
+      ports.devices = { stop: async () => {
+        await new Promise((resolve) => { setTimeout(resolve, 1_000) })
+        said.push(`stop ${n}`)
+      } } as unknown as DevicesPort
+      return {}
+    }) as unknown as typeof startDevices
+    const world = new World(S1, 'darwin', start)
+    worlds.push(world)
+    // A session's process, which a restart of the devices leaves running.
+    machine.start({ pid: 41_000, ppid: 1, executable: 'claude' })
+    expect(Object.keys(world.listener)).toEqual(['front'])
+    const restarted = world.restartDevices()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await restarted
+    expect(said).toEqual(['start 1', 'stop 1', 'start 2'])
+    const [first, second] = handed
+    expect(second!.core).toBe(first!.core)
+    // The same deps: the same root's folders, the same dial's cable.
+    expect(second!.deps).toBe(first!.deps)
+    expect(second!.deps.cable).toBe(world.dial.cable)
+    expect([...machine.processes.keys()]).toEqual([41_000])
+    // The stopped devices' listener went with them: the new devices opened none.
+    expect(world.listener).toEqual({})
+  })
+})
+
+describe("tier A's Linux raise", () => {
+  it('is the real raise on a desktop that takes a process: each raise records the app asked for, and the pids and classes it is handed', async () => {
+    machine.reset()
+    const { world, deps } = worldOn('linux')
+    // A session's Claude Code in a terminal of its own: the raise walks from the session to the terminal.
+    machine.start({ pid: 40_000, ppid: 1, executable: 'ghostty' })
+    machine.start({ pid: 41_000, ppid: 40_000, executable: 'claude' })
+    // The desktop is found on the raise's first look, as the real one is at start.
+    await world.quiet()
+    const raise = deps.raise!
+    expect([raise.ready({ agent: true }), raise.ready({ agent: false, app: 'claude' }), raise.ready({ agent: false, app: 'herdr' })])
+      .toEqual([true, true, false])
+    // Two at once, each recorded with its own app.
+    expect(await Promise.all([raise.raise({ pid: 41_000, app: 'codex' }), raise.raise({ app: 'claude' })])).toEqual([true, true])
+    expect(await raise.raise({ pid: 41_000 })).toBe(true)
+    // herdr's agents have no window of their own, so it has no class: with no process either, nothing is run.
+    expect(await raise.raise({ app: 'herdr' })).toBe(false)
+    expect(world.seen([]).commands.map((c) => c.argv)).toEqual([
+      ['raise', '--app', 'claude', '--class', 'com.anthropic.Claude', '--class', 'com.anthropic.claude'],
+      ['raise', '--app', 'codex', '--pid', '41000', '--pid', '40000', '--class', 'ChatGPT', '--class', 'chatgpt'],
+      ['raise', '--pid', '41000', '--pid', '40000'],
+    ])
+  })
+})

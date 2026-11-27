@@ -11,7 +11,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/setting_row.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/account_menu.dart';
-import 'package:harness/widgets/desktop_workspace_tab.dart';
 import 'package:harness/widgets/workspace_account_button.dart';
 
 import 'support/capture.dart';
@@ -464,41 +463,6 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(chosen, AccountMenuChoice.addPhone);
-  });
-
-  testWidgets('a tab that needs you is bold, with no count', (tester) async {
-    Future<TextStyle?> styleOf({required bool attention}) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: SizedBox(
-              width: 200,
-              height: 40,
-              child: DesktopWorkspaceTab(
-                id: 't',
-                label: 'lampOS',
-                selected: false,
-                attention: attention,
-                showShortcuts: ValueNotifier(false),
-                onSelect: () {},
-                onClose: () {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-      return tester
-          .widget<Text>(find.byKey(const ValueKey('tab-label:t')))
-          .style;
-    }
-
-    final rest = await styleOf(attention: false);
-    final bold = await styleOf(attention: true);
-    expect(bold!.fontWeight, grid.AppFont.semibold);
-    expect(rest!.fontWeight, isNot(grid.AppFont.semibold));
-    expect(find.byType(Text), findsOneWidget);
   });
 
   test('the one letter an account wears', () {

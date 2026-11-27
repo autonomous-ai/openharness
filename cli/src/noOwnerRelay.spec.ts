@@ -1,5 +1,5 @@
 /**
- * No owner subscription relay (anh Dee, 2026-11-07, Swarm v3, task #4137): every agent runs under its own person's login
+ * No owner subscription relay (anh Dee, 2026-11-07, task #4137): every agent runs under its own person's login
  * and settings, and nothing spends the machine owner's Claude or ChatGPT subscription for someone else. A Harness Team
  * account's launches are built by the core with what its composition root hands them (core/main.ts), so that is where a
  * relay would come back: no relay launch wired in, no relay provider or token named, and nothing written into an engine's
@@ -7,29 +7,19 @@
  *
  * Read from the code itself, every string and name in every source file the CLI ships (tests aside).
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 const CLI = resolve(__dirname, '..')
 
 function sources(): string[] {
-  const found: string[] = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        if (!['node_modules', '__fixtures__', 'fixtures', '__snapshots__', 'testing'].includes(entry.name)) walk(path)
-        continue
-      }
-      if (!/\.(ts|mjs)$/.test(entry.name) || /\.(spec|test)\.ts$/.test(entry.name) || entry.name.endsWith('.d.ts')) continue
-      found.push(path)
-    }
-  }
-  walk(join(CLI, 'src'))
-  walk(join(CLI, 'hook'))
-  return found
+  return ['src', 'hook'].flatMap((folder) => sourceFiles(join(CLI, folder))
+    .filter((file) => !file.split('/').slice(0, -1).some((name) => ['node_modules', '__fixtures__', 'fixtures', '__snapshots__', 'testing'].includes(name))
+      && /\.(ts|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file) && !file.endsWith('.d.ts'))
+    .map((file) => join(CLI, folder, file)))
 }
 
 /** The relay's Codex provider and model-list route, and the launch the core took from it. */

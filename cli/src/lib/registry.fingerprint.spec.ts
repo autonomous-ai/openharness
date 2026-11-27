@@ -3,6 +3,7 @@ import { fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, wr
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // Rows are compared without regard to key order. These cases check that this hides only key order:
 // another writer's real changes still land, local real changes still write, and the file keeps its format.
@@ -10,11 +11,18 @@ vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
   return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 type Row = Record<string, unknown>
 let directory: string
 let file: string
 let registry: typeof Registry
+const loaded: Array<typeof Registry> = []
 const input = {
   agentId: 'observed-agent', engine: 'claude' as const, tmuxPane: '%31', cwd: '/fixture/project',
   processIdentity: { pid: 1031, executable: '/fixture/claude', startMarker: 'fixture-1031' },
@@ -48,34 +56,42 @@ async function freshRegistry(): Promise<typeof Registry> {
   vi.resetModules()
   const next = (await import('./registry.js')).registry
   next.load()
+  loaded.push(next)
   return next
 }
 
 beforeEach(async () => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
-  vi.useFakeTimers()
+  loaded.length = 0
+  // Only row timestamps are fixed; real lock retries must still advance.
+  vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(1790900000000)
   directory = mkdtempSync(join(tmpdir(), 'registry-fingerprint-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
   registry.load()
-  expect(registry.openProcessAgent(input)).not.toBeNull()
+  loaded.push(registry)
+  expect((await registry.openProcessAgent(input))).not.toBeNull()
   clearCounts()
   tick()
 })
 
-afterEach(() => {
+afterEach(async () => {
+  const writes = await Promise.allSettled(loaded.map(current => current.flush({ exiting: true })))
   vi.mocked(fsyncSync).mockReset()
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
+  expect(writes.every(result => result.status === 'fulfilled')).toBe(true)
 })
 
 describe('key-order-insensitive row comparison', () => {
   it('adopts another writer\'s nested change while idle, then stays quiet', async () => {
-    registry.setClosePlan(input.agentId, plan)
+    ;(await registry.setClosePlan(input.agentId, plan))
     const [saved] = readRows()
     const external = { ...saved, closePlan: { ...plan, state: 'failed', detail: 'external' } }
     writeRows([reversedDeep(external)])
@@ -92,12 +108,13 @@ describe('key-order-insensitive row comparison', () => {
     expect(readRows()[0]).toEqual(external)
   })
 
-  it('does not bring back a close plan another process removed when a different field changes here', () => {
-    registry.setClosePlan(input.agentId, plan)
+  it('does not bring back a close plan another process removed when a different field changes here', async () => {
+    ;(await registry.setClosePlan(input.agentId, plan))
     const [saved] = readRows()
     const { closePlan: _removed, ...withoutPlan } = saved
     writeRows([reversedDeep(withoutPlan)])
     expect(registry.updateProcessIdentity(input.agentId, input.processIdentity, 'ori')).toBe(true)
+    await registry.flush()
     expect(readRows()[0]).toMatchObject({ gateway: 'ori' })
     expect(readRows()[0]).not.toHaveProperty('closePlan')
     expect(registry.byAgent(input.agentId)).not.toHaveProperty('closePlan')
@@ -121,9 +138,10 @@ describe('key-order-insensitive row comparison', () => {
     expect(registry.byAgent(input.agentId)?.processIdentity).toEqual(local)
   })
 
-  it('treats a reordered grid as unchanged but writes a changed or cleared one', () => {
+  it('treats a reordered grid as unchanged but writes a changed or cleared one', async () => {
     const grid = { baseUrl: 'https://relay.example/v1', model: null }
     expect(registry.updateProcessIdentity(input.agentId, input.processIdentity, undefined, grid)).toBe(true)
+    await registry.flush()
     expect(registryWrites()).toBe(1)
     const touchedAt = registry.byAgent(input.agentId)!.touchedAt
     const bytes = readFileSync(file, 'utf8')
@@ -131,16 +149,19 @@ describe('key-order-insensitive row comparison', () => {
     tick()
     registry.updateProcessIdentity(input.agentId, reversedDeep(input.processIdentity) as typeof input.processIdentity,
       undefined, { model: null, baseUrl: grid.baseUrl })
+    await registry.flush()
     expect(registryWrites()).toBe(0)
     expect(lockAttempts()).toBe(0)
     expect(registry.byAgent(input.agentId)!.touchedAt).toBe(touchedAt)
     expect(readFileSync(file, 'utf8')).toBe(bytes)
     tick()
     registry.updateProcessIdentity(input.agentId, input.processIdentity, undefined, { model: 'other', baseUrl: grid.baseUrl })
+    await registry.flush()
     expect(registryWrites()).toBe(1)
     expect(readRows()[0]).toMatchObject({ grid: { model: 'other' }, touchedAt: Date.now() })
     tick()
     registry.updateProcessIdentity(input.agentId, input.processIdentity, undefined, null)
+    await registry.flush()
     expect(registryWrites()).toBe(2)
     expect(readRows()[0]).toMatchObject({ grid: null, touchedAt: Date.now() })
   })
@@ -191,9 +212,11 @@ describe('key-order-insensitive row comparison', () => {
     const first = registry
     const second = await freshRegistry()
     expect(second.updateProcessIdentity(input.agentId, input.processIdentity, 'ori')).toBe(true)
+    await second.flush()
     tick()
     expect(first.updateProcessIdentity(input.agentId, input.processIdentity, undefined,
       { baseUrl: 'https://relay.example/v1', model: null })).toBe(true)
+    await first.flush()
     clearCounts()
     for (let pass = 0; pass < 2; pass++) {
       tick(); await observe(first)

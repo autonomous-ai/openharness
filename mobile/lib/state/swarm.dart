@@ -9,6 +9,7 @@ class Swarm {
 
   static String normalizeName(String name) =>
       const {
+        'New Swarm',
         'New swarm',
         'New tab',
         'New Tab',
@@ -19,16 +20,9 @@ class Swarm {
       ? defaultName
       : name;
 
-  /// What an untouched swarm is called, matching the desktop
-  /// (`desktop/lib/state/swarm.dart`).
-  ///
-  /// ⚠️ **"New Harness" is in the legacy set above, not here, and the two are
-  /// not the same thing.** A *harness* is one running agent session — what the
-  /// desktop's menus stop, fork and rename. A *swarm* groups harnesses. The
-  /// default was 'New Harness' until 2026-09-15, which read as though opening a
-  /// tab opened an agent; a layout saved then still carries the name, and it
-  /// has to come back as the same fresh tab.
-  static const defaultName = 'New Swarm';
+  /// An untouched tab, matching Desktop. Old automatic names still restore as
+  /// an unnamed tab; a tab never owns the lifetime of the agents it displays.
+  static const defaultName = 'New Tab';
 
   final String id;
   String name;

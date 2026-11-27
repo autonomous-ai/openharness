@@ -22,9 +22,10 @@ name: Release
 #     key, so it points each at its own scratch file and merges once at the end. The CLI is ONE
 #     platform-independent bundle under ONE key, published by ONE job — the race the desktop
 #     designs around cannot occur here, so inventing a merge step would be ceremony.
-#   * The two published artifacts remain JavaScript. cli.js embeds a universal,
-#     ad-hoc-signed macOS process probe. Both its pinned digest and the manifest's
-#     whole-bundle digest are checked before any extracted helper is executed.
+#   * The two published artifacts remain JavaScript. cli.js embeds two universal,
+#     ad-hoc-signed macOS helpers: the process probe and the /dev watch helper. Each one's
+#     pinned digest and the manifest's whole-bundle digest are checked before that helper
+#     is executed.
 #
 # cli/scripts/upload-cli.sh is used EXACTLY as it is, with no flag this file invented: GCS_BUCKET,
 # METADATA_PATH and OTA_KEY are env overrides it already supports. The script is the production
@@ -156,15 +157,16 @@ jobs:
           echo "$GITHUB_RUN_ID" | gcloud storage cp - "$probe"
           gcloud storage rm "$probe"
 
-  # Produce the optional-at-runtime probe from this exact release source. CI
-  # exercises both host architectures; this job packages both in one JS bundle.
+  # Produce the optional-at-runtime macOS helpers (the process probe and the /dev
+  # watch helper) from this exact release source. CI exercises both host
+  # architectures; this job packages both in one JS bundle.
   process-images:
     needs: version
     runs-on: macos-15
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - name: Build and verify universal read-only process probe
+      - name: Build and verify universal process probe and /dev watch helper
         run: python3 cli/scripts/build-process-images.py --output "$RUNNER_TEMP/process-images.json"
       - uses: actions/upload-artifact@v4
         with:

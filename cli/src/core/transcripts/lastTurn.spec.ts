@@ -3,6 +3,7 @@ import { engineTranscriptFor } from '../../engines/transcripts.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLastTurnReader } from './lastTurn.js'
+import { createStoreOf } from './stores.js'
 import { loadEngine } from '../../engines/inProcess.js'
 
 // Each engine's readers are its own code, loaded in this process; a test may say one could not be.
@@ -50,8 +51,8 @@ async function reader(sessions: RegisteredSession[]) {
   return create({
     bySession: (sessionId) => bySession.get(sessionId),
     readerFor: engineTranscriptFor,
-    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: async () => null },
-    hermesDb: async (s) => `/db/hermes-${s.agentId}.db`,
+    storeOf: createStoreOf({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: async () => null },
+      async (s) => `/db/hermes-${s.agentId}.db`),
   })
 }
 
@@ -99,7 +100,7 @@ describe('the last turn of each engine', () => {
 
 it('drops a recap read when its session binding changes and contains worker failures', async () => {
   const s = session('claude', '/read.jsonl')
-  const deps = { bySession: () => s, dbs: { opencode: '', kilo: '', devin: '', openclaw: async () => null }, hermesDb: async () => '' }
+  const deps = { bySession: () => s, storeOf: async () => null }
   const result = { userMessage: 'question', assistantText: 'answer' }
   const readerFor = () => ({ historyPage: async () => ({ events: [], timestamp: '' }), lastTurnText: async () => {
     s.transcriptPath = '/replacement.jsonl'
@@ -114,4 +115,19 @@ it('drops a recap read when its session binding changes and contains worker fail
     expect(warn).toHaveBeenCalledWith('[engine claude] last turn unavailable · ENGINE_BUSY')
     expect(warn).toHaveBeenCalledWith('[engine claude] last turn unavailable · ENGINE_UNAVAILABLE')
   } finally { warn.mockRestore() }
+})
+
+it('keeps the last turn of a resumed conversation that its own process binds while it is read, whatever its engine', async () => {
+  for (const engine of ['hermes', 'claude', 'codex']) {
+    const processIdentity = { pid: 7, executable: engine, startMarker: 'one' }
+    let s = { ...session(engine, engine === 'hermes' ? undefined : `/${engine}.jsonl`), resumeOnly: true, boundAt: null,
+      lastHookAt: 0, processIdentity } as RegisteredSession
+    const result = { userMessage: 'question', assistantText: 'answer' }
+    const readerFor = () => ({ historyPage: async () => ({ events: [], timestamp: '' }), lastTurnText: async () => {
+      // The registry rebuilds the row it binds.
+      s = { ...s, boundAt: 1, lastHookAt: 1, processIdentity: { ...processIdentity } }
+      return result
+    } })
+    expect.soft(await createLastTurnReader({ bySession: () => s, storeOf: async () => null, readerFor })(s.sessionId), engine).toBe(result)
+  }
 })

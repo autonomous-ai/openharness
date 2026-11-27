@@ -18,7 +18,7 @@ mutations = [
     ('partial header treated as absent', repair, 'if (!cwd || (sidechain && side === undefined && malformed))', 'if (false)', bounds),
     ('permissive Codex reader', repair, 'findSessionFileOf, sessionIdentityMetaOf }', 'findSessionFileOf, sessionMetaOf as sessionIdentityMetaOf }', bounds),
     ('Copilot missing identity ignored', repair, 'if (!root || !isAbsolute(root)) throw new IdentityReadUnavailable(head.complete', 'if (false) throw new IdentityReadUnavailable(head.complete', bounds),
-    ('invalid process start accepted', repair, "|| !Number.isFinite(Date.parse(record[rule.start]))", '', bounds),
+    ('invalid process start accepted', repair, "typeof start === 'string' && Number.isFinite(Date.parse(start)) ?", "typeof start === 'string' ?", bounds),
     ('first home wins', repair, '    result = found\n', '    return found\n', bounds),
     ('authoritative claim read too early', repair, 'const recheck = [...records.filter(record => record.file !== selected), ...records.filter(record => record.file === selected)]', 'const recheck = records', bounds),
     ('home adoption ignored during lookup', repair, "if (repairRoots(engine, opts?.codexHome).join('\\0') !== sessions.join('\\0'))", 'if (false)', bounds),

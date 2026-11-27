@@ -30,12 +30,19 @@ claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin 
 claude plugin install harness@openharness
 ```
 
+Where Harness Device already set up Claude Code, `openharness` is there: run only
+`claude plugin install harness@openharness`.
+
 Codex:
 
 ```
 codex plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin --sparse plugins
 codex plugin add harness@openharness
 ```
+
+In a Codex home with this marketplace, Harness sets up no
+[Harness Device plugin](../harness-device/README.md#codex): the marketplace is yours, so Codex's waits outside a
+Harness pane do not reach the dial there.
 
 The marketplace is [`.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) at the root of this
 repository; Codex reads the same file. `--sparse` checks out only the marketplace and this folder: on October 11,
@@ -58,5 +65,6 @@ The skill describes commands agents run as written, so change it with the CLI (`
 MCP files agree. Where Harness is listed, and what each directory reads, is in
 [docs/research/2026-10-11-listing-submissions.md](../../docs/research/2026-10-11-listing-submissions.md).
 
-The plugin has no `version`, so an install tracks the commit it came from and `claude plugin update` picks up
-changes on `main`.
+The plugin here has no `version`, so an install from GitHub tracks the commit it came from and `claude plugin update`
+picks up changes on `main`. Harness stamps a version on the copy it carries for its own marketplace folder (its CLI's
+version and a hash of the plugin's files), so that copy updates with Harness.

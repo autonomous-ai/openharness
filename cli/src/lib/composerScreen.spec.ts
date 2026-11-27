@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { composerState } from './composerScreen.js'
-import { CODEX_SWARM_MESSAGE } from './__fixtures__/codexSwarmMessage.js'
+import { CODEX_PARAGRAPH_DRAFT } from './__fixtures__/codexParagraphDraft.js'
 
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8')
 const rule = (width = 100) => `\u001b[38;5;244m${'─'.repeat(width)}\u001b[39m`
@@ -146,9 +146,9 @@ describe('Codex\'s composer', () => {
     expect(composerState('codex', ['', '\u001b[1m›\u001b[0m\u001b[38;2;48;2;1m fix', '', '  second paragraph', '', '• Fixed it.', '  One.', '  Two.', '  Three.'].join('\n'))).toBe('absent')
   })
 
-  it('is ready with an unshaded draft in paragraphs, as a Swarm message is typed into a pane no window shows', () => {
+  it('is ready with an unshaded draft in paragraphs, as a message is typed into a pane no window shows', () => {
     // Codex with no background to shade its composer from: blank rows inside the draft, and its footer under one more.
-    expect(composerState('codex', CODEX_SWARM_MESSAGE)).toBe('ready')
+    expect(composerState('codex', CODEX_PARAGRAPH_DRAFT)).toBe('ready')
     expect(composerState('codex', codexComposer('fix the bug', '  gpt-6 high · ~/code', ['', '  second paragraph', '', '  third', '  and fourth']))).toBe('ready')
   })
 

@@ -223,13 +223,13 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     times.push(`shared again ${again2.sharedTabId === sharedTabId ? 'same id' : 'new id'} v${reshared!.version}`)
 
     // Where it ran: killing Alice's edge host cuts Agent Messages' link to the core, with the edge's other services.
-    const edge = (await processes(A.d)).find((p) => / harnessd-edge\b/.test(p) || /__service.*edge/.test(p))
+    const edge = A.d.servicePids('edge').at(-1)
     expect(edge, 'an edge host process').toBeDefined()
     const from = A.d.log().length
-    process.kill(Number(edge!.split(' ')[0]), 'SIGKILL')
+    process.kill(edge!, 'SIGKILL')
     await until('messages to disconnect with the edge host', () => /\[services\] messages disconnected/.test(A.d.log().slice(from)) || null, 20_000, 100)
     const cut = A.d.log().slice(from).split('\n').filter((l) => /\[services\] \w+ disconnected|service edge (started|exited|stopped)/.test(l))
-    times.push(`edge ${edge!.split(' ')[0]} killed: ${cut.slice(0, 16).join(' || ')}`)
+    times.push(`edge ${edge} killed: ${cut.slice(0, 16).join(' || ')}`)
     expect(cut.some((l) => /\[services\] workspaces disconnected/.test(l)), 'the edge host\'s other services went with it').toBe(true)
     await until('messages to connect again from a new edge host', () => /\[services\] messages connected/.test(A.d.log().slice(from)) || null, 30_000, 200)
     // Step 1b's tests run beside each other after this one: these daemons have nothing more to do.
@@ -242,13 +242,12 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const sides: Side[] = []
     onTestFailed(() => failureLogs('1b', sides))
     const mark = (label: string, since: number) => times.push(`1b ${label} ${Date.now() - since}ms`)
-    // Alice's daemon runs the tab's tasks with a stub gh, which a test runner's VITEST would refuse (messages/tasks.ts).
-    const { A, B, lead, api, sharedTabId } = await sharedPair(alice1b, bob1b, '1b', sides, { owner: { VITEST: '' } })
+    const { A, B, lead, api, sharedTabId } = await sharedPair(alice1b, bob1b, '1b', sides)
     expect(A.d.env.HARNESSD_SERVICES, 'the default layout').toBeUndefined()
 
     // 1. Bob's second computer takes the pin from his first (A2), and adds a harness of its own.
     let t = Date.now()
-    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' })
+    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' })
     const B2: Side = { who: bob1b, d: two.daemon, machineId: two.machineId, client: two.client }
     sides.push(B2)
     const held = await rosterOf(A, sharedTabId)
@@ -335,9 +334,9 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
       `search issues harness-tab:${sharedTabId} --match body --limit 100 --json number,title,state,url,repository,body,updatedAt`,
       `search prs harness-tab:${sharedTabId} --match body --limit 100 --json number,state,url,repository,body,isDraft`,
     ])
-    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": the daemon also looks in
-    // Homebrew's folders and the login shell's PATH (lib/github.ts GH_DIRS), where a developer's Mac or a CI runner has a
-    // real one, which would read whatever login that computer has.
+    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": after PATH, the daemon
+    // also looks in Homebrew's folders, ~/.local/bin and the login shell's PATH (ghPath() in lib/gitOnPath.ts), where a
+    // developer's Mac or a CI runner has a real one, which would read whatever login that computer has.
     writeFileSync(join(B2.d.root, 'bin', 'gh'), "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n", { mode: 0o755 })
     expect(await am(B2, { action: 'share_tasks', sharedTabId })).toMatchObject({ error: 'GH_SIGNED_OUT' })
 
@@ -373,10 +372,10 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const removedNotice = await until('bob\'s removed notice', async () =>
       ((await shares(B)).notices as Array<Record<string, any>>).find((n) => n.kind === 'removed' && n.sharedTabId === sharedTabId) ?? null, 30_000, 300)
     expect(typeof removedNotice.id).toBe('string')
-    const edgeB = (await processes(B.d)).find((p) => / harnessd-edge\b/.test(p) || /__service.*edge/.test(p))
+    const edgeB = B.d.servicePids('edge').at(-1)
     expect(edgeB, 'an edge host process').toBeDefined()
     const fromB = B.d.log().length
-    process.kill(Number(edgeB!.split(' ')[0]), 'SIGKILL')
+    process.kill(edgeB!, 'SIGKILL')
     await until('bob\'s messages to disconnect with the edge host', () => /\[services\] messages disconnected/.test(B.d.log().slice(fromB)) || null, 20_000, 100)
     await until('bob\'s messages to connect again', () => /\[services\] messages connected/.test(B.d.log().slice(fromB)) || null, 30_000, 200)
     const kept = await until('the removed notice after the restart', async () =>
@@ -400,7 +399,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const mark = (label: string, since: number) => times.push(`activity ${label} ${Date.now() - since}ms`)
     let t = Date.now()
     for (const who of [aliceAct, bobAct]) {
-      const s = await signIn(backend, who, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' })
+      const s = await signIn(backend, who, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' })
       sides.push({ who, d: s.daemon, machineId: s.machineId, client: s.client })
     }
     const [A, B] = sides
@@ -604,7 +603,7 @@ const delivered = (s: Side, id: string, ms = 60_000) => until(`${id} to be deliv
 
 /** What was typed into an agent's conversation: the user prompts its (fake) engine wrote to its transcript. */
 function prompts(s: Side, agent: Record<string, any>): string[] {
-  const projects = join(s.d.root, 'claude', 'projects')
+  const projects = s.d.engineConfig.claudeProjectsDir
   for (const dir of readdirSync(projects)) {
     const file = join(projects, dir, `${agent.sessionId}.jsonl`)
     if (!existsSync(file)) continue

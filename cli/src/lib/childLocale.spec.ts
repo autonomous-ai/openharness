@@ -64,6 +64,12 @@ describe('psEnv', () => {
     expect(psEnv({ LANG: 'POSIX' }).LC_CTYPE).toBe('C.UTF-8')
   })
 
+  /** In legacy mode macOS `ps -e` displays each process's environment, as `-E` does (ps(1), LEGACY DESCRIPTION). */
+  it('pins COMMAND_MODE to unix2003, whatever the person set', () => {
+    expect(psEnv({ COMMAND_MODE: 'legacy' }).COMMAND_MODE).toBe('unix2003')
+    expect(psEnv({}).COMMAND_MODE).toBe('unix2003')
+  })
+
   it('returns a copy — the daemon\'s own locale is not rewritten', () => {
     const env: NodeJS.ProcessEnv = { LANG: 'en_US.UTF-8', LC_TIME: 'en_AU.UTF-8' }
     psEnv(env)

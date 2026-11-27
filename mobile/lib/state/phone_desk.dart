@@ -302,9 +302,7 @@ class PhoneDesk {
       {
         'op': 'tab.create',
         'id': id,
-        'name': (name == null || name.trim().isEmpty)
-            ? 'New Swarm'
-            : name.trim(),
+        'name': (name == null || name.trim().isEmpty) ? 'New Tab' : name.trim(),
         'nameIsCustom': false,
         'index': _state.synced.length,
       },

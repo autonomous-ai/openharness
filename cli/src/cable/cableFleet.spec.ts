@@ -1,16 +1,17 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
+import { heardClip } from './__fixtures__/heardClip.js'
 import { CableFleet as SourceFleet, testDialDiscovery, type CableFleetOptions } from './cableFleet.js'
-import { CableSession, type CableHost, type CablePort } from './cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { completeFlash } from '../lib/flashRecovery.js'
-import { SerialToolTimeoutError, createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
+import { createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
 
 // Run the same two-device scenarios against the staged helper before deployment.
 const CableFleet: typeof SourceFleet = process.env.HARNESS_TEST_USB_FLEET
@@ -28,7 +29,7 @@ class Peer implements CablePort {
   async close(why = 'disconnected') { if (this.isOpen) { this.isOpen = false; this.onClosed(why) } }
   say(message: Record<string, unknown>) { this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message))))) }
   raw(bytes: Buffer) { this.onData(bytes) }
-  pcm(value: number) { this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, Buffer.alloc(3200, value)))) }
+  pcm(value: number) { for (const frame of heardClip(value)) this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, frame))) }
 }
 
 function fixture(extra: Partial<CableFleetOptions> = {}, Log: typeof DialLog = DialLog) {
@@ -51,7 +52,7 @@ function fixture(extra: Partial<CableFleetOptions> = {}, Log: typeof DialLog = D
   }
   const logs = mkdtempSync(join(tmpdir(), 'usb-fleet-'))
   const options = {
-    canUseUsb: vi.fn(() => true),
+    canUseUsb: vi.fn((_dialHere: boolean) => true),
     // Nobody else holds these ports. The default asks `lsof`, a process per port per scan, which on a
     // loaded machine outlasts the second a test waits for both dials.
     inUse: vi.fn(async () => false),
@@ -92,6 +93,13 @@ describe('one dial failing', () => {
   it('is dropped alone after five faults, its port looked at again after a wait, while the other dial goes on', async () => {
     const f = fixture({ faults: new Set(['dial.AA:01']), dropBackoffMs: 300 })
     const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    // The wait is stamped with Date.now(): a held clock, set by hand, keeps a loaded machine's
+    // stalls from running the wait out before the scan that must find it still on.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // The faults land after vi.waitFor has moved the held clock a poll or more, so the wait's start is
+    // read where the fleet stamps it: the drop's log line is written in that same call.
+    let at = 0
+    vi.mocked(f.host.log).mockImplementation((line: string) => { if (line.includes(' dropped ')) at = Date.now() })
     try {
       f.fleet.start()
       await vi.waitFor(() => expect(f.ports).toHaveLength(2))
@@ -100,47 +108,55 @@ describe('one dial failing', () => {
       // Every greeting the faulty dial sends fails in its session, as its firmware greets on a cadence.
       for (let i = 0; i < 5; i++) faulty.say({ t: 'hello', product: 'harness', mac: faulty.path, fw: 'fixture', proto: 3 })
       await vi.waitFor(() => expect(faulty.isOpen).toBe(false))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: injected fault: dial\.AA:01\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: Error\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
       // The other dial is untouched: still attached, still told the desk's work.
       expect(healthy.isOpen).toBe(true)
       healthy.sent.length = 0
       await f.fleet.turnStarted('a', 'working')
       await vi.waitFor(() => expect(healthy.sent.some((m) => m.t === 'turn.started')).toBe(true))
       expect(f.fleet.isConnected).toBe(true)
-      // Not before its wait is over; then it is opened again.
+      // Not before its wait is over; then it is opened again. Absolute times: vi.waitFor moves a faked clock per poll.
+      vi.setSystemTime(at + 299)
       await scan()
       expect(f.ports).toHaveLength(2)
-      await new Promise((resolve) => setTimeout(resolve, 350))
+      vi.setSystemTime(at + 300)
       await scan()
       expect(f.ports).toHaveLength(3)
-    } finally { await f.fleet.stop() }
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
   })
 
   it('is dropped at once when it floods the port with what no dial sends, and waits longer each time it does again', async () => {
     const f = fixture({ dropBackoffMs: 100 })
     const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    // Held, as in the test above. A flood is dropped within raw(), so the clock read just before it is the wait's start.
+    vi.useFakeTimers({ toFake: ['Date'] })
     try {
       await f.start()
       const [flooding, healthy] = f.ports
+      let at = Date.now()
       flooding.raw(Buffer.alloc(70 * 1024, 0x41))
       await vi.waitFor(() => expect(flooding.isOpen).toBe(false))
       expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: flooded · 716\d\d B that are no frames in a second, more than a dial sends/))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port: .*\) — this dial alone; its port is looked at again in 0 s/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port\) — this dial alone; its port is looked at again in 0 s/))
       expect(healthy.isOpen).toBe(true)
-      await new Promise((resolve) => setTimeout(resolve, 150))
+      vi.setSystemTime(at + 99)
+      await scan()
+      expect(f.ports).toHaveLength(2)
+      vi.setSystemTime(at + 100)
       await scan()
       expect(f.ports).toHaveLength(3)
       // Again, soon after: the wait doubles.
+      at = Date.now()
       f.ports[2].raw(Buffer.alloc(70 * 1024, 0x41))
       await vi.waitFor(() => expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped .* looked at again in 0 s/)))
       await vi.waitFor(() => expect(f.ports[2].isOpen).toBe(false))
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      vi.setSystemTime(at + 199)
       await scan()
       expect(f.ports).toHaveLength(3)
-      await new Promise((resolve) => setTimeout(resolve, 150))
+      vi.setSystemTime(at + 200)
       await scan()
       expect(f.ports).toHaveLength(4)
-    } finally { await f.fleet.stop() }
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
   })
 
   it('is dropped for a flood of frames, or for frames that take the decoder too long', async () => {
@@ -171,7 +187,7 @@ describe('one dial failing', () => {
       const [noisy, quiet] = f.ports
       for (let i = 0; i < 5; i++) noisy.raw(Buffer.from(encodeCableFrame(CableType.Log, Buffer.from('I (12) boot: line'))))
       await vi.waitFor(() => expect(noisy.isOpen).toBe(false))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · the log could not be written'))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · Error'))
       expect(quiet.isOpen).toBe(true)
     } finally { await f.fleet.stop() }
   })
@@ -204,6 +220,25 @@ describe('USB dial fleet', () => {
       await vi.waitFor(() => expect(f.ports).toHaveLength(4))
       await f.greet(f.ports.slice(2))
       expect(f.fleet.isConnected).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('says whether a dial is on USB when it asks whose USB it is, so an empty desk starts no process', async () => {
+    const f = fixture()
+    f.setPorts([])
+    const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      f.fleet.start()
+      for (let i = 0; i < 3; i++) await scan()
+      expect(f.options.discover.mock.calls.length).toBeGreaterThanOrEqual(3)
+      expect(f.options.canUseUsb.mock.calls.every(([dialHere]) => dialHere === false)).toBe(true)
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      await scan()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(f.options.canUseUsb).toHaveBeenLastCalledWith(true)
+      f.options.canUseUsb.mockClear()
+      await scan()
+      expect(f.options.canUseUsb).toHaveBeenCalledWith(true)
     } finally { await f.fleet.stop() }
   })
 
@@ -291,10 +326,6 @@ describe('USB dial fleet', () => {
       expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
       await f.fleet.turnStarted('a', 'Working')
       for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'turn.started', agentId: 'a', text: 'Working' })
-      // The Swarm cards reach every session; a dial that did not name them is sent nothing.
-      await f.fleet.syncSwarmCards(true)
-      await f.fleet.swarmCardRecap({ tabId: 'st1', leadId: 'l1', text: 'x', at: 1, none: false })
-      for (const port of f.ports) expect(port.sent.some(m => String(m.t).startsWith('supertab'))).toBe(false)
       f.setPorts([device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
       expect(f.ports[0].isOpen).toBe(false)
       expect(f.ports[1].isOpen).toBe(true)
@@ -311,6 +342,32 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('followLocal reaches each attached dial', async () => {
+    const f = fixture()
+    try {
+      await f.start()
+      const localFollowed = vi.fn()
+      f.host.localFollowed = localFollowed
+      await f.fleet.followLocal('a', 'tab')
+      for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'focus', agentId: 'a' })
+      expect(localFollowed.mock.calls).toEqual([['tab', 'moved'], ['tab', 'moved']])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('viewChanged reaches each attached dial', async () => {
+    const f = fixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      for (const p of f.ports) p.say({ t: 'hello', product: 'harness', mac: p.path, fw: 'fixture', proto: 3, appFilter: 'v1' })
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some(m => m.t === 'agents.end')).toBe(true) })
+      f.host.listSwarms = () => ({ selected: 'tab', swarms: [{ id: 'tab', name: 'Tab', agents: 1, panes: 1 }], tiles: [] })
+      const before = f.ports.map(p => p.sent.length)
+      await f.fleet.viewChanged()
+      for (const [i, p] of f.ports.entries()) expect(p.sent.slice(before[i]).some(m => m.t === 'swarms')).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
   it('keeps simultaneous voice uploads separate even with the same upload id', async () => {
     const f = fixture()
     try {
@@ -320,7 +377,7 @@ describe('USB dial fleet', () => {
       for (const p of f.ports) p.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(f.host.sendTurn).toHaveBeenCalledTimes(2))
       const audio = vi.mocked(f.host.transcribe).mock.calls.map(c => c[0])
-      expect(audio.map(b => [b.length, b[0]])).toEqual([[3200, 17], [3200, 34]])
+      expect(audio.map(b => [b.length, b[0]])).toEqual([[12_800, 17], [12_800, 34]])
       expect(audio.every(b => b.every(v => v === b[0]))).toBe(true)
       for (const [i, p] of f.ports.entries()) {
         expect(p.sent.some(m => m.t === 'voice.transcript' && m.text === `audio-${i ? 34 : 17}`)).toBe(true)
@@ -343,6 +400,39 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  // Two dials back from one hub greet a moment apart. The second, its sibling attached, pushed at once, before the reads
+  // the host's attach started for the first had landed: its list lacked their rows until a tick's push (the dial eval's C11).
+  it('a dial that greets beside an attached one waits for the reads the host\'s attach started too, asked once', async () => {
+    const f = fixture()
+    const listed = [{ id: 'a', name: 'A', engine: 'codex' }]
+    f.host.listAgents = async () => listed
+    let land!: () => void
+    vi.mocked(f.host.onDialAttached!).mockReturnValue(new Promise<void>((resolve) => { land = resolve }))
+    /** The agent ids of the first list a dial was pushed. */
+    const firstList = (peer: Peer) => {
+      const types = peer.sent.map((m) => m.t)
+      return peer.sent.slice(types.indexOf('agents.begin'), types.indexOf('agents.end')).filter((m) => m.t === 'agent').map((m) => m.id)
+    }
+    try {
+      f.fleet.start(); await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      // The greeting's wait for the reads is bounded by a timer: held, so only the reads landing ends it.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      for (const p of f.ports) p.say({ t: 'hello', product: 'harness', mac: p.path, fw: 'fixture', proto: 3 })
+      // Each dial is attached in the same step that says it greeted.
+      await vi.waitFor(() => { for (const p of f.ports) expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining(`cable: dial ${p.path} on fw`)) })
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(0)
+      for (const p of f.ports) expect(p.sent.map((m) => m.t)).not.toContain('agents.begin')
+      listed.push({ id: 'app', name: 'App', engine: 'claude' })
+      land()
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some((m) => m.t === 'agents.end')).toBe(true) })
+      for (const p of f.ports) expect(firstList(p)).toEqual(['a', 'app'])
+      expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      await f.fleet.stop()
+    }
+  })
+
   it('preserves healthy sessions when discovery fails and replaces a moved USB path', async () => {
     const f = fixture()
     try {
@@ -359,6 +449,63 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('brings a dial back on the agent it was turned to, not the first of the ring: unplugged, USB away and back, or dropped', async () => {
+    // Each ends the dial's session, and the fleet opens a new one for it when it is back.
+    for (const away of ['unplugged', 'usb', 'flood'] as const) {
+      const f = fixture({ dropBackoffMs: 0 })
+      f.host.listAgentSnapshot = async () => ({
+        agents: [{ id: 'a', name: 'A', engine: 'codex' }, { id: 'b', name: 'B', engine: 'codex' }], tab: '', total: 2, view: 'machine',
+      })
+      const focuses = (port: Peer) => port.sent.filter((m) => m.t === 'focus')
+      const dial = device('/dev/tim', 'AA:01')
+      f.setPorts([dial])
+      try {
+        f.fleet.start()
+        await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+        await f.greet([f.ports[0]])
+        await vi.waitFor(() => expect(focuses(f.ports[0])).toEqual([{ t: 'focus', agentId: 'a' }]))
+        // The landing's echo first, so the turn after it is the person's own and not a repaint.
+        f.ports[0].say({ t: 'focus', agentId: 'a' })
+        f.ports[0].say({ t: 'focus', agentId: 'b' })
+        await vi.waitFor(() => expect(f.host.focus).toHaveBeenCalledWith('b'))
+        if (away === 'unplugged') { f.setPorts([]); await f.fleet['scan']() }
+        if (away === 'usb') { f.options.canUseUsb.mockReturnValue(false); await f.fleet['scan']() }
+        if (away === 'flood') f.ports[0].raw(Buffer.alloc(70 * 1024, 0x41))
+        await vi.waitFor(() => expect(f.ports[0].isOpen, away).toBe(false))
+        f.setPorts([dial]); f.options.canUseUsb.mockReturnValue(true); await f.fleet['scan']()
+        await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+        await f.greet([f.ports[1]])
+        await vi.waitFor(() => expect(focuses(f.ports[1]).length).toBeGreaterThan(0))
+        expect(focuses(f.ports[1]), away).toEqual([{ t: 'focus', agentId: 'b' }])
+      } finally { await f.fleet.stop() }
+    }
+  })
+
+  it('lands a dial back on the ring\'s first agent when the agent it was on has left the ring', async () => {
+    const f = fixture()
+    let agents = [{ id: 'a', name: 'A', engine: 'codex' }, { id: 'b', name: 'B', engine: 'codex' }]
+    f.host.listAgentSnapshot = async () => ({ agents, tab: '', total: agents.length, view: 'machine' })
+    const focuses = (port: Peer) => port.sent.filter((m) => m.t === 'focus')
+    const dial = device('/dev/tim', 'AA:01')
+    f.setPorts([dial])
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      await f.greet([f.ports[0]])
+      await vi.waitFor(() => expect(focuses(f.ports[0])).toEqual([{ t: 'focus', agentId: 'a' }]))
+      f.ports[0].say({ t: 'focus', agentId: 'a' })
+      f.ports[0].say({ t: 'focus', agentId: 'b' })
+      await vi.waitFor(() => expect(f.host.focus).toHaveBeenCalledWith('b'))
+      f.setPorts([]); await f.fleet['scan']()
+      agents = [{ id: 'a', name: 'A', engine: 'codex' }, { id: 'c', name: 'C', engine: 'codex' }]
+      f.setPorts([dial]); await f.fleet['scan']()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      await f.greet([f.ports[1]])
+      await vi.waitFor(() => expect(focuses(f.ports[1]).length).toBeGreaterThan(0))
+      expect(focuses(f.ports[1])).toEqual([{ t: 'focus', agentId: 'a' }])
+    } finally { await f.fleet.stop() }
+  })
+
   it('logs an ioreg that hung, and the next scan still runs and finds the dial', async () => {
     vi.useFakeTimers()
     const dump = `+-o Tim <class IOUSBHostDevice>
@@ -372,7 +519,7 @@ describe('USB dial fleet', () => {
     try {
       f.fleet.start()
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(f.host.log).toHaveBeenCalledWith(`cable: USB discovery failed: ${String(new SerialToolTimeoutError('ioreg'))}`)
+      expect(f.host.log).toHaveBeenCalledWith('cable: USB discovery failed: SerialToolTimeoutError')
       expect(f.ports).toHaveLength(0)
       await f.fleet['scan']()
       expect(runIoreg).toHaveBeenCalledTimes(2)
@@ -403,6 +550,179 @@ describe('USB dial fleet', () => {
       await vi.waitFor(() => expect(late.isOpen).toBe(false))
       expect(f.fleet.isConnected).toBe(false)
       expect(f.host.onDialAttached).not.toHaveBeenCalled()
+    } finally { await f.fleet.stop() }
+  })
+})
+
+describe('a dial plugged in while the daemon runs', () => {
+  /** The OS's device-arrival signal, held by the test. */
+  function osArrivals() {
+    const os = { signal: undefined as (() => void) | undefined, off: vi.fn() }
+    return { os, arrivals: (signal: () => void) => { os.signal = signal; return os.off } }
+  }
+
+  it('is opened as soon as the OS says a device arrived, well before the next scan', async () => {
+    const { os, arrivals } = osArrivals()
+    const f = fixture({ arrivals })
+    f.setPorts([])
+    try {
+      f.fleet.start(); await f.fleet['scan']()
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      const at = Date.now()
+      os.signal?.()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      // The scan timer (60 s here, 2 s in the daemon) would have found it much later.
+      expect(Date.now() - at).toBeLessThan(1_000)
+    } finally { await f.fleet.stop() }
+    expect(os.off).toHaveBeenCalledTimes(1)
+  })
+
+  it('scans once for a burst of arrivals, and opens the dial once', async () => {
+    const { os, arrivals } = osArrivals()
+    const f = fixture({ arrivals })
+    f.setPorts([])
+    try {
+      f.fleet.start(); await f.fleet['scan']()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      for (let i = 0; i < 5; i++) { os.signal?.(); await vi.advanceTimersByTimeAsync(50) }
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(f.options.discover).toHaveBeenCalledTimes(2)
+      expect(f.options.open).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
+  })
+
+  it('is still found by the scan timer when the OS cannot say a device arrived, which is said once', async () => {
+    const f = fixture({ arrivals: () => { throw new Error('no watch') }, intervalMs: 20 })
+    f.setPorts([])
+    try {
+      f.fleet.start()
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(vi.mocked(f.host.log).mock.calls.filter(([line]) => line.includes('arrivals'))).toEqual([
+        ['cable: device arrivals cannot be watched (Error) — a new dial is found by the next scan'],
+      ])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('scans once more after the scan an arrival landed in, which looked before the dial was there', async () => {
+    const { os, arrivals } = osArrivals()
+    const f = fixture({ arrivals })
+    f.setPorts([])
+    try {
+      f.fleet.start(); await f.fleet['scan']()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      let answer!: (ports: DialPort[]) => void
+      f.options.discover.mockImplementationOnce(() => new Promise<DialPort[]>((resolve) => { answer = resolve }))
+      const scanning = f.fleet['scan']()
+      os.signal?.()
+      await vi.advanceTimersByTimeAsync(1_000)
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      answer([])
+      await scanning
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(f.options.discover).toHaveBeenCalledTimes(3)
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
+  })
+})
+
+describe('a dial plugged in beside one already attached', () => {
+  const asked = [{ key: 'k', q: 'Run it?', options: ['Yes', 'No'], multi: false }]
+  const notice = [{ key: 'n', q: 'Done', options: ['In harness'], multi: false }]
+  const noticeId = `${SHOWN_ONLY_PREFIX}n1`
+  const questions = (peer: Peer) => peer.sent.filter(m => m.t === 'question').map(m => `${m.agentId} ${m.id}`)
+  // Lets whatever the frames above set off reach the ports before counting what each got.
+  const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+  async function firstAlone() {
+    const f = fixture()
+    f.setPorts([device('/dev/tim', 'AA:01')])
+    f.fleet.start()
+    await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+    await f.greet([f.ports[0]])
+    return f
+  }
+  async function plugSecond(f: ReturnType<typeof fixture>) {
+    f.setPorts([device('/dev/tim', 'AA:01'), device('/dev/tux', 'BB:02')])
+    await f.fleet['scan']()
+    await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+    await f.greet([f.ports[1]])
+  }
+
+  it('is asked the open questions and notices, each once, and the first dial is not asked again', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', asked)
+      await f.fleet.question('b', noticeId, notice)
+      expect(questions(f.ports[0])).toEqual(['a q1', `b ${noticeId}`])
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toHaveLength(2))
+      await flush()
+      expect(questions(f.ports[1]).sort()).toEqual(['a q1', `b ${noticeId}`])
+      expect(questions(f.ports[0])).toEqual(['a q1', `b ${noticeId}`])
+      expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is shown a notice whose turn has ended', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', noticeId, notice)
+      await f.fleet.summary('a', 'Done', 'Done')
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toHaveLength(1))
+      await flush()
+      expect(questions(f.ports[1])).toEqual([`a ${noticeId}`])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is not asked a question whose turn ended without a close, as the first dial greeting again is not', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', asked)
+      await f.fleet.turnDone('a')
+      await f.fleet.question('b', noticeId, notice)
+      await plugSecond(f)
+      // Asked in the order they came: by the notice, the question would be there too.
+      await vi.waitFor(() => expect(questions(f.ports[1])).toContain(`b ${noticeId}`))
+      expect(questions(f.ports[1])).toEqual([`b ${noticeId}`])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('holds a held question on every dial, one plugged in later too, and asks it of none', async () => {
+    const f = await firstAlone()
+    const reads = (peer: Peer) => peer.sent.filter(m => m.t === 'question.state')
+    const readOn = async (peer: Peer, agentId: string) => {
+      const before = reads(peer).length
+      peer.say({ t: 'question.read', agentId, requestId: 'r' })
+      await vi.waitFor(() => expect(reads(peer)).toHaveLength(before + 1))
+      return reads(peer)[before]
+    }
+    try {
+      await f.fleet.hold('b', noticeId, notice)
+      await f.fleet.question('a', 'q1', asked)
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toEqual(['a q1']))
+      await flush()
+      expect(questions(f.ports[1])).toEqual(['a q1'])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+      for (const port of f.ports) expect(await readOn(port, 'b')).toMatchObject({ ok: true, id: noticeId })
+      await f.fleet.hold('c', `${SHOWN_ONLY_PREFIX}n2`, notice)
+      for (const port of f.ports) expect(await readOn(port, 'c')).toMatchObject({ ok: true })
+      for (const port of f.ports) expect(questions(port)).toEqual(['a q1'])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is given a question the dial cannot answer, once, and the first dial is not asked again', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', [{ key: 'plan', q: `Approve? ${'x'.repeat(9000)}`, options: ['Approve', 'Keep planning'] }])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toEqual(['a q1']))
+      await flush()
+      expect(questions(f.ports[1])).toEqual(['a q1'])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
     } finally { await f.fleet.stop() }
   })
 })
@@ -564,12 +884,11 @@ describe('a board that is not a dial', () => {
     // Skipped without lsof; the fleet treats "cannot tell" as free, so there is nothing to prove there.
     const file = join(mkdtempSync(join(tmpdir(), 'held-')), 'tty')
     writeFileSync(file, '')
+    const lsofExists = await new Promise<boolean>(r => spawn('lsof', ['-v'], { stdio: 'ignore' }).on('error', () => r(false)).on('exit', () => r(true)))
     const holder = spawn('tail', ['-f', file], { stdio: 'ignore' })
     try {
-      await new Promise(r => setTimeout(r, 300))
-      const held = await portInUse(file)
-      const lsofExists = await new Promise<boolean>(r => spawn('lsof', ['-v'], { stdio: 'ignore' }).on('error', () => r(false)).on('exit', () => r(true)))
-      if (lsofExists) expect(held).toBe(true)
+      // Held once tail has opened the file, a moment after it starts.
+      if (lsofExists) await vi.waitFor(async () => expect(await portInUse(file)).toBe(true), { timeout: 10_000, interval: 50 })
     } finally {
       holder.kill()
       await new Promise(r => holder.on('exit', r))
@@ -625,10 +944,69 @@ describe('macOS USB inventory', () => {
     +-o serial
       "sessionID" = 99
       "IOCalloutDevice" = "/dev/tux"
+  +-o Tam
+    "sessionID" = 26004684572539
+    "idProduct" = 4097
+    "idVendor" = 12346
+    "USB Serial Number" = "CC:03"
+    +-o interface
+      "idProduct" = 4097
+      "sessionID" = 98
+      "idVendor" = 12346
+      "USB Serial Number" = "CC:03"
+      +-o serial
+        "IOCalloutDevice" = "/dev/tam"
   +-o console
     "IOCalloutDevice" = "/dev/debug-console"`
-    // The attachment identity is the USB device's own sessionID, not one from a node below it.
-    expect(parseDarwinDialPorts(dump)).toEqual([device('/dev/tim', 'AA:01'), { ...device('/dev/tux', 'BB:02'), session: '14351572441873' }])
+    // The attachment identity is the USB device's own sessionID, wherever it stands among the ids (a real dump
+    // lists it first), not one from a node below it.
+    expect(parseDarwinDialPorts(dump)).toEqual([
+      device('/dev/tim', 'AA:01'),
+      { ...device('/dev/tux', 'BB:02'), session: '14351572441873' },
+      { ...device('/dev/tam', 'CC:03'), session: '26004684572539' },
+    ])
+  })
+
+  it('reads one chain per serial port, as ioreg -t prints them: two dials behind one hub keep their own serial and session', () => {
+    const dump = `+-o Root
+  +-o hub
+    "idVendor" = 8457
+    "idProduct" = 10261
+    "sessionID" = 100
+    +-o Tim
+      "sessionID" = 101
+      "idProduct" = 4097
+      "idVendor" = 12346
+      "USB Serial Number" = "AA:01"
+      +-o serial
+          "IOCalloutDevice" = "/dev/cu.usbmodem1101"
++-o Root
+  +-o hub
+    "idVendor" = 8457
+    "idProduct" = 10261
+    "sessionID" = 100
+    +-o Tux
+      "idProduct" = 4097
+      "idVendor" = 12346
+      "USB Serial Number" = "BB:02"
+      +-o serial
+          "IOCalloutDevice" = "/dev/cu.usbmodem1201"
++-o Root
+  +-o bluetooth
+    +-o serial
+        "IOCalloutDevice" = "/dev/cu.Bluetooth-Incoming-Port"`
+    // Tux lists no sessionID: the hub's above it is not its attachment.
+    expect(parseDarwinDialPorts(dump)).toEqual([{ ...device('/dev/cu.usbmodem1101', 'AA:01'), session: '101' }, device('/dev/cu.usbmodem1201', 'BB:02')])
+  })
+
+  it('finds exactly the dial in a real dump of the serial-port query, with its device node\'s own session', () => {
+    // `ioreg -r -c IOSerialBSDClient -t -w0 -l` on the Mac of the 2026-11-14 report: the chains of debug-console, a
+    // dial behind a USB hub, and the Bluetooth port. Trimmed: only the USB nodes and the serial ports keep their
+    // properties (the others name the console user, the Mac's serial numbers and its addresses), and the dial's
+    // serial number is made up.
+    const dump = readFileSync(fileURLToPath(new URL('./__fixtures__/ioregSerialClients.txt', import.meta.url)), 'utf8')
+    // 26004684572539 is the dial's own sessionID, listed before its ids; the hub above it has 26004667014204.
+    expect(parseDarwinDialPorts(dump)).toEqual([{ ...device('/dev/cu.usbmodem21101', 'AA:BB:CC:DD:EE:01'), session: '26004684572539' }])
   })
 
   describe('dial scan gate', () => {
@@ -773,9 +1151,13 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     static made: Quiet[] = []
     isConnected = false
     wantsStats = false
+    /** The agent its dial was on, as CableSession's record. */
+    place = ''
     constructor(readonly host: CableHost) { Quiet.made.push(this) }
     start() {}
     async stop() {}
+    focusRecorded() { return this.place }
+    recordFocus(agentId: string) { this.place = agentId }
     petDial() { return { supported: false, held: [], sending: null, errors: {} } }
     silent() { this.host.onForeignPort?.('/dev/pro', 'silent') }
   }
@@ -816,6 +1198,20 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
       s.f.setPorts([{ ...s.port, session: '8' }])
       await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(3) })
       expect(s.rows()).toEqual([])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('hands the agent its dial was on to the session that looks at it again after the reset', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'pro')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      // A silent session holds a place only when it was handed one: where its dial was in an earlier session.
+      Quiet.made[0].place = 'b'
+      Quiet.made[0].silent()
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
+      expect(Quiet.made[1].place).toBe('b')
     } finally { await s.fleet.stop() }
   })
 
@@ -935,5 +1331,104 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
       Quiet.made[0].silent()
       await vi.waitFor(() => expect(s.reset).toHaveBeenCalledTimes(1))
     } finally { await s.fleet.stop() }
+  })
+})
+
+describe('the agents of dials that went away', () => {
+  // Stands in for a session holding the record of the agent its dial was on.
+  class Placed {
+    static made: Placed[] = []
+    isConnected = false
+    wantsStats = false
+    place = ''
+    constructor(readonly host: CableHost) { Placed.made.push(this) }
+    start() {}
+    async stop() {}
+    focusRecorded() { return this.place }
+    recordFocus(agentId: string) { this.place = agentId }
+    petDial() { return { supported: false, held: [], sending: null, errors: {} } }
+  }
+
+  it('are kept for 16 dials, each its own, the one away longest forgotten', async () => {
+    Placed.made = []
+    const f = fixture()
+    const dials = Array.from({ length: 17 }, (_, i) => device(`/dev/d${i}`, `D${i}`))
+    f.setPorts(dials)
+    const fleet = new CableFleet(Placed as unknown as typeof CableSession, f.host, f.logs, DialLog, f.options)
+    const scan = () => (fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      fleet.start(); await scan()
+      expect(Placed.made).toHaveLength(17)
+      Placed.made.forEach((session, i) => { session.place = `agent-${i}` })
+      f.setPorts([]); await scan()
+      f.setPorts(dials); await scan()
+      expect(Placed.made.slice(17).map((session) => session.place)).toEqual(['', ...dials.slice(1).map((_, i) => `agent-${i + 1}`)])
+    } finally { await fleet.stop() }
+  })
+})
+
+describe('a port that never opened', () => {
+  // Stands in for a session whose every open fails (no access to the tty): it only reports its problem.
+  class Closed {
+    static made: Closed[] = []
+    isConnected = false
+    wantsStats = false
+    constructor(readonly host: CableHost) { Closed.made.push(this) }
+    start() {}
+    async stop() {}
+    focusRecorded() { return '' }
+    petDial() { return { supported: false, held: [], sending: null, errors: {} } }
+  }
+  function setup() {
+    Closed.made = []
+    const f = fixture()
+    f.setPorts([device('/dev/ttyACM0', 'CC:03')])
+    const fleet = new CableFleet(Closed as unknown as typeof CableSession, f.host, f.logs, DialLog, f.options)
+    const scan = () => (fleet as unknown as { scan(): Promise<void> }).scan()
+    const rows = () => (vi.mocked(f.host.onDialStatus!).mock.calls.at(-1)?.[0].devices ?? [])
+    return { f, fleet, scan, rows }
+  }
+
+  it('has a row carrying only its problem', async () => {
+    const s = setup()
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Closed.made).toHaveLength(1))
+      Closed.made[0].host.onDialStatus?.({ attached: false, problem: 'P' })
+      expect(s.rows()).toEqual([{ id: 'CC:03', attached: false, problem: 'P' }])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('the row goes with the problem, with the port, and when USB passes to another account', async () => {
+    for (const change of ['problem', 'port', 'usb'] as const) {
+      const s = setup()
+      try {
+        s.fleet.start()
+        await vi.waitFor(() => expect(Closed.made).toHaveLength(1))
+        Closed.made[0].host.onDialStatus?.({ attached: false, problem: 'P' })
+        expect(s.rows()).toHaveLength(1)
+        if (change === 'problem') Closed.made[0].host.onDialStatus?.({ attached: false })
+        if (change === 'port') { s.f.setPorts([]); await s.scan() }
+        if (change === 'usb') { s.f.options.canUseUsb.mockReturnValue(false); await s.scan() }
+        expect(s.rows()).toEqual([])
+      } finally { await s.fleet.stop() }
+    }
+  })
+})
+
+describe('which apps the dials want', () => {
+  it('wants apps while any connected dial says appFilter', async () => {
+    const f = fixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      expect(f.fleet.wantsApps()).toBe(false)
+      f.ports[0].say({ t: 'hello', product: 'harness', mac: f.ports[0].path, fw: 'fixture', proto: 3, appFilter: 'v1' })
+      f.ports[1].say({ t: 'hello', product: 'harness', mac: f.ports[1].path, fw: 'fixture', proto: 3 })
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some(m => m.t === 'agents.end')).toBe(true) })
+      expect(f.fleet.wantsApps()).toBe(true)
+      await f.ports[0].close()
+      await vi.waitFor(() => expect(f.fleet.wantsApps()).toBe(false))
+    } finally { await f.fleet.stop() }
   })
 })

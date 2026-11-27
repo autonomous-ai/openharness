@@ -4,10 +4,11 @@ One thing to know from the start: **the daemon only knows about panes it created
 start from the app are tmux sessions named `harness-*`, owned by the daemon. A `claude` you launch
 by hand in your own tmux is not picked up. Another machine needs Node ≥ 20 and tmux; `sqlite3` only
 for the engines that keep their conversations in SQLite (OpenCode, Kilo, Hermes, Devin). There is no
-token to copy between machines: a durable computer id under `~/.harness` keeps later starts attached
-to the same machine record.
+token to copy between machines: a durable computer id in Harness's folder
+([where Harness keeps its files](#where-harness-keeps-its-files)) keeps later starts attached to the same machine
+record.
 
-`harness` is one pure-JS bundle run by the managed Node under `~/.harness/cli`. Everything below
+`harness` is one pure-JS bundle in that folder's `cli`, run by the managed Node. Everything below
 works the same on a headless Linux server; the app is not required on a machine, only the daemon.
 
 | Command | What it does |
@@ -17,6 +18,7 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness stop` · `harness logout` · `harness reset` | Stop the daemon · stop and clear the SSO session · stop and clear all local state. |
 | `harness status` · `harness version` · `harness update [--force]` | Running, pid, machine id, session count · version · update now. |
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
+| `harness hooks hermes` | For a Hermes `config.yaml` that has its own `hooks:`, which Harness leaves alone and its log names this command for: the entries to add by hand under that mapping and `terminal.client_env_passthrough`, under each config's path. The port is the running daemon's; the rest is built from this shell's environment (`HERMES_HOME`, the data folder, the other engines' homes, the managed Node), so a daemon started with another environment installs other entries. Prints nothing when no Hermes home has a config; another engine, or none, exits 1. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
 | `harness machines engines <machine> [--engine E]… [--json]` | Asks that machine now, over the machine link, which engines it has (`engines_probe`, answered there): one JSON line per engine with `machineId`, `engine`, `installed` (`true` or `null`), `signedIn` (claude and codex only, else `null`), `installable` and `firstPrompt` (whether its Harness can start that engine with a first prompt; `null` from an older Harness). `null` means unknown, never "not there": the probe reads a missing command, a timed-out login shell and a failed spawn alike, so only a failed start says an engine is missing. `--engine` narrows the probe to the engines named, so the answer comes sooner. For a device that hands work to its person's machines (#1788). |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
@@ -28,6 +30,11 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness grid login [--force] [--json]` · `harness grid logout` | Sign the `grid` CLI in with this computer's account, no second browser. |
 | `harness grid env <grid>` | `<grid>`'s relay address and key as shell exports, through the harness's own `grid`: `eval "$(harness grid env <grid>)"` before pointing an OpenAI-compatible client at `$OPENAI_BASE_URL`. |
 | `harness flash [flags]` | Re-flash a plugged-in Harness device over USB. Flags pass straight to the flasher. |
+| `harness device notify "<question>" [--suggest "<recommendation>"] [--waiting\|--proceeding] [--json]` | For an agent in any app (Harness, Orca, a terminal, VS Code, Cursor, the Claude app, the ChatGPT app): ring this computer's dial when the person must decide or act, and keep working. It sends one line: `Waiting · <question> · Suggest: <suggestion>`, `Waiting · <question>`, `Proceeding · <question> · Doing: <suggestion>`, `Proceeding · <question>`, `<question> · Suggest: <suggestion>` or `<question>`. `--suggest` takes the next word and the last one wins; both state flags read as `--waiting`; every other word, also one that starts with `-`, is the question. The line is at most 120 characters and 239 bytes: the suggestion keeps 40 at most, and the question is cut first. The dial shows it whole under the agent's name, pinned, with one option, "In <app>", until that agent's next turn starts or the agent leaves; a tap on "In <app>" opens the agent in that app and the card stays, and the person answers there. A card from a session no list holds, which a tap cannot open, goes at the tap. When the person is already with that agent (they or the dial prompted it in the last 2 minutes, its app is in front and the dial shows it; for a Harness agent, its turn began in the last 2 minutes and its tile is on the window in front), the card comes as a row in the dial's list with no sound, and the command still prints `shown`. If the person has left by the end of that agent's turn, the card rings then, once, and the turn's end makes no second sound. A notice still pending when the daemon restarts comes back in the dial's list without ringing again, for up to 24 hours. With the Notifications setting on Needs you, the dial's list holds only these notices, questions and failed turns, and an ordinary finished turn's recap stays on its agent's face. With it on All, an outside agent's ordinary finished turn the person is watching draws its tile alone, with no sound. Any question text prints `shown`, `no dial` or `limited` and exits 0; no question (flags alone, or only `--help` or `-h`) prints the usage and exits 1, sending nothing. Where the devices run inside the core with no listener of their own (Harness OS), it prints `no dial`. Claude Code and Codex run it without a permission question on macOS, Linux and Windows, typed as `harness`, which is how agents type it. On Windows Codex may ask for it typed another way: `codex execpolicy check` matches the launcher's full path (`C:\Users\<u>\.harness\bin\harness.exe`) only with `--resolve-host-executables`, and an upper-case `HARNESS.EXE` never. A deny or an ask of yours for it in Claude Code's `settings.json`, by name or by path, wins even when you add it after Harness's allow: the next daemon start or launch takes Harness's rules for it out. |
+| `harness device claude status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service sets Claude Code up by itself, once, and keeps it current as Harness updates: its `harness-device` plugin and the `dial` skill in each home it knows. These take that away or bring it back. Whether the dial is on for Claude Code: its plugin is on and `disable` has not removed it · clear the removal, install the plugin, or turn it on, and write the skill to `$CLAUDE_CONFIG_DIR/skills/dial/SKILL.md` (`~/.claude` by default) and back into each home the devices service set up · uninstall the plugin and remove the skill from the homes Harness wrote it into, but for a skills folder Codex holds it in; Harness leaves them removed until `enable`. With no `claude` found while the plugin is on, it says so and exits 1. The plugin comes from a folder Harness writes in its data folder, `claude-marketplace`, which Claude Code reads in place: no Git and no GitHub. A step that fails prints Claude Code's line and why in parentheses, such as `(network)` or `(timeout)`, and exits 1. A folder Harness cannot write prints `Harness could not write Claude Code's plugin folder. (<code>)`, such as `(EACCES)`, and exits 1, after turning on a plugin already installed. A build that carries no plugin, one run from the sources, prints `This Harness build carries no Claude Code plugin.` and exits 1. `enable` and `disable` also turn the plugin on or off in each Orca account's Claude Code home; a home that fails says so in one line. A `dial` skill the person wrote is never changed. The plugin also adds one line about the dial to each Claude Code session's context when it starts, resumes, clears or compacts, while Harness's own dial skill is in that home. |
+| `harness device codex status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service sets Codex up by itself in each Codex home it knows, once, and keeps it current as Harness updates: the `dial` skill, which tells Codex of the dial, and, with Codex 0.172.0 or later, its `harness-device` plugin, which shows Codex's waits outside a Harness pane on the dial. These take that away or bring it back. Whether the dial is on for Codex: a dial was plugged in here or `enable` ran, and `disable` has not removed it · clear the removal, write the skill to `$CODEX_HOME/skills/dial/SKILL.md` (`~/.codex` by default) and back into each home the devices service set up, and set the plugin up in that home and each the devices service set it up in, but where the person turned it off in Codex · remove the skill from the homes Harness wrote it into, but for a skills folder Claude Code holds it in, and the plugin from the homes where Harness set it up; Harness leaves them removed until `enable`. The plugin comes from `claude-marketplace` in Harness's data folder, as Claude Code's does; a home whose `openharness` marketplace is the person's own is left alone. A home that fails prints `Could not set up the Codex plugin.` or `Could not remove the Codex plugin.`, with why in parentheses, and exits 1; an older Codex prints `Codex 0.172.0 or later is needed.` and exits 1. A build that carries no plugin, one run from the sources, prints `This Harness build carries no Codex plugin.` and exits 1. With no `codex` found while the plugin is on, `disable` says so and exits 1. A `dial` skill the person wrote is never changed. The plugin also adds one line about the dial to each Codex session's context when it starts, resumes, clears or compacts, while Harness's own dial skill is in that home. |
+| `harness device vscode enable` · `disable` · `harness device cursor enable` · `disable` | From the first dial plugged in on this computer, the devices service installs Harness's extension into VS Code and into Cursor by itself, once, through each editor's own CLI, and keeps it current as Harness updates. These take that away or bring it back, one editor at a time: `disable` uninstalls it, and Harness leaves it removed · `enable` clears that and installs it. Each prints one JSON line, `{"vscode":"on","version":"…"}` or `{"cursor":"off"}`. |
+| `harness device orca enable` · `disable` | From the first dial plugged in on this computer, the devices service installs Harness Device's plugin into Orca by itself and keeps it current as Harness updates. Harness approves the plugin in Orca for you: its own worker process and read-only access to your workspaces; an update that asks for more access is not approved. These take that away or bring it back: `disable` uninstalls it, and Harness leaves it removed · `enable` clears that and installs it. Each prints one JSON line, `{"orca":"on"}` or `{"orca":"off"}`. |
 | `harness autonomous-device discover\|status\|list\|pair\|revoke` | Pair Autonomous OS devices found on the LAN, directly, with no relay. |
 | `harness autonomous-device addon state\|propose\|proposal` | Read what a paired device publishes, and propose what it might do ([device add-ons](autonomous-device-addons.md)). |
 
@@ -40,6 +47,88 @@ variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID
 per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
 `.env.example`.
 
+## Where Harness keeps its files
+
+On macOS and Windows everything is in `~/.harness` (`%USERPROFILE%\.harness`). On Linux Harness keeps its files in
+two folders, the data root `$XDG_DATA_HOME/harness` (by default `~/.local/share/harness`) and the state root
+`$XDG_STATE_HOME/harness` (by default `~/.local/state/harness`); a variable that is unset, empty or not an absolute
+path is ignored. Which folders a Linux process uses:
+
+1. The data root exists: the two roots.
+2. Else `~/.harness` exists: `~/.harness` for both, not moved yet.
+3. Else the two roots, a fresh install.
+
+| Root | What it holds |
+|---|---|
+| data | `auth` (the SSO session), `computer-id`, `cli` (the CLI; `cli/data` is the daemon's data folder), `connections`, `agent-messages`, `bin`, `dsh` (installed harnesses), `claude-profiles`, `desktop-app-v2` and Desktop's other `desktop-app*` folders, `viewer-app-v2`, `tui`, `devices`, `lessons`, `grid-fleet`, `community`, `memory`, and anything not listed here |
+| state | `logs`, `runtime` (managed Node, tmux, PTY host), `hook-routes`, `s` (short socket folders), `run`, `shell-requests`, `pty`, `uninstalling`, `flasher`, `monitor` |
+
+Every `~/.harness/<entry>` in these docs is in the root this table names. An override such as `ADAPTER_DATA_DIR`
+still wins.
+
+An existing `~/.harness` moves to the two roots the next time Harness starts (`harness start`, its `-f` and
+`--if-down` forms, or systemd's start). The move waits while an update awaits its verdict, another start is moving,
+an override names a folder inside `~/.harness`, tmux is older than 3.0 with a Harness pane open, or a PTY host runs;
+a `~/.harness` that is itself a link never moves. `harness status` says why a move waits or failed, and what to do.
+Agents already running keep working through links left in `~/.harness`, which go within minutes of the last one
+ending. Afterwards a Harness older than this one starts as a new, signed-out computer.
+
+Each process reads `XDG_DATA_HOME` and `XDG_STATE_HOME` itself, so set them for your whole session
+(`~/.config/environment.d/` or `~/.profile`), not only in your shell's rc file, or the app and the terminal find
+different folders. `harness service install` carries them into the systemd unit. Harness OS keeps the default
+folders: its services start without your `XDG_DATA_HOME` and `XDG_STATE_HOME`.
+
+After the move the Store sets each installed harness up again, two at a time.
+A harness whose setup fails says `Needs setup` on its Store page, and `needs setup` in `harness dsh list`.
+`harness dsh update <owner/name>` or the page's `Update` button sets it up again.
+
+## A state file that cannot be read
+
+- **Trust files** (keys, pairings, linked machines, the trust group, the device log, the sign-in) are left as they are.
+  Harness trusts nobody new from one, and a command that would replace it fails with
+  `✗ <name> cannot be read (<why>)`. `harness status` lists each one after its table:
+  `! <full path> cannot be read (<why>) · move it aside to start over`. Move the file aside and Harness starts that
+  store over; put a good copy back and it reads it again.
+- **Every other state file** is moved to `<name>.unreadable`, where its bytes stay, and Harness starts it empty.
+
+## The daemon's environment
+
+On macOS and Linux, `harness start` (with or without `-f`) gives the daemon only these variables of the shell that ran
+it. Anything else in that shell never reaches the daemon, its tmux server or a pane.
+
+| Group | Variables |
+|---|---|
+| System | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `LANG`, `LANGUAGE`, `LC_*`, `SSH_AUTH_SOCK`, `SSH_CONNECTION`, `__CF_USER_TEXT_ENCODING`, `TMUX_TMPDIR`, `ZDOTDIR`, `WSL_DISTRO_NAME` |
+| Linux desktop | `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `SWAYSOCK`, `HYPRLAND_INSTANCE_SIGNATURE` |
+| Network | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` and their lowercase forms, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` |
+| Harness | `HARNESS_*`, `HARNESSD_*`, `ADAPTER_*`, `DOTENV_CONFIG_PATH`, `NODE_ENV`, and every setting of the CLI's config (`BACKEND_WS_URL`, `WEB_URL`, `PORT` and the rest) |
+| Harness OS | `npm_config_prefix`, `BROWSER` |
+| Engine settings | `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `OPENCLAW_HOME`, `CODEX_PATH`, `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, `OPENCODE_DB`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `KILO_DB`, `GRID_HOME`, `GRID_CONTROL_PLANE_URL`, `LLAMA_SERVER`, `HC_SOCKET`, and each engine's home and path setting (`CODEX_HOME`, `CLAUDE_PATH` and the rest) |
+| Provider credentials, for now | `ANTHROPIC_*`, `OPENAI_*`, `AWS_*`, `GOOGLE_*`, `GEMINI_*`, `AZURE_*`, `OPENROUTER_*`, `XAI_*`, `CLAUDE_CODE_USE_*`, `CLOUD_ML_REGION` |
+
+Left out on purpose: `TERM` and `COLORTERM` (tmux sets a pane's own), `NODE_OPTIONS`, `TMUX`, `TMUX_PANE`,
+`HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`CLAUDE_CODE_OAUTH_TOKEN` (another tool, such as an account switcher, often puts it in the shell that ran the start),
+and every variable that names an agent's own session (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, every `ORCA_*`),
+under an allowed prefix too.
+
+What you export in your shell's startup files still reaches your agents: every pane starts its engine through your
+login shell.
+
+Anything else the daemon or its agents need, `HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND` and
+`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names (absolute, or relative to your home),
+which every daemon process reads as it starts.
+
+Provider keys will move to `HARNESS_ENV_FILE` next.
+
+On Windows a start keeps its whole environment for now: a Windows pane has no login shell. It narrows once a start
+reads your own variables from the registry.
+
+The daemon's log says how many variables a start left out, never which:
+`[env] started with N variables; M left out`.
+
+After `harness service install`, launchd and systemd start the daemon with their own environment, as before.
+
 ## Automation
 
 The app is one client of the daemon. Any process of the same OS user can be another: the loopback
@@ -48,7 +137,7 @@ WebSocket at `ws://127.0.0.1:18473/api/local-ws` takes a `machine_select` frame 
 and answers them with `<type>_result`. Since 0.4.21 every loopback request (REST and this WebSocket)
 shows the daemon's local credential, `X-Harness-Local: <credential>` (or `Authorization: Bearer
 <credential>`): the contents of the 0600 `hook-credential` file in `ADAPTER_DATA_DIR`
-(`~/.harness/cli/data`). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
+(`~/.harness/cli/data`, on Linux in the data root). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
 through this daemon's link to it.
 
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
@@ -161,6 +250,27 @@ auto|ask|plan|full`, `--name`, `--new [name]` and `--json` are the rest. There i
 harness on another of your machines: `harness new claude --machine office --name check -- …`, then
 `harness wait --machine office check` and `harness show --machine office check`.
 
+`harness ps --machines` lists every machine of your account's own at once (never one shared with it), each under its
+name: every machine is asked together, each for 5 s, and one that does not answer is listed as `unreachable` with why,
+never left out. At most 32 other machines are asked; the rest are listed as `not_asked`. `--json` answers
+`{"machines": [{"machineId", "machine", "current", "state": "ok" | "unreachable" | "not_asked", "detail"?,
+"harnesses"?}]}`, each harness a row as `ps` gives it.
+
+`harness show <name> --work` says a harness's work as facts instead of its last turn: its branch, its pull request
+(number, state, title, address), the files and lines it changed and its checks. They are read on the machine that owns
+the harness with the requests its pull request label already asks (`git_pull_request`, then `git_pull_requests_status`),
+never by running git or gh here on another machine's folder. No pull request yet is `"pullRequest": "none"`; one its
+machine could not read is `"unavailable"`; a pull request whose files and checks could not be read (gh signed out
+there) is shown without them.
+
+`harness goal open <title>`, `harness goal done <id>` and `harness goal list` are Hachi's
+([design](design/2026-11-12-hachi.md), "Goals"): a goal in the person's own words (at most 80 characters), the
+harnesses started for it with `harness new … --goal <id>`, and its close, the one signal that it finished. The goals
+service (`services/goals.ts`, in the edge host) answers the Hachi harness alone, read from the pane the request comes
+from: any other caller exits 5 (`NOT_HACHI`), and so does `done` for a goal no harness was started for
+(`GOAL_EMPTY`); done twice is done once. They are kept in `<data>/hachi/goals.json`, mode 0600, never synced: at most
+50 open, a closed one pruned after 7 days.
+
 A cloud agent starts the same way: `harness new devin-cloud --machine office --repo acme/api -- <task>`.
 `--repo` takes `owner/name` or a GitHub address; Cursor Cloud needs one, Devin Cloud works without.
 `--acu-limit <n>` caps Devin Cloud's spend (5 when left out). `show` and `wait` read it from the cloud: its
@@ -224,8 +334,10 @@ activity, then the screen, then two idle looks on one turn for one here. The fir
 | `started` | installing or starting | |
 | `working` | it works (a draft in its box counts) | `ask`: the last thing it was told |
 | `needs_person` | a question or a permission; for a cloud harness, its maker's own state | `question`: its last words, to `--chars` (4000) |
-| `done` | idle after a turn | `summary`: its last answer, to `--chars`; `truncated`; `tools` |
-| `idle` | idle with nothing asked of it, past its start | |
+| `held` | Harness cannot follow it until the person acts | `namedState`: what to do; a new line when it changes |
+| `background` | idle after a turn, with background commands it started still running | `backgroundCommands`: how many; a new line each time the number changes |
+| `done` | idle after a turn, once none runs | `summary`: its last answer, to `--chars`; `truncated`; `tools`; `backgroundCommands` |
+| `idle` | idle with nothing asked of it, past its start | `backgroundCommands` |
 | `failed` | the cloud says it failed | `summary`, `links` |
 | `stopped` | stopped or gone | `summary`: its last answer, when it has one |
 
@@ -235,11 +347,35 @@ the same words are never said twice. **A cloud harness's state is its maker's, n
 `waiting_for_user` both when it asks and when it has only finished (#1449), so `needs_person` comes either way: read
 `question` and `cloud.providerStatus` to tell. A Devin put to sleep once it finished is `stopped`
 (`providerStatus` `suspended`/`inactivity`), with its answer as `summary`. The words are the harness's own, as they
-are, Devin's `ATTACHMENT:` lines included; `ask` leaves out the line `harness new` puts before a task. It looks every
-3 s, as `wait` does, so a watch of another machine's harness is one `agents_list` over the machine link every 3 s. It reads with the requests
-`wait` makes, over the same socket: one `agents_list` a round, the screen for a harness here that the daemon does not
-already say is working, and the last transcript page only when the harness changed. Nothing reports failing tests
+are, Devin's `ATTACHMENT:` lines included; `ask` leaves out the line `harness new` puts before a task. As `wait` does,
+it follows a harness here by what Harness pushes when it changes (`agents_watch`: its activity, its turn's end, a
+question opening or closing, the harness going), and looks again only then, to confirm an idle look, and once a minute
+as a backstop. It looks every 3 s at a cloud harness, a harness on another machine (one `agents_list` over the machine
+link each time) and on a daemon too old to push. It reads with the requests `wait` makes, over the same socket: one
+`agents_list` a look, the screen for a harness here that the daemon does not already say is working, and the last
+transcript page only when the harness changed. Nothing reports failing tests
 during a turn yet, so there is no event for them.
+
+`harness watch --mine` is one stream of those lines for every harness the caller started that is running, on every
+machine, as Hachi follows what it started inside a turn: each line also names its `machine` (`kid @office` in text).
+This machine's are followed by push and another machine's are looked at every 3 s, as for one harness; a machine that
+cannot be reached, or whose line drops, is said once on stderr and the rest are followed. It ends once every one has
+stopped (exit 4). Only an agent has harnesses of its own: anyone else is refused (exit 5).
+
+**Background commands.** A harness reads idle as soon as its turn ends, even when the turn left a command running in
+the background (a build, a test suite, a dev server). Its engine tells it when such a command ends, and it usually
+starts a turn to read it, so it is not done yet. When a harness here reads idle, `inspect` also answers how many it
+still runs, read only then: `backgroundCommands`, a number, or `null` when Harness cannot know (never `0` then). `null`
+blocks nothing and is read as before. `show` says `N background commands running` above its `Next:` and offers `wait`
+instead of `close`; its JSON carries `backgroundCommands` whenever it reads idle. `wait` does not return on such a
+harness until none runs; a timeout meanwhile says the count (`<name>: timeout · 2 background commands running; …`, and
+`backgroundCommands` in JSON). `watch` says `background` instead of `done`, and `done` once none runs; `done` and
+`idle` carry the count (`0` or `null`). `close` without `--now` looks first and refuses such a harness (`<name>: 2
+background commands running; --now closes anyway`, exit 1) without closing it; `--now` closes it, and the commands with
+it. What is counted: Hermes's own list of the background processes it runs, on every platform; Claude Code's Bash tool
+commands, on macOS and Linux. Every other engine, a cloud harness and Claude Code on Windows are not known (`null`,
+shown as nothing). Never counted: MCP servers, language servers and an engine's other helpers, and a command that left
+its engine (`nohup … &` whose shell exits, `setsid`, a double fork).
 
 `harness whoami` says, for an agent, where it is and what it may do before it acts (`--json` gives the same as
 `context`); the top of an agent's `harness ps` begins with it, and `harness mcp` puts it in its instructions:
@@ -261,13 +397,18 @@ The person sees it in Harness, beside you.
 Next: harness wait <name>  (until it has answered; then read it: harness show <name>)
 ```
 
-`show` names `close` for an idle harness of the agent's own, `wait` for a working one, and the person for one that
-needs the person; `close` says how many of the agent's own are still open; an agent's `ps` ends with its idle one to
-read, its busy ones to wait for, or a start, and shows its own first and at most 15 rows (`--all` shows every one).
+`show` names `close` for an idle harness of the agent's own, `wait` for a working one or one still running background
+commands, and the person for one that needs the person; `close` says how many of the agent's own are still open; an
+agent's `ps` ends with its idle one to read, its busy ones to wait for, or a start, and shows its own first and at
+most 15 rows (`--all` shows every one).
 A harness waiting on a question or a permission is shown as `needs the person` (JSON keeps `needs-input` and adds
-`needsPerson: true`). A refusal (`SPAWN_LIMIT`, `TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and
-`next` in its JSON. `harness help agents` prints the commands, states, exit codes and rules on one screen, and
-`harness --help` starts with it when an agent runs it.
+`needsPerson: true`). An agent Harness cannot follow until the person acts is shown as `held`, with what to do
+(`namedState`; JSON adds `needsPerson: true`): `wait` ends on it with exit 3. A harness is `starting` until it has
+taken its first task. One whose launch failed is `failed`, with why (`failure`): `wait` ends on it with exit 1; one
+its machine refused ends it with exit 4. A named state Harness recovers from by itself does not end `wait`: `show`
+prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`,
+`TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and `next` in its JSON. `harness help agents` prints the
+commands, states, exit codes and rules on one screen, and `harness --help` starts with it when an agent runs it.
 
 ## Your devices
 
@@ -312,6 +453,84 @@ Phones & apps).
 
 A `history` or `dismiss` that answers *This needs a newer Harness running here* means the daemon
 still running is an older version: `harness stop && harness start`.
+
+## The dial on Linux
+
+**Starts at login.** The installer leaves a login entry, `~/.config/autostart/harnessd.desktop` (under
+`$XDG_CONFIG_HOME` when that is an absolute path), which runs `harness start` each time you log in. Turn it off where
+your desktop keeps login items (GNOME's Startup Applications, KDE's Autostart); a later install leaves it off. GNOME,
+KDE Plasma, XFCE, Cinnamon, MATE and LXQt run it; sway and Hyprland run it only with `dex` or `uwsm`. A server with
+no desktop session never runs it: use `harness service install`. `harness uninstall` removes the entry when it is
+still the installer's own; a file another app put there stays.
+
+**No access to the dial.** The dial's port belongs to a group (`dialout` on Debian, Ubuntu and Fedora, `uucp` on
+Arch). Desktop's Devices tab and `harness hardware watch` say which step is missing:
+
+| It says | It means |
+|---|---|
+| `No access to the dial. Run: sudo usermod -aG <group> $USER, then log out and in.` | Your account is not in the port's group. |
+| `No access to the dial yet. Log out and in.` | Your account is in the group; this login started before it was. |
+
+**A tap brings the window forward.** A tap focuses the agent's pane, then brings its terminal's or editor's window
+forward. What each desktop needs:
+
+| Desktop | Needs |
+|---|---|
+| sway, Hyprland, KDE Plasma | Nothing to install |
+| X11 (GNOME on X11 too) | `wmctrl` |
+| GNOME on Wayland | The Activate Window By Title extension |
+| Anything else | Nothing works: the tap chooses the pane inside its terminal only |
+
+The daemon's log says which it found, once at start and again when it changes: `[device] raise · sway` (`hyprland`,
+`kwin`, `gnome`, `x11`), or `[device] raise · none · <why>`, `<why>` one of `no desktop session`,
+`gnome without the extension`, `unknown compositor`, `no swaymsg`, `no hyprctl`, `no wmctrl`. A raise that brought
+nothing forward says `[device] raise · <desktop> · failed`, once until a raise ends otherwise.
+
+**Links.** An agent in an app opens by the app's own link, through `xdg-open`, when an app has registered the link's
+scheme (`xdg-mime query default x-scheme-handler/<scheme>`). With none, the tap falls back to the pane.
+
+| Link | Registered by |
+|---|---|
+| `vscode://` | VS Code |
+| `cursor://` | Cursor |
+| `claude://` | The Claude desktop app (Linux beta) |
+| `codex://` | The ChatGPT desktop app (Linux preview); its package also claims `http` and `https`, so it may be offered as a browser |
+
+**kitty.** The dial reaches a kitty window only with remote control on. Add to `kitty.conf`, then restart kitty:
+
+```
+allow_remote_control socket-only
+listen_on unix:/tmp/kitty
+```
+
+kitty adds its pid to that address (`/tmp/kitty-<pid>`), which is fine. An address over 64 characters is not used.
+While remote control is off, the daemon's log says `[device] kitty · remote control off` once.
+
+**Zellij** (0.44). A tap focuses the agent's pane, and the dial's words are typed into it. The dial does not follow
+Zellij's focus: Zellij does not report it.
+
+kitty and Zellij are found on the daemon's `PATH`, else where your login shell finds them, else in the usual install
+folders.
+
+**WezTerm.** The dial's words are typed into the agent's pane.
+
+**Orca and herdr.** The dial's words are typed into an Orca terminal or a herdr pane only when Orca or herdr made the
+agent's terminal. An agent started from one, in VS Code or another terminal, gets no words there, and a tap there only
+after its other panes: VS Code started from an Orca terminal is tapped in VS Code. The daemon's log says
+`[device] orca · held` or `[device] herdr · held` once.
+
+**herdr inside a terminal.** An agent in a herdr pane is on the page of the app holding herdr's client, as on macOS:
+WezTerm, kitty or Ghostty. herdr's client inside your tmux or Zellij is not placed: herdr (0.9.5) removes tmux's and
+Zellij's variables from its panes, so the agent is on the Other page and a tap focuses its herdr pane, on macOS and
+Linux. In WezTerm and kitty (kitty with remote control on) a swipe or a rest while that app is in front selects the tab
+holding herdr's client, then the agent's herdr pane; a tap does the same and brings the window forward. Ghostty on
+Linux, GNOME Terminal, Ptyxis, Konsole, Alacritty, foot and xterm offer no tab API: there the agent is on Ghostty's
+page, else on the Other page, as on macOS; a swipe and a tap focus the herdr pane, a tap brings the client's window
+forward where the desktop raises by process (X11, sway, KDE, Hyprland; not GNOME), and the tab holding the client is
+not selected. The same holds for tmux's client in those terminals.
+
+An idle agent in herdr or tmux is on that app's page as soon as the dial attaches. Run
+`herdr integration install claude` so the dial focuses the right herdr pane.
 
 ## The daemon's control interface
 

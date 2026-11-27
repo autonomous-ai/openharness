@@ -2,18 +2,39 @@
 // under test. It behaves the way the daemon depends on the real CLIs behaving, and nothing more:
 //
 //   - answers `--version` / `--help` probes;
+//   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
+//   - as `codex queue --thread <id> --message=<text>`, notes the call under the test's root, in `codex-queue` or the
+//     config's `queueLedger` (the ChatGPT app's own CLI notes apart), when that thread's rollout is in its CODEX_HOME,
+//     else exits 1 having noted nothing, as 0.167 does;
+//   - as `claude plugin …`, adds Harness's local marketplace folder, and installs, turns on and off, uninstalls and lists
+//     the harness-device plugin as 2.1.326 does, noting each call in `claude-plugin-calls` under the test's root
+//     (`claudePlugin`);
+//   - as `claude -p … --input-format stream-json`, answers the `initialize` control request with its `/model` and `/`
+//     lists as 2.1.x does on a subscription, and ends when its stdin ends (`answerClaudeLists`);
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
 //     500 ms deadline and its offline registry writes, and the daemon's pane/process binding is
-//     exercised for real;
+//     exercised for real. Beyond the session and prompt events, as the facts files beside
+//     docs/plans/2026-11-16-hook-driven-agent-status-plan.md say the real ones run them: both run Stop after a
+//     finished turn's answer (Codex before its task_complete) and none after an interrupt or an error; Codex runs
+//     Interrupt before a stopped turn's turn_aborted; a question runs PreToolUse (AskUserQuestion, request_user_input)
+//     before its dialog; a permission runs PermissionRequest, Codex's before its dialog, Claude Code's beside it (and
+//     for AskUserQuestion's dialog too); Claude Code runs Elicitation before an MCP server's input dialog, Notification
+//     after a permission or input dialog waited 6 s, and SubagentStart and SubagentStop for its subagents. Codex runs no subagent hook: Harness installs none for it;
 //   - draws a composer, turns on bracketed paste, and treats Enter as submit; Codex shades its composer as 0.162 does on
 //     a dark pane, or not with `unshadedComposer` in its config, as in a pane that answers no background query;
 //   - writes its conversation to a transcript in the engine's real record shapes, so the daemon's
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
-// A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
-// `!tool <command>` runs a tool call first, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
+// A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back, `!until <name>` until the
+// test writes `<name>.release` in the root (a minute at most), as an agent's turn goes on while a command it runs works,
+// and answers with that file's text when it holds any, so a test can give the turn's exact last answer; while it
+// holds, `<name>.permit` asks permission to run that file's command at once, its Notification without the 6 s wait, as
+// a dialog the person has left (a scenario's needs-input step), and once it is answered the turn goes on until its
+// release file, answering with its text, or as `!permit`'s when it holds none,
+// `!tool <command>` runs a tool call first, `!background <command>` (Claude Code) starts the command in the background as
+// its Bash tool's `run_in_background` does, as the engine's own direct child, and ends the turn while it runs, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
 // `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
@@ -39,7 +60,14 @@
 // the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
 // until the test's release file exists, as a CLI does whose hooks or first record are slow, `!latestop` (Claude
 // Code) has its Stop and the next prompt's hook reach the daemon only after that prompt's turn is on disk (see
-// `lateStop`), `!exit` ends the process.
+// `lateStop`), `!heldstop` has the turn's Stop reach the daemon only once the test writes `held-stop.release`, alone or
+// before another directive (`!heldstop !permit printf hi`), `!lagwrite` (Claude Code) writes its turn to the transcript
+// only once its Stop has returned, each record with the time it was made, as a transcript the daemon reads after the
+// Stop came (Claude Code's own docs: the transcript may lag behind; a loaded machine reads it late), `!fail`
+// (Codex) ends the turn in an error, with no Stop, `!elicit` (Claude Code) has an MCP tool's server ask for input in its
+// own dialog, `!spawn [name] [helper|resume]` (Claude Code) starts a background subagent that runs past its lead's Stop
+// until the test writes `<name>.release` (see the directive), `!exit` ends the process. A task `harness new` started it with is read for its directive below the line
+// it puts before the task (`[from …, the harness that started you. …]`), as an agent acts on its task, not on that line.
 // Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
 // picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
 // that follow (see `openModelPicker`).
@@ -51,38 +79,73 @@
 // it draws or announces anything (an engine's first run after an update). `unreadableDescriptorMs` is how long,
 // once started, it holds a descriptor the daemon's process reader has no name for, as Codex 0.162.1 did for its
 // first seconds in a clean macOS VM (2026-10-12): every read of its process was refused until then ("the native
-// control descriptor type is unavailable"). `firstHookDelayMs` is how long
-// its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
-// loaded machine, while the daemon has already found the engine and its conversation. `root` is the
+// control descriptor type is unavailable"). `helpDelayMs` is how long its help (`--help` or `-h`) takes to answer, as
+// a fresh Codex's first run held the launch script's help probe open for seconds. `holdsRollout: false` (Codex) keeps
+// no rollout open, so a test can prove the daemon learned its home from something else (enginehomes.e2e.ts).
+// `firstHookDelayMs` is how long its first SessionStart takes to reach the daemon once the engine is up: the hook
+// command starting on a loaded machine, while the daemon has already found the engine and its conversation.
+// `lateTranscript` (Claude Code) creates each new conversation's transcript, its startup's, a fork's (not a resume's) and
+// a `!clear`'s, only once the test writes `transcript.<session id>.release` in the root (a minute at most): meanwhile
+// `transcript.<session id>.waiting` is there, its SessionStart names the path that does not exist yet, turns run and
+// their records are kept back; the release creates the file with them and removes both files. Claude Code on Windows
+// announces SessionStart before its transcript exists (2-3 s measured, CLI 0.6.89). `lazySessionStart` (Codex) sends
+// no SessionStart as it starts: its first prompt runs it (`resume` for a resumed process, else `startup`) before its
+// UserPromptSubmit, and a `!clear` sends nothing, its next prompt running SessionStart (`clear`) the same way, as Codex
+// queues each new conversation's SessionStart and runs it only inside a turn (codex-rs core/src/hook_runtime.rs). `lostHooks` lists hooks, `<event>` or `<event>:<source>`, it never runs and notes as lost in its hook
+// log, as a hook killed at its timeout on a loaded machine never reaches the daemon. Claude Code reads its hook settings
+// past a leading BOM (one Windows PowerShell 5 writes); Codex loads no hooks from a hooks.json that starts with one and
+// notes so in its hook log, as Codex 0.169 warns and loads none. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
-// it ran. `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
+// it ran. `withoutHooks` lists the hook events this release does not have, which it never runs (Codex 0.144.0:
+// `['Interrupt']`).
+// `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
 // refuses to resume a conversation it archived, as the real one does.
 //
 // Ctrl+Z suspends it, as both CLIs do on Unix (Claude Code 2.1.289: "Claude Code has been suspended.
 // Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
 // on Unix"): it gives the terminal back and stops its whole process group with SIGTSTP. Continued from
 // that stop it takes the terminal again; continued from any stop it repaints, and nothing more.
+// It notes that stop, and the continue that ends it, in `suspends` under the test's root, each with its
+// pid: the proof a test has of a Ctrl+Z, as Codex prints nothing and bash 5.3 keeps its "Stopped" notice
+// for a prompt an agent's pane never reaches (#1612, suspend.e2e.ts).
+//
+// Esc or Ctrl-C ends a running turn in both, as the real CLIs do. Every Ctrl-C its composer takes, and an Esc that ends a turn,
+// is noted in `interrupts` under the test's root, with its pid: the proof a test has of how many it took.
 //
 // Codex runs as npm installs it: a Node wrapper, the command the pane starts, with the engine as its
 // child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
- * The events each CLI fires that the daemon installs hooks for (lib/hooks.ts): Claude Code's session,
- * prompt and turn-end events, and Codex's SessionStart and UserPromptSubmit, the two it installs for
- * Codex and the two notify.mjs reads from it. A hook for any other event in the settings is not run,
- * as the CLI has no such moment to run it at.
+ * The events each CLI fires that the daemon installs hooks for (engines/<engine>/hookContract.ts), or will: Claude
+ * Code's session, prompt, turn-end, wait and subagent events, and Codex's session, prompt, turn-end and wait events
+ * (no subagent events: Harness installs none for Codex). A hook for any other event in the settings is not run, as the
+ * fake has no such moment to run it at. What each sends and when is docs/plans/2026-11-16-hook-driven-agent-status-facts-claude.md
+ * and -facts-codex.md.
  */
 const HOOK_EVENTS = {
   // PostToolUse: Agent Messages' hook (engines/kit/messagesHook.ts), run after each tool of the `!work` directive.
-  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse']),
-  codex: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
+  // Notification: run once a permission or MCP input dialog has waited on the person for 6 s (`noticeDialog`).
+  // PreToolUse: AskUserQuestion's, before its dialog. PermissionRequest: beside a permission or question dialog.
+  // Elicitation: before an MCP server's input dialog. SubagentStart, SubagentStop: a subagent's start and end.
+  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse', 'Notification',
+    'PreToolUse', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop']),
+  // Stop: before a finished turn's task_complete. Interrupt: before a stopped turn's turn_aborted. PermissionRequest
+  // and PreToolUse (request_user_input): before their dialog. Codex waits for each.
+  codex: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'Interrupt', 'PermissionRequest', 'PreToolUse']),
 }
+/** The field of an event's input a block's matcher is tested against, for the events whose matcher means something. */
+const MATCHED_FIELD = { SessionStart: 'source', PreToolUse: 'tool_name', Notification: 'notification_type' }
+
+/** A Claude Code settings or `.claude.json` file's text without a leading BOM, which Claude Code reads past (Windows PowerShell 5 writes
+ *  one). Codex does not: its hooks.json is read as it is. */
+const settingsText = (file) => readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
 
 /** Inside `root`, or `root` itself. */
 const within = (root, path) => {
@@ -91,9 +154,10 @@ const within = (root, path) => {
 }
 
 /**
- * Whether a hook block's matcher takes this value. Only SessionStart's matcher means anything to these
- * two CLIs (Codex's block carries `startup|resume|clear|compact`, matched against the event's source);
- * Stop and StopFailure ignore one (lib/hooks.ts). No matcher, an empty one or `*` takes everything.
+ * Whether a hook block's matcher takes this value (`MATCHED_FIELD`): SessionStart's source (Codex's block carries
+ * `startup|resume|clear|compact`), PreToolUse's tool name (`AskUserQuestion`, `request_user_input`: a list of names
+ * matches exactly in both CLIs) and Notification's type. Stop and StopFailure ignore one (lib/hooks.ts). No matcher,
+ * an empty one or `*` takes everything.
  */
 const matcherTakes = (matcher, value) => {
   if (matcher === undefined || matcher === null || matcher === '' || matcher === '*') return true
@@ -106,6 +170,20 @@ const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
 const CODEX_SHADE = '\x1b[48;2;51;51;51m'
 const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
 
+/** The latest name a Claude Code transcript gives its conversation (a `custom-title` record); undefined when it gives
+ *  none or is not there yet. */
+function customTitleIn(transcript) {
+  let title
+  let text = ''
+  try { text = readFileSync(transcript, 'utf8') } catch { /* not created yet */ }
+  for (const line of text.split('\n')) {
+    let record
+    try { record = JSON.parse(line) } catch { continue }
+    if (record?.type === 'custom-title' && typeof record.customTitle === 'string') title = record.customTitle
+  }
+  return title
+}
+
 /**
  * `@openai/codex`'s bin/codex.js (0.160.0): it starts the native binary as its child with the same
  * terminal, process group and arguments, forwards SIGINT, SIGTERM and SIGHUP to it, and ends as the
@@ -113,7 +191,15 @@ const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
  * it is one the wrapper listens for (then the wrapper exits 0).
  */
 async function codexWrapper(config) {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+  const args = process.argv.slice(2)
+  const probe = args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], {
+    // Named `codex` from its start, as the native binary npm's launcher runs is: the daemon reads the rollout a
+    // launcher's child holds open only from a child of the engine's own name (processTable.ts `engineChildren`).
+    // A probe's child keeps Node's name: the real Codex 0.167.0's is `<vendor>/codex --help`, which discovery skips,
+    // while `codex <script> --help` was recorded as the engine until it exited, and a close then said a conversation
+    // was kept (CLI end to end run 43746252131, shard 4; docs/plans/2026-11-16-codex-help-race-design.md).
+    ...(probe ? {} : { argv0: 'codex' }),
     stdio: 'inherit',
     env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
   })
@@ -138,6 +224,185 @@ function holdUnreadableDescriptor(config, ms) {
     fd = openSync(link, constants.O_RDONLY | constants.O_SYMLINK)
   } else fd = openSync('/proc/self/ns/net', 'r')
   setTimeout(() => closeSync(fd), ms).unref()
+}
+
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+/**
+ * Claude Code 2.1.x's `/model` rows on a subscription: bare aliases, Haiku with no effort. Opus and Sonnet take the
+ * efforts the daemon's alias list offers them, so a test that picks one sees the same choices whether its first ask is
+ * answered from the aliases or from this list (the aliases give `default` no effort, and add `fable`).
+ */
+const CLAUDE_LISTED_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)', description: 'Opus for complex work', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'opus', displayName: 'Opus', description: 'For complex work and everyday tasks', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'sonnet', displayName: 'Sonnet', description: 'For everyday tasks', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'haiku', displayName: 'Haiku', description: 'Fastest for quick answers' },
+]
+const CLAUDE_LISTED_COMMANDS = [
+  { name: 'compact', description: 'Clear history but keep a summary', argumentHint: '[instructions]' },
+  { name: 'review', description: 'Review a pull request', argumentHint: '' },
+]
+
+/**
+ * `claude -p … --input-format stream-json` as engines/claude/lists.ts reads it: each `initialize` control request on
+ * stdin is answered with the models and commands; nothing is launched, written or hooked, and it ends with its stdin.
+ */
+function answerClaudeLists() {
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    let message
+    try { message = JSON.parse(line) } catch { return }
+    if (message?.type !== 'control_request' || message.request?.subtype !== 'initialize') return
+    process.stdout.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id,
+      response: { models: CLAUDE_LISTED_MODELS, commands: CLAUDE_LISTED_COMMANDS } } })}\n`)
+  })
+  process.stdin.on('end', () => process.exit(0))
+}
+
+/** The one marketplace the fake knows, and the plugin in it: what devices/claudePlugin.ts adds and installs. */
+const FAKE_MARKETPLACE = 'openharness'
+const FAKE_PLUGIN = 'harness-device@openharness'
+
+/**
+ * A local marketplace as Claude Code takes one: an absolute path (Windows' `C:\...` there) or one starting `./`, `../` or
+ * `~/`, read against the process's own folder, holding `.claude-plugin/marketplace.json` named FAKE_MARKETPLACE. Its
+ * absolute path, or Claude Code's failure line. Any other source, such as a GitHub repository, is refused: the product
+ * adds none, and the fake fetches nothing.
+ */
+function localMarketplace(config, source) {
+  if (!source || !(isAbsolute(source) || /^(\.\.?|~)[\\/]/.test(source))) {
+    return { error: `Failed to add marketplace: ${source} is not a local marketplace path` }
+  }
+  const path = /^~[\\/]/.test(source) ? join(homedir(), source.slice(2)) : resolve(process.cwd(), source)
+  const manifest = join(path, '.claude-plugin', 'marketplace.json')
+  if (!existsSync(manifest)) return { error: `Failed to add marketplace: Marketplace file not found at ${manifest}` }
+  // Real paths: on macOS the process's folder reads /private/var where the root may say /var.
+  if (!within(realpathSync(config.root), realpathSync(path))) throw new Error('fake claude plugin: a marketplace outside its throwaway root')
+  let name
+  try { name = JSON.parse(readFileSync(manifest, 'utf8')).name } catch { /* not JSON: refused below */ }
+  if (name !== FAKE_MARKETPLACE) return { error: `Failed to add marketplace: Invalid marketplace file at ${manifest}` }
+  return { path }
+}
+
+/**
+ * Why Claude Code would not install [id] from a local marketplace: its marketplace.json does not list it, or the folder
+ * it names holds no `.claude-plugin/plugin.json`. Undefined when it would.
+ */
+function notInstallable(marketplace, id) {
+  const name = id.split('@')[0]
+  let listed = false
+  try {
+    listed = JSON.parse(readFileSync(join(marketplace.path, '.claude-plugin', 'marketplace.json'), 'utf8')).plugins
+      ?.some((plugin) => plugin?.name === name) === true
+  } catch { /* unreadable: not listed */ }
+  if (!listed) return `Plugin "${name}" not found in marketplace "${FAKE_MARKETPLACE}"`
+  const manifest = join(marketplace.path, 'plugins', name, '.claude-plugin', 'plugin.json')
+  if (!existsSync(manifest)) return `Plugin manifest not found at ${manifest}`
+  return undefined
+}
+
+/** A plugin's version as Claude Code reads it in place from a local marketplace: its plugin.json's, else `unknown`. */
+function versionIn(marketplace, id) {
+  try {
+    const manifest = join(marketplace.path, 'plugins', id.split('@')[0], '.claude-plugin', 'plugin.json')
+    return JSON.parse(readFileSync(manifest, 'utf8')).version ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/**
+ * `claude plugin …` as Claude Code 2.1.326 answers the words devices/claudePlugin.ts runs: `list --json`, `marketplace
+ * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `disable`, `uninstall` and `update`. The
+ * marketplace is a local folder (localMarketplace), recorded as `{ name, source: 'directory', path }`, its plugins read
+ * in place. What is added and installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of
+ * CLAUDE_CONFIG_DIR, else of ~/.claude: a plugin installed in one home is not in another, but one whose `plugins` links
+ * to another's shares it, as Orca's account homes do. Whether a plugin is on is Claude Code's own record,
+ * `enabledPlugins` in that home's user settings, which install, enable, disable and uninstall write: disable leaves the
+ * plugin installed and its entry `false`, uninstall removes the entry. Each call is noted in `claude-plugin-calls` under
+ * the test's root, one line of its words. A home or a marketplace outside the root throws: it would be the person's own.
+ */
+function claudePlugin(config, argv) {
+  if (!config.root) throw new Error('fake claude plugin: the wrapper names no test root')
+  const home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  if (!within(config.root, home)) throw new Error('fake claude plugin outside its throwaway home')
+  const settingsFile = join(home, 'settings.json')
+  appendFileSync(join(config.root, 'claude-plugin-calls'), `${argv.join(' ')}\n`)
+  const args = argv.slice(1)
+  const stateFile = join(home, 'plugins', 'fake-plugin-state.json')
+  const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { marketplaces: [], installed: [] }
+  const settings = existsSync(settingsFile) ? JSON.parse(settingsText(settingsFile)) : {}
+  const saveState = () => {
+    mkdirSync(dirname(stateFile), { recursive: true })
+    writeFileSync(stateFile, JSON.stringify(state))
+  }
+  /** [entry]: true or false as enable and disable write it, undefined removes it as uninstall does. */
+  const turn = (id, entry) => {
+    const enabledPlugins = { ...settings.enabledPlugins }
+    if (entry === undefined) delete enabledPlugins[id]
+    else enabledPlugins[id] = entry
+    mkdirSync(dirname(settingsFile), { recursive: true })
+    writeFileSync(settingsFile, `${JSON.stringify({ ...settings, enabledPlugins }, null, 2)}\n`)
+  }
+  const fail = (line) => {
+    process.stderr.write(`✘ ${line}\n`)
+    process.exit(1)
+  }
+  const said = (line) => process.stdout.write(`✔ ${line}\n`)
+  const id = args[1]
+  const marketplace = state.marketplaces.find((added) => added.name === FAKE_MARKETPLACE)
+  const words = args.filter((arg) => !arg.startsWith('-')).slice(0, 2).join(' ')
+  switch (words) {
+    case 'list':
+      process.stdout.write(`${JSON.stringify(state.installed.map((plugin) => ({
+        id: plugin, version: versionIn(marketplace, plugin), scope: 'user', enabled: settings.enabledPlugins?.[plugin] === true,
+      })), null, 2)}\n`)
+      return
+    case 'marketplace list':
+      process.stdout.write(`${JSON.stringify(state.marketplaces, null, 2)}\n`)
+      return
+    case 'marketplace add': {
+      const local = localMarketplace(config, args[2])
+      if (local.error) fail(local.error)
+      state.marketplaces = [...state.marketplaces.filter((added) => added.name !== FAKE_MARKETPLACE),
+        { name: FAKE_MARKETPLACE, source: 'directory', path: local.path }]
+      saveState()
+      said(`Successfully added marketplace: ${FAKE_MARKETPLACE}`)
+      return
+    }
+    case 'marketplace update':
+      if (!state.marketplaces.some((added) => added.name === args[2])) fail(`Failed to update marketplace: Marketplace '${args[2]}' not found`)
+      said(`Successfully updated marketplace: ${args[2]}`)
+      return
+  }
+  const verb = args[0]
+  if (!['install', 'enable', 'disable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
+  if (id !== FAKE_PLUGIN || !marketplace) {
+    fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" not found in any configured marketplace`)
+  }
+  const installed = state.installed.includes(id)
+  if (verb === 'install') {
+    const refused = notInstallable(marketplace, id)
+    if (refused) fail(`Failed to install plugin "${id}": ${refused}`)
+    if (!installed) state.installed.push(id)
+    saveState()
+    turn(id, true)
+    said(`Successfully installed plugin: ${id} (scope: user)`)
+  } else if (!installed) {
+    fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" is not installed`)
+  } else if (verb === 'enable') {
+    turn(id, true)
+    said(`Successfully enabled plugin: ${id} (scope: user)`)
+  } else if (verb === 'disable') {
+    turn(id, false)
+    said(`Successfully disabled plugin: ${id} (scope: user)`)
+  } else if (verb === 'uninstall') {
+    state.installed = state.installed.filter((plugin) => plugin !== id)
+    saveState()
+    turn(id, undefined)
+    said(`Successfully uninstalled plugin: ${id} (scope: user)`)
+  } else {
+    said(`Plugin "${id}" is already at the latest version (${versionIn(marketplace, id)}).`)
+  }
 }
 
 export async function run(engine, config = {}, { native = false } = {}) {
@@ -165,6 +430,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
     return
   }
   if (args.includes('--help') || args.includes('-h')) {
+    // A slow first run of a fresh Codex held the launch script's help probe open (2.9 s measured,
+    // engines/kit/launchStartup.ts `ownedFlagProbe`); a test holds it open the same way, not unref'd so the process stays.
+    if (config.helpDelayMs) await new Promise((resolve) => setTimeout(resolve, config.helpDelayMs))
     // The flags the daemon looks for in the real CLIs' help before it launches them, less the ones this
     // release has dropped.
     process.stdout.write((engine === 'codex'
@@ -194,7 +462,50 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Resume checks for a live background job before opening a pane. This is a
   // CLI query, not an agent launch: keep it out of the launch-argv ledger.
   if (engine === 'claude' && args.length === 2 && args[0] === 'agents' && args[1] === '--json') {
+    // Who asked, by its pid: Claude Code's engine worker, not the core (#4146).
+    if (config.root) appendFileSync(join(config.root, 'background-job-queries'), `${process.ppid}\n`)
     process.stdout.write('[]\n')
+    return
+  }
+  // `codex app-server [-c …]`, as a rate-limit read (lib/codexRateLimits.ts) or a provider move starts it. The real
+  // server speaks JSON-RPC on stdio and exits when its stdin ends; this one answers nothing, so a read finds no limits,
+  // but it ends with its stdin too. It used to draw its TUI instead and outlive its daemon: 14 pairs of the fake were
+  // found orphaned on 2026-11-14. A read is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'app-server') {
+    process.stdin.resume()
+    process.stdin.on('end', () => process.exit(0))
+    return
+  }
+  // `codex queue` (0.167) puts a message in a thread's queue for its next turn and starts nothing: no session, no hook. A
+  // malformed id, or a thread with no rollout in the home, is refused with exit 1 and nothing queued (the spike in
+  // docs/specs/2026-11-15-device-codex.md). A queue is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'queue') {
+    const home = process.env.CODEX_HOME || config.codexHome
+    if (!within(config.root, home)) throw new Error('fake Codex queue outside its throwaway home')
+    const thread = args[args.indexOf('--thread') + 1] ?? ''
+    const known = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(thread) && (() => {
+      try {
+        return readdirSync(join(home, 'sessions'), { recursive: true }).map((path) => basename(String(path)))
+          .some((name) => name.startsWith('rollout-') && name.endsWith(`-${thread}.jsonl`))
+      } catch { return false }
+    })()
+    if (!known) {
+      process.stderr.write(`Error: no thread ${thread} in ${home}\n`)
+      process.exit(1)
+    }
+    appendFileSync(join(config.root, config.queueLedger ?? 'codex-queue'), `${JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null })}\n`)
+    return
+  }
+  // `claude plugin …` changes or lists plugins and starts no session: no launch, kept out of the launch-argv ledger.
+  if (engine === 'claude' && args[0] === 'plugin') {
+    claudePlugin(config, args)
+    return
+  }
+  // Since #4413 the daemon asks Claude Code its `/model` list this way (engines/claude/lists.ts), and Claude Code started
+  // so runs no hook and keeps no session. The fake used to take it for a launch (a launch-argv line, a session, hooks)
+  // and never answered, so every Claude models_list waited out the engine worker's 5 s deadline.
+  if (engine === 'claude' && args[0] === '-p' && args[args.indexOf('--input-format') + 1] === 'stream-json') {
+    answerClaudeLists()
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
@@ -206,7 +517,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // table, so the arguments are not read as part of it; a control character is shown as `ps` shows one.
   // Node's title rewrite makes macOS ps omit the environment. Evidence tests keep the interpreter
   // and its actual engine entrypoint, which discovery also recognizes, so endpoint markers are readable.
-  if (!config.preserveProcessArgs) process.title = [engine.padEnd(16), ...args].join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
+  // In a herdr pane its title is its name alone: herdr tells an agent by its argv[0] whole (`pane.process_info`), and
+  // the name with arguments after it, `claude --resume <id>`, was no agent of herdr's.
+  const shown = process.env.HERDR_PANE_ID ? [engine] : [engine.padEnd(16), ...args]
+  if (!config.preserveProcessArgs) process.title = shown.join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
   // Raw at once, as the real CLIs are (Ink and ratatui take the terminal before they draw anything): a
   // terminal still in line mode keeps at most 1 KiB of a line, so a paste that arrived before the
   // engine was ready lost the rest of itself (measured: 1,018 of 2,406 characters).
@@ -294,10 +608,16 @@ export async function run(engine, config = {}, { native = false } = {}) {
     process.exit(78)
   }
   const hookSettings = (() => {
+    let text
+    try { text = engine === 'claude' ? settingsText(hookSettingsFile) : readFileSync(hookSettingsFile, 'utf8') } catch { return {} }
     try {
-      const parsed = JSON.parse(readFileSync(hookSettingsFile, 'utf8'))
+      const parsed = JSON.parse(text)
       return parsed && typeof parsed.hooks === 'object' && parsed.hooks ? parsed.hooks : {}
-    } catch { return {} }
+    } catch {
+      // Codex 0.169 warns and loads none (codex-rs/hooks/src/engine/discovery.rs): a BOM is not JSON to serde_json.
+      hookLog(`hooks not loaded: ${hookSettingsFile} is not JSON`)
+      return {}
+    }
   })()
   // A conversation Codex archived (its rollout moved to `archived_sessions/`) is not resumed: Codex
   // refuses before its TUI is up (codex-rs app-server thread_processor.rs) until `codex unarchive <id>`
@@ -333,7 +653,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Asking whether to trust the folder (`trustPrompt`), before any conversation starts, as both CLIs
   // ask in a folder they have no answer for, reading the answer from their own config: Claude Code's
   // `projects[<folder or one above it>].hasTrustDialogAccepted` in `.claude.json` in CLAUDE_CONFIG_DIR,
-  // else the home folder (2.1.290: `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`); Codex's
+  // else the home folder (2.1.290: `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`), read past a leading BOM as
+  // its settings are and saved whole, without one; Codex's
   // `[projects."<folder>"] trust_level = "trusted"` in its CODEX_HOME's config.toml (0.160:
   // onboarding/directory_trust.rs, whatever the permission flags). Enter or 1 trusts and saves it as they
   // do; Esc, 2 or ctrl+c quits. Off unless a test asks: the real ones also skip folders this models
@@ -343,7 +664,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const trustFile = engine === 'claude' ? join(claudeHome ?? homedir(), '.claude.json') : join(codexHome, 'config.toml')
     const trusted = (() => {
       let text = ''
-      try { text = readFileSync(trustFile, 'utf8') } catch { return false }
+      try { text = engine === 'claude' ? settingsText(trustFile) : readFileSync(trustFile, 'utf8') } catch { return false }
       if (engine === 'codex') {
         const at = text.indexOf(`[projects.${JSON.stringify(cwd)}]`)
         return at >= 0 && /^trust_level\s*=\s*"trusted"/m.test(text.slice(at).split(/\n\[/)[0])
@@ -373,7 +694,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (engine === 'codex') appendFileSync(trustFile, `\n[projects.${JSON.stringify(cwd)}]\ntrust_level = "trusted"\n`)
       else {
         let saved = {}
-        try { saved = JSON.parse(readFileSync(trustFile, 'utf8')) } catch { /* none yet */ }
+        try { saved = JSON.parse(settingsText(trustFile)) } catch { /* none yet */ }
         writeFileSync(trustFile, JSON.stringify({ ...saved, projects: { ...saved.projects, [cwd]: { ...saved.projects?.[cwd], hasTrustDialogAccepted: true } } }))
       }
       process.stdout.write('\x1b[H\x1b[2J')
@@ -387,41 +708,107 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const titled = setTimeout(() => process.stdout.write(`\x1b]0;✳ ${config.graphicsQuery.title}\x07`), config.graphicsQuery.titleAfterMs)
     titled.unref?.()
   }
+  /** Until the test writes `file` (or [other]), for at most a minute: a test that failed first does not leave this waiting. */
+  const released = async (file, other) => {
+    const written = () => existsSync(file) || (other !== undefined && existsSync(other))
+    for (const end = Date.now() + 60_000; !written() && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  // `lateTranscript` (Claude Code): the new conversation whose transcript is not created yet, and its records kept back.
+  const lateTranscript = engine === 'claude' && config.lateTranscript === true
+  let unwritten = null
+  const createLate = () => {
+    const { file, kept, waiting, release } = unwritten
+    unwritten = null
+    appendFileSync(file, kept.join(''))
+    rmSync(waiting, { force: true })
+    rmSync(release, { force: true })
+  }
+  // A pair of files per session: another process in the same root, or this one's next conversation, has its own.
+  const holdTranscript = () => {
+    const mine = { file: transcript, kept: [],
+      waiting: join(config.root, `transcript.${sessionId}.waiting`), release: join(config.root, `transcript.${sessionId}.release`) }
+    unwritten = mine
+    writeFileSync(mine.waiting, '')
+    // A `!clear` created this one already.
+    void released(mine.release).then(() => { if (unwritten === mine) createLate() })
+  }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
       ? config.rolloutFor[resumed]
       : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
   mkdirSync(dirname(transcript), { recursive: true })
-  if (!existsSync(transcript)) writeFileSync(transcript, '')
+  // A fork's conversation is a new one: its transcript is new too.
+  if (lateTranscript && (!resumed || fork)) holdTranscript()
+  else if (!existsSync(transcript)) writeFileSync(transcript, '')
+  // The person's name for the conversation, a test's by its environment. Claude Code keeps it in the conversation's
+  // transcript and says it from any process that goes on in it: herdr that starts again resumes its panes' conversations
+  // itself (`resume_agents_on_restore`), in shells no test gave the name (dial eval I14).
+  const savedTitle = engine === 'claude' && resumed ? customTitleIn(transcript) : undefined
+  const sessionTitle = engine === 'claude' ? process.env.FAKE_CLAUDE_SESSION_TITLE || savedTitle : undefined
   // What each CLI leaves for whoever needs to know which conversation this process is writing, as the
   // daemon does when the conversation's start-up hook was lost. Codex holds its rollout open for the
   // session; Claude Code keeps a record per process, `~/.claude/sessions/<pid>.json`.
   let held = null
   const procStart = (() => { try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim() } catch { return '' } })()
+  const processRecord = join(dirname(projectsDir), 'sessions', `${process.pid}.json`)
+  // Written first outside the records' folder, then renamed over: the daemon never reads half a record, and a test
+  // that lists the folder never finds the draft.
+  const draftRecord = join(dirname(projectsDir), `.${process.pid}.json.tmp`)
+  const writeProcessRecord = (row) => {
+    mkdirSync(dirname(processRecord), { recursive: true })
+    writeFileSync(draftRecord, JSON.stringify(row))
+    renameSync(draftRecord, processRecord)
+  }
   const announceProcess = () => {
     if (engine === 'codex') {
+      if (config.holdsRollout === false) return
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
-      const sessions = join(dirname(projectsDir), 'sessions')
-      mkdirSync(sessions, { recursive: true })
-      writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd: process.cwd(), procStart }))
+      // The person's name for the session, which Claude Code keeps in its record: the devices name a session the scan
+      // found from there (cable/hosts/record.ts).
+      writeProcessRecord({ pid: process.pid, sessionId, cwd: process.cwd(), procStart, status: 'idle',
+        ...(sessionTitle ? { name: sessionTitle, nameSource: 'user' } : {}) })
     }
+  }
+  // Claude Code's record says `busy` while a turn runs and `idle` between turns, and the devices' scan reads a
+  // session's last answer only when it is idle (docs/plans/2026-11-17-dial-recap-after-restart-design.md): without
+  // it every session the scan found read `working`. Only the status changes, so the fields a test wrote stay, as
+  // Claude Code keeps its own. Codex writes none: its busy reader reads its rollout.
+  const sayStatus = (status) => {
+    if (engine !== 'claude' || !procStart) return
+    let row
+    // A record it cannot read (one a test broke on purpose) stays as the test left it.
+    try { row = JSON.parse(readFileSync(processRecord, 'utf8')) } catch { return }
+    writeProcessRecord({ ...row, status })
   }
 
   const now = () => new Date().toISOString()
-  const write = (record) => appendFileSync(transcript, JSON.stringify(record) + '\n')
+  /** `!lagwrite`: the turn's records, each with the time it was made, kept back until its Stop has returned. */
+  let lagging = null
+  const append = (text) => {
+    if (unwritten) unwritten.kept.push(text)
+    else appendFileSync(transcript, text)
+  }
+  const write = (record) => {
+    const line = JSON.stringify(record) + '\n'
+    if (lagging) lagging.push(line)
+    else append(line)
+  }
   let parent = null
   const claude = (record) => {
     const uuid = randomUUID()
-    write({ parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId, version, timestamp: now(), uuid, ...record })
+    // `entrypoint`: who drives it, `cli` from a terminal (lib/sessionSearch/externals/claude.ts reads it to list a session).
+    write({ parentUuid: parent, isSidechain: false, userType: 'external', entrypoint: 'cli', cwd, sessionId, version, timestamp: now(), uuid, ...record })
     parent = uuid
   }
   const codex = (type, payload) => write({ timestamp: now(), type, payload })
   if (engine === 'codex' && readFileSync(transcript, 'utf8') === '') {
     codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
   }
+  // As Claude Code records a name the person gives the conversation.
+  if (sessionTitle && sessionTitle !== savedTitle) write({ type: 'custom-title', customTitle: sessionTitle, sessionId })
 
   // What the CLI says about its permission mode in an event, read off its own argv as it reads it.
   const permissionMode = engine === 'claude'
@@ -445,8 +832,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   /**
    * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
    * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
-   * were recorded sending (src/lib/__fixtures__/swarm-prompt-hooks.json: Claude Code's prompt id and
-   * permission mode, Codex's turn id, model and permission mode).
+   * were recorded sending (Claude Code's prompt id and permission mode, Codex's turn id, model and
+   * permission mode).
    */
   const hookInput = (event, fields) => ({
     session_id: sessionId,
@@ -454,6 +841,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
     cwd,
     hook_event_name: event,
     ...(engine === 'codex' ? { model: current.model, permission_mode: permissionMode } : {}),
+    // A Claude app session's Claude Code names the app's title for it, and any session the name the person gave it.
+    ...(sessionTitle ? { session_title: sessionTitle } : {}),
     ...fields,
   })
   /**
@@ -512,21 +901,32 @@ export async function run(engine, config = {}, { native = false } = {}) {
     child.stdin.on('error', () => { /* a hook that exits without reading its input */ })
     child.stdin.end(JSON.stringify(input))
   })
-  /** Every hook the settings carry for this event, at once, each command once, and wait for them all. */
-  const runHooks = async (event, fields = {}, held = null) => {
-    if (!HOOK_EVENTS[engine].has(event)) return
+  // The events this release does not have (`withoutHooks`): an older CLI never runs a hook for one.
+  const withoutHooks = new Set(config.withoutHooks ?? [])
+  // The hooks lost on the way (`lostHooks`), by event or `<event>:<source>`.
+  const lostHooks = new Set(config.lostHooks ?? [])
+  /**
+   * Every hook the settings carry for this event, at once, each command once: resolves once they all ended. Undefined
+   * when there is none to run, so a caller can go on in the same tick, as the CLI does with no hook to wait for.
+   */
+  const runHooks = (event, fields = {}, held = null) => {
+    if (!HOOK_EVENTS[engine].has(event) || withoutHooks.has(event)) return undefined
     const blocks = Array.isArray(hookSettings[event]) ? hookSettings[event] : []
     const commands = new Map()
     for (const block of blocks) {
-      if (event === 'SessionStart' && !matcherTakes(block?.matcher, fields.source)) continue
+      if (MATCHED_FIELD[event] && !matcherTakes(block?.matcher, fields[MATCHED_FIELD[event]])) continue
       for (const entry of Array.isArray(block?.hooks) ? block.hooks : []) {
         if (entry?.type !== 'command' || typeof entry.command !== 'string' || !entry.command) continue
         if (!commands.has(entry.command)) commands.set(entry.command, entry.timeout)
       }
     }
-    if (!commands.size) return
+    if (!commands.size) return undefined
+    if (lostHooks.has(event) || (fields.source && lostHooks.has(`${event}:${fields.source}`))) {
+      hookLog(`${event}${fields.source ? `(${fields.source})` : ''} session=${sessionId} lost`)
+      return undefined
+    }
     const input = hookInput(event, fields)
-    await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input, held)))
+    return Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input, held))).then(() => {})
   }
   // `!latestop` (Claude Code): its Stop reaches the daemon only after the next turn has been read opening (the
   // test's `late-stop.release` says when), and that turn's prompt hook only as its answer is written, as a loaded
@@ -534,10 +934,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // requests were read late.
   let lateStop = null
   let latePrompt = null
-  /** Until the test writes `file`, for at most a minute: a test that failed first does not leave this waiting. */
-  const released = async (file) => {
-    for (const end = Date.now() + 60_000; !existsSync(file) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
-  }
   const hookHeld = () => {
     const file = join(config.root, `held-hook-${randomUUID()}`)
     return { file, release: () => writeFileSync(file, '') }
@@ -738,14 +1134,51 @@ export async function run(engine, config = {}, { native = false } = {}) {
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
   drawComposer()
-  if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
-  await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
+  // `lazySessionStart` (Codex): the source the next prompt's SessionStart names, until that prompt runs it.
+  const lazySessionStart = engine === 'codex' && config.lazySessionStart === true
+  let lazyStart = lazySessionStart ? (resumed ? 'resume' : 'startup') : null
+  if (!lazySessionStart) {
+    if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
+    await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
+  }
 
   let turn = 0
   let open = null
   let interruptSlow = null
   // The tool `!holdtool` left running: an interrupt flushes its output, marked aborted, before the turn ends.
   let runningTool = null
+  // A Codex turn stopped and not yet written aborted, its Interrupt hooks running: the next prompt waits for it.
+  let aborting = undefined
+  // The open turn's Stop, held until the test's release file exists (`!heldstop`, `runHookCommand`), or null.
+  let heldStop = null
+  /** An interrupt key taken (every Ctrl-C, an Esc that stops a turn), noted in `interrupts` under the test's root with
+   *  this pid: the proof a test has of how many the engine took. */
+  const noteInterrupt = (key) => appendFileSync(join(config.root, 'interrupts'), `${key} ${process.pid}\n`)
+  /**
+   * Ends the open turn as the person stops it. Both CLIs write a running tool's output, marked aborted, first; Codex
+   * then runs its Interrupt hooks and waits for them (here until each ends or is killed at its installed timeout, which
+   * Harness writes as the 3 s Codex caps it at) before it writes `turn_aborted` (0.150.0 on, facts-codex §2). No Stop
+   * runs for a stopped turn.
+   */
+  const interrupt = () => {
+    if (runningTool) {
+      if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: runningTool, content: '[Request interrupted by user for tool use]', is_error: true }] } })
+      else codex('response_item', { type: 'function_call_output', call_id: runningTool, output: 'aborted by user' })
+      runningTool = null
+    }
+    const ended = open
+    if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
+    else {
+      const aborted = () => codex('event_msg', { type: 'turn_aborted', turn_id: ended })
+      const hooks = runHooks('Interrupt', { turn_id: ended })
+      if (hooks) aborting = hooks.then(aborted)
+      else aborted()
+    }
+    open = null
+    sayStatus('idle')
+    say('(interrupted)\r\n')
+    interruptSlow?.()
+  }
   // The question dialog `!ask` draws, as the real CLIs draw theirs (the parser's fixtures,
   // src/lib/__fixtures__/question-single.txt and question-codex.txt). Claude takes a digit as the
   // choice; Codex moves its cursor on a digit and takes Enter; Esc cancels either.
@@ -759,6 +1192,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const MANY = 'Which toppings do you want?'
   const TOPPINGS = [['Cheese', 'Melted and savory.'], ['Ham', 'Salty cured meat.'], ['Basil', 'Fresh herb, aromatic.'],
     ['Olives', 'Briny and dark.'], ['Onion', 'Sweet once cooked.'], ['Peppers', 'Crisp and bright.']]
+  // `!elicit` (Claude Code): the MCP server whose tool asks the person for input, and what it asks.
+  const ELICIT_SERVER = 'deploy'
+  const ELICIT_MESSAGE = 'Deploy to staging?'
   // Every key a dialog takes, one per line (`question-keys-<engine>` in the test's root): what reached the
   // engine, whoever typed it. A test can arm `question-keys-<engine>.signal`, `{ pid, signal, after, delayMs? }`:
   // once `after` keys in all have reached a dialog, the engine signals that process before it acts on the
@@ -811,6 +1247,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : [`  $ ${command}`, '',
           `${mark(0, '›')} 1. Yes, proceed (y)`, `${mark(1, '›')} 2. Yes, and don't ask again for commands that start with \`${command}\` (p)`,
           `${mark(2, '›')} 3. No, and tell Codex what to do differently (esc)`, '', '  Press enter to confirm or esc to cancel'])
+      // `!elicit` (Claude Code): an MCP server's request for input. Not recorded from a real Claude Code: drawn in the
+      // shape of its other dialogs, with rows the question watcher has no name for.
+      : dialog.kind === 'elicit'
+      ? [rule, ` MCP server "${ELICIT_SERVER}" requests your input`, '', ` ${ELICIT_MESSAGE}`, '',
+          ...['Accept', 'Decline'].map((label, i) => `${dialog.cursor === i ? ' ❯ ' : '   '}${i + 1}. ${label}`),
+          ' Esc to cancel']
       : engine === 'claude'
       ? [rule, ' ☐ Drink', '', QUESTION, '',
           ...CHOICES.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. ${label}`, `     ${description}`]),
@@ -848,11 +1290,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
       noteDialogKey(key)
+      dialog.idle?.refresh()
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
         // Keep the whole frame for that acceptance case; the composer below it is the live screen.
         if (dialog.keepInScrollback) process.stdout.write('\r\n')
         else eraseDialog()
+        clearTimeout(dialog.idle)
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
       }
       if (dialog.kind === 'many') {
@@ -886,24 +1330,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
         else if (!key.startsWith('\x1b') && key >= ' ') { dialog.typed += key; drawDialog() }
         continue
       }
-      const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
+      // A permission request and an MCP server's request for input both settle on the row chosen.
+      const byRow = dialog.kind === 'permit' || dialog.kind === 'elicit'
+      const rows = dialog.kind === 'permit' ? 3 : dialog.kind === 'elicit' ? 2 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
-        if (dialog.kind !== 'permit' && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
+        if (!byRow && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
         continue
       }
       if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
       if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
-      if (dialog.kind !== 'permit' && engine === 'claude' && key === String(CHOICES.length + 1)) {
+      if (!byRow && engine === 'claude' && key === String(CHOICES.length + 1)) {
         dialog.cursor = CHOICES.length
         dialog.typed = ''
         drawDialog()
         continue
       }
-      if (dialog.kind === 'permit') {
+      if (byRow) {
         if (key === '\x1b') settle(null)
         else if (key === 'y' && engine === 'codex') settle(0)
         else if (key === '\r' || key === '\n') settle(dialog.cursor)
-        else if (/^[1-3]$/.test(key)) settle(Number(key) - 1)
+        else if (/^[1-9]$/.test(key) && Number(key) <= rows) settle(Number(key) - 1)
         continue
       }
       if (key === '\x1b') settle(null)
@@ -1187,29 +1633,46 @@ export async function run(engine, config = {}, { native = false } = {}) {
       codex('compacted', { message: 'Summary of the conversation so far.', replacement_history: [] })
     }
   }
-  const finish = async (text) => {
+  // [thought]: the final message thought first. Claude Code writes each block of a message as a line of its own, each with the
+  // message's stop reason (2.1.322): its thinking, then its text, both `end_turn`, under one message id.
+  const finish = async (text, thought = false) => {
     if (latePrompt) {
       const { release, hooks } = latePrompt
       latePrompt = null
       release()
       await hooks
     }
+    const ended = open
     if (engine === 'claude') {
+      if (thought) claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: 'how to say it' }], stop_reason: 'end_turn' } })
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
     } else {
       codex('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text }], phase: 'final_answer' } })
-      codex('event_msg', { type: 'task_complete', turn_id: open, last_agent_message: text })
     }
     open = null
     say(`\r\n${text}\r\n\r\n`)
-    // Claude Code's Stop hooks run once the answer is in, and the CLI waits for them before it takes the
-    // next prompt; an interrupt ends a turn without them.
-    await runHooks('Stop', { stop_hook_active: false })
+    // The Stop hooks run once the answer is in, and the CLI waits for them before it takes the next prompt; an
+    // interrupt or an error ends a turn without them. Codex runs them before it writes the turn's task_complete
+    // (0.144.0 and 0.169.0, facts-codex §2), so its end is never read before its Stop has come. Claude Code is idle in
+    // its record only then.
+    const held = heldStop
+    heldStop = null
+    await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, held)
+    if (lagging) { append(lagging.join('')); lagging = null }
+    sayStatus('idle')
+    if (engine === 'codex') codex('event_msg', { type: 'task_complete', turn_id: ended, last_agent_message: text })
   }
+  /**
+   * What Claude Code hands its SubagentStart and SubagentStop hooks (facts-claude §2): the subagent's id and type, and
+   * no version. A stop says whether a Stop hook continued it.
+   * An empty [type] is one of Claude Code's own forked agents (a prompt suggestion, `/btw`), which ends with no start.
+   */
+  const subagentInput = (agentId, { type = 'general-purpose', stop = false } = {}) =>
+    ({ agent_id: agentId, agent_type: type, ...(stop ? { stop_hook_active: false } : {}) })
 
   // A permission asked for in a turn, answered: the command run (and written as the engine writes it)
-  // or not, and the turn over. `turnOf` is the turn that asked.
-  const permitted = (command, row, turnOf = turn) => {
+  // or not. Returns what the turn says of it. `turnOf` is the turn that asked.
+  const answered = (command, row, turnOf = turn) => {
     const allowed = row === 0 || row === 1
     const id = `call_${turnOf}_p`
     if (allowed) {
@@ -1221,7 +1684,53 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${command}` })
       }
     }
-    return finish(allowed ? `ran ${command}` : `did not run ${command}`)
+    return allowed ? `ran ${command}` : `did not run ${command}`
+  }
+  // The same, and the turn over with it.
+  const permitted = (command, row, turnOf = turn) => finish(answered(command, row, turnOf))
+  // A dialog in the composer's place, as the CLIs draw theirs, until it is answered. Claude Code also says so to its
+  // Notification hooks once a permission or MCP input dialog has waited 6 s with no key (2.1.x: `permission_prompt`,
+  // "Claude needs your permission to use Bash"; `elicitation_dialog`): each key starts the wait again, and an answer in
+  // time sends none. Codex has no such hook.
+  const PERMIT_NOTICE_MS = 6_000
+  const noticeDialog = (state, notice, noticeMs = PERMIT_NOTICE_MS) => {
+    eraseComposer()
+    dialog = { cursor: 0, drawn: 0, ...state, idle: setTimeout(() => { void runHooks('Notification', notice) }, noticeMs) }
+    drawDialog()
+  }
+  /** What a permission request hands its hooks: the tool and its input, as each CLI names them. */
+  const permitInput = (command) => engine === 'claude'
+    ? { tool_name: 'Bash', tool_input: { command }, permission_suggestions: [] }
+    : { turn_id: open, tool_name: 'exec_command', tool_input: { cmd: command } }
+  const permitDialog = (command, resolve, noticeMs) => {
+    noticeDialog({ kind: 'permit', command, resolve }, { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' }, noticeMs)
+    // Claude Code runs its PermissionRequest hooks beside the dialog it has just drawn, not before it, in the lead's
+    // own session (2.1.209 and 2.1.326, facts-claude §2).
+    if (engine === 'claude') void runHooks('PermissionRequest', permitInput(command))
+  }
+  /**
+   * Asks permission to run [command]: Codex first runs its PermissionRequest hooks and waits for them (facts-codex §2),
+   * then draws the request; Claude Code draws it at once. [resolve] takes the row chosen.
+   */
+  const askPermission = (command, resolve, noticeMs) => {
+    const hooks = engine === 'codex' ? runHooks('PermissionRequest', permitInput(command)) : undefined
+    if (hooks) void hooks.then(() => permitDialog(command, resolve, noticeMs))
+    else permitDialog(command, resolve, noticeMs)
+  }
+  /**
+   * A question asked through the engine's question tool, its dialog drawn from [state]: the tool's PreToolUse hooks
+   * first, waited for, as both CLIs wait for them before the tool runs; Claude Code then also runs its
+   * PermissionRequest hooks beside the dialog, a second wait on the same one (facts-claude §5). Resolves with the answer.
+   */
+  const askQuestion = async (questions, state) => {
+    const tool = { tool_name: engine === 'claude' ? 'AskUserQuestion' : 'request_user_input', tool_input: { questions } }
+    await runHooks('PreToolUse', { ...(engine === 'codex' ? { turn_id: open } : {}), ...tool, tool_use_id: engine === 'claude' ? `toolu_${turn}` : `call_${turn}_q` })
+    return new Promise((resolve) => {
+      eraseComposer()
+      dialog = { cursor: 0, drawn: 0, ...state, resolve }
+      drawDialog()
+      if (engine === 'claude') void runHooks('PermissionRequest', { ...tool, permission_suggestions: [] })
+    })
   }
   // `!permitnext`: the request waiting for the next paste.
   let armed = null
@@ -1229,12 +1738,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (!armed) return
     const { command, turn: turnOf } = armed
     armed = null
-    eraseComposer()
-    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve: (row) => { void permitted(command, row, turnOf) } }
-    drawDialog()
+    askPermission(command, (row) => { void permitted(command, row, turnOf) })
   }
 
   const handle = async (raw) => {
+    // A stopped Codex turn is written aborted before the next prompt is taken.
+    await aborting
     const prompt = raw.trim()
     // Enter on an empty composer takes nothing.
     if (!prompt) return
@@ -1287,18 +1796,22 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // says both through its hooks, as the real CLIs do.
       if (open) await finish('(interrupted by a new conversation)')
       await runHooks('SessionEnd', { reason: 'clear' })
+      // The conversation that ended is on disk before the next begins.
+      if (unwritten) createLate()
       sessionId = randomUUID()
       transcript = engine === 'claude'
         ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
         : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
       mkdirSync(dirname(transcript), { recursive: true })
-      writeFileSync(transcript, '')
+      if (lateTranscript) holdTranscript()
+      else writeFileSync(transcript, '')
       parent = null
       turn = 0
       if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
       announceProcess()
       say('(new conversation)\r\n')
-      await runHooks('SessionStart', { source: 'clear' })
+      if (lazySessionStart) lazyStart = 'clear'
+      else await runHooks('SessionStart', { source: 'clear' })
       return
     }
     if (config.submissionGate && /^!latestart\b/.test(prompt)) {
@@ -1312,6 +1825,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const late = lateStop
     lateStop = null
     const promptHeld = late ? hookHeld() : null
+    if (lazyStart) {
+      const source = lazyStart
+      lazyStart = null
+      await runHooks('SessionStart', { source })
+    }
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
     // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
     // start-up announcement the daemon missed. The fields beyond the prompt are those each CLI was
@@ -1322,7 +1840,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (!late) await promptHooks
     turn++
     open = `turn-${turn}`
+    sayStatus('busy')
     if (engine === 'claude') {
+      if (/^!lagwrite(?:\s|$)/.test(prompt.replace(START_HEADER, ''))) lagging = []
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
       if (late) {
@@ -1338,7 +1858,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
       codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: open, content: [{ type: 'text', text: prompt, text_elements: [] }] } })
       codex('response_item', { type: 'reasoning', summary: [{ type: 'summary_text', text: `considering: ${prompt}` }] })
     }
-    const directive = /^!(\w+)\s*(.*)$/.exec(prompt)
+    // `!heldstop`: this turn's Stop reaches the daemon only once the test writes `held-stop.release` (a second in one
+    // test removes it first), and the CLI waits for it all that time: Codex writes its task_complete only after it. What
+    // follows it is the turn's prompt, so a turn that asks the person can have its Stop held too.
+    const asked = prompt.replace(START_HEADER, '')
+    const holding = /^!heldstop(?:\s+|$)/.exec(asked)
+    heldStop = holding ? { file: join(config.root, 'held-stop.release') } : null
+    const directive = /^!(\w+)\s*(.*)$/.exec(asked.slice(holding ? holding[0].length : 0))
     if (directive?.[1] === 'grow' || directive?.[1] === 'burst') {
       // `grow` writes the way Codex compacts — a snapshot at a time, with the engine still working in
       // between — so a live tail sees a few MiB per read. `burst` writes it all at once.
@@ -1360,6 +1886,27 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
     }
+    if (engine === 'claude' && directive?.[1] === 'background') {
+      // Claude Code 2.1.322's Bash tool with `run_in_background` (recorded 2026-11-12, docs/plans/2026-11-12-background-count-plan.md):
+      // the command runs in a shell that is the engine's direct child and that the trailing `pwd` keeps alive while it
+      // runs, and the turn ends without waiting for it.
+      const command = directive[2]
+      const id = `toolu_${turn}_sh`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_sh`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command, run_in_background: true } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `Command running in background with ID: bg_${turn}` }] } })
+      const home = claudeHome ?? join(homedir(), '.claude')
+      const quoted = (text) => `'${text.replaceAll("'", "'\\''")}'`
+      const tag = randomUUID().replaceAll('-', '')
+      const snapshot = join(home, 'shell-snapshots', `snapshot-sh-${Date.now()}-${tag.slice(0, 6)}.sh`)
+      const cwdFile = join(home, `claude-${tag.slice(6, 10)}-cwd`)
+      // Claude Code writes its snapshot before it sources it; a `source` of a missing file ends a POSIX `sh` (macOS's
+      // bash as sh) at once, so the command would never run.
+      mkdirSync(dirname(snapshot), { recursive: true })
+      writeFileSync(snapshot, '')
+      spawn('/bin/sh', ['-c', `source ${quoted(snapshot)} 2>/dev/null || true && eval ${quoted(command)} < /dev/null && pwd -P >| ${quoted(cwdFile)}`], { stdio: 'ignore' })
+      await finish(`started in the background: ${command}`)
+      return
+    }
     // Codex says what it is about to do in a message of its own, its commentary, ahead of the answer, and its transcript reader leaves
     // such a message out of what the turn said.
     if (engine === 'codex' && directive?.[1] === 'commentary') {
@@ -1373,10 +1920,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       const name = directive[2] || 'scout'
       const id = `toolu_${turn}_bg`
       claude({ type: 'assistant', message: { id: `msg_${turn}_bg`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Agent', input: { description: `Count for ${name}`, prompt: `Count the files for ${name}.`, run_in_background: true } }], stop_reason: 'tool_use' } })
+      await runHooks('SubagentStart', subagentInput('a0f1e2d3c4b5a6978'))
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'Async agent launched successfully.\nagentId: a0f1e2d3c4b5a6978' }] }, toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a0f1e2d3c4b5a6978' } })
       const edit = `toolu_${turn}_ed`
       claude({ type: 'assistant', message: { id: `msg_${turn}_ed`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id: edit, name: 'Bash', input: { command: 'true' } }], stop_reason: 'tool_use' } })
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: edit, content: 'ran true' }] } })
+      await runHooks('SubagentStop', subagentInput('a0f1e2d3c4b5a6978', { stop: true }))
       const notification = `<task-notification>\n<task-id>a0f1e2d3c4b5a6978</task-id>\n<tool-use-id>${id}</tool-use-id>\n<output-file>${join(cwd, '.tasks', 'a0f1e2d3c4b5a6978.output')}</output-file>\n<status>completed</status>\n<summary>Agent "Count for ${name}" finished</summary>\n<result>${name} found 3 files</result>\n</task-notification>`
       claude({ type: 'attachment', attachment: { type: 'queued_command', prompt: notification, commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' } } })
     }
@@ -1447,8 +1996,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      // The dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
-      const row = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const row = await new Promise((resolve) => askPermission(command, resolve))
       await permitted(command, row)
       return
     }
@@ -1456,14 +2004,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // A real engine thinks before it asks; a dialog already on screen when its turn began reads to the
       // daemon as the previous turn's (askQuestion.ts `noteTurnStart`).
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { cursor: 0, drawn: 0, keepInScrollback: directive[1] === 'askscrollback', resolve }; drawDialog() })
+      const questions = [{ question: QUESTION, header: 'Drink', multiSelect: false, options: CHOICES.map(([label, description]) => ({ label, description })) }]
+      const choice = await askQuestion(questions, { keepInScrollback: directive[1] === 'askscrollback' })
       if (choice === null) {
         say('(question cancelled)\r\n')
         await finish('(question cancelled)')
         return
       }
       // The tool call is written once it is answered, as the real CLIs flush it.
-      const questions = [{ question: QUESTION, header: 'Drink', multiSelect: false, options: CHOICES.map(([label, description]) => ({ label, description })) }]
       if (engine === 'claude') {
         const id = `toolu_${turn}`
         claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
@@ -1480,13 +2028,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     if (engine === 'claude' && directive?.[1] === 'askmany') {
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'many', cursor: 0, checked: new Set(), review: false, drawn: 0, resolve }; drawDialog() })
+      const questions = [{ question: MANY, header: 'Toppings', multiSelect: true, options: TOPPINGS.map(([label, description]) => ({ label, description })) }]
+      const choice = await askQuestion(questions, { kind: 'many', checked: new Set(), review: false })
       if (choice === null) {
         say('(question cancelled)\r\n')
         await finish('(question cancelled)')
         return
       }
-      const questions = [{ question: MANY, header: 'Toppings', multiSelect: true, options: TOPPINGS.map(([label, description]) => ({ label, description })) }]
       const id = `toolu_${turn}`
       claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `User has answered your questions: "${MANY}"="${choice}"` }] } })
@@ -1523,6 +2071,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       claude({ type: 'system', subtype: 'turn_duration', durationMs: 5_000, messageCount: 6 })
       say('Goal paused\r\n')
       open = null
+      sayStatus('idle')
       return
     }
     if (engine === 'claude' && directive?.[1] === 'goalloop') {
@@ -1532,20 +2081,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // The daemon closed the turn at the first stop and read the next pass as no turn at all.
       //
       // The first pass's Stop reaches the daemon only once the next pass is on disk, as a loaded daemon took
-      // it in a full end-to-end run (520 ms after that pass started): the CLI waits for its hook commands,
-      // but the hook's request can be read after it has gone on. So the hooks run once the pass has begun.
+      // it in a full end-to-end run (520 ms after that pass started). Claude Code runs its Stop hooks together, the
+      // goal hook among them, and waits for them all before it writes the refusal, so the Stop is stamped as run
+      // before the next pass opens; only its request is read after it has gone on. Run late instead, it reads as
+      // that pass's own Stop. So it starts here, held (`hookHeld`), the refusal waits for its process to start
+      // (when notify.mjs stamps it), and it is read once the pass has begun.
       const condition = directive[2] || 'the work is done'
       const model = claudeModel
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
       claude({ type: 'assistant', message: { id: `msg_${turn}_g1`, role: 'assistant', model, content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
       say(`\r\nfirst pass at: ${condition}\r\n`)
+      const held = hookHeld()
+      const lateStop = runHooks('Stop', { stop_hook_active: false }, held)
+      await released(`${held.file}.started`)
       claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
       claude({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition, reason: 'one check still fails' } })
       claude({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
       const id = `call_${turn}_g`
       claude({ type: 'assistant', message: { id: `msg_${turn}_g2`, role: 'assistant', model, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'make check' } }], stop_reason: 'tool_use' } })
       await pause(600)
-      const lateStop = runHooks('Stop', { stop_hook_active: false })
+      held.release()
       await pause(Number(config.goalPassMs) || 4_000)
       await lateStop
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'all checks pass' }] } })
@@ -1557,9 +2112,66 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (engine === 'claude' && directive?.[1] === 'latestop') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `answer ${turn}: ${prompt}` }], stop_reason: 'end_turn' } })
       open = null
+      sayStatus('idle')
       say(`\r\nanswer ${turn}: ${prompt}\r\n\r\n`)
       const stop = hookHeld()
       lateStop = { stop: runHooks('Stop', { stop_hook_active: false }, stop), release: stop.release }
+      return
+    }
+    if (engine === 'codex' && directive?.[1] === 'fail') {
+      // A turn that ends in an error, as Codex 0.169.0 writes one: the error on its task_complete (codexTaskError), and
+      // no Stop: Codex runs none for a turn that ends in an error (facts-codex §2).
+      const message = 'stream disconnected before completion'
+      codex('event_msg', { type: 'task_complete', turn_id: open, last_agent_message: null, error: { message } })
+      open = null
+      say(`\r\n■ ${message}\r\n\r\n`)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'elicit') {
+      // An MCP tool whose server asks the person for input: Claude Code runs its Elicitation hooks and waits for them
+      // before it draws the dialog (facts-claude §2). Accepted with its first row, declined with its second or Esc.
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      const id = `toolu_${turn}_mcp`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_mcp`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: `mcp__${ELICIT_SERVER}__deploy`, input: {} }], stop_reason: 'tool_use' } })
+      await runHooks('Elicitation', { mcp_server_name: ELICIT_SERVER, message: ELICIT_MESSAGE, mode: 'form', elicitation_id: `elicit_${turn}`, requested_schema: { type: 'object', properties: {} } })
+      const row = await new Promise((resolve) => noticeDialog({ kind: 'elicit', resolve }, { message: 'Claude Code needs your input', notification_type: 'elicitation_dialog' }))
+      const answer = row === 0 ? 'accepted' : 'declined'
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: answer }] } })
+      await finish(`the deploy was ${answer}`)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'spawn') {
+      // A background subagent that outlives its lead's turn (the Agent tool's `run_in_background`): its start, then the
+      // lead's answer and Stop while it runs. It ends once the test writes `<name>.release`: its SubagentStop, its
+      // `<task-notification>` handed to the idle lead as a user record (which opens no turn), and the lead's wrap-up
+      // and its Stop. The lead is idle meanwhile, as in Claude Code. A word after the name adds what else Claude Code
+      // sends while it runs (facts-claude §5): `helper`, one of its own forked agents ending, a SubagentStop with an
+      // empty agent_type and no start; `resume`, another subagent resumed and ending, a start with its own stop.
+      const [name = 'scout', extra] = directive[2].split(/\s+/).filter(Boolean)
+      const agentOf = () => randomUUID().replaceAll('-', '').slice(0, 17)
+      const agentId = agentOf()
+      const lead = turn
+      const id = `toolu_${lead}_sp`
+      claude({ type: 'assistant', message: { id: `msg_${lead}_sp`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Agent', input: { description: `Count for ${name}`, prompt: `Count the files for ${name}.`, run_in_background: true } }], stop_reason: 'tool_use' } })
+      await runHooks('SubagentStart', subagentInput(agentId))
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `Async agent launched successfully.\nagentId: ${agentId}` }] }, toolUseResult: { isAsync: true, status: 'async_launched', agentId } })
+      await finish(`started ${name} in the background`)
+      void (async () => {
+        if (extra === 'helper') await runHooks('SubagentStop', subagentInput(agentOf(), { type: '', stop: true }))
+        if (extra === 'resume') {
+          const resumed = agentOf()
+          await runHooks('SubagentStart', subagentInput(resumed))
+          await runHooks('SubagentStop', subagentInput(resumed, { stop: true }))
+        }
+        await released(join(config.root, `${name}.release`))
+        await runHooks('SubagentStop', subagentInput(agentId, { stop: true }))
+        const notification = `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n<summary>Agent "Count for ${name}" finished</summary>\n<result>${name} found 3 files</result>\n</task-notification>`
+        claude({ type: 'user', message: { role: 'user', content: notification } })
+        const wrapUp = `${name} found 3 files`
+        claude({ type: 'assistant', message: { id: `msg_${lead}_sp2`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: wrapUp }], stop_reason: 'end_turn' } })
+        say(`\r\n${wrapUp}\r\n\r\n`)
+        await runHooks('Stop', { stop_hook_active: false })
+      })()
       return
     }
     if (directive?.[1] === 'version') { await finish(versionLine); return }
@@ -1629,6 +2241,27 @@ export async function run(engine, config = {}, { native = false } = {}) {
       })
       if (!open) return
     }
+    if (directive?.[1] === 'until') {
+      const release = join(config.root, `${directive[2]}.release`)
+      const permit = join(config.root, `${directive[2]}.permit`)
+      await released(release, permit)
+      if (!open) return
+      // A turn that asked goes on once answered, as one whose command ran works on, until its release file.
+      let said
+      if (!existsSync(release) && existsSync(permit)) {
+        const command = readFileSync(permit, 'utf8').trim() || 'printf hi'
+        const row = await new Promise((resolve) => askPermission(command, resolve, 0))
+        said = answered(command, row)
+        await released(release)
+        if (!open) return
+      }
+      let answer = ''
+      try { answer = readFileSync(release, 'utf8') } catch { /* not written within the minute */ }
+      if (answer || said) {
+        await finish(answer || said)
+        return
+      }
+    }
     await finish(`answer ${turn}: ${prompt}`)
   }
 
@@ -1656,18 +2289,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
     pastes.clear()
     return text
   }
+  const noteSuspend = (what) => {
+    if (!config.root) return
+    try { appendFileSync(join(config.root, 'suspends'), `${what} ${process.pid}\n`) } catch { /* a note, never a failure */ }
+  }
   // Ctrl+Z, as the real CLIs do it: give the terminal back, and stop the whole process group (the
   // npm Codex's wrapper with it) once the terminal is restored; in raw mode the terminal sends no
   // SIGTSTP of its own. Raw mode comes back only from this stop: Claude Code arms a one-time SIGCONT
   // handler here, Codex takes the terminal again when its stop returns.
+  // Both are noted for the test: `stopped` before the SIGTSTP, as nothing runs between it and the
+  // continue, and `continued` from this stop's own handler alone, which only a `fg` reaches.
   const suspend = () => {
     process.stdout.write('\x1b[?2004l')
     if (engine === 'claude') process.stdout.write('\r\nClaude Code has been suspended. Run `fg` to bring Claude Code back.\r\n')
     process.stdin.setRawMode?.(false)
     process.once('SIGCONT', () => {
+      noteSuspend('continued')
       process.stdin.setRawMode?.(true)
       process.stdout.write('\x1b[?2004h')
     })
+    noteSuspend('stopped')
     process.kill(0, 'SIGTSTP')
   }
   // Continued, whoever stopped it, the renderer repaints, and that is all: after a stop from outside
@@ -1778,13 +2419,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
         continue
       }
       if (pasting) { pasted += part === '\r' ? '\n' : part; continue }
-      if (engine === 'claude' && part === '\x1b' && open && !suggestions(buffer)) {
+      if (part === '\x1b' && open && !suggestions(buffer)) {
         // Observed on real Claude Code 2.1.307: Esc interrupts the response,
-        // then runs a queued follow-up; it does not restore it as an unsent draft.
-        claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
-        open = null
-        say('(interrupted)\r\n')
-        interruptSlow?.()
+        // then runs a queued follow-up; it does not restore it as an unsent draft. Codex's Esc interrupts too.
+        noteInterrupt('Escape')
+        interrupt()
         continue
       }
       if (part.startsWith('\x1b')) {
@@ -1817,18 +2456,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (part === '\x03') {
         // Ctrl-C ends a running turn, and empties the composer either way.
         buffer = ''
-        if (open) {
-          if (runningTool) {
-            if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: runningTool, content: '[Request interrupted by user for tool use]', is_error: true }] } })
-            else codex('response_item', { type: 'function_call_output', call_id: runningTool, output: 'aborted by user' })
-            runningTool = null
-          }
-          if (engine === 'claude') claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
-          else codex('event_msg', { type: 'turn_aborted', turn_id: open })
-          open = null
-          say('(interrupted)\r\n')
-          interruptSlow?.()
-        } else draw()
+        noteInterrupt('C-c')
+        if (open) interrupt()
+        else draw()
       } else if (part === '\r' || part === '\n') {
         const line = expand(buffer)
         buffer = ''
@@ -1862,6 +2492,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   process.on('SIGTERM', () => process.exit(0))
   setInterval(() => {}, 60_000)
 }
+
+/** The line `harness new` puts before an agent's task (agentClient/commands.ts `startHeader`). */
+const START_HEADER = /^\[from [^\]\n]*, the harness that started you\. It reads your answer itself\.\]\n\n/
 
 /** The options both CLIs read a value after, and Codex's `resume <id>` and `fork <id>`: the word after one is not a
  *  prompt. `--settings <file-or-json>` carries the pull request line of a harness another agent started

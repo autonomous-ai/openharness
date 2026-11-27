@@ -62,8 +62,26 @@ static void ui_swarms_replace(const cable_swarm_t *rows,int n,const char *id) {
 static void ui_notif_replace(const cable_notif_t *rows,int n) {
     assert(!held&&n>=0&&n<=8);notice_calls++;notice_count=n;memcpy(notices,rows,(size_t)n*sizeof *rows);
 }
+static unsigned app_calls;
+static int app_count;
+static cable_app_t apps[CABLE_MAX_APPS];
+static char app_shown[64];
+static void ui_apps_replace(const cable_app_t *rows,int n,const char *shown) {
+    assert(!held&&n>=0&&n<=CABLE_MAX_APPS&&shown);app_calls++;app_count=n;
+    memcpy(apps,rows,(size_t)n*sizeof *rows);snprintf(app_shown,sizeof app_shown,"%s",shown);
+}
+static unsigned shows,beeps;
+static bool shown_list;
+static char shown_request[80];
+static bool ui_question_show(const char *id,const char *name,const char *machine,const char *request,const cJSON *questions,bool list) {
+    (void)name;(void)machine;assert(id&&questions);shows++;shown_list=list;
+    snprintf(shown_request,sizeof shown_request,"%s",request?request:"");return !list;
+}
+static void audio_notify_done(void) { beeps++; }
+static uint32_t welcome_features;
+bool cable_client_supports(uint32_t features) { return (welcome_features & features) == features; }
 '''
-for name in ['str_of','bool_of','handle_agent','handle_swarms','handle_notifications','handle_models']:
+for name in ['str_of','bool_of','caps_of','handle_agent','handle_swarms','handle_notifications','handle_models','count_of','handle_apps','handle_question']:
     code += function(name)
 code += r'''
 static cJSON *object(const char *key,const char *value) {
@@ -114,6 +132,17 @@ int main(void) {
            notices[1].question && !notices[1].failed && !notices[2].question && !notices[2].failed);
     p=cJSON_Parse("{\"items\":[{\"agentId\":\"failed\"}]}");
     assert(p);handle_notifications(p);cJSON_Delete(p);assert(notice_count==1&&!notices[0].failed);
+    // An agent's question and its news are two rows (the drawer keeps a row per agent and kind), in either order.
+    // A second row of one agent and kind is still dropped. A row carries no question id: the kind is the whole key.
+    p=cJSON_Parse("{\"items\":[{\"agentId\":\"a\",\"question\":true,\"summary\":\"Ship it?\"},{\"agentId\":\"a\",\"summary\":\"Built.\"},"
+        "{\"agentId\":\"a\",\"question\":true,\"summary\":\"Again?\"},{\"agentId\":\"a\",\"summary\":\"Again.\"},{\"agentId\":\"b\",\"summary\":\"Done.\"}]}");
+    assert(p);handle_notifications(p);cJSON_Delete(p);
+    assert(notice_count==3 && notices[0].question && !strcmp(notices[0].summary,"Ship it?") &&
+           !notices[1].question && !strcmp(notices[1].agent_id,"a") && !strcmp(notices[1].summary,"Built.") &&
+           !strcmp(notices[2].agent_id,"b"));
+    p=cJSON_Parse("{\"items\":[{\"agentId\":\"a\",\"summary\":\"Built.\"},{\"agentId\":\"a\",\"question\":true,\"summary\":\"Ship it?\"}]}");
+    assert(p);handle_notifications(p);cJSON_Delete(p);
+    assert(notice_count==2 && !notices[0].question && notices[1].question);
     for(int len=0;len<=65;len++) {
         char token[66];memset(token,'t',len);token[len]=0;
         p=cJSON_CreateObject();assert(p);cJSON *entries=cJSON_AddArrayToObject(p,"items");
@@ -130,6 +159,65 @@ int main(void) {
     add(items,"id",bad_profile);add(items,"id",profile);add(items,"id","second");
     s_models_max=4;handle_models(p);cJSON_Delete(p);
     assert(s_models_replied&&sem_gives==1&&s_models_n==2&&!strcmp(models[0].id,profile));bounds();
+    // apps: two apps and shown are handed on, in the daemon's order.
+    p=cJSON_Parse("{\"shown\":\"vscode\",\"apps\":[{\"id\":\"ghostty\",\"name\":\"Ghostty\",\"count\":3,\"waiting\":0},"
+                  "{\"id\":\"vscode\",\"name\":\"VS Code\",\"count\":2,\"waiting\":1}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_calls==1&&app_count==2&&!strcmp(app_shown,"vscode"));
+    assert(!strcmp(apps[0].id,"ghostty")&&!strcmp(apps[0].name,"Ghostty")&&apps[0].count==3&&apps[0].waiting==0);
+    assert(!strcmp(apps[1].id,"vscode")&&!strcmp(apps[1].name,"VS Code")&&apps[1].count==2&&apps[1].waiting==1);
+    // A shown that is no entry's id is kept as it came; an absent one is none.
+    p=cJSON_Parse("{\"shown\":\"orca\",\"apps\":[{\"id\":\"ghostty\",\"name\":\"Ghostty\",\"count\":1,\"waiting\":0}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);assert(app_calls==2&&app_count==1&&!strcmp(app_shown,"orca"));
+    p=cJSON_Parse("{\"apps\":[]}");assert(p);handle_apps(p);cJSON_Delete(p);assert(app_calls==3&&!app_count&&!app_shown[0]);
+    // The 17th entry is dropped.
+    p=cJSON_CreateObject();assert(p&&cJSON_AddStringToObject(p,"shown","a0"));
+    cJSON *list=cJSON_AddArrayToObject(p,"apps");assert(list);
+    for(int i=0;i<CABLE_MAX_APPS+1;i++) { char id[8];snprintf(id,sizeof id,"a%d",i);add(list,"id",id); }
+    handle_apps(p);cJSON_Delete(p);assert(app_count==CABLE_MAX_APPS&&!strcmp(apps[CABLE_MAX_APPS-1].id,"a15"));
+    // An id of 16 characters is dropped, not cut: it is what the dial sends back. So is a missing or empty one.
+    p=cJSON_Parse("{\"shown\":\"x\",\"apps\":[{\"id\":\"abcdefghijklmnop\"},{\"name\":\"No id\"},{\"id\":\"\"},{\"id\":7},"
+                  "\"not an object\",{\"id\":\"abcdefghijklmno\",\"name\":\"Fifteen\"}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);assert(app_count==1&&!strcmp(apps[0].id,"abcdefghijklmno"));
+    // A count of 5000 is 999; a negative or non-number count is 0.
+    p=cJSON_Parse("{\"shown\":\"a\",\"apps\":[{\"id\":\"a\",\"count\":5000,\"waiting\":-3},{\"id\":\"b\",\"count\":\"7\",\"waiting\":1e300}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_count==2&&apps[0].count==999&&apps[0].waiting==0&&apps[1].count==0&&apps[1].waiting==999);
+    // A name that does not fit is cut on a character: 22 letters and an é (24 bytes) keep the 22 letters.
+    p=cJSON_Parse("{\"shown\":\"a\",\"apps\":[{\"id\":\"a\",\"name\":\"aaaaaaaaaaaaaaaaaaaaaa\xc3\xa9\"},{\"id\":\"b\",\"name\":\"aaaaaaaaaaaaaaaaaaaa\xc3\xa9\"}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_count==2&&!strcmp(apps[0].name,"aaaaaaaaaaaaaaaaaaaaaa")&&!strcmp(apps[1].name,"aaaaaaaaaaaaaaaaaaaa\xc3\xa9"));
+    // A duplicate id keeps its first row: a pick names one app.
+    p=cJSON_Parse("{\"shown\":\"a\",\"apps\":[{\"id\":\"a\",\"count\":1},{\"id\":\"b\"},{\"id\":\"a\",\"count\":2}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_count==2&&!strcmp(apps[0].id,"a")&&apps[0].count==1&&!strcmp(apps[1].id,"b"));
+    // apps that is missing or not an array keeps the dial's apps, as every other malformed list does.
+    unsigned calls=app_calls;
+    p=cJSON_Parse("{\"shown\":\"b\"}");assert(p);handle_apps(p);cJSON_Delete(p);
+    p=cJSON_Parse("{\"shown\":\"b\",\"apps\":{\"id\":\"b\"}}");assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_calls==calls&&app_count==2&&!strcmp(app_shown,"a"));bounds();
+    welcome_features=CABLE_FEATURE_QUESTION_TIER;
+    // `question` with tier "list" files a silent row: no beep. With no tier, or any other, it is an alert.
+    p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\",\"questions\":[{\"key\":\"\",\"q\":\"Ship it?\",\"options\":[]}]}");
+    assert(p);handle_question(p,"a");cJSON_Delete(p);assert(shows==1&&shown_list&&!beeps&&!strcmp(shown_request,"q1"));
+    const char *alerts[]={"{\"id\":\"q1\",\"questions\":[]}","{\"id\":\"q1\",\"tier\":\"alert\",\"questions\":[]}",
+        "{\"id\":\"q1\",\"tier\":\"silent\",\"questions\":[]}","{\"id\":\"q1\",\"tier\":5,\"questions\":[]}",
+        "{\"id\":\"q1\",\"tier\":\"LIST\",\"questions\":[]}"};
+    for(unsigned i=0;i<sizeof alerts/sizeof *alerts;i++) {
+        p=cJSON_Parse(alerts[i]);assert(p);handle_question(p,"a");cJSON_Delete(p);
+        assert(shows==2+i&&!shown_list&&beeps==1+i);
+    }
+    // No questions, or no agent: nothing, as before.
+    p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\"}");assert(p);handle_question(p,"a");cJSON_Delete(p);
+    p=cJSON_Parse("{\"id\":\"q1\",\"questions\":[]}");assert(p);handle_question(p,NULL);cJSON_Delete(p);
+    assert(shows==6&&beeps==5);
+    // A welcome without question.tier (an older daemon, or no welcome yet): tier "list" is an alert.
+    const uint32_t without[]={0,~(uint32_t)CABLE_FEATURE_QUESTION_TIER};
+    for(unsigned i=0;i<sizeof without/sizeof *without;i++) {
+        unsigned shows_before=shows,beeps_before=beeps;welcome_features=without[i];
+        p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\",\"questions\":[]}");assert(p);handle_question(p,"a");cJSON_Delete(p);
+        assert(shows==shows_before+1&&!shown_list&&beeps==beeps_before+1);
+    }
     printf("Protocol identities: exact %u-byte targets / %zu-byte profiles, overlong/duplicate rejection, malformed lists preserve state, fixed row bounds PASS\n",ID_MAX-1,sizeof profile-1);
 }
 '''

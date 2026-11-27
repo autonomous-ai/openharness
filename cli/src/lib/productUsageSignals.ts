@@ -13,16 +13,22 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
   browser_open: 'browser_open',
 } as const
 const unmeasured = (..._args: unknown[]): void => {}
+// An OpenClaw with no Gateway token (`OPENCLAW_NO_TOKEN`) is a computer not set up yet, so it counts with setup's,
+// by its listed code.
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
-  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SWARM_SKILL_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
-const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED'])
+  'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED',
+  'OPENCLAW_NO_TOKEN'])
+// The Browser's Start refusals (services/agentBrowser.ts) answer no launch, so they take a fixed kind, not the launch
+// code list, where each would have joined all twelve launch families: a guest's agent (`NOT_ALLOWED`) is `auth`, and an
+// agent that does not run here (`NOT_RUNNING`) is `invalid`.
+const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED', 'NOT_ALLOWED'])
 const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAVAILABLE', 'API_UNAVAILABLE',
-  'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE', 'SWARM_ROLE_UNAVAILABLE'])
+  'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE'])
 // A history page read for no session, or one this computer's index does not hold (services/search.ts): until
 // 2026-10-28 both were `other`, 2,225 that day, a Desktop list re-reading a conversation that had left the index.
-const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
+const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH',
   'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_LAUNCH_ARGS', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY',
-  'BAD_SESSION', 'NOT_INDEXED'])
+  'BAD_SESSION', 'NOT_INDEXED', 'NOT_RUNNING'])
 /** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
  * `other`: that day's 11 failed installs, all on Windows, said nothing of why. For the Store's requests only, so a
  * create's or a resume's totals keep their meaning. Its busy and not-installed refusals are named with the others'. */
@@ -85,8 +91,10 @@ export interface ProductUsageLaunchSignal {
   /** Local RAM only, discarded on stop/choice change; never part of a report or persisted queue. */
   id: string
   phase: 'start' | 'pending' | 'created' | 'failed' | 'refused' | 'cancelled' | 'unconfirmed' | 'work_requested'
-  /** On `start`: an agent or a Swarm asked for this launch (the create's `startedBy`), not a person. */
+  /** On `start`: an agent asked for this launch (the create's `startedBy`), not a person. */
   agentStarted?: true
+  /** On `start`, only with `agentStarted`: that agent was Hachi (the create's `startedByHachi`). */
+  hachiStarted?: true
   origin?: 'interactive' | 'tool'
   failure?: Failure
   /** The listed code of an `other` or setup failure, of a refusal, or of a created launch's late one (`late`). */
@@ -113,15 +121,18 @@ function createdSignal(agent: unknown): Omit<ProductUsageLaunchSignal, 'id'> {
 
 /** Observe an actual new-harness receipt through subsequent status polls. Polling adds no attempts.
  * [engine] is the request's `engine`; the reply's [agent] is its agent frame, or whether it had one.
- * [agentStarted]: the create says an agent started it (`startedBy: 'agent'`). */
-export function productUsageLaunch(type: string, id: unknown, emit: (signal: ProductUsageLaunchSignal) => void, engine?: unknown, agentStarted = false) {
+ * [agentStarted]: the create says an agent started it (`startedBy: 'agent'`); [hachiStarted]: that it was Hachi
+ * (`startedByHachi`), which counts only for a launch an agent started. */
+export function productUsageLaunch(type: string, id: unknown, emit: (signal: ProductUsageLaunchSignal) => void, engine?: unknown, agentStarted = false,
+  hachiStarted = false) {
   const known = ['agent_create', 'agent_create_status', 'agent_create_cancel'].includes(type)
     && typeof id === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(id)
   if (!known) return unmeasured
   const send = (signal: Omit<ProductUsageLaunchSignal, 'id'>) => {
     if (known) { try { emit({ id: id as string, ...signal }) } catch { /* Optional measurement. */ } }
   }
-  if (type === 'agent_create') send({ phase: 'start', engine: launchEngine(engine), ...(agentStarted ? { agentStarted: true } : {}) })
+  if (type === 'agent_create') send({ phase: 'start', engine: launchEngine(engine),
+    ...(agentStarted ? { agentStarted: true, ...(hachiStarted ? { hachiStarted: true } : {}) } : {}) })
   return (error: unknown, state: unknown, agent: unknown, held: unknown) => {
     if (typeof error === 'string' && LAUNCH_REFUSALS.has(error)) send({ phase: 'refused', code: launchErrorCode(error) })
     else if (error != null || state === 'failed') {

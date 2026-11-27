@@ -6,7 +6,9 @@
  * process by the time anyone checks. The start marker pins the process GENERATION — Linux exposes it
  * in /proc/<pid>/stat (field 22, starttime in clock ticks); elsewhere `ps -o lstart` gives it to the
  * second, which is coarse but has never collided in practice. A marker that cannot be read at all
- * degrades to "alive if the pid exists", which is what Windows gets.
+ * degrades to "alive if the pid exists". Windows gets no marker and runs nothing: a `ps` found on its
+ * PATH (Git's) printed an error on every `harness stop` and `harness start` (run 44758521149), and
+ * `spawnLockOwnerReused` already proves a reused pid there from the Windows process table.
  */
 
 import { readFileSync } from 'fs'
@@ -32,7 +34,7 @@ export function processStartTicks(pid: number): number | null {
 }
 
 export function processStartMarker(pid: number): string | null {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null
+  if (process.platform === 'win32' || !Number.isSafeInteger(pid) || pid <= 0) return null
   const ticks = processStartTicks(pid)
   if (ticks !== null) return `linux:${ticks}`
   try {

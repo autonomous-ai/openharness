@@ -1,0 +1,265 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+import { afterEach, expect, it } from 'vitest'
+import { collect, readResults, runScenario, SETTLE_END_MS, SOURCES, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
+import { agentIdOf, type Check, type EvalDriver, type Platform, type RunResults, type Scenario, type Seen, type SessionDef,
+  type Step, type StepKind, type Tier } from './types.js'
+
+const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const claude = (key: string, n: number): SessionDef =>
+  ({ key, app: 'claude', id: uuid(n), localId: `local_${uuid(100 + n)}`, title: `Eval ${key}`, cwd: `/work/eval-${key}`, ageMs: n * 1000 })
+const A = claude('a', 1)
+const B = claude('b', 2)
+const GHOST: SessionDef = { ...claude('z', 9), ghost: true }
+
+const ring = (expect: string[], extra: Partial<Check> = {}): Check => ({ id: 'ring', kind: 'ring', dim: 'D1', page: 'claude', expect, ...extra } as Check)
+const cost: Check = { id: 'cost', kind: 'cost', dim: 'D8' }
+
+function scenario(steps: Step[], checks: Check[] = [ring(['a', 'b'])], probes: Check[] = [ring(['a', 'b', 'z'])]): Scenario {
+  return { id: 'S1', app: 'claude', title: 'Eval scenario', dims: ['D1'], platforms: ['darwin', 'linux', 'win32'],
+    tiers: ['a', 'b'], heldOut: false, sessions: [A, B, GHOST], steps, checks, probes }
+}
+
+/** One push: the apps frame, then a whole ring of these sessions. */
+const list = (at: number, rows: SessionDef[]): Seen['frames'] => [
+  { at, message: { t: 'apps', shown: 'claude', apps: [] } },
+  { at, message: { t: 'agents.begin' } },
+  ...rows.map((r) => ({ at, message: { t: 'agent', id: agentIdOf(r), name: r.title } })),
+  { at, message: { t: 'agents.end', total: rows.length, tab: '' } },
+]
+
+interface Script {
+  tier?: Tier
+  /** What the world does as a step runs. */
+  onStep?(driver: Scripted, step: Exclude<Step, { kind: 'wait' }>): void
+  /** What the world does at a virtual time, once time reaches it. */
+  events?: Array<{ at: number; does(driver: Scripted): void }>
+  gaps?: string[]
+  throwOn?: { kind: StepKind; error: Error }
+  onStop?(driver: Scripted): void
+}
+
+/** A driver whose world is a script, on a virtual clock that moves 100 ms at a time while it settles. */
+class Scripted implements EvalDriver {
+  readonly tier: Tier
+  readonly calls: string[] = []
+  readonly frames: Seen['frames'] = []
+  readonly deliveries: Seen['deliveries'] = []
+  cost: Seen['cost']
+  private t = 0
+  private scenario: Scenario | undefined
+  private readonly steps: Seen['steps'] = []
+  private readonly events: NonNullable<Script['events']>
+
+  constructor(private readonly script: Script = {}) {
+    this.tier = script.tier ?? 'a'
+    this.events = [...script.events ?? []]
+  }
+
+  async start(s: Scenario, platform: Platform): Promise<void> {
+    this.scenario = s
+    this.calls.push(`start ${s.id} ${platform}`)
+  }
+
+  async step(step: Exclude<Step, { kind: 'wait' }>): Promise<void> {
+    this.calls.push(`${step.kind} at ${this.t}`)
+    this.steps.push({ at: this.t, index: this.scenario!.steps.indexOf(step), kind: step.kind, ...(step.label ? { label: step.label } : {}) })
+    if (this.script.throwOn?.kind === step.kind) throw this.script.throwOn.error
+    this.script.onStep?.(this, step)
+  }
+
+  async settle(ms: number, until?: () => boolean): Promise<void> {
+    const end = this.t + ms
+    while (this.t < end && !until?.()) {
+      this.t += 100
+      for (const event of this.events.filter((e) => e.at <= this.t)) {
+        this.events.splice(this.events.indexOf(event), 1)
+        event.does(this)
+      }
+    }
+    this.calls.push(`settle ${ms} until ${this.t}`)
+  }
+
+  now(): number {
+    return this.t
+  }
+
+  seen(): Seen {
+    return { frames: [...this.frames], faces: [], commands: [], deliveries: [...this.deliveries], steps: [...this.steps],
+      ...(this.cost ? { cost: this.cost } : {}) }
+  }
+
+  gaps(): string[] {
+    return this.script.gaps ?? []
+  }
+
+  async stop(): Promise<void> {
+    this.calls.push('stop')
+    this.script.onStop?.(this)
+  }
+}
+
+const write: Step = { kind: 'claude.write', sessions: ['a', 'b'], label: 'write' }
+const tap: Step = { kind: 'tap', session: 'a', label: 'tap' }
+const parts = (run: ScenarioRun, which: 'results' | 'probes' = 'results'): Record<string, number> =>
+  Object.fromEntries(run[which].map((r) => [r.check, r.score]))
+
+it('steps run in order and labels are timed', async () => {
+  const s = scenario([write, { kind: 'wait', ms: 500 }, tap], [ring(['a', 'b']), ring(['a', 'b'], { id: 'late', at: 'write' })])
+  const driver = new Scripted({ onStep: (d, step) => { if (step.kind === 'claude.write') d.frames.push(...list(d.now(), [A, B])) } })
+  const run = await runScenario(driver, s, 'linux')
+  expect(driver.calls).toEqual(['start S1 linux', 'claude.write at 0', 'settle 500 until 500', 'tap at 500',
+    `settle ${SETTLE_END_MS} until ${500 + SETTLE_END_MS}`, 'stop'])
+  // The list came at the write: a check that ends at the write sees none.
+  expect(parts(run)['ring.recall']).toBe(1)
+  expect(parts(run)['late.recall']).toBe(0)
+})
+
+/** A wait until the dial has a ring of these sessions, bounded by 5 s. */
+const listed = (expect: string[]): Step => ({ kind: 'wait', ms: 5_000, until: { kind: 'ring', page: 'claude', expect } })
+
+it('a condition wait ends as soon as what the dial has received meets it, a timed result of 1', async () => {
+  const s = scenario([write, listed(['a', 'b']), tap])
+  const driver = new Scripted({ events: [{ at: 1_200, does: (d) => d.frames.push(...list(d.now(), [A, B])) }] })
+  const run = await runScenario(driver, s, 'darwin')
+  expect(driver.calls.slice(1, 4)).toEqual(['claude.write at 0', 'settle 5000 until 1200', 'tap at 1200'])
+  // Timed: tier B never asserts it, and tier A's exact baseline sees a wait that stops holding.
+  expect(run.results.find((r) => r.check === 'wait.1')).toMatchObject({ dim: 'D1', score: 1, timed: true })
+})
+
+it('a condition wait that reaches its limit is a failing result that says what the dial had', async () => {
+  const s = scenario([write, listed(['a', 'b']), tap])
+  const driver = new Scripted({ onStep: (d, step) => { if (step.kind === 'claude.write') d.frames.push(...list(d.now(), [A])) } })
+  const run = await runScenario(driver, s, 'darwin')
+  expect(driver.calls.slice(1, 4)).toEqual(['claude.write at 0', 'settle 5000 until 5000', 'tap at 5000'])
+  const missed = run.results.find((r) => r.check === 'wait.1')
+  expect(missed).toMatchObject({ tier: 'a', platform: 'darwin', scenario: 'S1', app: 'claude', dim: 'D1', heldOut: false,
+    score: 0, timed: true })
+  expect(missed!.evidence.slice(0, 2)).toEqual(['not held in 5000 ms', 'list at 0 on claude: 1 rows a'])
+})
+
+it('the world settles 6 s after the last step', async () => {
+  expect(SETTLE_END_MS).toBe(6_000)
+  // The list lands 5.9 s after the write: still inside the run.
+  const driver = new Scripted({ events: [{ at: 5_900, does: (d) => d.frames.push(...list(d.now(), [A, B])) }] })
+  const run = await runScenario(driver, scenario([write]), 'darwin')
+  expect(driver.calls.slice(-2)).toEqual(['settle 6000 until 6000', 'stop'])
+  expect(parts(run)['ring.recall']).toBe(1)
+})
+
+it("a driver's gap drops the scenario's results and lists it with its app", async () => {
+  const driver = new Scripted({ tier: 'b', gaps: ['a platform read'], onStep: (d) => d.frames.push(...list(d.now(), [A, B])) })
+  const run = await runScenario(driver, scenario([write]), 'win32')
+  expect(run).toMatchObject({ scenario: 'S1', platform: 'win32', results: [], probes: [],
+    gaps: [{ tier: 'b', platform: 'win32', scenario: 'S1', app: 'claude', heldOut: false, reason: 'a platform read' }] })
+  expect(uncaughtProbes(run)).toEqual([])
+  const held = await runScenario(new Scripted({ gaps: ['a platform read'] }), { ...scenario([write]), heldOut: true }, 'linux')
+  expect(held.gaps.map((g) => g.heldOut)).toEqual([true])
+})
+
+it('checks are evaluated on what the driver saw through its stop', async () => {
+  // Tier B measures the devices process from start to the end of stop: the cost exists only once stop is done.
+  const driver = new Scripted({ tier: 'b', onStop: (d) => { d.cost = { cpuPercent: 4, loopP99Ms: 30, leftovers: 0 } } })
+  const run = await runScenario(driver, scenario([write], [cost], []), 'darwin')
+  expect(parts(run)).toEqual({ 'cost.cpu': 1, 'cost.loopP99': 1, 'cost.leftovers': 1 })
+  expect(run.results.every((r) => r.tier === 'b' && r.platform === 'darwin' && r.scenario === 'S1')).toBe(true)
+})
+
+it('probes are evaluated apart and not in the results', async () => {
+  const pushes = new Scripted({ onStep: (d) => d.frames.push(...list(d.now(), [A, B])) })
+  const run = await runScenario(pushes, scenario([write], [ring(['a', 'b'])], [ring(['a', 'b', 'z'], { id: 'ghost' })]), 'darwin')
+  expect(Object.keys(parts(run)).every((check) => check.startsWith('ring.'))).toBe(true)
+  expect(Object.keys(parts(run, 'probes')).every((check) => check.startsWith('ghost.'))).toBe(true)
+  expect(parts(run, 'probes')['ghost.recall']).toBeLessThan(1)
+  expect(uncaughtProbes(run)).toEqual([])
+  expect(collect([run]).results).toEqual(run.results)
+
+  // Seeing nothing leaves the probe's evidence empty: it is not caught.
+  const blind = await runScenario(new Scripted(), scenario([write]), 'darwin')
+  expect(uncaughtProbes(blind)).toEqual(['ring'])
+})
+
+it('a wrong send is listed with its tier and platform', async () => {
+  const voice: Step = { kind: 'voice', transcript: 'Eval words', target: 'a' }
+  const driver = new Scripted({ tier: 'b' })
+  const s = scenario([voice])
+  // The words reach b: what the driver saw, read through a delivery after the step.
+  driver.seen = () => ({ frames: [], faces: [], commands: [], steps: [{ at: 0, index: 0, kind: 'voice' }],
+    deliveries: [{ at: 300, path: 'mod', target: 'b', text: 'Eval words' }] })
+  const run = await runScenario(driver, s, 'linux')
+  expect(run.wrongSends).toEqual([{ tier: 'b', platform: 'linux', scenario: 'S1', target: 'a', got: 'b', path: 'mod', at: 300 }])
+  expect(collect([run]).wrongSends).toEqual(run.wrongSends)
+})
+
+let dir: string | undefined
+afterEach(() => {
+  if (dir) rmSync(dir, { recursive: true, force: true })
+  dir = undefined
+})
+
+it('results files round-trip and merge', async () => {
+  dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
+  const a = collect([await runScenario(new Scripted({ onStep: (d) => d.frames.push(...list(d.now(), [A, B])) }), scenario([write]), 'darwin')])
+  const b = collect([await runScenario(new Scripted({ tier: 'b', gaps: ['why'] }), scenario([write]), 'linux')])
+  expect(basename(writeResults(dir, 'spec', a))).toBe('results-a-spec.json')
+  expect(basename(writeResults(dir, 'claude', b))).toBe('results-b-claude.json')
+  writeFileSync(join(dir, 'report.json'), '{}')
+  expect(readResults(dir)).toEqual({ schema: 1, results: [...a.results, ...b.results], wrongSends: [], gaps: b.gaps })
+})
+
+it("the editors' results files are named results-b-vscode.json and results-b-cursor.json and merge with the others", () => {
+  dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
+  expect(SOURCES.b).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'orca', 'iterm', 'heldOut'])
+  const one = (scenario: string): RunResults => ({ schema: 1, results: [{ tier: 'b', platform: 'darwin', scenario,
+    check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false, score: 1, timed: false, evidence: [] }], wrongSends: [], gaps: [] })
+  expect(basename(writeResults(dir, 'vscode', one('V1')))).toBe('results-b-vscode.json')
+  expect(basename(writeResults(dir, 'cursor', one('U1')))).toBe('results-b-cursor.json')
+  writeResults(dir, 'claude', one('C1'))
+  expect(readResults(dir).results.map((r) => r.scenario)).toEqual(['C1', 'U1', 'V1'])
+})
+
+it("Orca's results file is results-b-orca.json and merges with the others", () => {
+  dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
+  const one = (scenario: string): RunResults => ({ schema: 1, results: [{ tier: 'b', platform: 'darwin', scenario,
+    check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false, score: 1, timed: false, evidence: [] }], wrongSends: [], gaps: [] })
+  expect(SOURCES.b).toContain('orca')
+  expect(basename(writeResults(dir, 'orca', one('O1')))).toBe('results-b-orca.json')
+  writeResults(dir, 'claude', one('C1'))
+  writeResults(dir, 'vscode', one('V1'))
+  expect(readResults(dir).results.map((r) => r.scenario)).toEqual(['C1', 'O1', 'V1'])
+})
+
+it("iTerm2's results file is results-b-iterm.json and merges with the others", () => {
+  dir = mkdtempSync(join(tmpdir(), 'dial-eval-results-'))
+  const one = (scenario: string): RunResults => ({ schema: 1, results: [{ tier: 'b', platform: 'darwin', scenario,
+    check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false, score: 1, timed: false, evidence: [] }], wrongSends: [], gaps: [] })
+  expect(SOURCES.b).toContain('iterm')
+  expect(basename(writeResults(dir, 'iterm', one('I1')))).toBe('results-b-iterm.json')
+  writeResults(dir, 'claude', one('C1'))
+  writeResults(dir, 'orca', one('O1'))
+  expect(readResults(dir).results.map((r) => r.scenario)).toEqual(['C1', 'I1', 'O1'])
+})
+
+it('a step that throws still stops the driver, keeps the wrong sends seen so far and fails the run with what threw', async () => {
+  const voice: Step = { kind: 'voice', transcript: 'Eval words', target: 'a' }
+  const failing = new Scripted({
+    throwOn: { kind: 'tap', error: new Error('boom\nat a stack line') },
+    onStep: (d, step) => { if (step.kind === 'voice') d.deliveries.push({ at: d.now(), path: 'mod', target: 'b', text: 'Eval words' }) },
+  })
+  const run = await runScenario(failing, scenario([voice, tap]), 'darwin')
+  expect(failing.calls.at(-1)).toBe('stop')
+  expect(run.wrongSends).toEqual([{ tier: 'a', platform: 'darwin', scenario: 'S1', target: 'a', got: 'b', path: 'mod', at: 0 }])
+  expect(run.error).toBe('step 1 (tap) threw: boom')
+  expect(run.results.find((r) => r.check === 'error')).toEqual({ tier: 'a', platform: 'darwin', scenario: 'S1', check: 'error',
+    app: 'claude', dim: 'D1', heldOut: false, score: 0, timed: false, evidence: ['step 1 (tap) threw: boom'] })
+})
+
+it('a stop that throws fails the run too, and a run that throws nothing has no error', async () => {
+  const stuck = await runScenario(new Scripted({ onStop: () => { throw new Error('stuck') } }), scenario([write]), 'darwin')
+  expect(stuck.error).toBe('stop threw: stuck')
+  expect(stuck.results.filter((r) => r.check === 'error').map((r) => r.score)).toEqual([0])
+  const clean = await runScenario(new Scripted(), scenario([write]), 'darwin')
+  expect(clean.error).toBeUndefined()
+  expect(clean.results.map((r) => r.check)).not.toContain('error')
+})

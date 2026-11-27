@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
+import { errorKind } from '../log.js'
 import { sync } from './agents.js'
 import { cleanToken, locked, type Client, type Store, type Token } from './store.js'
 
@@ -36,35 +37,10 @@ export interface VaultPort {
   write(base: number, envelope: Record<string, unknown>): Promise<{ written: boolean, revision: number, envelope: unknown } | null>
   seal(plaintext: string): Promise<Record<string, unknown>>
   /** Null when no machine of the account sealed it for this one; `complete`: sealed for every one. */
-  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | null>
+  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
 }
 
 type Payload = Record<string, unknown>
-
-/** The account as the core holds it: the backend, signed in, and the gateway's sealing. */
-export interface VaultAccount {
-  backend(method: string, path: string, body?: unknown): Promise<{ status: number, body: Record<string, unknown> }>
-  connectorVault: { seal(plaintext: string): Promise<Record<string, unknown>>, open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | null> }
-}
-
-/** One `connector_vault` op answered with the core's account (core/connectorsQueries.ts, and the
- *  connectors service in the core's process): `read`, `write`, `seal`, `open`. */
-export async function answerVaultOp(account: VaultAccount, payload: Payload): Promise<Payload> {
-  try {
-    switch (payload.op) {
-      case 'read': return { ...await account.backend('GET', '/api/connector-vault') }
-      case 'write': return { ...await account.backend('PUT', '/api/connector-vault', { base: payload.base, envelope: payload.envelope }) }
-      case 'seal': return { envelope: await account.connectorVault.seal(typeof payload.plaintext === 'string' ? payload.plaintext : '') }
-      case 'open': {
-        const opened = await account.connectorVault.open(payload.envelope)
-        return opened === null ? {} : { ...opened }
-      }
-      default: return { error: 'UNKNOWN_OP' }
-    }
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) }
-  }
-}
 
 /** The port over the core's `connector_vault` query (core/connectorsQueries.ts), asked in line or over
  *  the service's link: `read`, `write`, `seal`, `open`. */
@@ -89,6 +65,7 @@ export function vaultPortOf(call: (op: string, payload?: Payload) => Promise<Pay
     },
     open: async (envelope) => {
       const answer = await call('open', { envelope })
+      if (answer.stranded === true) return { stranded: true }
       return typeof answer.plaintext === 'string' ? { plaintext: answer.plaintext, complete: answer.complete === true } : null
     },
   }
@@ -229,7 +206,7 @@ export class VaultSync {
     this.running = (async () => {
       do {
         this.again = false
-        try { await this.exchange() } catch (error) { this.deps.log?.(`[connectors] could not keep connections in step · ${error instanceof Error ? error.message : String(error)}`) }
+        try { await this.exchange() } catch (error) { this.deps.log?.(`[connectors] could not keep connections in step · ${errorKind(error)}`) }
       } while (this.again)
     })().finally(() => { this.running = null })
     return this.running
@@ -263,8 +240,16 @@ export class VaultSync {
           return
         }
         this.unreadable = false
-        theirs = parseSnapshot(opened.plaintext) ?? theirs
-        complete = opened.complete
+        if ('stranded' in opened) {
+          // Sealed only by or for computers the account no longer has: nobody will open it, and waiting for
+          // one left every computer of the account without the others' connections. This one's are written
+          // in its place, for the account's machines as they are now.
+          this.deps.log?.('[connectors] the account\'s saved connections were sealed for computers no longer in the account: replacing them with this computer\'s')
+          complete = false
+        } else {
+          theirs = parseSnapshot(opened.plaintext) ?? theirs
+          complete = opened.complete
+        }
       }
       const mine = snapshotOf(vault)
       const merged = merge(mine, theirs)

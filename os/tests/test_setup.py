@@ -129,15 +129,7 @@ class Join(unittest.TestCase):
             out = setup.join(dict(ssid='Glink 1', password='@11235813', ticket='t'), self.NETWORKS, 'wlo1')
         self.assertEqual(out, dict(state='done', ssid='Glink 1', signedIn=True))
         connect.assert_called_once_with('Glink 1', '@11235813', 'WPA2', 'wlo1')
-        sign_in.assert_called_once_with('t', swarm=False)
-
-    def test_a_phone_with_swarm_on_signs_in_for_its_swarm(self):
-        with patch.object(setup, 'connect', return_value=None), \
-             patch.object(setup, 'internet', return_value=True), \
-             patch.object(setup, 'sign_in', return_value=(True, '')) as sign_in, \
-             patch.object(setup, 'signed_in', return_value=True):
-            setup.join(dict(ssid='Glink 1', password='@11235813', ticket='t', swarm=True), self.NETWORKS, 'wlo1')
-        sign_in.assert_called_once_with('t', swarm=True)
+        sign_in.assert_called_once_with('t')
 
     def test_wifi_without_internet_is_forgotten_and_reported(self):
         with patch.object(setup, 'connect', return_value=None), \
@@ -218,7 +210,8 @@ class SetUpAsUnlocked(unittest.TestCase):
             sent = folder / 'phone-setup.json'
             if request is not None:
                 sent.write_text(json.dumps(request))
-            session = folder / 'session.json'
+            session = folder / '.local/share/harness/auth/session.json'
+            session.parent.mkdir(parents=True)
             session.write_text(json.dumps(dict(signInAcct=account)))
             users, state = [], dict(signed_in=signed_in)
 
@@ -228,7 +221,7 @@ class SetUpAsUnlocked(unittest.TestCase):
                 if command[1] == 'logout' and not refused:
                     state['signed_in'] = False
 
-            with patch.object(setup, 'PHONE_SETUP', sent), patch.object(setup, 'SESSION', session), \
+            with patch.object(setup, 'PHONE_SETUP', sent), patch.object(setup, 'HOME', folder), \
                  patch.object(setup, 'STATE', folder), patch.object(setup, 'RESULT', folder / 'r.json'), \
                  patch.object(setup, 'wifi_device', return_value='wlo1'), \
                  patch.object(setup, 'online', return_value=False), \
@@ -294,27 +287,13 @@ class FromPhone(unittest.TestCase):
                 self.assertFalse(marker.exists())
                 as_user.assert_called_once()
 
-    def test_a_swarm_setup_leaves_its_own_mark_and_a_plain_one_clears_it(self):
-        with tempfile.TemporaryDirectory() as folder:
-            marker, swarm = Path(folder) / 'set-up-from-phone', Path(folder) / 'set-up-for-swarm'
-            with patch.object(setup, 'FROM_PHONE', marker), patch.object(setup, 'FOR_SWARM', swarm), \
-                 patch.object(setup, 'signed_in', return_value=False), patch.object(setup, 'as_user'):
-                with patch.object(setup, 'run_sign_in', side_effect=lambda t: (swarm.exists(), '', False)):
-                    self.assertEqual(setup.sign_in('t', swarm=True), (True, ''))
-                self.assertTrue(swarm.exists())
-                with patch.object(setup, 'run_sign_in', return_value=(True, '', False)):
-                    setup.sign_in('t')
-                self.assertFalse(swarm.exists())
-                with patch.object(setup, 'run_sign_in', return_value=(False, 'used', False)):
-                    self.assertEqual(setup.sign_in('t', swarm=True), (False, 'used'))
-                self.assertFalse(swarm.exists())
-
 
 class SignedIn(unittest.TestCase):
     def test_a_session_marked_signed_out_is_no_sign_in(self):
         with tempfile.TemporaryDirectory() as folder:
-            session = Path(folder) / 'session.json'
-            with patch.object(setup, 'SESSION', session):
+            session = Path(folder) / '.local/share/harness/auth/session.json'
+            session.parent.mkdir(parents=True)
+            with patch.object(setup, 'HOME', Path(folder)):
                 self.assertFalse(setup.signed_in())
                 session.write_text(json.dumps(dict(accessToken='a')))
                 self.assertTrue(setup.signed_in())
@@ -323,6 +302,65 @@ class SignedIn(unittest.TestCase):
                 self.assertFalse(setup.signed_in())
                 session.write_text('{')
                 self.assertFalse(setup.signed_in())
+
+
+class DataRoot(unittest.TestCase):
+    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it holds Harness's marker,
+    else ~/.harness while that exists, else XDG (a fresh image)."""
+
+    def read(self, home, root):
+        (home / root / 'auth').mkdir(parents=True)
+        (home / root / 'auth/session.json').write_text(json.dumps(dict(accessToken='a', signInAcct='u-1')))
+        (home / root / 'computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
+        with patch.object(setup, 'HOME', home):
+            return setup.signed_in(), setup.signed_in_account(), setup.computer_id()
+
+    def test_the_session_and_the_computer_id_are_read_from_the_data_root_once_it_holds_the_marker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            # A ~/.harness left beside the moved root is not read.
+            (home / '.harness/auth').mkdir(parents=True)
+            (home / '.harness/auth/session.json').write_text(json.dumps(dict(signedOut=dict(reason='old'))))
+            (home / '.harness/computer-id').write_text('old\n')
+            (home / '.local/share/harness').mkdir(parents=True)
+            (home / '.local/share/harness/.harness-root').write_text('1\n')
+            self.assertEqual(self.read(home, '.local/share/harness'),
+                             (True, 'u-1', '601cb0af-9a2d-44cf-8381-df989bf4a192'))
+
+    def test_a_data_root_without_the_marker_switches_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / '.harness').mkdir()
+            (home / '.local/share/harness/.harness-root').mkdir(parents=True)
+            self.assertEqual(setup.harness_data_root(home, {}), home / '.harness', 'a folder is no marker')
+
+    def test_from_harness_while_only_that_exists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(self.read(Path(folder), '.harness'),
+                             (True, 'u-1', '601cb0af-9a2d-44cf-8381-df989bf4a192'))
+
+    def test_from_the_data_root_on_a_fresh_image(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            self.assertEqual(setup.harness_data_root(home, {}), home / '.local/share/harness')
+
+    def test_xdg_data_home_is_used_when_absolute(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / '.harness').mkdir()
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME='/data')), home / '.harness')
+            (home / 'data/harness').mkdir(parents=True)
+            (home / 'data/harness/.harness-root').write_text('1\n')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=str(home / 'data'))),
+                             home / 'data/harness')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=f"{home / 'data'}/")),
+                             home / 'data/harness')
+            # Empty or relative: as unset.
+            for value in ['', 'data']:
+                self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=value)), home / '.harness', value)
+            (home / '.local/share/harness').mkdir(parents=True)
+            (home / '.local/share/harness/.harness-root').write_text('1\n')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME='data')), home / '.local/share/harness')
 
 
 class SignInAgain(unittest.TestCase):
@@ -453,6 +491,55 @@ class FactoryReset(unittest.TestCase):
             setup.forget_desk()
         self.assertEqual(written[-1], [{'op': 'tab.close', 'id': 'own'},
                                        {'op': 'pane.remove', 'tabId': 'shared', 'machineId': 'me', 'agentId': 'b'}])
+
+    def test_the_desk_and_the_account_are_asked_over_the_daemons_own_socket(self):
+        # MSI, 2026-11-26: the daemon's TCP port wants the person's local credential from the person's own process, and
+        # this root process asked it with the old header alone: 401, so a factory reset left the computer in its account
+        # and its tabs on the desk, and the next setup reopened them.
+        import http.server
+        import socketserver
+        import threading
+        asked = []
+
+        class Daemon(http.server.BaseHTTPRequestHandler):
+            def answer(self):
+                length = int(self.headers.get('Content-Length') or 0)
+                asked.append((self.command, self.path, self.rfile.read(length) if length else b''))
+                body = json.dumps({'data': {'tabs': [{'id': 't', 'panes': []}]}}).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            do_GET = do_POST = do_DELETE = answer
+
+            def log_message(self, *args):
+                pass
+
+        class Server(socketserver.UnixStreamServer):
+            def get_request(self):
+                request, _ = super().get_request()
+                return request, ('local', 0)
+
+        # Short: a Unix socket's path is bounded (104 bytes on macOS), and a test runner's own temp folder can be past it.
+        with tempfile.TemporaryDirectory(dir='/tmp') as folder:
+            home = Path(folder) / 'me'
+            socket_path = home / '.local/share/harness/cli/data/daemon-18473.sock'
+            socket_path.parent.mkdir(parents=True)
+            server = Server(str(socket_path), Daemon)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                with patch.object(setup, 'HOME', home), \
+                     patch.object(setup, 'as_user', return_value=result(output='{"machineId": "m1"}')), \
+                     patch.object(setup, 'log'):
+                    self.assertEqual(setup.desk_ops(), [{'id': 't', 'panes': []}])
+                    setup.desk_ops([{'op': 'tab.close', 'id': 't'}])
+                    setup.remove_from_account()
+            finally:
+                server.shutdown()
+                server.server_close()
+        self.assertEqual([(method, path) for method, path, _ in asked],
+                         [('GET', '/api/desk'), ('POST', '/api/desk/ops'), ('DELETE', '/api/machines/m1')])
+        self.assertEqual(json.loads(asked[1][2]), {'ops': [{'op': 'tab.close', 'id': 't'}]})
 
     def test_the_commands_run_in_units_of_their_own(self):
         for argv, unit, tail in [(['reset', '--keep-wifi'], 'harness-factory-reset', ['reset', '--here', '--keep-wifi']),
@@ -687,8 +774,9 @@ class Machine(unittest.TestCase):
         # No address to read: the computer id, as before.
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(setup, 'permanent_mac', return_value=''), \
-             patch.object(setup, 'COMPUTER_ID', Path(folder) / 'computer-id'):
-            (Path(folder) / 'computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
+             patch.object(setup, 'HOME', Path(folder)):
+            (Path(folder) / '.local/share/harness').mkdir(parents=True)
+            (Path(folder) / '.local/share/harness/computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
             self.assertEqual(setup.hotspot_name('wlo1'), 'Harness-A192')
 
     def test_the_permanent_address_falls_back_to_the_current_one(self):
@@ -721,6 +809,39 @@ class Machine(unittest.TestCase):
                 self.assertEqual(setup.hotspot_wait(1000 + since, 1000), expected,
                                  (signed, headless, online, screen, since))
 
+    def test_an_ask_made_while_the_hotspot_was_up_does_not_take_the_wifi_the_phone_gave(self):
+        # MSI, 2026-11-26: the factory reset signed out, the hotspot came up by itself, and the reset's own ask came
+        # at its end; once the phone had set the computer up, that ask took it off its new Wi-Fi for a second hotspot.
+        with tempfile.TemporaryDirectory() as folder:
+            now = Path(folder) / 'setup-now'
+            signed = [False]
+
+            def phone_sets_up(device, asked=False):
+                now.touch()  # the reset's ask, while this hotspot is up
+                signed[0] = True
+                return True
+
+            loops = iter(range(3))
+
+            def sleep(_):
+                if next(loops, None) is None:
+                    raise StopIteration
+
+            with patch.object(setup, 'NOW', now), \
+                 patch.object(setup, 'signed_in', side_effect=lambda: signed[0]), \
+                 patch.object(setup, 'screen_here', return_value=False), \
+                 patch.object(setup, 'online', return_value=True), \
+                 patch.object(setup, 'headless', return_value=True), \
+                 patch.object(setup, 'wifi_device', return_value='wlo1'), \
+                 patch.object(setup, 'setup_mode', side_effect=phone_sets_up) as mode, \
+                 patch.object(setup, 'nmcli') as nmcli, \
+                 patch.object(setup.time, 'sleep', side_effect=sleep):
+                with self.assertRaises(StopIteration):
+                    setup.watch()
+            self.assertEqual(mode.call_count, 1)
+            nmcli.assert_not_called()
+            self.assertFalse(now.exists())
+
     def test_the_screen_holds_the_radio_until_signed_in(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'setup-screen'
@@ -748,8 +869,9 @@ class Machine(unittest.TestCase):
     def test_the_hotspot_is_named_after_the_computer(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder)
-            with patch.object(setup, 'COMPUTER_ID', state / 'computer-id'):
-                (state / 'computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
+            with patch.object(setup, 'HOME', state):
+                (state / '.local/share/harness').mkdir(parents=True)
+                (state / '.local/share/harness/computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
                 self.assertEqual(setup.hotspot_name(), 'Harness-A192')
 
     def test_the_hotspot_is_open_on_2_4_ghz(self):

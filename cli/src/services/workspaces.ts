@@ -1,54 +1,51 @@
 /**
- * Workspaces: everything about the folder an agent works in (docs/design/2026-10-03-harnessd.md,
- * "Workspaces"). Here so far: a worktree branch Harness made up takes its session's name, and the
- * worktrees Harness made that nothing uses are swept.
+ * Workspaces: everything about the folder an agent works in (docs/design/2026-10-03-harnessd.md, "Workspaces"), and the
+ * git it takes, which the core runs none of (the audit of 2026-11-12): the folder a create asks git for (a clone, a
+ * worktree, the folder itself on another branch: lib/gitProjectFolder.ts), a harness's worktree read and removed at a
+ * purge (lib/worktreeDeletion.ts), and a worktree branch Harness made up named after its session. Nothing here removes
+ * a worktree on its own: the timer sweep that did (#4166) removed clean, week-idle ones its person had chosen to keep,
+ * gitignored files and all. Starts, renames and removals in one repository take turns (lib/gitProject.ts
+ * `inRepositoryTurn`), all of them in this process.
  *
  * A service on the core boundary (step 13): it reads the core only through `CoreApi`, and the core
  * reaches it only through `ports.workspaces`.
  */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import type { CoreApi, CorePorts } from '../core/api.js'
+import { gitFolderAnswer } from '../lib/gitProjectFolder.js'
 import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
-import { forgetScmProject, renameScmProject, sweepScmProjects } from '../scm/scmProjects.js'
+import { worktreeAnswers } from '../lib/worktreeDeletion.js'
+import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
+import { startWorkspaceFrames } from './workspaceFrames.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
+  const frames = startWorkspaceFrames(core)
+  let stopped = false
   // A worktree branch Harness made up at Start takes its session's name once it has one
   // (lib/branchNaming.ts). Each agent is looked at once per daemon; the git reads are the cost.
   const branchNamed = new Set<string>()
   const nameSessionBranches = (): void => {
+    if (stopped) return
     for (const session of core.agents.live()) {
       const title = sessionDisplayTitle(session)
       if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
       branchNamed.add(session.agentId)
       const cwd = session.cwd
       void renameScmProject(cwd, title).then((renamed) => {
-        if (!renamed) return
-        console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
+        if (!renamed || stopped) return
+        // Not the branch's name: it is made of the session's title, the person's words.
+        console.log(`[worktrees] agent ${sid(session.agentId)} branch named after its title`)
         forgetScmProject(cwd)
         const current = core.agents.byAgent(session.agentId)
-        if (current) core.agents.sync(current)
+        if (current && current.cwd === cwd && current.sessionId === session.sessionId) { frames.refresh(current); core.agents.sync(current) }
       }).catch(() => {})
     }
   }
-  // Worktrees Harness made that no live or stopped harness uses and nothing would miss
-  // (lib/worktreeSweep.ts). The core decides when: a few minutes after start, once restored agents
-  // are back in the registry, then twice a day.
-  //
-  // One sweep at a time: a sweep still going is never joined by a second over the same folders. In the
-  // core's process its timers are hours apart; in this service's own process, a core that restarted
-  // asks again on its own timer while a long sweep from the last core may still be running.
-  let sweeping = false
-  const sweepUnusedWorktrees = () => {
-    if (sweeping) return
-    let inUse: Array<string | null>
-    try { inUse = core.agents.all().map(s => s.cwd) } catch { return }
-    sweeping = true
-    void sweepScmProjects({ root: join(homedir(), 'harnesses'), inUse })
-      .then(removed => { if (removed.length) console.log(`[worktrees] removed ${removed.length} unused worktree(s)`) })
-      .catch(() => {})
-      .finally(() => { sweeping = false })
+  ports.workspaces = {
+    stop: () => { stopped = true; frames.stop(); branchNamed.clear() },
+    nameBranches: nameSessionBranches,
+    ready: () => true,
+    prepareFolder: gitFolderAnswer,
+    ...worktreeAnswers(),
   }
-  ports.workspaces = { nameBranches: nameSessionBranches, sweepUnused: sweepUnusedWorktrees }
 }

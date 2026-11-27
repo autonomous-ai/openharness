@@ -181,10 +181,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     markNeedsPaint();
   }
 
+  /// Rows are whole device pixels tall, so a new ratio can change how many fit.
   set devicePixelRatio(double value) {
     if (value == _painter.devicePixelRatio) return;
     _painter.devicePixelRatio = value;
-    markNeedsPaint();
+    markNeedsLayout();
   }
 
   FocusNode _focusNode;
@@ -545,8 +546,34 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return max(_terminalHeight - _viewportHeight, 0.0);
   }
 
+  /// Where row 0 starts, on a device pixel like every row after it (see
+  /// [wholeDevicePixels]).
   double get _lineOffset {
-    return -_scrollOffset + _padding.top;
+    return snapToDevicePixel(
+      -_scrollOffset + _padding.top,
+      _painter.devicePixelRatio,
+    );
+  }
+
+  /// How far to move the drawing so this box's origin falls on a device pixel.
+  ///
+  /// A pane can place the terminal part way into a pixel (a PC at 125% did, by
+  /// half of one); rows on whole pixels within the box would still straddle
+  /// the screen's. Under a scale or rotation there is no one pixel grid to
+  /// meet, and nothing moves.
+  Offset _pixelAlignment() {
+    final transform = getTransformTo(null);
+    final translationOnly = transform.storage[0] == 1 &&
+        transform.storage[1] == 0 &&
+        transform.storage[4] == 0 &&
+        transform.storage[5] == 1;
+    if (!translationOnly) return Offset.zero;
+    final origin = MatrixUtils.transformPoint(transform, Offset.zero);
+    final ratio = _painter.devicePixelRatio;
+    return Offset(
+      snapToDevicePixel(origin.dx, ratio) - origin.dx,
+      snapToDevicePixel(origin.dy, ratio) - origin.dy,
+    );
   }
 
   /// The offset of the cursor from the top left corner of this render object.
@@ -591,6 +618,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         Paint()..color = _painter.theme.background,
       );
     }
+    // Everything the grid draws from here starts on a device pixel.
+    final alignment = _pixelAlignment();
+    canvas.translate(alignment.dx, alignment.dy);
 
     final lines = _terminal.buffer.lines;
     final charHeight = _painter.cellSize.height;
@@ -610,7 +640,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
       _painter.paintLineCached(
         canvas,
-        offset.translate(0, (i * charHeight + _lineOffset).truncateToDouble()),
+        offset.translate(0, i * charHeight + _lineOffset),
         lines[i],
       );
     }

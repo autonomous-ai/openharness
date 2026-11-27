@@ -14,6 +14,7 @@ import { TerminalBinaryKind, TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES, type 
 import { writeImageToOsClipboard, type OsClipboardImageResult } from './osClipboard.js'
 import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
 import { MoveGate } from './hostMove/gate.js'
+import { hashOf } from './log.js'
 
 vi.mock('./osClipboard.js', () => ({ writeImageToOsClipboard: vi.fn() }))
 vi.mock('./pasteDropFiles.js', () => ({ writePasteImageFile: vi.fn(), writePasteDropFile: vi.fn() }))
@@ -130,16 +131,11 @@ describe('TerminalStreamManager', () => {
     expect((result.payload.engines as Array<{ id: string }>).map((row) => row.id)).toEqual([...ENGINES])
   })
 
-  // An app seals agent_instructions_read and agent_instructions_write through a daemon of its own that knows them; one that
-  // does not sends a request type it has never heard of in the clear. So the app asks first, and this is the answer.
-  it('says it knows the instructions requests, whether it controls terminals or only watches them', async () => {
+  // An app sent agent_instructions_read and agent_instructions_write, sealed, only to a daemon that said it knew them. They
+  // went with the Swarm (2026-11-14), so this daemon no longer says so, and an older app sends neither.
+  it('no longer says it knows the instructions requests', async () => {
     await manager.handleFrame('web-1', 'terminal_capabilities', { requestId: 'r1' })
-    expect((sent.at(-1)?.payload.features as Record<string, unknown>).agentInstructions).toBe(true)
-    const watching = newManager({ readOnly: true })
-    await watching.handleFrame('web-1', 'terminal_capabilities', { requestId: 'r2' })
-    expect(sent.at(-1)?.payload.requestId).toBe('r2')
-    expect((sent.at(-1)?.payload.features as Record<string, unknown>).agentInstructions).toBe(true)
-    await watching.stop()
+    expect(sent.at(-1)?.payload.features).not.toHaveProperty('agentInstructions')
   })
 
   it('asks no window for the tab its input came from, and still writes input from an older one that names it', async () => {
@@ -871,6 +867,38 @@ describe('TerminalStreamManager', () => {
       })
     })
 
+    // A file's name is written by the person (AGENTS.md rule 7): the log keeps its extension and size only.
+    it('logs an upload begin with the extension and size, never the file name', async () => {
+      const lines: { event: string; fields: Record<string, unknown> }[] = []
+      manager = newManager({ diagnostic: (event, fields) => lines.push({ event, fields }) })
+      const streamId = await openStream()
+      // A name with no dot, and one whose "extension" is the whole marker, must not leak through ext.
+      for (const filename of ['SECRET-NAME-MARKER.PDF', 'SECRET-NAME-MARKER', 'x.SECRET-NAME-MARKER']) {
+        await begin(streamId, { uploadKind: 'file', filename, totalBytes: fileContent.length })
+        await manager.handleFrame('web-1', 'terminal_chunked_upload_cancel', { streamId })
+      }
+
+      const begins = lines.filter((l) => l.event === 'chunked_upload_begin')
+      expect(begins).toHaveLength(3)
+      expect(begins[0].fields).toMatchObject({ uploadKind: 'file', totalBytes: fileContent.length, ext: 'pdf' })
+      expect(JSON.stringify(lines)).not.toMatch(/SECRET-NAME-MARKER/i)
+    })
+
+    // A 7-10 letter "extension" can itself be the person's words, so only 1-6 characters are kept.
+    it('logs a long extension as other and keeps a short one', async () => {
+      const lines: { event: string; fields: Record<string, unknown> }[] = []
+      manager = newManager({ diagnostic: (event, fields) => lines.push({ event, fields }) })
+      const streamId = await openStream()
+      for (const filename of ['a.diaryentry', 'x.docx', 'b.tar.gz']) {
+        await begin(streamId, { uploadKind: 'file', filename, totalBytes: fileContent.length })
+        await manager.handleFrame('web-1', 'terminal_chunked_upload_cancel', { streamId })
+      }
+
+      const exts = lines.filter((l) => l.event === 'chunked_upload_begin').map((l) => l.fields.ext)
+      expect(exts).toEqual(['other', 'docx', 'gz'])
+      expect(JSON.stringify(lines)).not.toMatch(/diaryentry/i)
+    })
+
     it('rejects a second begin while one upload is already in progress on the same pane', async () => {
       const streamId = await openStream()
       await begin(streamId, { uploadKind: 'image', totalBytes: pngBytes.length })
@@ -1310,6 +1338,37 @@ describe('TerminalStreamManager', () => {
     expect(closed?.payload.code).toBe('TERMINAL_TAKEN_OVER')
     expect(closed?.payload).not.toHaveProperty('takenBy')
     expect(sent.findLast((frame) => frame.type === 'terminal_ready')?.connId).toBe('web-3')
+  })
+
+  // The close reason and the taker's name are what the person sees in their app; the daemon's log is not
+  // (AGENTS.md rule 7): it keeps a reason's length and a name's hash.
+  it("a stream's diagnostics carry no reason's words and no client's name", async () => {
+    const lines: { event: string; fields: Record<string, unknown> }[] = []
+    manager = newManager({
+      diagnostic: (event, fields) => lines.push({ event, fields }),
+      onInput: () => { throw new Error('typed into /Users/sentinel') },
+    })
+    const hostReason = 'pty host stream failed: /Users/sentinel'
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30 })
+    const first = sent.findLast((frame) => frame.type === 'terminal_ready')!.payload.streamId as string
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId: first, seq: 0, compressed: false, bytes: Buffer.from('x') })
+    sink!.onClose(hostReason)
+    await vi.waitFor(() => expect(sent.some((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')).toBe(true))
+    await manager.handleFrame('web-2', 'terminal_open', { requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30 })
+    await manager.handleFrame('phone-1', 'terminal_open', {
+      requestId: 'open-3', protocolVersion: 3, agentId: 'agent-1', cols: 40, rows: 20,
+      client: { kind: 'phone', name: "Sentinel's iPhone" },
+    })
+
+    expect(JSON.stringify(lines)).not.toMatch(/sentinel/i)
+    expect(lines.find((line) => line.event === 'input_listener_failed')?.fields).toMatchObject({ kind: 'Error' })
+    const closed = lines.filter((line) => line.event === 'closed').map((line) => line.fields)
+    expect(closed[0]).toMatchObject({ reason: `text(${hostReason.length})` })
+    expect(closed[1]).toMatchObject({ reason: 'text(24)', takenBy: hashOf("Sentinel's iPhone") })
+    // The clients still get both whole.
+    expect(sent.find((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')?.payload.reason).toBe(hostReason)
+    expect(sent.find((frame) => frame.connId === 'web-2' && frame.type === 'terminal_closed')?.payload)
+      .toMatchObject({ reason: 'another client connected', takenBy: { kind: 'phone', name: "Sentinel's iPhone" } })
   })
 
   it('reads a client descriptor strictly', () => {
@@ -1848,6 +1907,25 @@ describe('TerminalStreamManager', () => {
       expect(opens[0].stream.writes).toEqual([])
       expect(rawWrites).toEqual([])
       expect(sent.filter((f) => f.type === 'terminal_error')).toEqual([])
+    })
+
+    it('refuses queued and direct terminal input after an uncertain move frees its transient queue', async () => {
+      let refused = false
+      await manager.stop()
+      gate = new MoveGate(() => refused)
+      manager = newManager({ moveGate: gate })
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'queued')
+      await paste('web-1', streamId, 'queued paste')
+      refused = true
+      await gate.release('agent-1')
+      await input('web-1', streamId, 1, 'direct')
+      await paste('web-1', streamId, 'direct paste')
+      expect(opens[0].stream.order).toEqual([])
+      expect(rawWrites).toEqual([])
+      expect(sent.filter(frame => frame.type === 'terminal_error')).toHaveLength(4)
     })
 
     it('held input whose stream closed during the move still reaches the row\'s pane', async () => {

@@ -11,7 +11,6 @@
 #include "config_store.h"
 #include "../cable_machines.h"   // cable_machine_t — the wheel's row, already parsed and diffed
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
-#include "habitat/supertab.h"   // ht_supertab_t — one Swarm and its Leads, as cable_client parsed it
 
 struct cJSON;
 
@@ -42,6 +41,14 @@ void ui_enter_boot_loading(void);
 void ui_land_after_reload(void);
 // Global commander connection indicator (shown on every tile's header).
 void ui_set_connected(bool connected);
+// Where the dial is stuck while not connected, drawn dim under the wordmark. NONE is 0: the screen's
+// zeroed state and the session layer's first one agree, so nothing is sent until the hint changes.
+typedef enum {
+    UI_LINK_HINT_NONE,
+    UI_LINK_HINT_NO_COMPUTER,   // no USB host on the cable
+    UI_LINK_HINT_OPEN_APP,      // a host, but no daemon has spoken for a while
+} ui_link_hint_t;
+void ui_set_link_hint(ui_link_hint_t hint);
 // The custom pets changed (pet.map, a finished pack, pet.drop): redraw so the dial applies them at the next scene.
 void ui_pets_changed(void);
 // Node (paired machine) online↔offline from the `node_status` frame — distinct from ui_set_connected
@@ -54,6 +61,19 @@ void ui_project_set_engine(const char *project_id, const char *engine);
 // Which machine an agent lives on. A tab spans machines, so this is what the tile's machine line and
 // line shows and what a machine row uses to find the first agent to land on.
 void ui_project_set_machine(const char *project_id, const char *machine_id, const char *machine);
+
+// Where an agent runs (the daemon's short id: orca, ghostty, ...) and which of CABLE_CAP_* the dial may
+// use on it. An agent outside Harness can be watched, not spoken to, so a face tap without voice shows
+// "See it in {Host}" instead of opening the microphone.
+void ui_project_set_host_caps(const char *project_id, const char *host, uint8_t caps);
+// `view: machine` on the roster: it is this computer's agents rather than a tab's, so each face names
+// where its agent lives under the agent's name.
+void ui_fleet_set_view(bool machine);
+// The `apps` frame: the apps this dial can show with no window and the one shown. Known from the first frame, even
+// an empty one, until forgotten when the session ends: an older daemon sends none, and the dial then reads as before.
+// Memory only. Safe from the reader task.
+void ui_apps_replace(const cable_app_t *rows, int count, const char *shown);
+void ui_apps_forget(void);
 
 // Runtime model/effort (remote machines): store the opaque runtime-v1 profile and repaint the Model/Effort
 // chips. set_ is authoritative (agent_synced, clears the optimistic hold); reconcile_ is the guarded poll
@@ -138,27 +158,6 @@ void ui_machine_select_error(const char *machine_id, const char *code, const cha
 // is what every tile's swarm line draws. count 0 hides the line. Safe from the reader task.
 void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected);
 
-// --- The Swarms (Super Tabs; cable_client.h). Each is safe from the reader task. ---
-// The `supertabs` list: the Swarms shown, in order. A Swarm gone from it leaves the list and the inbox.
-void ui_supertabs_ids(const char ids[][ID_MAX], int n);
-// One Swarm's card. True when the caller should beep: a Lead started needing a person, off the face.
-bool ui_supertab(const ht_supertab_t *in);
-// `chat_id`: the chat the text is the last message of, "" from a daemon without swarmChat. Dropped for another chat.
-void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none);
-void ui_supertab_focus(const char *tab, const char *lead);
-// A tag in the Lead's project, or an older daemon's Lead message (`supertab.notice`): that Lead's one inbox entry, read at
-// once when its chat is on the face. `thread`: the root of the thread it replies in, "" for the main stream; such a notice
-// is read at once only when the face shows that thread. True when the caller should beep.
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at);
-// The desktop opened that chat (`supertab.notice.read`): the entry goes.
-void ui_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
-// A Super Tab wait from harness `agent_id` (some Lead's `local`). It only sets that Lead's inbox text and face;
-// it never opens the question screen. True when the caller should beep.
-bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text);
-void ui_supertab_wait_close(const char *agent_id, const char *request);
-// Link lost: forget every Swarm and its inbox entries.
-void ui_supertabs_clear(void);
-
 // Drain the select deadline. Called from refresh_task, off the LVGL task; drops the spinner and shows the
 // reason when the daemon never answered.
 void ui_tick_machine_select(void);
@@ -192,9 +191,6 @@ void ui_focus_project(const char *project_id);
 // commander_route_confirm. `need_new` = no agent fit. Runs on the commander-WS task (takes the display lock).
 void ui_voice_routed(bool auto_sent, bool need_new, const char *route_id, const char *agent_id,
                      const char *agent_name, double confidence);
-// Backend abandoned an Overview route voice (empty transcript / STT or router error) → drop the loading
-// overlay now instead of waiting out the routing watchdog. No-op unless a route voice is waiting.
-void ui_voice_route_abort(void);
 // One short line from the cabled Mac (a routing refusal, a send that did not land). Releases the routing
 // overlay first, then shows the message for ~2s over whatever is on screen.
 void ui_cable_toast(const char *msg);
@@ -260,11 +256,12 @@ void ui_voice_error(const char *msg);
 // `name`, `machine` and `recap` come from the frame: the dial holds one tab, and the agent may be on
 // another — the row has nobody else to ask. Any may be NULL; a held tile's own model wins when present.
 // A live `summary`. TIER is the wire's "alert" | "list" | "silent"; NULL or unknown falls back to the old
-// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert, and not
-// for the pane already on the face. A list entry is a drawer row only; silent files nothing.
+// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert the drawer
+// took, and not for the pane already on the face. A list entry is a drawer row only; silent files nothing.
 bool ui_notify_summary(const char *project_id, const char *name, const char *machine, const char *recap,
                        const char *tier, bool quiet, bool silent);
-// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep.
+// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep: the
+// drawer took the row and the pane is not on the face.
 bool ui_turn_error(const char *project_id, const char *message);
 // The WINDOW looked at this agent → drop its FINISHED-turn row here, as a tap on that row does.
 //
@@ -297,8 +294,10 @@ void ui_project_clear_event(const char *project_id);
 // Also records it behind the bell: a blocked agent is counted, and stays counted until the question is
 // ANSWERED rather than until somebody looks at it. Not gated on the window having the agent on screen —
 // showing a question asks the window to bring it forward, so that gate could never open.
-// True when the caller should beep: not for the pane already on the face.
-bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
+// `list`: a question the dial was told before, back on the daemon's drawer. Its row is filed with no wake and no
+// beep, and stays read when the dial already read that agent's question in the same words.
+// True when the caller should beep: never for `list`, nor for the pane already on the face.
+bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions, bool list);
 // That question was answered somewhere else (the app, or the pane by hand) — leave the screen instead of
 // waiting for an answer that can no longer be delivered. No-op unless THIS request is the one on screen.
 void ui_question_close(const char *project_id, const char *request_id);

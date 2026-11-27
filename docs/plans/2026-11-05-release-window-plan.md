@@ -5,7 +5,7 @@
 
 **Goal:** A release outside 09:00-18:00 Asia/Ho_Chi_Minh, or a backend release within 2 hours of the last one, is
 refused with the next allowed time. A P0 may release at night with `--urgent "<reason>"`; the reason is recorded and
-printed as the one line the releaser posts in the project chat (Dee, 2026-11-05).
+printed as the one line the releaser posts (Dee, 2026-11-05).
 
 **Architecture:** One script, `scripts/release-window.py`, reads its numbers from `scripts/release-window.json`
 (zone, window, pace per kind). The four release scripts (backend, CLI, Desktop, web) call it before they tag. The

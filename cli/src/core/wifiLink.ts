@@ -6,28 +6,22 @@
  * prompt it sends and the transcript lines that prove it reach the service as they happened here; dropped
  * while it is down, as a frame lost on the way is, which its devices retry by the same key. What the
  * service needs to start over (the sessions, which of them said hello, the window's focus) the core keeps
- * and says again each time it connects (core/wifi.ts `started`). The one question the core asks it is a
- * person's (`harness device receipt`), with a deadline.
+ * and says again each time it connects (core/wifi.ts `started`). It asks it nothing: what a person asks of it
+ * (`harness device receipt`, its add-ons) are its routes of the door (core/serviceRoutes.ts).
  *
  * What it asks of the core is `CoreApi`'s Wi-Fi doors, as it would call them in the core's process:
  * the agents as it lists them, a stop, an answer, an agent made for a Store harness, a step along the desk
  * and a recent turn, as queries; the rest as notices.
  */
-import type { AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
-import { WIFI_FALLBACKS, readFallback, type CoreApi, type WifiAddon, type WifiPort, type WifiReceipt } from './api.js'
+import type { CoreApi, WifiPort } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 export interface WifiLinkDeps {
   core: CoreApi
   /** A notice for the service's process; false when it is not connected to hear it. */
   notify(frame: ServiceFrame): boolean
-  /** A request to the service's process, answered SERVICE_UNAVAILABLE when it is down or slow. */
-  call(type: string, payload: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>>
   log?: (line: string) => void
 }
-
-/** How long `harness device receipt` waits for the service. */
-export const WIFI_WAIT_MS = 5_000
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
@@ -56,22 +50,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     agentGone: (agentId) => event('agentGone', { agentId }),
     appFocus: async (machineId, agentId, connId) => event('appFocus', { machineId, agentId, connId }),
     revealed: (operationId, agentId) => event('revealed', { operationId, agentId }),
-    receipt: async (deviceId, idempotencyKey) => {
-      const answer = await deps.call('receipt', { deviceId, idempotencyKey }, WIFI_WAIT_MS)
-      if (typeof answer.error === 'string') return readFallback(WIFI_FALLBACKS.receipt).value as WifiReceipt
-      return { receipt: (answer.receipt ?? null) as AutonomousDeviceReceipt | null }
-    },
-    // A person's or an agent's, as `receipt` is: asked with a deadline. The link answers a service that is
-    // down and one that missed the deadline alike, so a proposal with no answer may still have been sent:
-    // said as unknown, to be retried with the same key, never as a stopped service.
-    addon: async (op, input) => {
-      const answer = await deps.call('addon', { op, input }, WIFI_WAIT_MS)
-      if (typeof answer.error !== 'string') return answer as WifiAddon
-      if (op === 'propose') {
-        return { error: { code: 'OUTCOME_UNKNOWN', message: 'No answer in time: the proposal may have been sent. Retry with the same key (--key) to send it at most once.' } }
-      }
-      return readFallback(WIFI_FALLBACKS.addon).value as WifiAddon
-    },
     // Its own process: the master stops it.
     stop: async () => {},
   }

@@ -23,7 +23,9 @@ function setup(over: Partial<QuestionDeps> = {}) {
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     sessionTurnOpen: (sessionId) => sessionId === 'busy',
     someoneCanAnswer: () => true,
+    followedByTool: () => false,
     deviceInput: { setUserAction: vi.fn() },
+    waitOver: vi.fn(),
     ...over,
   }
   return { deps, asking: createQuestions(deps) }
@@ -62,10 +64,22 @@ describe('questions', () => {
     const watcher = given(asking.questionWatcher)
     expect((watcher.getSession('a1') as RegisteredSession).sessionId).toBe('s1')
     expect(watcher.capture).toBe(deps.terminal.captureTerminal)
-    expect(watcher.hasDevice()).toBe(true)
+    expect(watcher.hasDevice('s1')).toBe(true)
     const driving = vi.spyOn(asking.questions, 'isDriving').mockReturnValue(true)
     expect(watcher.isDriving('s1')).toBe(true)
     expect(driving).toHaveBeenCalledWith('s1')
+  })
+
+  // An agent's `harness wait` or `watch` follows a harness by what is pushed (core/toolWatches.ts): with no window, dial or
+  // app here, its question was never looked for, and the wait read the screen itself every 3 s to see it.
+  it('looks for a question on the screen of a harness a tool follows, though nobody else is here', () => {
+    const followed = new Set<string>()
+    const { asking } = setup({ someoneCanAnswer: () => false, followedByTool: (agentId) => followed.has(agentId) })
+    const watcher = given(asking.questionWatcher)
+    expect(watcher.hasDevice('s1')).toBe(false)
+    followed.add('a1')
+    expect(watcher.hasDevice('s1')).toBe(true)
+    expect(watcher.hasDevice('s2')).toBe(false)
   })
 
   it('keeps the dial working while an answer is on its way, and returns the answer\'s result', async () => {
@@ -111,10 +125,20 @@ describe('questions', () => {
     // The owner's apps away from this desk hear the same question, over the relay.
     expect(vi.mocked(deps.clients.sendRemote).mock.calls.at(-1)).toEqual([asked])
     expect(asking.openQuestions.get('s1')).toBe(asked)
-    expect(log.mock.calls[0][0]).toContain('asking the user · "Ship it?" · req=r1')
+    expect(log.mock.calls[0][0]).toContain('asking the user · question 8 chars · req=r1')
     // A question with nothing shaped still goes out, and still says so.
     given(asking.questionWatcher).onQuestion('s1', 'r2', [])
-    expect(log.mock.calls[1][0]).toContain('asking the user · "" · req=r2')
+    expect(log.mock.calls[1][0]).toContain('asking the user · question 0 chars · req=r2')
+  })
+
+  it('logs the size of a question, never its words', () => {
+    const { asking } = setup()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'SECRET-QUESTION-MARKER?', options: [] }])
+    const line = log.mock.calls.map(([said]) => String(said)).find((said) => said.includes('asking the user'))
+    expect(line).toContain('[question] s1 ')
+    expect(line).toContain('req=r1')
+    expect(line).not.toContain('SECRET')
   })
 
   it.each([true, false])('preserves permission metadata only for approval dialogs (%s)', permission => {
@@ -149,6 +173,24 @@ describe('questions', () => {
     expect(log.mock.calls[0][0]).toContain('answered elsewhere · closing on every client · req=r1')
   })
 
+  // A hook said the agent waits on the person (core/turns/turnHooks.ts): the watcher says when it no longer does.
+  it('tells the turn hooks when a question closes and when the pane reads clear', async () => {
+    vi.useFakeTimers()
+    try {
+      const waitOver = vi.fn()
+      const { asking } = setup({ waitOver })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      given(asking.questionWatcher).onQuestionGone('s1', 'r1')
+      expect(waitOver).toHaveBeenCalledExactlyOnceWith('s1')
+      // A dialog answered before any poll found it: two polls in a row read the pane with none.
+      asking.questionWatcher.start('s1')
+      asking.questionWatcher.awaitDialog('s1')
+      await vi.advanceTimersByTimeAsync(1_500 * 2)
+      expect(waitOver.mock.calls).toEqual([['s1'], ['s1']])
+      asking.questionWatcher.stopAll()
+    } finally { vi.useRealTimers() }
+  })
+
   it('tells an app that connects every question still open, then which are open at all', () => {
     const { deps, asking } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -170,6 +212,46 @@ describe('questions', () => {
     asking.openQuestions.set('cloud-a', { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } })
     asking.reannounceRemote()
     expect(vi.mocked(deps.clients.sendRemote).mock.calls).toEqual([[{ type: 'commander_questions_open', payload: { requestIds: [] } }]])
+  })
+
+  it('checks an answer against the id the watcher holds', () => {
+    const { asking } = setup()
+    const view = { kind: 'question' as const, question: 'Which drink?', rows: [], multi: false, dialog: 'Which drink?' }
+    const held = vi.spyOn(asking.questionWatcher, 'heldRequestId').mockReturnValue('r1')
+    expect(given(asking.questions).heldRequestId('s1', view)).toBe('r1')
+    expect(held).toHaveBeenCalledWith('s1', view)
+  })
+
+  it('hands a dial or window that attaches no question of an agent that is gone, and forgets it', () => {
+    const { asking } = setup()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Ship it?', options: [] }])
+    given(asking.questionWatcher).onQuestion('s9', 'r9', [{ q: 'Which branch?', options: [] }])
+    const asked = asking.openQuestions.get('s1')
+    expect(asking.openQuestionFrames()).toEqual([asked])
+    expect(asking.openQuestions.has('s9')).toBe(false)
+    expect(asking.pendingQuestion('s9')).toBeNull()
+    expect(asking.monitorActivity('s9')).not.toBe('needsInput')
+    expect(log.mock.calls.at(-1)?.[0]).toContain('s9 forgotten · its agent is gone · req=r9')
+  })
+
+  it('keeps a cloud agent\'s question, which the registry never knows', () => {
+    const { asking } = setup()
+    const cloud = { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } }
+    asking.openQuestions.set('cloud-a', cloud)
+    expect(asking.openQuestionFrames()).toEqual([cloud])
+  })
+
+  it('tells an app that connects no question of an agent that is gone', () => {
+    const { deps, asking } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Ship it?', options: [] }])
+    given(asking.questionWatcher).onQuestion('s9', 'r9', [{ q: 'Which branch?', options: [] }])
+    const asked = asking.openQuestions.get('s1')
+    const remote = vi.mocked(deps.clients.sendRemote)
+    remote.mockClear()
+    asking.reannounceRemote()
+    expect(remote.mock.calls).toEqual([[asked], [{ type: 'commander_questions_open', payload: { requestIds: ['r1'] } }]])
   })
 })
 

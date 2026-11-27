@@ -38,7 +38,6 @@ async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine, fo
   }, 60_000, 500)
 }
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 /** The fake engines running for this daemon: an engine-titled process under one of its launch shells. */
 function engines(d: IsolatedDaemon): number {
   const table = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
@@ -85,8 +84,11 @@ describe('what a message says', () => {
       const from = client.frames.length
       client.send('message', { agentId: agent.id, content: text })
       await client.waitFor((frame) => isTurn('turn_ended', agent.id)(frame) && client.frames.indexOf(frame) >= from, 45_000, `the turn for ${what}`)
-      // Longer than two reconcile passes, so an engine that typing made exit is seen to be gone.
-      await sleep(12_000)
+      // An engine that typing made exit is retired after two misses (MISS_LIMIT), each a probe begun after the turn: the
+      // pass running as it ended may have probed before, so three more passes than now. A fixed time ended before any
+      // pass looked once one was slow or overdue under load, and the check passed falsely.
+      const passes = await d.discoveryPasses()
+      await until(`three discovery passes after ${what}`, async () => await d.discoveryPasses() >= passes + 3, 60_000, 250)
       expect(engines(d), `${what}: the engine process is still running`).toBe(1)
       const starts = client.frames.slice(from).filter(isTurn('turn_started', agent.id))
       expect(starts, `${what}: one prompt, not two`).toHaveLength(1)

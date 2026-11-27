@@ -92,7 +92,9 @@ class Sandbox:
         self.stubs = self.dir / "stubs"
         self.home = self.dir / "home"
         self.log = self.dir / "log"
-        for folder in (self.root / "toolchain", self.bin, self.stubs):
+        # self.home / ".harness": a home still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too
+        # (runtimes.sh's rule).
+        for folder in (self.root / "toolchain", self.bin, self.stubs, self.home / ".harness"):
             folder.mkdir(parents=True)
         self.log.write_text("")
         for tool in TOOLS:

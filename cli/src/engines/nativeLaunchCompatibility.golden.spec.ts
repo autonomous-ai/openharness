@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { shellSingleQuote } from '../lib/shellQuote.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/native-launch-compatibility.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_NATIVE_LAUNCH_GOLDEN === '1'
@@ -44,7 +45,7 @@ it('preserves native arguments, first messages and healthy installer effects', a
   vi.stubEnv('PATH', `${commands}:/usr/bin:/bin`)
   for (const engine of ENGINES.filter(engine => engine !== 'terminal')) {
     const command = engineBin(engine), executable = join(commands, command)
-    writeFileSync(executable, '#!/bin/sh\ncase "$1" in --version) printf "1.0.0\\n";; --help) printf -- "--auto --permission-mode --approve-for-me\\n";; esac\n', { mode: 0o700 })
+    writeExecutable(executable, '#!/bin/sh\ncase "$1" in --version) printf "1.0.0\\n";; --help) printf -- "--auto --permission-mode --approve-for-me\\n";; esac\n')
     const prepared = await inspectNativeLaunch(engine)
     expect(prepared.ok).toBe(true)
     if (!prepared.ok) throw Error(prepared.detail)
@@ -67,7 +68,7 @@ it('preserves native arguments, first messages and healthy installer effects', a
     const directory = join(root, kind); mkdirSync(directory)
     const trace = join(directory, 'trace'), binary = join(directory, 'engine'), source = join(directory, 'source')
     writeFileSync(source, `#!/bin/sh\ncase "$1" in --version) printf '1.0.0\\n'; exit 0;; --help) printf 'Usage: engine\\n'; exit 0;; esac\nprintf 'engine\\n' >>${shellSingleQuote(trace)}\nprintf '%s\\n' "$@" >>${shellSingleQuote(trace)}\n`, { mode: 0o700 })
-    if (kind === 'installed') writeFileSync(binary, readFileSync(source), { mode: 0o700 })
+    if (kind === 'installed') writeExecutable(binary, readFileSync(source, 'utf8'))
     const install = `printf 'install:%s\\n' "\${npm_config_prefix:-vendor}" >>${shellSingleQuote(trace)}; cp ${shellSingleQuote(source)} ${shellSingleQuote(binary)}`
     const recipe = { source: 'private fixture',
       command: kind === 'fallback' ? `printf 'primary\\n' >>${shellSingleQuote(trace)}` : install,

@@ -15,12 +15,14 @@
  * in one of these engines' files, and say so in that change.
  */
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { hashOf } from '../lib/log.js'
 import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-hooks.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -254,12 +256,15 @@ function reset(): void {
   mkdirSync(join(root, 'home'), { recursive: true })
 }
 
-/** The OpenCode the installer asks for its version: the test's own script, answering as `major` would. */
+/** The OpenCode the installer asks for its version: the test's own script, answering as `major` would. Rewritten in
+ *  place while it is there: a new file waits for macOS's first-exec check (testing/executableFixture.ts) inside the
+ *  version probe's 5 s, and every case and the setup's every install ask it. */
 function opencode(major: 1 | 2 | null): void {
   const bin = join(root, 'bin', 'opencode')
-  rmSync(bin, { force: true })
-  if (major === null) return
-  write(bin, `#!/bin/sh\necho "${major === 1 ? '1.18.31' : 'opencode v2.0.18'}"\n`, 0o755)
+  if (major === null) { rmSync(bin, { force: true }); return }
+  const text = `#!/bin/sh\necho "${major === 1 ? '1.18.31' : 'opencode v2.0.18'}"\n`
+  if (existsSync(bin)) writeFileSync(bin, text)
+  else { mkdirSync(dirname(bin), { recursive: true }); writeExecutable(bin, text) }
 }
 
 async function install(vendor: Vendor, port: number): Promise<Run> {
@@ -322,12 +327,19 @@ beforeAll(async () => {
   }
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
+  // A home Harness ran in before the XDG move (`~/.harness` is in it) while the modules resolve their paths, so the hooks
+  // name `<home>/.harness/…` and the record holds for every platform. The first install's reset empties the home again.
+  mkdirSync(join(home, '.harness'), { recursive: true })
   vi.resetModules()
   ;({ installEngineHooks } = await import('../core/engines/hooks.js') as unknown as { installEngineHooks: typeof installEngineHooks })
   const notify = await import('./kit/notifyHooks.js')
   const { VERSION } = await import('../version.js')
+  // The log names each file, and a Hermes profile, by its hash (lib/log.ts hashOf): each known one by its path.
+  const profile = join(root, 'home', '.hermes', 'profiles', 'work')
+  const named = [...Object.values(targets()), opencodeLegacy(), profile, join(profile, 'config.yaml')]
   // Longest first: the root is in every other path.
-  tokens = [[notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.'], [`"${VERSION}"`, '"<version>"']]
+  tokens = [...named.map((path): [string, string] => [hashOf(path), `<hash ${path}>`]), [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [root, '<root>'],
+    [`.${process.pid}.`, '.<pid>.'], [`"${VERSION}"`, '"<version>"']]
   const previous = process.umask(0o022)
   try {
     for (const vendor of VENDORS) {
@@ -355,9 +367,11 @@ const casesFor = (vendor: Vendor): Case[] => CASES.filter((one) => !one.vendors 
 // byte-for-byte compatibility check (including modes and aliases).
 const IO_HELD = new Set(['a dangling symlink', 'a symlink into a missing folder', 'a read-only file', 'an unreadable file',
   'a read-only folder', 'a read-only folder holding a writable file', 'the file is a folder'])
-const INVALID_VALUE = new Set(['empty file', 'whitespace only', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array', 'JSON string', 'JSON number'])
+const INVALID_VALUE = new Set(['empty file', 'whitespace only', 'malformed JSON', 'JSON null', 'JSON array', 'JSON string', 'JSON number'])
 const INVALID_HOOKS = new Set(['hooks is a string', 'hooks is an array', 'hooks is null'])
-const FOREIGN_SOURCE = new Set([...INVALID_VALUE, ...INVALID_HOOKS, 'foreign content', 'a symlink to foreign content', 'a private file', 'a temporary file left by this process'])
+// A settings file saved with a BOM is read as its text (lib/settingsText.ts); a plugin's source of `{}` is still not
+// Harness's plugin, with a BOM or without one. Hermes's `{}` is a flow mapping its hooks cannot be appended to.
+const FOREIGN_SOURCE = new Set([...INVALID_VALUE, ...INVALID_HOOKS, 'byte order mark', 'foreign content', 'a symlink to foreign content', 'a private file', 'a temporary file left by this process'])
 function held(vendor: Vendor, name: string): boolean {
   if (IO_HELD.has(name)) return true
   if (KIND[vendor] === 'source') return FOREIGN_SOURCE.has(name)

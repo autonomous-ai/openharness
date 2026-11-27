@@ -7,8 +7,9 @@ on top of it (see [Fixes made during the run](#fixes-made-during-the-run)). The 
 This is Task 23 of the Windows native PTY plan. The spec's testing section (§5, "End to end") is in
 [the design](../superpowers/specs/2026-10-14-windows-native-pty-host-design.md).
 
-**How it was driven.** Everything ran on the VM against the VM daemon's loopback WebSocket
-(`ws://127.0.0.1:18473/api/local-ws`). No account was signed in. The driver uses the same transport and frames as
+**How it was driven.** Everything ran on the VM against the VM daemon's local WebSocket (`/api/local-ws`). The
+driver reaches it over the daemon's pipe, as every Windows client does; this run used the loopback port
+(`ws://127.0.0.1:18473`), which now answers a Windows client 401. No account was signed in. The driver uses the same transport and frames as
 the desktop app: `machine_select`, `agent_create`, `terminal_open` with `protocolVersion: 3`, binary input, paste and
 keyframe frames, `terminal_resize` and `terminal_resync`. It lives in
 [`cli/scripts/windows-pty-e2e/`](../../cli/scripts/windows-pty-e2e/). One check needs the user's account and was
@@ -68,7 +69,8 @@ The SSH session is an elevated admin running `cmd.exe`. Installed beforehand:
 6. **Start the daemon outside the SSH session.**
    - Run `powershell -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\launch.ps1`.
    - This uses WMI `Win32_Process.Create` to run `start.cmd`. That runs `node dist\cli.js start -f` in the
-     foreground, with output to `C:\work\e2e\daemon.log`.
+     foreground. The daemon logs to `C:\work\e2e\data\harness.log`, in its data folder; `start.cmd` keeps only its
+     console output in `C:\work\e2e\daemon.log`.
    - Why: OpenSSH for Windows kills every process of a session when the session ends (F16). A plain background
      `harness start` from SSH died with the session.
    - Stop it with `C:\work\e2e\stop.cmd` (`harness stop`).
@@ -88,7 +90,7 @@ The SSH session is an elevated admin running `cmd.exe`. Installed beforehand:
    - The commands are in `scenarios.mts`. Evidence was captured from their output.
    - The driver selects the machine id the daemon serves, as the CLI's own clients do: the sign-in's machine id when
      the daemon is signed in, otherwise the isolated `computer-id` file. A signed-in core serves under its account's
-     machine id, so the computer id alone was refused with `NO_PEER_LINK`. The loopback API needs no account.
+     machine id, so the computer id alone was refused with `NO_PEER_LINK`. The pipe needs no account.
 
 ## Scenario results
 

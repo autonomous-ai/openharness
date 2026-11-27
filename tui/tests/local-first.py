@@ -17,6 +17,8 @@ import subprocess
 import tempfile
 import time
 
+import harness_home
+
 REPO = Path(__file__).resolve().parents[2]
 BASE = Path(tempfile.mkdtemp(prefix='hnown-', dir='/tmp')).resolve()
 NODE = shutil.which('node')
@@ -99,7 +101,7 @@ try:
     first = wait(lambda: (s if (s := status(a)).get('discoveryReady') else None), 'first local daemon')
     assert first['machineId'] == 'a' * 32 and first['signedIn'] is False
     b, env_b = fixture('b')
-    cache = b / '.harness/tui/fleet.json'
+    cache = harness_home.path(b, env_b, 'tui') / 'fleet.json'
     cache.parent.mkdir(parents=True)
     cache.write_text(json.dumps({'machines': [{'id': 'old-account', 'name': 'OTHER_ACCOUNT_PRIVATE'}],
         'agents': [{'machine': 'old-account', 'row': {'id': 'private-pane', 'name': 'OTHER_ACCOUNT_PRIVATE'}}]}))

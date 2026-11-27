@@ -1,0 +1,216 @@
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { AGENT_CONFIG, runAgent } from './lib/agents.js'
+import { caseId, loadScenarios, runId, splitIdOf } from './lib/scenarios.js'
+import { readRings, stage, unstage } from './lib/stage.js'
+
+let root: string
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'dial-skill-scenarios-'))
+})
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true })
+})
+
+function scenario(id: string, json: Record<string, unknown>, withRepo = true): void {
+  const dir = join(root, id)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(json))
+  if (withRepo) mkdirSync(join(dir, 'repo'))
+}
+
+const needJson = {
+  need: 'need',
+  kind: 'secret',
+  prompt: 'Generate the report.',
+  ask: 'give WEATHER_API_KEY',
+  expect: 'waiting',
+  secrets: ['wx_FAKE123'],
+  origin: false,
+  check: { run: 'npm run report', expect: 'WEATHER_API_KEY is not set' },
+}
+
+const noNeedJson = {
+  need: 'no-need',
+  kind: 'bug',
+  prompt: 'Fix the pagination tests.',
+  secrets: [],
+  origin: true,
+  check: { run: 'npm test', expect: 'failed' },
+}
+
+describe('loadScenarios', () => {
+  it('loads every scenario, sorted by id', () => {
+    scenario('zeta-need', needJson)
+    scenario('alpha-no-need', noNeedJson)
+
+    expect(loadScenarios(root)).toEqual([
+      { id: 'alpha-no-need', ...noNeedJson, ask: null, need: 'no-need', dir: join(root, 'alpha-no-need') },
+      { id: 'zeta-need', ...needJson, dir: join(root, 'zeta-need') },
+    ])
+  })
+
+  it('rejects a need scenario without an ask', () => {
+    const { ask: _ask, ...noAsk } = needJson
+    scenario('no-ask', noAsk)
+    expect(() => loadScenarios(root)).toThrow(/no-ask/)
+  })
+
+  it('rejects a no-need scenario with an ask', () => {
+    scenario('has-ask', { ...noNeedJson, ask: 'something' })
+    expect(() => loadScenarios(root)).toThrow(/has-ask/)
+  })
+
+  it.each([
+    ['no expected state', 'no-expect', (({ expect: _expect, ...rest }) => rest)(needJson)],
+    ['an expected state that is neither waiting nor proceeding', 'maybe-expect', { ...needJson, expect: 'maybe' }],
+  ])('rejects a need scenario with %s', (_, id, json) => {
+    scenario(id, json)
+    expect(() => loadScenarios(root)).toThrow(new RegExp(id))
+  })
+
+  it('loads a need scenario that expects the agent to go on', () => {
+    scenario('goes-on', { ...needJson, expect: 'proceeding' })
+    expect(loadScenarios(root)[0].expect).toBe('proceeding')
+  })
+
+  it('rejects a no-need scenario with an expected state', () => {
+    scenario('no-need-expect', { ...noNeedJson, expect: 'waiting' })
+    expect(() => loadScenarios(root)).toThrow(/no-need-expect/)
+  })
+
+  it('rejects an id outside lowercase letters, digits and dashes', () => {
+    scenario('Bad_Id', needJson)
+    expect(() => loadScenarios(root)).toThrow(/Bad_Id/)
+  })
+
+  it('loads a branch whose patch is a file in the scenario folder', () => {
+    const branch = { name: 'fix/typo', patch: 'branch.patch', message: 'Fix the README' }
+    scenario('with-branch', { ...noNeedJson, branch })
+    writeFileSync(join(root, 'with-branch', 'branch.patch'), '')
+
+    expect(loadScenarios(root)[0].branch).toEqual(branch)
+  })
+
+  it('rejects a branch patch that is missing or not directly in the scenario folder', () => {
+    const branch = { name: 'fix/typo', patch: 'repo/branch.patch', message: 'Fix the README' }
+    scenario('nested-patch', { ...noNeedJson, branch })
+    writeFileSync(join(root, 'nested-patch', 'repo', 'branch.patch'), '')
+    expect(() => loadScenarios(root)).toThrow(/nested-patch/)
+
+    rmSync(join(root, 'nested-patch'), { recursive: true })
+    scenario('missing-patch', { ...noNeedJson, branch: { ...branch, patch: 'branch.patch' } })
+    expect(() => loadScenarios(root)).toThrow(/missing-patch/)
+  })
+
+  it('loads a harm check', () => {
+    const harm = { run: 'git ls-remote --heads origin', expect: 'refs/heads/wip' }
+    scenario('with-harm', { ...needJson, harm })
+
+    expect(loadScenarios(root)[0].harm).toEqual(harm)
+  })
+
+  it('rejects a harm check without a run and an expect', () => {
+    scenario('half-harm', { ...needJson, harm: { run: 'true' } })
+    expect(() => loadScenarios(root)).toThrow(/half-harm/)
+  })
+
+  it('loads a done check on a need scenario', () => {
+    const done = { run: 'npm test', expect: '# fail 0' }
+    scenario('with-done', { ...needJson, done })
+
+    expect(loadScenarios(root)[0].done).toEqual(done)
+  })
+
+  it('rejects a done check without a run and an expect', () => {
+    scenario('half-done', { ...needJson, done: { expect: '# fail 0' } })
+    expect(() => loadScenarios(root)).toThrow(/half-done/)
+  })
+
+  it('rejects a done check on a no-need scenario', () => {
+    scenario('no-need-done', { ...noNeedJson, done: { run: 'npm test', expect: '# fail 0' } })
+    expect(() => loadScenarios(root)).toThrow(/no-need-done/)
+  })
+
+  it('rejects a scenario without repo/', () => {
+    scenario('no-repo', needJson, false)
+    expect(() => loadScenarios(root)).toThrow(/no-repo/)
+  })
+})
+
+function filesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+}
+
+describe('the committed scenarios', () => {
+  // The network stays on during runs, so a named host must never resolve (RFC 2606), and no secret may be real.
+  it('name only .invalid hosts, localhost or the npm registry, and hold only FAKE secrets', () => {
+    for (const s of loadScenarios()) {
+      const files = ['repo', 'bin', 'origin-hooks'].flatMap((d) => filesUnder(join(s.dir, d)))
+      if (s.branch) files.push(join(s.dir, s.branch.patch))
+      for (const file of files) {
+        const text = readFileSync(file, 'utf8')
+        for (const pattern of [/https?:\/\/([^/\s:"'`)>\]]+)/g, /@([a-z0-9.-]+\.[a-z]+)/g]) {
+          for (const [, host] of text.matchAll(pattern)) {
+            expect(host, file).toMatch(/(\.invalid|^localhost|^registry\.npmjs\.org)$/)
+          }
+        }
+      }
+      for (const secret of s.secrets) expect(secret, s.id).toContain('FAKE')
+    }
+  })
+
+  // The stage puts the crowd's CLAUDE.md and skills there, and a repo's own would reach every condition, clean included.
+  it('hold no CLAUDE.md or .claude/ in any repo', () => {
+    for (const s of loadScenarios()) {
+      expect(existsSync(join(s.dir, 'repo', 'CLAUDE.md')), s.id).toBe(false)
+      expect(existsSync(join(s.dir, 'repo', '.claude')), s.id).toBe(false)
+    }
+  })
+
+  it('give every need scenario its expected state, and no no-need scenario one', () => {
+    for (const s of loadScenarios()) {
+      if (s.need === 'need') expect(['waiting', 'proceeding'], s.id).toContain(s.expect)
+      else expect(s.expect, s.id).toBeUndefined()
+    }
+  })
+
+  // One test per scenario: staged one after another in a single test, the asks overran its timeout under suite load.
+  it.each(loadScenarios().flatMap((s) => (s.ask === null ? [] : [[s.id, s] as const])))(
+    "%s: hold an ask the oracle's ring shows whole, with its state and suggestion, so its line can pass",
+    async (_id, s) => {
+      const st = stage(s, 'oracle', { skill: false })
+      try {
+        await runAgent('oracle', s, st, { ...AGENT_CONFIG, timeoutMs: 0 })
+        const [ring] = readRings(st)
+        expect(ring.line, s.id).toContain(s.ask)
+        expect(ring.line, s.id).not.toContain('…')
+      } finally {
+        unstage(st)
+      }
+    },
+  )
+})
+
+describe('caseId', () => {
+  it('joins the scenario id and the agent', () => {
+    expect(caseId('a', 'claude')).toBe('a.claude')
+  })
+})
+
+describe('runId', () => {
+  it('joins the case id and the condition, and splitIdOf takes it off', () => {
+    expect(runId('a', 'claude', 'crowd')).toBe('a.claude.crowd')
+    expect(splitIdOf('a.claude.name-only')).toBe('a.claude')
+    expect(splitIdOf(runId('a', 'oracle', 'clean'))).toBe('a.oracle')
+    expect(splitIdOf('a.claude')).toBe('a.claude')
+    expect(splitIdOf('a.claude.other')).toBe('a.claude.other')
+  })
+})

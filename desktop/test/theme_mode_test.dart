@@ -41,9 +41,9 @@ void main() {
     addTearDown(store.dispose);
     await store.setMode(AppearanceMode.light);
     expect(store.value.palette, HarnessPalette.cloud);
-    await store.setPalette(HarnessPalette.plum);
-    expect(store.value.palette, HarnessPalette.plum);
-    expect(store.value.lightPalette, HarnessPalette.plum);
+    await store.setPalette(HarnessPalette.mist);
+    expect(store.value.palette, HarnessPalette.mist);
+    expect(store.value.lightPalette, HarnessPalette.mist);
     await store.setMode(AppearanceMode.dark);
     expect(store.value.palette, HarnessPalette.graphite);
     // Choosing a dark theme in Light moves to Dark; the light choice stays.
@@ -51,7 +51,7 @@ void main() {
     await store.setPalette(HarnessPalette.storm);
     expect(store.value.mode, AppearanceMode.dark);
     expect(store.value.palette, HarnessPalette.storm);
-    expect(store.value.lightPalette, HarnessPalette.plum);
+    expect(store.value.lightPalette, HarnessPalette.mist);
     await store.setPalette(HarnessPalette.paper);
     expect(store.value.mode, AppearanceMode.light);
     expect(store.value.palette, HarnessPalette.paper);
@@ -67,20 +67,20 @@ void main() {
     final store = AppearancePrefsStore(storage: _Storage());
     addTearDown(store.dispose);
     store.followSystemBrightness();
-    await store.setPalette(HarnessPalette.plum);
+    await store.setPalette(HarnessPalette.mist);
     await store.setPalette(HarnessPalette.night);
     await store.setMode(AppearanceMode.system);
-    expect(store.value.palette, HarnessPalette.plum);
+    expect(store.value.palette, HarnessPalette.mist);
 
     dispatcher.platformBrightnessTestValue = Brightness.dark;
     expect(store.value.palette, HarnessPalette.night);
     dispatcher.platformBrightnessTestValue = Brightness.light;
-    expect(store.value.palette, HarnessPalette.plum);
+    expect(store.value.palette, HarnessPalette.mist);
 
     // In Match, choosing a theme only sets its slot: the Mac decides which.
     await store.setPalette(HarnessPalette.storm);
     expect(store.value.mode, AppearanceMode.system);
-    expect(store.value.palette, HarnessPalette.plum);
+    expect(store.value.palette, HarnessPalette.mist);
     dispatcher.platformBrightnessTestValue = Brightness.dark;
     expect(store.value.palette, HarnessPalette.storm);
 
@@ -88,7 +88,7 @@ void main() {
     await store.setMode(AppearanceMode.light);
     dispatcher.platformBrightnessTestValue = Brightness.light;
     dispatcher.platformBrightnessTestValue = Brightness.dark;
-    expect(store.value.palette, HarnessPalette.plum);
+    expect(store.value.palette, HarnessPalette.mist);
   });
 
   testWidgets('a closed store stops following the system', (tester) async {
@@ -110,7 +110,7 @@ void main() {
       final storage = _Storage()..gate = Completer<void>();
       final store = AppearancePrefsStore(storage: storage);
       addTearDown(store.dispose);
-      final saving = store.setPalette(HarnessPalette.plum);
+      final saving = store.setPalette(HarnessPalette.mist);
       store.setPalette(HarnessPalette.storm);
       store.setMode(AppearanceMode.system);
       store.setMode(AppearanceMode.light);
@@ -121,11 +121,11 @@ void main() {
       addTearDown(reopened.dispose);
       await reopened.load();
       expect(reopened.value.mode, AppearanceMode.light);
-      expect(reopened.value.lightPalette, HarnessPalette.plum);
+      expect(reopened.value.lightPalette, HarnessPalette.mist);
       expect(reopened.value.darkPalette, HarnessPalette.storm);
-      expect(reopened.value.palette, HarnessPalette.plum);
+      expect(reopened.value.palette, HarnessPalette.mist);
       // An older build reads only this key: it opens in the same look.
-      expect(storage.values['app_color_palette'], 'plum');
+      expect(storage.values['app_color_palette'], 'mist');
       await reopened.reset();
       expect(storage.values.keys, isNot(contains('app_theme_mode')));
       expect(storage.values.keys, isNot(contains('app_light_palette')));
@@ -164,6 +164,27 @@ void main() {
       expect(store.value.darkPalette, dark, reason: saved);
       expect(store.value.palette.name, saved);
     }
+  });
+
+  test('a saved Plum opens in the default light theme, and nothing else '
+      'changes', () async {
+    // Plum went on 2026-11-15; a computer that chose it still holds its name.
+    final storage = _Storage()
+      ..values.addAll({
+        'app_color_palette': 'plum',
+        'app_theme_mode': 'light',
+        'app_light_palette': 'plum',
+        'app_dark_palette': 'storm',
+        'harness_auto_rename_tabs': 'true',
+      });
+    final store = AppearancePrefsStore(storage: storage);
+    addTearDown(store.dispose);
+    await store.load();
+    expect(store.value.palette, AppearancePrefs.defaultLightPalette);
+    expect(store.value.lightPalette, AppearancePrefs.defaultLightPalette);
+    expect(store.value.mode, AppearanceMode.light);
+    expect(store.value.darkPalette, HarnessPalette.storm);
+    expect(store.value.autoRenameTabs, isTrue);
   });
 
   test('hand-edited choices land on usable themes', () async {

@@ -119,7 +119,7 @@ Workspace is required, exactly one of:
   competing for one canonical workspace are serialized/refused before creation.
 
 No `text` or `prompt` is allowed. No implicit installation update. The implementation reuses catalog,
-Store install/setup/doctor, `prepareProjectFolder`, `onCreateAgent` and `AgentCreationReceipts`.
+Store install/setup/doctor, `prepareNewFolder`, `onCreateAgent` and `AgentCreationReceipts`.
 Already-installed packages skip setup/install but run doctors again. Missing/unusable viewer or
 application requirements produce action-needed with doctor evidence. A review-required dependency
 is not silently installed. Broken installs are not overwritten.

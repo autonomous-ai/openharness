@@ -90,15 +90,33 @@ describe('machine add-ons: a device that is this Harness machine', () => {
     expect(all.proposals[0].seq).toBe(all.next - INBOX_MAX + 1)
   })
 
-  it('takes publishes and decisions over `machine_addon` from a process on this machine alone', async () => {
+  it('takes publishes and decisions through its routes of the door, from this computer\'s owner alone', async () => {
     const f = fixture()
-    expect(await f.addons.request({ op: 'publish', input: { values: [{ topic: 'voice/state', value: {} }] } }, OFFICE)).toMatchObject({ error: { code: 'LOCAL_ONLY' } })
-    expect(await f.addons.request({ op: 'publish', input: { values: [{ topic: 'voice/state', value: {} }] } }, { local: true, owner: true })).toMatchObject({ result: { topics: 1 } })
+    const local = { local: true, owner: true }
+    const route = f.addons.requests().machine_addons_http!
+    const publish = { method: 'POST', target: '/api/autonomous-device/machine-addon/publish', body: JSON.stringify({ values: [{ topic: 'voice/state', value: {} }] }) }
+    expect(await route(publish, OFFICE)).toMatchObject({ status: 403, body: { error: { code: 'FORBIDDEN' } } })
+    expect(await route(publish, local)).toMatchObject({ status: 200, body: { topics: 1 } })
     const id = ((f.propose(OFFICE) as { result: { proposal: { proposalId: string } } }).result.proposal.proposalId)
-    expect(await f.addons.request({ op: 'proposals', input: { after: 0 } }, { local: true, owner: true })).toMatchObject({ result: { next: 1, proposals: [{ seq: 1 }] } })
-    expect(await f.addons.request({ op: 'decision', input: { proposalId: id, decision: 'maybe' } }, { local: true, owner: true })).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
-    expect(await f.addons.request({ op: 'decision', input: { proposalId: id, decision: 'dropped' } }, { local: true, owner: true })).toEqual({ result: { proposalId: id, state: 'dropped' } })
-    expect(await f.addons.request({ op: 'hello' }, { local: true, owner: true })).toMatchObject({ result: { topics: 0 } })
+    expect(await route({ method: 'GET', target: '/api/autonomous-device/machine-addon/proposals?after=0' }, local)).toMatchObject({ status: 200, body: { next: 1, proposals: [{ seq: 1 }] } })
+    const decide = (decision: string) => ({ method: 'POST', target: '/api/autonomous-device/machine-addon/decision', body: JSON.stringify({ proposalId: id, decision }) })
+    expect(await route(decide('maybe'), local)).toMatchObject({ status: 400, body: { error: { code: 'INVALID_REQUEST' } } })
+    expect(await route(decide('dropped'), local)).toEqual({ status: 200, body: { proposalId: id, state: 'dropped' } })
+    expect(await route({ method: 'POST', target: '/api/autonomous-device/machine-addon/hello', body: '{}' }, local)).toMatchObject({ status: 200, body: { topics: 0 } })
+    // Never as `machine_addon`, the owner's machines' request: what the device's own service does is its routes' alone.
+    for (const op of ['hello', 'publish', 'decision', 'proposals']) expect(f.addons.request({ op }, local), op).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
+  })
+
+  it('serves nothing while this machine\'s id is not known, never as no machine: its routes of the door nor the owner\'s machines', async () => {
+    const requests = new MachineAddons({ machineId: () => '' }).requests()
+    const message = 'This machine\'s id is not known yet. Try again in a moment.'
+    for (const request of [
+      { method: 'POST', target: '/api/autonomous-device/machine-addon/hello', body: '{}' },
+      { method: 'POST', target: '/api/autonomous-device/machine-addon/publish', body: '{"values":[]}' },
+      { method: 'POST', target: '/api/autonomous-device/machine-addon/decision', body: '{"proposalId":"p","decision":"kept"}' },
+      { method: 'GET', target: '/api/autonomous-device/machine-addon/proposals' },
+    ]) expect(await requests.machine_addons_http!(request, { local: true, owner: true }), request.target).toEqual({ status: 503, body: { error: { code: 'UNAVAILABLE', message } } })
+    for (const op of ['state', 'propose', 'proposal']) expect(await requests.machine_addon!({ op }, OFFICE), op).toEqual({ error: { code: 'UNAVAILABLE', message } })
   })
 
   it('tells the device\'s service that the store it published to is gone: another instance, or a cursor ahead of it', async () => {

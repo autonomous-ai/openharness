@@ -36,3 +36,8 @@ globalThis.Date = new Proxy(RealDate, {
     return Reflect.get(target, property, receiver)
   },
 })
+
+// A process's start on the wall clock is read once, as it starts: one started after a jump reads the moved clock, one
+// started before keeps its own. The hook says when its engine ran it from this (hook/notify.mjs FIRED_AT), against
+// turn times taken with the shifted `Date`.
+Object.defineProperty(performance, 'timeOrigin', { value: performance.timeOrigin + shift() })

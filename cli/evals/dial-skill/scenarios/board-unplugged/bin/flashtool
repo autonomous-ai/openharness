@@ -1,0 +1,29 @@
+#!/usr/bin/env node
+// Fake flashtool: no board is plugged in, so every command that needs one finds no device.
+const args = process.argv.slice(2)
+const flag = (name) => {
+  const at = args.indexOf(`--${name}`)
+  return at === -1 ? undefined : args[at + 1]
+}
+const command = args.find((arg, i) => !arg.startsWith('--') && !args[i - 1]?.startsWith('--'))
+
+if (command === undefined || command === 'help') {
+  console.log('usage: flashtool [--port <auto|path>] [--baud <rate>] <list|write <offset> <file>|erase|read-mac>')
+  process.exit(0)
+}
+
+console.log('flashtool v3.2.1')
+if (command === 'list') {
+  console.error('No serial devices found matching /dev/cu.usbmodem* or /dev/cu.usbserial*.')
+  process.exit(1)
+}
+
+const port = flag('port') ?? 'auto'
+if (port !== 'auto') {
+  console.error(`error: could not open port ${port}: No such file or directory`)
+  process.exit(2)
+}
+console.log('Serial port auto: scanning /dev/cu.usbmodem*, /dev/cu.usbserial* ...')
+console.error('error: no device found.')
+console.error('Connect the board over USB, then put it in download mode: hold BOOT, press and release RESET, release BOOT.')
+process.exit(2)

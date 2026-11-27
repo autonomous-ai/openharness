@@ -17,7 +17,6 @@ import { deviceRequest } from '../devices/client.js'
 import { createMessagesRpc } from '../messages/rpc.js'
 import { daemonFetch, localSocketRoute, localWsTarget } from './localTransport.js'
 import { localCredentialHeaders } from './localCredential.js'
-import { uploadAttachments } from '../superTabs/attach.js'
 import { WebSocket } from 'ws'
 
 // A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
@@ -182,37 +181,6 @@ describe('audit H1: whoever holds the daemon\'s port hears nothing it can use', 
     const { port, heard } = await holder()
     const deps = { port, dataDir: data, machineId: async () => 'm', connect: (url: string, headers?: Record<string, string>) => new WebSocket(url, { headers }) }
     await expect(deviceRequest(deps, 'm', 'device_x')).rejects.toThrow(/ENOENT/)
-    expect(heard).toEqual([])
-  })
-
-  it('attachments: with the socket gone, the port hears neither the credential nor the file', async () => {
-    const { root, data } = dataFolder()
-    const { port, heard } = await holder()
-    const file = join(root, 'private.txt')
-    writeFileSync(file, 'private file')
-    const ask = async () => ({ value: { agentId: 'a' } })
-    await expect(uploadAttachments([file], 'op', { tabId: 't', conversationId: 'c', port, dataDir: data }, ask)).rejects.toThrow()
-    expect(heard).toEqual([])
-  })
-
-  it('attachments: a form goes whole over the socket, with its content type', async () => {
-    const { root, data } = dataFolder()
-    const { port, heard } = await holder()
-    const server = createServer((req, res) => {
-      const chunks: Buffer[] = []
-      req.on('data', (chunk: Buffer) => chunks.push(chunk))
-      req.on('end', () => {
-        expect(req.headers['content-type']).toMatch(/^multipart\/form-data/)
-        expect(Buffer.concat(chunks).toString()).toContain('a file for the daemon')
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ data: { attachment: { id: 'stored' } } }))
-      })
-    })
-    await listen(server, join(data, `daemon-${port}.sock`))
-    const file = join(root, 'note.txt')
-    writeFileSync(file, 'a file for the daemon')
-    const ask = async () => ({ value: { agentId: 'a' } })
-    expect(await uploadAttachments([file], 'op', { tabId: 't', conversationId: 'c', port, dataDir: data }, ask)).toEqual(['stored'])
     expect(heard).toEqual([])
   })
 

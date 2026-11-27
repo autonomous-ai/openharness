@@ -1,0 +1,10 @@
+#!/usr/bin/env node
+const err = (text) => process.stderr.write(`${text}\n`)
+
+if (process.argv.slice(2).some((arg) => arg.startsWith('-license'))) {
+  err('xcodebuild: error: Agreeing to the Xcode/iOS license requires admin privileges, please run “sudo xcodebuild -license” and then retry this command.')
+  process.exit(69)
+}
+err('You have not agreed to the Xcode license agreements. You must agree to both license agreements below in order to use Xcode.')
+err("Please run 'sudo xcodebuild -license' from within a Terminal window to review and agree to the Xcode and Apple SDKs license.")
+process.exit(69)

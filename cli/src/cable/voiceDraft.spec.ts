@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { VoiceDraft, type DraftState } from './voiceDraft.js'
+import { MAX_TEXT } from './hosts/orca.js'
 
 function setup(text = 'Keep the public API.') {
   const drafts = new VoiceDraft()
@@ -97,11 +98,15 @@ describe('voice draft ownership and receipts', () => {
     expect(p.canSend).toBe(true)
     await drafts.command(p.id, p.revision, 'send'); expect(submit).toHaveBeenCalledExactlyOnceWith('Fix this please.')
   })
-  it.each(['', ' '.repeat(10), 'x'.repeat(16001), 'a\tb', 'a\0b', 'a\x1bb'])('rejects invalid text %#', text => {
+  it('takes a transcript of up to 20,000 characters, counted in characters, not bytes', () => {
+    expect(setup('x'.repeat(20_000)).page).toMatchObject({ ok: true, total: 42 })
+    expect(setup('é'.repeat(10_000)).page).toMatchObject({ ok: true, canSend: true })
+  })
+  it.each(['', ' '.repeat(10), 'x'.repeat(MAX_TEXT + 1), 'a\tb', 'a\0b', 'a\x1bb'])('rejects invalid text %#', text => {
     expect(setup(text).page.ok).toBe(false)
   })
   it('bounds cumulative edits and preserves the old draft on failure', async () => {
-    const { drafts, page } = setup('a'.repeat(15900))
+    const { drafts, page } = setup('a'.repeat(MAX_TEXT - 100))
     expect(drafts.edit(drafts.pin(page.id, 1, 'append')!, 'b'.repeat(200)).ok).toBe(false)
     expect((await drafts.command(page.id, 1, 'state')).revision).toBe(1)
   })

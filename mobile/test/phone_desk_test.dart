@@ -221,6 +221,32 @@ void main() {
     },
   );
 
+  for (final name in <String?>[null, '   ']) {
+    test('an unnamed new tab writes the current placeholder ($name)', () async {
+      await join();
+
+      final id = desk.createTabFor((
+        machineId: 'm',
+        agentId: 'new',
+      ), name: name);
+      await pumpEventQueue();
+
+      expect(id, isNotNull);
+      expect(desk.tabs.last.name, 'New Tab');
+      expect(desk.tabs.last.nameIsCustom, isFalse);
+      expect(backend.received, [
+        {
+          'op': 'tab.create',
+          'id': id,
+          'name': 'New Tab',
+          'nameIsCustom': false,
+          'index': 2,
+        },
+        {'op': 'pane.add', 'tabId': id, 'machineId': 'm', 'agentId': 'new'},
+      ]);
+    });
+  }
+
   // Find's `+` after the last tab chip: the desktop's New Tab.
   test(
     'an agent made from the + after the tabs opens a tab of its own, and the phone is in it',

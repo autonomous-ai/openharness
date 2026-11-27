@@ -1,0 +1,6 @@
+{
+  "name": "@acme/scheduler",
+  "version": "1.0.9",
+  "type": "module",
+  "main": "src/index.js"
+}

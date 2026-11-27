@@ -9,6 +9,8 @@ import 'package:harness/ws/relay_codec.dart';
 import 'package:harness/ws/terminal_transport_plugin.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/loopback_websocket.dart';
+
 /// A relay session that seals nothing — the handshake shape of the real one, with
 /// the frames left readable so the test can see what crossed the socket.
 class _PassThroughCodec implements RelayCodec {
@@ -125,7 +127,8 @@ void main() {
     receivedBinary = [];
     unawaited(
       server.forEach((request) async {
-        final socket = await WebSocketTransformer.upgrade(request);
+        final socket = await acceptWebSocket(request);
+        if (socket == null) return;
         if (!socketReady.isCompleted) socketReady.complete(socket);
         socket.listen((raw) {
           if (raw is List<int>) {

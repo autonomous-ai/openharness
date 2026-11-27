@@ -5,6 +5,9 @@ Mac Studio, modes, listeners and the process table were read, with values on com
 readable files in `/private/tmp`, other agents' included, as the main account (M1): it counted key-shaped text, and printed each match's
 kind, length and randomness, and its file's top folder and extension, never a value. No other file's contents were read.
 
+**Status, 2026-11-14:** Harness Team accounts are gone. The findings on the daemon's port, the credential, `/tmp` and tmux
+(H1, M1, M2, L4) stand for any other account on the machine.
+
 ## Answer
 
 **The home folder holds. The account as a whole does not yet.** A Team agent is refused every direct read, list and write in
@@ -20,7 +23,6 @@ Team agent the owner's full rights (H1, H2), and files and command lines the own
 | M2 | **Medium** | Tokens on tmux's command line show in `ps` to every account | Seen on the Mac Studio, fix requested |
 | M3 | **Medium** | A Team agent's chat message reaches the owner's agents, which act with the owner's rights | Read in code, decision requested |
 | M4 | **Medium** | The relay forwards any path and method with the owner's vendor sign-in | Read in code, fix requested |
-| M5 | **Medium** | A Team agent can stop the owner's Swarm service, again and again, through its status file | Blocking read proved, fix requested |
 | L1 | Low | `harness team status` prints what the Team account wrote, escape codes included | Read in code, fix requested |
 | L2 | Low | The privacy check covers only the owner's home, misses some ACLs, and its result is self-reported | Read in code, noted |
 | L3 | Low | `harness team remove` trusts a computer id the Team account wrote | Read in code, fix requested |
@@ -45,7 +47,7 @@ Any account may bind a free loopback port above 1023, and it can simply retry un
   it once the daemon publishes the new port (`lib/hookRoutes.ts`); until then, and for a pane with no record, hooks use the installed
   port and report to the holder.
 - Other clients fall back the same way once the socket file is gone: `agentClient/daemon.ts:76`, `messages/rpc.ts:38`.
-  `devices/client.ts:24` and `superTabs/attach.ts:52` use TCP directly, and Desktop sends it over TCP when the socket is gone
+  `devices/client.ts:24` uses TCP directly, and Desktop sends it over TCP when the socket is gone
   (`desktop/lib/ws/local_daemon_transport.dart:165`).
 - Where the guest helper is installed, the owner's account runs it as root with no password, which widens what the holder gets. It is
   not installed on the Mac Studio.
@@ -77,7 +79,7 @@ without permission prompts, so nothing stops to ask. This was not tried. M3 is t
 **Fix:** build and run a branch that a Team agent wrote only in a Team account or a sandbox, never in the main account, and read it
 there with its project settings off. Until then, route those Reviewers and Testers to Team accounts.
 
-**Status (task #2025, `docs/plans/2026-11-02-team-written-branch-plan.md`):** the attack was then tried with Claude Code 2.1.316 on a
+**Status (task #2025):** the attack was then tried with Claude Code 2.1.316 on a
 fixture: planted `settings.json`, `settings.local.json` and `.mcp.json` all ran in a trusted folder. The fix:
 
 - The server refuses a main-account agent for a task a Team agent was assigned to build, and for any pull request GitHub's activity log
@@ -91,8 +93,7 @@ fixture: planted `settings.json`, `settings.local.json` and `.mcp.json` all ran 
 - a push between the check and the fetch;
 - a rebase or cherry-pick of a Team agent's commits by a person or an owner's agent, whose push GitHub shows as a person's;
 - pushes more than a week before the pull request and its oldest commit;
-- the default branch, which reads clean because it is protected;
-- the PM, which builds batch branches in the main account. The batch and `make merge-pr` must run from a default-branch checkout.
+- the default branch, which reads clean because it is protected.
 
 The server decides who gets work and cannot stop a shell. Closing the first two takes a sandbox for every main-account agent, or a
 repository rule that keeps the app's bot to its own branch prefix.
@@ -165,19 +166,6 @@ it ends: a restart more than 30 days after the token was minted starts a new one
 taken, the daemon moves to a new port and a new token, but running agents keep sending their whole requests to the port's holder, who
 can answer them, until they restart. That is as before this change, and only a log line says so.
 
-### M5. A Team agent can stop the owner's Swarm service (Medium)
-
-The status folder belongs to the Team account, and `team/privacy.ts:169` reads the file with a plain `readFileSync`. The owner's
-daemon does so about once a minute (`superTabs/service.ts:883`), as do `harness team status` and setup. A FIFO there blocks that
-read for good (proved with a real FIFO: killed by a 3-second alarm), and it is still there after each restart, so the service stops
-again. A link to `/dev/zero` should run until memory is gone; that was not run, on a shared Mac.
-
-That service has its own process (`harnessd/services.ts:414`), and the port is the core's (`core/main.ts:2212`), so this does not free
-the port for H1. The whole daemon hangs only where the services run in the core's process: a data folder too deep for the socket, or
-`HARNESSD_SERVICES=none`. No data leaks: only known fields are kept.
-
-**Fix:** open with `O_NOFOLLOW | O_NONBLOCK`, check it is a plain file of a small size, as `handoff.ts` already does.
-
 ### L1. `harness team status` prints what the Team account wrote (Low)
 
 `team/command.ts:437` and `:492` print `detail` from the status file as it is, up to 300 characters. It can carry terminal escape
@@ -221,9 +209,8 @@ so in the agents' role text, and bind test services to a socket in a private fol
 | tmux | Socket folder `0700`, per account | Seen on the Mac Studio |
 | Relay folder | Owner's, `0700`, one ACL entry for the Team account; a folder or file of another owner is refused | Seen on the Mac Studio; `relay.spec.ts` |
 | Harness's other local servers | Relay and API shares need a token; the bridge a key; viewer proxies a token. Others on the machine: L4 | Read in code |
-| Team sign-in on the server | Deny by default; no web relay, device lane, or other machine's agents | `teamSession.ts`; 117 unit tests run; integration `superTabTeam.test.ts` read, not run |
+| Team sign-in on the server | Deny by default; no web relay, device lane, or other machine's agents | `teamSession.ts`; 117 unit tests run |
 | Git | No token in `GIT_CONFIG_PARAMETERS`, only a helper's path | Seen on the Mac Studio, long values masked |
-| Purge | Acts as the Team user, inside its own home, so it cannot reach the owner's files | `inCore/teamPurge.ts` |
 | Handoff code | Passed on standard input, kept in a file of the Team account, read with `O_NOFOLLOW`, deleted | `team/handoff.ts`, `team/script.ts` |
 
 ## Not verified

@@ -16,9 +16,9 @@ import { randomUUID } from 'node:crypto'
 import { WebSocket, type RawData } from 'ws'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from './wsLiveness.js'
 import type { Frame, LocalClientSink } from '../backendSocket.js'
-import type { AuthSessionManager } from './authSession.js'
+import type { AuthSessionManager } from './authRefresh.js'
 import { b64d, type Identity } from './e2ee/core.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError } from './relayFrames.js'
 
 export { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError }
@@ -37,7 +37,7 @@ import {
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
-import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, isPairFrameType } from './e2ee/applicationFrames.js'
+import { admitRelayedPairFrame, AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES, HARNESS_EVENT, isPairFrameType } from './e2ee/applicationFrames.js'
 import { declaredClientQuery } from './declaredClient.js'
 
 const CONNECT_TIMEOUT_MS = 15_000
@@ -397,7 +397,7 @@ export class RemoteRelayPool {
    *  trust us, and it has not denied us DENIED_TRIES times within DENIED_WINDOW_MS yet. */
   private denied(machineId: string): void {
     const pub = this.peers.get(machineId)?.pub
-    if (pub && this.expectsTrust?.(machineId, pub)) {
+    if (pub && this.trustExpected(machineId, pub)) {
       const now = Date.now()
       const recent = (this.denials.get(machineId) ?? []).filter((at) => now - at < DENIED_WINDOW_MS)
       recent.push(now)
@@ -405,7 +405,23 @@ export class RemoteRelayPool {
       if (recent.length < DENIED_TRIES) return
     }
     this.denials.delete(machineId)
-    this.peers.unlink(machineId)
+    try {
+      this.peers.unlink(machineId)
+    } catch (err) {
+      // A pin file that cannot be read or written. Nothing above catches: this runs in the socket's message handler.
+      console.warn(`[relay] could not drop the pin of a machine that denied this one: ${errorKind(err)}`)
+    }
+  }
+
+  /** Whether the device key log says `machineId` should trust this machine. One that cannot be read says no, and the
+   *  pin goes as for any denial: this runs in the socket's message handler, which nothing above catches. */
+  private trustExpected(machineId: string, pub: string): boolean {
+    try {
+      return this.expectsTrust?.(machineId, pub) ?? false
+    } catch (err) {
+      console.warn(`[relay] could not tell whether a machine that denied this one will trust it: ${errorKind(err)}`)
+      return false
+    }
   }
 
   /** Background CLI jobs (a monitor pane polling `agents_list`, a script) must not replace the
@@ -433,12 +449,21 @@ export class RemoteRelayPool {
         ? { ...frame, payload: { ...framePayload(frame), relayIsolation: true } } : frame),
     }, onClosed)
     let detached = false
+    // A watch on the other machine lives as long as this connection (gateway/harnessWatch.ts): shelved, it would outlive
+    // the client that asked, and the next background client handed it would be told that harness's changes unasked
+    // (review of #4197). So a session that asked for one closes with its client, and the other machine ends the watch.
+    let watched = false
     return {
       ...session,
+      send: (frame) => {
+        if (frame.type === 'harness_watch') watched = true
+        return session.send(frame)
+      },
       detach: () => {
         if (detached) return
         detached = true
         session.detach() // the pool's own linger starts here
+        if (watched) { pool.invalidate(machineId, { code: 1000, reason: 'watch ended' }); return }
         const idle = this.idleIsolated.get(machineId) ?? []
         if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId, { code: 1000, reason: 'shelf full' }); return }
         idle.push(pool)
@@ -581,7 +606,7 @@ export class RemoteRelayPool {
         return
       } catch (err) {
         // Held in memory (machinePeers.ts) and by the backoff below; never thrown out of here, where nothing would catch it.
-        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${err instanceof Error ? err.message : String(err)}`)
+        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${errorKind(err)}`)
       }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
@@ -795,8 +820,8 @@ export class RemoteRelayPool {
           return
         }
         // The relay cannot inject response bytes/headers into a local browser in plaintext, nor open or close an
-        // agent browser's stream: those are sealed to this session alone.
-        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type))
+        // agent browser's stream, nor tell a watcher a harness changed: those are sealed to this session alone.
+        if (typeof frame.type === 'string' && (VIEWER_UP_TYPES.has(frame.type) || AGENT_BROWSER_UP_TYPES.has(frame.type) || AGENT_BROWSER_DOWN_TYPES.has(frame.type) || frame.type === HARNESS_EVENT)
           && (!isWrapped(frame.payload) || frame.payload.__e2e?.k !== 'p')) return
         // Nor a question, a recap or an answer's result for the pair brain (applicationFrames.ts).
         if (typeof frame.type === 'string' && isPairFrameType(frame.type) && !admitRelayedPairFrame(frame)) return
@@ -1031,7 +1056,7 @@ export class RemoteRelayPool {
           if (relayed && !entry.upgradeDone) this.scheduleUpgradeAttempt(machineId, entry)
         } else if (state === 'failed' && !wasDirect) {
           console.log(`[p2p] gave up · machine=${sid(machineId)} reason=${reason ?? 'unknown'} after=${Math.round(setupMs)}ms`
-            + ` · ${p2p.negotiationDetail} — terminals stay on the ws relay`)
+            + ` · ${p2p.negotiationFacts} — terminals stay on the ws relay`)
           this.reportP2pResult(entry, reason === 'negotiation_timeout' ? 'timeout' : 'failed', setupMs, reason)
           // TURN-first failing says the path changed: the next attempt gathers everything again.
           if (turnFirst) this.turnOnly.delete(machineId)

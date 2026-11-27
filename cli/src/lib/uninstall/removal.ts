@@ -1,7 +1,8 @@
 /**
  * The files `harness uninstall` removes, and how. `~/.harness` holds both the program (bin, runtime, pty, the CLI's
  * bundles) and the person's data (sign-in, this computer's identity, history, settings, hn's state): without
- * --keep-data both go, with it the program only. The desktop app keeps its own state in the same root
+ * --keep-data both go, with it the program only. On Linux, once moved, they are in two XDG roots (config/harnessHome.ts),
+ * each holding its own part of the program. The desktop app keeps its own state in the data root
  * (`desktop-app-v2`); that is the app's, which its own uninstall removes, and never this command's.
  *
  * mac and Linux delete a running program's files at once. Windows cannot delete the node.exe the CLI runs from, nor a
@@ -12,16 +13,19 @@
  * anything (B5.4 review, on the VM); so when WMI fails the CLI says so and how to finish by hand.
  *
  * This code deletes a person's files, and a wrong path deletes their home. So every plan, however it was made, is
- * checked before anything is removed: its root is a full path to a folder named `.harness` that is not a drive's root,
- * not the home folder nor above it, with no `..`; and every path it names is strictly inside that root. A link (a
- * symlink, or on Windows a junction) is removed as a link and never followed: on the Windows VM `del` given a
- * junction emptied the folder it pointed to (B5.4), so the last step never hands del anything that is a folder.
+ * checked before anything is removed: its root is a full path to a folder named `.harness`, or on Linux one of the two
+ * XDG roots exactly, that is not a drive's root, not the home folder nor above it, with no `..`; and every path it names
+ * is strictly inside that root. A link (a symlink, or on Windows a junction) is removed as a link and never followed: on
+ * the Windows VM `del` given a junction emptied the folder it pointed to (B5.4), so the last step never hands del
+ * anything that is a folder.
  */
 import { chmodSync, lstatSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
+import { HARNESS_ENTRIES, HARNESS_HOME_NAME, xdgRoots, type HarnessEntry } from '../../config/harnessHome.js'
 import { removeLink } from '../removePath.js'
-import { runPowershell, type PowershellRun } from '../windows/powershell.js'
+import { modulesByPath, runPowershell, systemRoot, type PowershellRun } from '../windows/powershell.js'
+import { UNINSTALL_MARKER } from './marker.js'
 
 export interface RootEntry { name: string; dir: boolean; link?: true }
 export interface RemovalTarget { path: string; dir: boolean; link?: true }
@@ -29,18 +33,10 @@ export interface RemovalPlan { root: string; remove: RemovalTarget[]; kept: stri
 
 /** The desktop app's own state in the product root. */
 export const DESKTOP_STATE = /^desktop-app/
-/** The program, as --keep-data reads the root: the rest of it is the person's data. */
+/** The program, as --keep-data reads a root, each in the root the table gives it: the rest of it is the person's data. */
 export const PROGRAM = new Set(['bin', 'runtime', 'pty'])
-/** The only folder name a removal root may have. */
-export const ROOT_NAME = '.harness'
-/**
- * `harness uninstall` at work, in the root: while it is there (and fresh) the desktop app does not start the daemon
- * again (desktop/lib/core/uninstall_marker.dart), which would hold the files being removed and undo the uninstall. It
- * is in no plan: it goes after every other path (removeNow, finalRemovalScript), and before the root, whatever
- * --keep-data keeps. Its text is the time it was written, in seconds: one that outlived an uninstall killed half way
- * stops counting on its own.
- */
-export const UNINSTALL_MARKER = 'uninstalling'
+/** The only folder name a removal root may have, but Linux's two XDG roots. */
+const ROOT_NAME = HARNESS_HOME_NAME
 
 export interface PlanInput {
   platform: NodeJS.Platform
@@ -67,6 +63,8 @@ const pathsFor = (platform: NodeJS.Platform) => (platform === 'win32' ? win32 : 
 /** Windows paths are the same path in any case. */
 const same = (platform: NodeJS.Platform, a: string, b: string) => (platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
 const defaultHome = (platform: NodeJS.Platform) => (platform === process.platform ? homedir() : undefined)
+/** On Linux, the two XDG roots of [home], whether or not Harness has moved there yet: the roots, besides a .harness, a removal may have. */
+const xdgFor = (platform: NodeJS.Platform, home?: string) => (platform === 'linux' && home ? xdgRoots(home, process.env) : null)
 const segments = (platform: NodeJS.Platform, path: string) => path.split(platform === 'win32' ? /[\\/]+/ : /\/+/)
 /** `..`, and on Windows `...` and the like, which Windows reads as a way up as well. */
 const goesUp = (platform: NodeJS.Platform, segment: string) => segment === '..' || (platform === 'win32' && /^\.{2,}$/.test(segment))
@@ -101,13 +99,19 @@ function normalized(platform: NodeJS.Platform, path: string): string {
   return n
 }
 
-/** The root, checked and normalized: a folder named .harness that is not a drive's root, nor home or above it. */
+/**
+ * The root, checked and normalized: a folder named .harness, or on Linux one of the two XDG roots exactly, that is not a
+ * drive's root, nor home or above it.
+ */
 export function checkRoot(platform: NodeJS.Platform, root: string, home?: string): string {
   checkPathText(platform, root)
   const p = pathsFor(platform)
   const n = normalized(platform, root)
   if (same(platform, n, p.parse(n).root) || p.basename(n) === '') refuse(root, 'it is the root of a drive')
-  if (!same(platform, p.basename(n), ROOT_NAME)) refuse(root, `it is not a folder named ${ROOT_NAME}`)
+  const xdg = xdgFor(platform, home)
+  if (!same(platform, p.basename(n), ROOT_NAME) && !(xdg && (n === xdg.data || n === xdg.state))) {
+    refuse(root, `it is not a folder named ${ROOT_NAME}${xdg ? `, ${xdg.data} or ${xdg.state}` : ''}`)
+  }
   if (home !== undefined && home !== '') {
     const h = normalized(platform, home)
     if (same(platform, h, n)) refuse(root, 'it is your home folder')
@@ -138,7 +142,11 @@ export function checkPlan(platform: NodeJS.Platform, plan: RemovalPlan, home?: s
 export function removalPlan(o: PlanInput): RemovalPlan {
   const p = pathsFor(o.platform)
   const home = o.home ?? defaultHome(o.platform)
-  checkRoot(o.platform, o.root, home)
+  const root = checkRoot(o.platform, o.root, home)
+  // An XDG root holds the entries the table gives it, a .harness all of them: a root's program is looked for in it alone.
+  const xdg = xdgFor(o.platform, home)
+  const kinds = xdg ? (['data', 'state'] as const).filter((kind) => xdg[kind] === root) : []
+  const holds = (name: HarnessEntry) => !kinds.length || kinds.includes(HARNESS_ENTRIES[name])
   for (const entry of o.entries) checkName(o.platform, o.root, entry.name)
   o = { ...o, entries: o.entries.filter((e) => e.name !== UNINSTALL_MARKER) }
   const at = (dir: string) => (entry: RootEntry): RemovalTarget => ({ path: p.join(dir, entry.name), dir: entry.dir, ...(entry.link ? { link: true as const } : {}) })
@@ -150,12 +158,12 @@ export function removalPlan(o: PlanInput): RemovalPlan {
   // The CLI's folder is the program's only when it is the root's own `cli` (ADAPTER_CLI_DIR can name another), and
   // only when that `cli` is a folder: a link's far side is not this root's to empty.
   const cliLink = o.entries.some((e) => e.name === 'cli' && e.link)
-  const cliHere = !cliLink && same(o.platform, p.resolve(o.cliDir), p.resolve(o.root, 'cli'))
+  const cliHere = holds('cli') && !cliLink && same(o.platform, p.resolve(o.cliDir), p.resolve(o.root, 'cli'))
   if (cliHere) for (const entry of o.cliEntries) checkName(o.platform, o.cliDir, entry.name)
   // Data is kept whatever holds it: the data folder itself, a folder it is inside, anything inside it.
   const data = p.resolve(o.dataDir)
   const touchesData = (path: string) => same(o.platform, path, data) || inside(o.platform, path, data) || inside(o.platform, data, path)
-  const rootGoes = (e: RootEntry) => PROGRAM.has(e.name) && !touchesData(p.resolve(o.root, e.name))
+  const rootGoes = (e: RootEntry) => PROGRAM.has(e.name) && holds(e.name as HarnessEntry) && !touchesData(p.resolve(o.root, e.name))
   const cliGoes = (e: RootEntry) => cliHere && !touchesData(p.resolve(o.cliDir, e.name))
   return done({
     root: o.root,
@@ -365,7 +373,8 @@ export function manualRemoval(plan: RemovalPlan): string {
  * name is digits and dashes. /v:off keeps a `!` a `!` even where the registry turns delayed expansion on for every cmd;
  * /d skips the AutoRun commands the registry may give every cmd.
  */
-const START_OUTSIDE_JOB = String.raw`$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+export const START_OUTSIDE_JOB = String.raw`${modulesByPath('CimCmdlets')}
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $command = '"' + $env:HARNESS_CMD + '" /d /v:off /c .\' + $env:HARNESS_UNINSTALL_SCRIPT
 $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $env:HARNESS_UNINSTALL_CWD; ProcessStartupInformation = $startup }
 if ($result.ReturnValue -ne 0) { [Console]::Error.Write("Win32_Process.Create returned $($result.ReturnValue)"); exit 3 }`
@@ -414,7 +423,7 @@ export function finalRemovalDeps(): FinalRemovalDeps {
   return {
     pid: process.pid,
     tempDir: tmpdir(),
-    systemRoot: process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows',
+    systemRoot: systemRoot(),
     now: () => Date.now(),
     write: (path, text) => writeFileSync(path, text, 'utf8'),
     remove: (path) => rmSync(path, { force: true }),

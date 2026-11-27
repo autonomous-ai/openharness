@@ -1,7 +1,8 @@
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
-import { command, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
+import { command, requireHookScript, isNamedHold, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
+import { errorKind, fileTag } from '../../lib/log.js'
 import { hostPlatform } from './windowsFiles.js'
 
 export interface NativeHookSettings {
@@ -40,6 +41,7 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that is
     // a failed install with its reason, not a rejection (B4.1 review).
+    requireHookScript(rule.engine)
     const cmd = command(port, rule.engine, undefined, undefined, options.environment, platform === 'win32' ? rule.win32Runner! : 'bash')
     return await runHookPreparation([rule.file], async attempt => {
       const observed = inspectHookFile(rule.file)
@@ -87,14 +89,15 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
       }
       const published = await observed.replace(changed ? JSON.stringify(parsed, null, 2) + '\n' : observed.content!, attempt)
       published.verify()
-      console.log(changed ? rule.messages.installed.replace('{file}', () => rule.file) : rule.messages.current)
+      // The file by its hash: its path names the person's home.
+      console.log(changed ? rule.messages.installed.replace('{file}', () => fileTag(rule.file)) : rule.messages.current)
       if (changed && rule.messages.after) console.log(rule.messages.after)
       return true
     }, { ...options, identity: JSON.stringify([identitySettings(rule, platform), port, cmd]) })
   } catch (error) {
-    const line = hooksNotInstalled(rule.engine, error, platform)
-    if (line) console.error(line)
-    else console.error(rule.messages.failed, error)
+    const held = error instanceof HookPreparationHeld ? error.hold : errorKind(error)
+    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled(rule.engine)} · ${held}`)
+    else console.error(rule.messages.failed, held)
     return false
   }
 }

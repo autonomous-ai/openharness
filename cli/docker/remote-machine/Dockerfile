@@ -46,9 +46,8 @@ ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
 # tmux: the daemon discovers and drives agents through it, so there is no agent without it.
-# procps: `ps` — the CLI reads a live engine's environment to answer "which grid is this agent on?"
-#   (`lib/processEnv.ts`). On Linux it reads /proc directly, but ps is what makes the same question
-#   answerable by hand when a test disagrees with the daemon.
+# procps: `ps` — how the daemon reads the process table (`lib/processTable.ts`), and how a person
+#   checks the box by hand.
 # git + ca-certificates + curl: what an engine expects to find on a developer box.
 # socat: the SSO callback listener binds the container's LOOPBACK (as it should — see
 #   ADAPTER_LOGIN_CALLBACK_PORT), but Docker publishes a port to the container's eth0, so nothing

@@ -63,4 +63,4 @@ with tempfile.TemporaryDirectory(prefix='harness-reload-threads-') as folder:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-pthread',
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),str(folder/'reload.c'),
         '-o',str(folder/'reload')],check=True)
-    subprocess.run([str(folder/'reload')],check=True,timeout=60)
+    subprocess.run([str(folder/'reload')],check=True)

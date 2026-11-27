@@ -1,12 +1,14 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { insideGitCheckout, validGitPath } from './gitProject.js'
+import { insideGitCheckout } from './gitProject.js'
+import { ghPath, gitPath } from './gitOnPath.js'
+import { validProjectPath } from './projectPath.js'
 import { canonicalRepository } from './agentProject.js'
 import { validPullRequestUrl } from './sessionWorkWire.js'
 import { tmpdir } from 'node:os'
 
 const exec = promisify(execFile)
-type Run = (command: string, args: string[], cwd: string) => Promise<string>
+type Run = (command: 'git' | 'gh', args: string[], cwd: string) => Promise<string>
 /** Bound process and queue counts across simultaneous badges and history pages. */
 export function boundedPullRequestRunner(execute: Run, limit = 4, queueLimit = 64, waitMs = 2000): Run {
   let active = 0
@@ -38,7 +40,8 @@ const run: Run = boundedPullRequestRunner(async (command, args, cwd) => {
   if (command === 'git' && !(await insideGitCheckout(cwd))) throw new Error('not a Git checkout')
   const env = { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
-  return (await exec(command, args, { cwd, env, timeout: command === 'git' ? 1500 : 5000,
+  const file = command === 'git' ? await gitPath() : await ghPath()
+  return (await exec(file, args, { cwd, env, timeout: command === 'git' ? 1500 : 5000,
     killSignal: 'SIGKILL', maxBuffer: 256 * 1024 })).stdout.trim()
 })
 export type FoundPullRequest = {
@@ -141,7 +144,7 @@ export function createPullRequestReader(execute: Run = run, now = Date.now) {
   const readBranch = createBranchPullRequestReader(execute, now)
   const cache = new Map<string, { until: number; value: Promise<PullRequestResult> }>()
   return async (cwd: string, expected?: PullRequestIdentity): Promise<PullRequestResult> => {
-    if (!validGitPath(cwd)) return { status: 'unavailable' }
+    if (!validProjectPath(cwd)) return { status: 'unavailable' }
     try {
       const [branch, remote] = await Promise.all([
         execute('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd),

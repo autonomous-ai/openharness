@@ -51,13 +51,13 @@ describe('keeping a conversation the daemon left for a new one', () => {
 
   it('says why it could not, and is never in the way; a window that cannot be told is not an error', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const full = { list: () => [], get: () => null, save: vi.fn<(row: RegisteredSession) => void>(() => { throw new Error('ENOSPC') }) }
+    const full = { list: () => [], get: () => null, save: vi.fn<(row: RegisteredSession) => void>(() => { throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }) }) }
     const keep = createKeepAbandonedConversation({ stoppedAgents: full, publishStoppedAgent: publish })
     expect(() => keep(left())).not.toThrow()
     expect(warn).toHaveBeenCalledWith('[agent] agent-1 could not keep the conversation it left, session- · ENOSPC')
     full.save.mockImplementationOnce(() => { throw 'locked' })
     keep(left())
-    expect(warn).toHaveBeenCalledWith('[agent] agent-1 could not keep the conversation it left, session- · locked')
+    expect(warn).toHaveBeenCalledWith('[agent] agent-1 could not keep the conversation it left, session- · string')
     // Saved, but it did not read back: nothing to tell the windows.
     full.save.mockImplementationOnce(() => {})
     keep(left())

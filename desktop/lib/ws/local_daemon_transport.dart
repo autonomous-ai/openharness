@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
+import '../core/harness_home.dart';
 import '../core/test_run.dart';
 import 'daemon_pipe_record.dart';
 import 'trusted_pipe.dart';
@@ -36,30 +37,65 @@ const _maxSocketPathBytes = 96;
 
 /// Where the socket of the daemon on [port] would be —
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
-/// `~/.harness/cli/data/daemon-<port>.sock` — or null where there is none
-/// (Windows, or a home too long as well).
+/// `cli/data/daemon-<port>.sock` in Harness's data root — or null where there
+/// is none (Windows, or a home too long as well). [look] is for tests: both
+/// folders' roots, whether it is Linux and `XDG_RUNTIME_DIR` are found by it,
+/// this computer's by default.
 String? defaultDaemonSocketPath(
   int port, {
   Map<String, String>? environment,
   bool? isWindows,
+  HomeLook? look,
 }) {
   if (isWindows ?? Platform.isWindows) return null;
+  // One answer per folder for both folders, so they never come from two
+  // layouts while Harness's folder moves.
+  final rule = (look ?? platformHomeLook(environment: environment))
+      .remembered();
   final dataDir = defaultDaemonDataDir(
     environment: environment,
     isWindows: isWindows,
+    look: rule,
   );
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
   if (utf8.encode(path).length <= _maxSocketPathBytes) return path;
-  // Too long to hold a socket: the daemon's is under the home folder, named by
-  // the folder's hash (CLI `lib/localSocket.ts` `socketPathIn`).
+  // Too long to hold a socket: the daemon's is in a short folder named by the
+  // folder's hash (CLI `lib/localSocket.ts` `socketPathIn`): on Linux under
+  // XDG_RUNTIME_DIR while that is the account's own, else in the state root.
   // No HOME: the empty path has no socket, so this reads as the daemon being
   // down, never as a place with no socket at all, which would allow the port.
   final home = (environment ?? Platform.environment)['HOME'] ?? '';
   final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
   final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  final short = '$home/.harness/s/$hex/${daemonSocketName(port)}';
+  // Its trailing slashes go, as the CLI's `join` drops them.
+  final runtime = rule.environment['XDG_RUNTIME_DIR']?.replaceFirst(
+    RegExp(r'/+$'),
+    '',
+  );
+  final sockets = rule.linux && runtime != null && _ownPrivateFolder(runtime)
+      ? '$runtime/harness'
+      : HarnessHome.of(
+          home,
+          join: separatorJoin('/'),
+          look: rule,
+        ).path(HarnessEntry.s);
+  final short = '$sockets/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
+}
+
+/// Whether [path] is absolute and names a folder itself (no link) of mode
+/// exactly 0700 that this process can enter. dart:io shows no owner, but only
+/// the owner (or root) can enter a 0700 folder, so that stands for the CLI's
+/// "owned by this account".
+bool _ownPrivateFolder(String path) {
+  if (!path.startsWith('/')) return false;
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.directory) {
+    return false;
+  }
+  if (FileStat.statSync(path).mode & 0xfff != 0x1c0) return false;
+  return FileStat.statSync('$path/.').type != FileSystemEntityType.notFound;
 }
 
 /// The header a call to the daemon's loopback PORT carries its local
@@ -94,7 +130,7 @@ HttpClient unixHttpClient(String path) => HttpClient()
 /// discovery, REST and the local WebSocket so they agree.
 class LocalDaemonTransport {
   LocalDaemonTransport({
-    this.candidate,
+    this._candidate,
     this.trustedPipe,
     this.recordedPort,
     this.credential,
@@ -105,7 +141,9 @@ class LocalDaemonTransport {
   /// for all local routes, and the credential for non-Windows loopback TCP. Under `flutter
   /// test`, no real daemon transport or credential is reached.
   factory LocalDaemonTransport.detect(Uri daemonBase) => LocalDaemonTransport(
-    candidate: kUnderTest ? null : defaultDaemonSocketPath(daemonBase.port),
+    candidate: kUnderTest
+        ? null
+        : () => defaultDaemonSocketPath(daemonBase.port),
     trustedPipe: kUnderTest || !Platform.isWindows
         ? null
         : TrustedPipe.forPort(daemonBase.port),
@@ -120,8 +158,11 @@ class LocalDaemonTransport {
     credential: kUnderTest ? null : readDaemonCredential,
   );
 
-  /// Where the socket would be, or null when this app never uses one.
-  final String? candidate;
+  final String? Function()? _candidate;
+
+  /// Where the socket would be, or null when this app never uses one. Found
+  /// again at each use: Harness's folder may move while the app runs.
+  String? get candidate => _candidate?.call();
 
   /// Windows: the daemon's authenticated pipe (CLI `listenAuthenticated`),
   /// which carries all local REST and WebSocket traffic. The window connection

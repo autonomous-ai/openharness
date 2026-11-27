@@ -3,6 +3,7 @@ import { linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, sym
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { removeLink } from '../../lib/removePath.js'
 
 const control = vi.hoisted(() => ({
   failures: new Map<string, string>(),
@@ -22,7 +23,12 @@ vi.mock('../../lib/processEvidence.js', async () => {
 vi.mock('../../lib/deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn(async () => 'gone') }))
 vi.mock('../../core/engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(),
-  execFile: () => { throw new Error('Native identity tests must not launch a host binary') },
+  execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
+    if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) {
+      throw new Error('Native identity tests must not launch a host binary')
+    }
+    queueMicrotask(() => done(null, 'fixture-start'))
+  },
 }))
 vi.mock('../inProcess.js', () => ({ loadEngine: () => { throw new Error('Session control must remain eager') } }))
 vi.mock('node:perf_hooks', async original => {
@@ -72,6 +78,7 @@ vi.mock('../../lib/sqliteRead.js', async original => {
 })
 
 let root: string, home: string
+let fixtureRegistry: typeof import('../../lib/registry.js')['registry'] | undefined
 let pool: typeof import('./storePool.js').readStorePool
 let repair: typeof import('../../lib/sessionRepair.js').findLiveSession
 let declared: import('./storeHomes.js').StoreHomes
@@ -99,6 +106,7 @@ const read = () => pool(declared, home, query)
 const find = () => repair('hermes', '/fixture/work', Date.parse('2026-10-09T11:59:00Z'))
 const held = (work: Promise<unknown>) => expect(work).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
 beforeEach(async () => {
+  fixtureRegistry = undefined
   root = realpathSync(mkdtempSync(join(tmpdir(), 'hermes-store-pool-')))
   home = join(root, 'hermes')
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECTS_DIR',
@@ -107,12 +115,16 @@ beforeEach(async () => {
     'KILO_DATA_DIR', 'DEVIN_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) vi.stubEnv(name, join(root, name))
   vi.stubEnv('HERMES_HOME', home)
   vi.resetModules()
+  const processChecks = await import('../../lib/deleteAgentFallback.js')
+  vi.mocked(processChecks.checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture process ended' })
+  vi.mocked(processChecks.terminateDeletedAgent).mockReset().mockResolvedValue('gone')
   Database = (process.getBuiltinModule('node:sqlite') as { DatabaseSync: typeof Database }).DatabaseSync
   pool = (await import('./storePool.js')).readStorePool
   repair = (await import('../../lib/sessionRepair.js')).findLiveSession
   declared = (await import('../hermes/contract.js')).HERMES_HOMES
 })
 afterEach(async () => {
+  await fixtureRegistry?.flush({ exiting: true })
   ;(await import('../../lib/sqliteBuiltin.js')).closeSqliteHandles()
   control.failures.clear(); control.afterQuery = undefined; control.afterStat = undefined
   control.result = undefined; control.now = undefined; control.queries = []
@@ -201,7 +213,7 @@ it('deduplicates aliases to one physical store but retains all path evidence', a
   symlinkSync(profile, join(home, 'profiles', 'alias'), 'dir')
   expect(await find()).toEqual({ sessionId: id, hermesHome: profile })
   expect(control.queries).toHaveLength(1)
-  control.afterQuery = () => { rmSync(join(home, 'profiles', 'alias')); control.afterQuery = undefined }
+  control.afterQuery = () => { removeLink(join(home, 'profiles', 'alias')); control.afterQuery = undefined }
   await held(find())
 })
 
@@ -322,7 +334,7 @@ it('shares one deadline across stores and passes the remaining budget to SQLite'
   control.afterQuery = () => { control.now = 2_001 }
   await expect(find()).rejects.toThrow('deadline')
   expect(control.queries).toHaveLength(1)
-  expect(control.queries[0].options).toEqual({ busyTimeoutMs: 250, cliTimeoutMs: 2000, maxBuffer: 40 * 1024 * 1024 })
+  expect(control.queries[0].options).toEqual({ busyTimeoutMs: 250, timeoutMs: 2000, maxBuffer: 40 * 1024 * 1024 })
 })
 
 it('holds a failed final inspection even after a successful SQL query', async () => {
@@ -402,9 +414,9 @@ it('cannot bind a delegated row through directory repair, and retries when an in
   update(path, "UPDATE sessions SET source = 'tool'")
   const row = { engine: 'hermes', agentId: 'fixture-agent', sessionId: '', cwd: '/fixture/work', runtimes: [],
     processIdentity: { pid: 4242, executable: 'hermes', startMarker: '2026-10-09T11:59:00Z' } } as unknown as import('../../lib/registry.js').RegisteredSession
-  const register = vi.fn(() => null)
+  const register = vi.fn(async () => null)
   const deps = { registry: { byProcess: () => row, bySession: () => undefined, has: () => false, register },
-    homes: { hermes: home } } as unknown as import('../../core/agents/bind.js').BindDeps
+    homes: { hermes: home }, followsLive: () => false } as unknown as import('../../core/agents/bind.js').BindDeps
   const observed = { engine: 'hermes', cwd: '/fixture/work', runtimes: [], primaryRuntimeKey: '',
     args: 'hermes', resumeSessionId: null, processIdentity: row.processIdentity! } as import('../../lib/terminalAgentDiscovery.js').DiscoveredTerminalAgent
   const binding = (await import('../../core/agents/bind.js')).createBinding(deps)
@@ -412,13 +424,15 @@ it('cannot bind a delegated row through directory repair, and retries when an in
   expect(register).not.toHaveBeenCalled()
   update(path, `INSERT INTO sessions VALUES ('${other}', 'cli', '/fixture/work', 1791547200)`)
   await binding.bindObservedAgent(observed)
-  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: other, hermesHome: home }))
+  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: other, hermesHome: home }),
+    expect.objectContaining({ current: expect.any(Function) }))
 })
 
 async function stopFixture() {
   const profile = join(home, 'profiles', 'work')
   store(profile)
   const { registry } = await import('../../lib/registry.js')
+  fixtureRegistry = registry
   const { stoppedAgents } = await import('../../lib/stoppedAgents.js')
   const { AgentRestartCoordinator } = await import('../../lib/restartAgent.js')
   const { createForgetSession } = await import('../../core/agents/forget.js')
@@ -426,19 +440,20 @@ async function stopFixture() {
   const { terminateDeletedAgent } = await import('../../lib/deleteAgentFallback.js')
   const processIdentity = { pid: 4242, executable: 'hermes', startMarker: '2026-10-09T11:59:00Z' }
   control.processes = [{ ...processIdentity, args: 'hermes', parentPid: 1 }]
-  const live = registry.openProcessAgent({ engine: 'hermes', cwd: '/fixture/work', tmuxPane: '%77', processIdentity })!.entry
+  const receipt = (await registry.openProcessAgent({ engine: 'hermes', cwd: '/fixture/work', tmuxPane: '%77', processIdentity }))!.entry
+  const live = registry.byAgent(receipt.agentId)!
+  expect(registry.byAgent(live.agentId)?.processIdentity).toEqual(processIdentity)
   const forgetSession = createForgetSession({
     registry, stoppedAgents, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
-    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
-    dataDir: process.env.ADAPTER_DATA_DIR!,
   })
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   const stop = createStopAgentService({ registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
-    backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(async () => {}),
   })
   return { stop, registry, stoppedAgents, live, profile, kill, terminateDeletedAgent }

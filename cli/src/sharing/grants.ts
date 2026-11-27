@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
+import { atomicWriteFile } from '../lib/secureState.js'
 
 export const emailSchema = z.string().trim().toLowerCase().email().max(254)
 export const inviteSchema = z.object({
@@ -22,7 +23,7 @@ const grantSchema = z.object({
 })
 export type HarnessGrant = z.infer<typeof grantSchema>
 /** An observer a shared tab's roster wants for one of this machine's harnesses (`derive`). */
-export interface DerivedGrant { agentId: string; email: string; tab: string; name: string; engine: string | null; ownerPublicKey: string }
+interface DerivedGrant { agentId: string; email: string; tab: string; name: string; engine: string | null; ownerPublicKey: string }
 /** The backend's bounds on a share's name (backend/src/routes/harnessShares.ts): a roster allows 200 characters, and
  *  an empty one once its control characters are taken out. */
 const shareName = (name: string): string => name.trim().slice(0, 160) || 'Harness'
@@ -39,9 +40,7 @@ export class HarnessGrantStore {
   }
   private save(next: HarnessGrant[]): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temp = `${this.path}.${randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify(next), { mode: 0o600, flag: 'wx' })
-    renameSync(temp, this.path)
+    atomicWriteFile(this.path, JSON.stringify(next), 'cache')
     this.grants = next
   }
   all(): HarnessGrant[] { return this.grants.map(g => ({ ...g })) }

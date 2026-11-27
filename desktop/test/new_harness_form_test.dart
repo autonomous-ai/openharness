@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/browser/browser_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/harness_launch_integration.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -993,162 +990,4 @@ void main() {
     await press(tester, LogicalKeyboardKey.escape);
     expect(box.field, dismissed);
   });
-
-  group('Browser in Swarm New agent', () {
-    Future<NewHarnessController> mountBrowser(
-      WidgetTester tester, {
-      Map<String, dynamic> available = const {'state': 'ready'},
-      bool local = true,
-      bool offered = true,
-    }) async {
-      final connection = _Browser(available);
-      final app = createApp(
-        connectionForTest: (_) => connection,
-        connected: true,
-      );
-      app.machineStates['m']!
-        ..machine = const Machine(
-          machineId: 'm',
-          authMode: MachineAuthMode.remote,
-          name: 'Ken Mac',
-        )
-        ..localOnly = local;
-      final box = NewHarnessController(
-        app,
-        machineId: 'm',
-        engine: 'claude',
-        folder: '/work/repo',
-        integration: offered
-            ? HarnessLaunchIntegration(
-                creationId: 'c1',
-                offersBrowser: true,
-                prepare: (_, task, _) async => task,
-                complete: (_, _) async {},
-                beforeSubmit: (_, _) async {},
-              )
-            : null,
-      );
-      addTearDown(app.dispose);
-      addTearDown(box.dispose);
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(1100, 800);
-      addTearDown(tester.view.reset);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: NewHarnessForm(
-              controller: box,
-              onClose: () {},
-              onCreated: () {},
-              desktop: true,
-              embedded: true,
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      return box;
-    }
-
-    final pill = find.byKey(const ValueKey('new-harness-field-browser'));
-    const line = 'Needs setup · about 15 min';
-    DesktopPill pillOf(WidgetTester tester) => tester.widget<DesktopPill>(pill);
-
-    testWidgets('the pill shows only in Swarm New agent', (tester) async {
-      await mountBrowser(tester, offered: false);
-      expect(pill, findsNothing);
-      await mountBrowser(tester);
-      expect(pill, findsOneWidget);
-      expect(pillOf(tester).tooltip, 'A sandboxed Chrome the agent drives');
-    });
-
-    test('the pill and the Browser button are not offered on the web or on '
-        'Windows', () {
-      bool offered({bool web = false, bool windows = false, bool asked = true}) =>
-          browserOffered(web: web, windows: windows, offersBrowser: asked);
-      expect(offered(web: true), isFalse);
-      expect(offered(windows: true), isFalse);
-      expect(offered(asked: false), isFalse);
-      expect(offered(), isTrue);
-    });
-
-    testWidgets('ready, stopped, podman_old and podman_memory: the pill works '
-        'and shows no line', (tester) async {
-      for (final state in ['ready', 'stopped', 'podman_old', 'podman_memory']) {
-        final box = await mountBrowser(tester, available: {'state': state});
-        expect(box.browser, isFalse, reason: 'off by default');
-        await tester.tap(pill);
-        await tester.pump();
-        expect(box.browser, isTrue, reason: state);
-        expect(find.text(line), findsNothing);
-      }
-    });
-
-    testWidgets('needs_setup on this computer: the pill works and shows "Needs '
-        'setup · about 15 min"', (tester) async {
-      final box = await mountBrowser(
-        tester,
-        available: {'state': 'needs_setup'},
-      );
-      expect(find.text(line), findsOneWidget);
-      await tester.tap(pill);
-      await tester.pump();
-      expect(box.browser, isTrue);
-    });
-
-    for (final (available, why) in [
-      (
-        {'state': 'needs_setup'},
-        'Set up Browser on Ken Mac first',
-      ),
-      ({'state': 'unsupported'}, 'Update Harness on Ken Mac first'),
-      (
-        {'state': 'unavailable'},
-        'Browser isn\'t available on Ken Mac right now',
-      ),
-    ]) {
-      testWidgets('${available['state']} on another computer: disabled with '
-          '"$why"', (tester) async {
-        final box = await mountBrowser(
-          tester,
-          available: available,
-          local: false,
-        );
-        expect(pillOf(tester).onPressed, isNull);
-        expect(pillOf(tester).tooltip, why);
-        expect(find.text(line), findsNothing);
-        box.toggleBrowser();
-        expect(box.browser, isFalse);
-      });
-    }
-  });
-}
-
-/// A machine whose daemon answers the form's reads, and `agent_browser_available` with [available] (`unsupported`
-/// and `unavailable` stand for an older CLI's refusal and a service that did not answer).
-class _Browser extends _Git {
-  _Browser(this.available);
-  final Map<String, dynamic> available;
-
-  @override
-  bool get isReady => true;
-
-  @override
-  Future<Map<String, dynamic>> request(
-    String type, {
-    Map<String, dynamic> payload = const {},
-    Duration timeout = const Duration(seconds: 20),
-  }) async {
-    if (type != 'agent_browser_available') {
-      return super.request(type, payload: payload, timeout: timeout);
-    }
-    return switch (available['state']) {
-      'unsupported' => throw WsRequestFailure(
-        responseType: '${type}_result',
-        code: 'UNSUPPORTED',
-      ),
-      'unavailable' => throw WsRequestTimeout(type),
-      _ => available,
-    };
-  }
 }

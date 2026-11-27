@@ -1,9 +1,13 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import type { Server } from 'node:http'
 import type { HookServerHandlers } from '../hookServer.js'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { noOtherStreams } from '../testing/otherStreams.js'
+import { startMarkerMs } from './processProof.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // These are ownership and injected-I/O outcomes, independent of host scheduling. Actual
 // elapsed-work deadlines are exercised separately in engines/kit/nativeEvidence.spec.ts.
@@ -23,6 +27,17 @@ vi.mock('fs', async original => {
     return actual.fsyncSync(fd)
   } }
 })
+// A registry image flush a test holds open, as a slow disk does.
+const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void) }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await preparation.wait?.() } }))
+function hold() {
+  let entered!: () => void, release!: () => void
+  const reached = new Promise<void>(done => { entered = done }), released = new Promise<void>(done => { release = done })
+  preparation.release = release
+  preparation.wait = async () => { preparation.wait = undefined; entered(); await released }
+  return { entered: reached, release }
+}
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -35,10 +50,14 @@ function observeNativeProof(): void { vi.doMock('../engines/transcriptBindings.j
     return { ...proof, verify: (...selected: Parameters<typeof proof.verify>) => { fault.beforeVerify?.(); proof.verify(...selected) } }
   } }
 }) }
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js'); await import('../hookServer.js')
 const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 let server: Server | undefined
 let root: string, home: string, file: string, transcript: string
 let registry: typeof import('./registry.js')['registry'], target: string, source: string
+let timers: ReturnType<typeof deadline.holdRegistryDeadline>
 const header = (id = A, delegated = false) => JSON.stringify({ type: 'session_meta', payload: {
   id, cwd: root, source: delegated ? { subagent: { thread_spawn: { parent_thread_id: B, depth: 1 } } } : 'cli',
 } }) + '\n'
@@ -51,6 +70,9 @@ const unchanged = (before: ReturnType<typeof snapshot>) => {
   expect(readFileSync(file, 'utf8')).toBe(before.disk)
 }
 beforeEach(async () => {
+  // The hook server answers a commit still in flight after 250 ms, and the registry expires a write after 5 s.
+  // Only a test fires either here, so how fast this machine writes the registry never changes the outcomes these tests pin.
+  timers = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [250] })
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
   root = realpathSync(mkdtempSync(join(tmpdir(), 'registry-admission-')))
   home = join(root, 'codex'); file = join(root, 'data', 'registry.json'); fault.file = file
@@ -62,42 +84,45 @@ beforeEach(async () => {
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}')
   transcript = join(home, 'sessions', `rollout-${A}.jsonl`); writeFileSync(transcript, header())
   vi.resetModules(); observeNativeProof(); ({ registry } = await import('./registry.js'))
-  target = registry.openProcessAgent({ engine: 'terminal', tmuxPane: '%1', cwd: root,
-    processIdentity: { pid: 4101, startMarker: 'fixture-start', executable: '<shell>' } })!.entry.agentId
-  source = registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root, processIdentity: input(A, transcript, '%2').processIdentity })!.entry.agentId
+  target = (await registry.openProcessAgent({ engine: 'terminal', tmuxPane: '%1', cwd: root,
+    processIdentity: { pid: 4101, startMarker: 'fixture-start', executable: '<shell>' } }))!.entry.agentId
+  source = (await registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root, processIdentity: input(A, transcript, '%2').processIdentity }))!.entry.agentId
+  await registry.flush()
 })
 afterEach(async () => {
+  preparation.wait = undefined; preparation.release?.(); preparation.release = undefined
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
+  await registry.flush().catch(() => {})
   vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true })
 })
 
-it.each(['', '{', '{"type":"session_meta"}\n'])('holds incomplete native evidence without promoting the terminal: %s', text => {
+it.each(['', '{', '{"type":"session_meta"}\n'])('holds incomplete native evidence without promoting the terminal: %s', async text => {
   writeFileSync(transcript, text)
   const before = snapshot()
-  expect(() => registry.register(input())).toThrow()
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow()
   unchanged(before)
   expect(registry.byRuntimeTerminal({ backend: 'tmux', paneId: '%1' })?.agentId).toBe(target)
 })
-it.each(['different-id', 'delegated'])('refuses confirmed %s without changing the terminal or its durable row', kind => {
+it.each(['different-id', 'delegated'])('refuses confirmed %s without changing the terminal or its durable row', async kind => {
   writeFileSync(transcript, header(kind === 'different-id' ? B : A, kind === 'delegated'))
   const before = snapshot()
-  expect(registry.register(input())).toBeNull()
+  expect((await registry.register(input()))).toBeNull()
   unchanged(before)
 })
-it.each(['terminal', 'active-owner', 'dormant-owner'])('keeps every live and durable owner when the %s commit fails', kind => {
+it.each(['terminal', 'active-owner', 'dormant-owner'])('keeps every live and durable owner when the %s commit fails', async kind => {
   if (kind !== 'terminal') {
-    expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
-    if (kind === 'dormant-owner') registry.setActive(source, false)
+    expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
+    if (kind === 'dormant-owner') { registry.setActive(source, false); await registry.flush() }
   }
   const before = snapshot(); fault.rename = true
-  expect(() => registry.register(input())).toThrow('fixture registry write failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   unchanged(before)
   expect(registry.byAgent(target)?.engine).toBe('terminal')
   if (kind !== 'terminal') expect(registry.bySession(A)?.agentId).toBe(source)
 })
-it('rechecks the native header under the write lock before publishing any registration', () => {
+it('rechecks the native header under the write lock before publishing any registration', async () => {
   const before = snapshot()
   let checked = false
   fault.beforeVerify = () => {
@@ -105,26 +130,31 @@ it('rechecks the native header under the write lock before publishing any regist
     expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
     writeFileSync(transcript, header(B))
   }
-  expect(() => registry.register(input())).toThrow('header changed')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('header changed')
   expect(checked).toBe(true)
   unchanged(before)
 })
-it('never overwrites a different durable admission that arrived during inspection', () => {
+it('never overwrites a different durable admission that arrived during inspection', async () => {
   const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const before = JSON.stringify(registry.list())
   let committed = ''
   fault.afterProof = () => {
     fault.afterProof = undefined
-    expect(peer.register(input(B, other))).not.toBeNull()
+    const rows = JSON.parse(readFileSync(file, 'utf8'))
+    Object.assign(rows.find((row: { agentId: string }) => row.agentId === target), {
+      engine: 'codex', sessionId: B, transcriptPath: other, boundAt: Date.now(), processIdentity: input(B, other).processIdentity,
+    })
+    writeFileSync(file, JSON.stringify(rows, null, 2))
     committed = readFileSync(file, 'utf8')
   }
-  expect(() => registry.register(input())).toThrow('saved binding changed')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('saved binding changed')
   expect(JSON.stringify(registry.list())).toBe(before)
   expect(readFileSync(file, 'utf8')).toBe(committed)
+  peer.load()
   expect(peer.bySession(B)?.agentId).toBe(target)
 })
-it('returns the committed live row and publishes only after the registry write', () => {
+it('returns the committed row snapshot and publishes only after the registry write', async () => {
   const former = registry.byAgent(target)!, before = structuredClone(former)
   const entered: string[] = []
   registry.onEnter = engine => {
@@ -132,18 +162,18 @@ it('returns the committed live row and publishes only after the registry write',
     expect(saved.find(row => row.agentId === target)?.sessionId).toBe(A)
     entered.push(engine)
   }
-  const result = registry.register(input())!
+  const result = (await registry.register(input()))!
   expect(result.entry).not.toBe(former)
   expect(former).toEqual(before)
-  expect(result.entry).toBe(registry.byAgent(target))
+  expect(result.entry).toEqual(registry.byAgent(target))
   expect(result.entry.sessionId).toBe(A)
-  expect(registry.bySession(A)).toBe(result.entry)
+  expect(registry.bySession(A)).toEqual(result.entry)
   expect(entered).toContain('codex')
 })
 
 
-it('publishes all displaced owners before optional entry notification and contains its failure', () => {
-  expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
+it('publishes all displaced owners before optional entry notification and contains its failure', async () => {
+  expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const observations: string[] = []
   registry.onEnter = engine => {
@@ -153,8 +183,8 @@ it('publishes all displaced owners before optional entry notification and contai
     observations.push(engine)
     throw new Error('optional engine startup unavailable')
   }
-  const result = registry.register(input())!
-  expect(result.entry).toBe(registry.byAgent(target))
+  const result = (await registry.register(input()))!
+  expect(result.entry).toEqual(registry.byAgent(target))
   expect(observations.length).toBe(2)
   expect(warning).toHaveBeenCalledTimes(2)
   const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<{ agentId: string; sessionId: string }>
@@ -163,43 +193,43 @@ it('publishes all displaced owners before optional entry notification and contai
 })
 
 
-it.each(['terminal', 'active-owner', 'dormant-owner'])('reconciles its own post-rename uncertainty for %s before publishing', kind => {
+it.each(['terminal', 'active-owner', 'dormant-owner'])('reconciles its own post-rename uncertainty for %s before publishing', async kind => {
   if (kind !== 'terminal') {
-    expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
-    if (kind === 'dormant-owner') registry.setActive(source, false)
+    expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
+    if (kind === 'dormant-owner') { registry.setActive(source, false); await registry.flush() }
   }
   const before = JSON.stringify(registry.list())
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   expect(JSON.stringify(registry.list())).toBe(before)
   const written = readFileSync(file, 'utf8')
   expect(JSON.parse(written).find((row: { agentId: string }) => row.agentId === target).sessionId).toBe(A)
   fault.directorySync = false
-  const result = registry.register(input())!
+  const result = (await registry.register(input()))!
   expect(result.entry.sessionId).toBe(A)
-  expect(result.entry).toBe(registry.byAgent(target))
+  expect(result.entry).toEqual(registry.byAgent(target))
   expect(readFileSync(file, 'utf8')).toBe(written)
   if (kind === 'active-owner') expect(registry.byAgent(source)?.sessionId).toBe('')
   if (kind === 'dormant-owner') expect(registry.byAgent(source)).toBeUndefined()
 })
 
-it('does not consume post-rename uncertainty as success after a local removal changes ownership', () => {
+it('does not consume post-rename uncertainty as success after a local removal changes ownership', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const written = readFileSync(file, 'utf8')
-  registry.removeAgent(target)
-  expect(registry.register(input())).toBeNull()
+  ;(await removeRegistryAgent(registry, target))
+  expect((await registry.register(input()))).toBeNull()
   expect(registry.byAgent(target)).toBeUndefined()
   const saved = JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === target)
   expect(saved).toBeUndefined()
   expect(readFileSync(file, 'utf8')).not.toBe(written)
 })
 
-it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding intact when mismatch refusal meets %s', mode => {
-  expect(registry.register(input())).not.toBeNull()
+it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding intact when its rotation\'s write meets %s', async mode => {
+  expect((await registry.register(input()))).not.toBeNull()
   const row = registry.byAgent(target)!
-  row.resumeOnly = true; row.lastHookAt = 0; row.launch = { state: 'starting' }; registry.flush()
+  row.resumeOnly = true; row.lastHookAt = 0; row.launch = { state: 'starting' }; (await registry.flush())
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const before = snapshot()
   if (mode === 'rename') fault.rename = true
@@ -207,9 +237,15 @@ it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding int
   let peerDisk: string | undefined
   if (mode === 'peer-commit') {
     const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
-    fault.afterProof = () => { fault.afterProof = undefined; peer.setLaunch(target, { state: 'ready' }); peerDisk = readFileSync(file, 'utf8') }
+    fault.afterProof = () => {
+      fault.afterProof = undefined
+      const rows = JSON.parse(readFileSync(file, 'utf8'))
+      rows.find((row: { agentId: string }) => row.agentId === target).launch = { state: 'ready' }
+      writeFileSync(file, JSON.stringify(rows, null, 2))
+      peerDisk = readFileSync(file, 'utf8')
+    }
   }
-  expect(() => registry.register(input(B, other))).toThrow()
+  await expect((async () => (await registry.register(input(B, other))))()).rejects.toThrow()
   expect(JSON.stringify(registry.list())).toBe(before.live)
   expect(readFileSync(file, 'utf8')).toBe(peerDisk ?? before.disk)
 })
@@ -219,12 +255,13 @@ it('cannot flush an unrelated stale discovery claim over a newer durable peer', 
   let peerDisk = ''
   await registry.transaction(async () => {
     registry.updateRuntimes(source, [{ backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')
-    const third = peer.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
-      processIdentity: { pid: 9103, startMarker: 'fixture-peer', executable: '<claude>' } })!
+    const third = (await peer.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
+      processIdentity: { pid: 9103, startMarker: 'fixture-peer', executable: '<claude>' } }))!
+    await peer.flush()
     peerDisk = readFileSync(file, 'utf8')
     expect(third.entry.agentId).not.toBe(source)
     const live = JSON.stringify(registry.list())
-    expect(() => registry.register(input())).toThrow()
+    await expect((async () => (await registry.register(input())))()).rejects.toThrow()
     expect(JSON.stringify(registry.list())).toBe(live)
     expect(readFileSync(file, 'utf8')).toBe(peerDisk)
     // Finish the observation without the stale route; it never earns a write through registration.
@@ -234,109 +271,111 @@ it('cannot flush an unrelated stale discovery claim over a newer durable peer', 
 })
 
 
-it('rolls back only its unpublished image before a different local write and then retries the held admission', () => {
+it('rolls back only its unpublished image before a different local write and then retries the held admission', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   registry.setCwd(source, '/fixture/next-folder')
   expect(registry.byAgent(target)?.engine).toBe('terminal')
   expect(registry.byAgent(source)?.cwd).toBe('/fixture/next-folder')
-  const result = registry.register(input())!
+  const result = (await registry.register(input()))!
   expect(result.entry.sessionId).toBe(A)
   expect(registry.byAgent(source)?.cwd).toBe('/fixture/next-folder')
   expect(JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === source).cwd).toBe('/fixture/next-folder')
 })
 
-it('contains another directory failure while reversing an unpublished binding for removal', () => {
+it('contains another directory failure while reversing an unpublished binding for removal', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
-  registry.removeAgent(target)
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
+  await expect(removeRegistryAgent(registry, target)).rejects.toThrow('registry storage write failed')
+  expect(registry.byAgent(target)).toBeDefined()
   fault.directorySync = false
-  registry.flush()
-  expect(registry.register(input())).toBeNull()
+  await removeRegistryAgent(registry, target)
+  ;(await registry.flush())
+  expect((await registry.register(input()))).toBeNull()
   const saved = JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === target)
   expect(saved).toBeUndefined()
 })
 
-it('reconciles a peer-changed ownership group and allows unrelated strict writes and fresh admission', () => {
+it('reconciles a peer-changed ownership group and allows unrelated strict writes and fresh admission', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === target).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const peerDisk = readFileSync(file, 'utf8')
-  expect(() => registry.register(input())).toThrow('different durable owner')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('different durable owner')
   expect(readFileSync(file, 'utf8')).toBe(peerDisk)
   expect(registry.byAgent(target)?.engine).toBe('codex')
   expect(registry.byAgent(target)?.identityHold).toContain('concurrent binding')
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
-  expect(registry.register(input(B, other, '%2'))?.entry.sessionId).toBe(B)
+  expect((await registry.register(input(B, other, '%2')))?.entry.sessionId).toBe(B)
   expect(registry.byAgent(target)?.cwd).toBe('/fixture/peer-folder')
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect((await registry.register(input()))?.entry.sessionId).toBe(A)
   expect(registry.bySession(B)?.agentId).toBe(source)
 })
 
-it('confirms an unpublished group while retaining an unrelated peer write', () => {
+it('confirms an unpublished group while retaining an unrelated peer write', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === source).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect((await registry.register(input()))?.entry.sessionId).toBe(A)
   expect(registry.byAgent(source)?.cwd).toBe('/fixture/peer-folder')
   expect(JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === source).cwd).toBe('/fixture/peer-folder')
 })
 
-it('keeps its unconfirmed image independent of mutable input objects', () => {
+it('keeps its unconfirmed image independent of mutable input objects', async () => {
   const pending = input()
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(pending)).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(pending)))()).rejects.toThrow('registry storage write failed')
   const written = readFileSync(file, 'utf8')
   pending.processIdentity.startMarker = 'mutated-after-write'
   fault.directorySync = false
-  expect(() => registry.register(input())).not.toThrow()
+  await expect((async () => (await registry.register(input())))()).resolves.not.toBeInstanceOf(Error)
   expect(registry.byAgent(target)?.sessionId).toBe(A)
   expect(readFileSync(file, 'utf8')).toBe(written)
 })
 
-it('lets a late hook recover a launch timeout while its live process remains the owner', () => {
+it('lets a late hook recover a launch timeout while its live process remains the owner', async () => {
   registry.setLaunch(source, { state: 'failed', error: 'START_TIMEOUT' })
-  expect(registry.register(input(A, transcript, '%2'))?.entry.sessionId).toBe(A)
+  expect((await registry.register(input(A, transcript, '%2')))?.entry.sessionId).toBe(A)
 })
 
 
-it('does not acknowledge a Close plan discarded by peer ownership recovery', () => {
+it('does not acknowledge a Close plan discarded by peer ownership recovery', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === target).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const disk = readFileSync(file, 'utf8')
   const plan = { id: 'cccccccc-3333-4333-8333-cccccccccccc', state: 'waiting' as const, identity: 'fixture-binding', requestedAt: Date.now() }
-  expect(() => registry.setClosePlan(target, plan)).toThrow('different durable owner')
+  await expect((async () => (await registry.setClosePlan(target, plan)))()).rejects.toThrow('different durable owner')
   expect(registry.byAgent(target)?.closePlan).toBeUndefined()
   expect(readFileSync(file, 'utf8')).toBe(disk)
-  expect(registry.setClosePlan(source, plan)?.closePlan).toEqual(plan)
+  expect((await registry.setClosePlan(source, plan))?.closePlan).toEqual(plan)
 })
 
-it('does not authorize an external dispatch discarded by recovery of a staged batch', () => {
-  const external = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
-    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } })!
-  registry.setExternalResume(external.agentId, { ...external.externalResume!, phase: 'admitted', session: {
+it('does not authorize an external dispatch discarded by recovery of a staged batch', async () => {
+  const external = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
+    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } }))!
+  ;(await registry.setExternalResume(external.agentId, { ...external.externalResume!, phase: 'admitted', session: {
     engine: 'codex', sessionId: B, cwd: root, origin: 'terminal', title: 'fixture', mtime: 1, transcriptPath: null,
-  } })
+  } }))
   registry.byAgent(external.agentId)!.cwd = '/fixture/staged-folder'
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === external.agentId).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const disk = readFileSync(file, 'utf8')
-  expect(() => registry.beginExternalDispatch(external.agentId)).toThrow('different durable owner')
+  await expect((async () => (await registry.beginExternalDispatch(external.agentId)))()).rejects.toThrow('different durable owner')
   expect(registry.byAgent(external.agentId)?.externalResume?.dispatched).toBeUndefined()
   expect(registry.byAgent(external.agentId)?.launch?.state).toBe('held')
   expect(registry.byAgent(external.agentId)?.cwd).toBe('/fixture/peer-folder')
@@ -344,15 +383,15 @@ it('does not authorize an external dispatch discarded by recovery of a staged ba
 })
 
 
-it('reconciles a whole alias-only ownership transfer after an unconfirmed write', () => {
+it('reconciles a whole alias-only ownership transfer after an unconfirmed write', async () => {
   const alias = 'shared-alias'
-  const previous = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
-    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } })!
-  registry.setExternalResume(previous.agentId, { ...previous.externalResume!, phase: 'admitted', session: {
+  const previous = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
+    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } }))!
+  ;(await registry.setExternalResume(previous.agentId, { ...previous.externalResume!, phase: 'admitted', session: {
     engine: 'codex', sessionId: B, aliases: [alias], cwd: root, origin: 'terminal', title: 'fixture', mtime: 1, transcriptPath: null,
-  } })
+  } }))
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === previous.agentId).externalResume.session.aliases = []
@@ -362,11 +401,11 @@ it('reconciles a whole alias-only ownership transfer after an unconfirmed write'
   }
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const disk = readFileSync(file, 'utf8')
-  expect(() => registry.register(input())).toThrow('different durable owner')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('different durable owner')
   expect(readFileSync(file, 'utf8')).toBe(disk)
   expect(registry.externalConflict([alias])?.agentId).toBe(target)
   expect(registry.byAgent(previous.agentId)?.externalResume?.session?.aliases).toEqual([])
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect((await registry.register(input()))?.entry.sessionId).toBe(A)
 })
 
 
@@ -375,10 +414,9 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   overrides: Partial<HookServerHandlers> = {}, admissionBytesCapacity?: number) {
   const { startHookServer } = await import('../hookServer.js')
   const { readHookCredential } = await import('./hookAuth.js')
-  const prompts: string[] = [], registered = vi.fn(), reasons: Array<string | undefined> = []
+  const registered = vi.fn<HookServerHandlers['onRegistered']>(), reasons: Array<string | undefined> = []
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: blocked,
-    onPromptSubmitted: (_id, text) => prompts.push(text),
     onAdmissionHeld: (_id, reason) => reasons.push(reason),
     ...overrides,
   // The order of concurrent retries is what this file pins; each real lookup of who is calling takes its own time.
@@ -392,27 +430,28 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
         ...(order.firedAt ? { 'x-harness-hook-fired-at': String(order.firedAt) } : {}),
       },
       body: JSON.stringify({ engine: 'codex', sessionId: A, transcriptPath: transcript,
-        tmuxPane: '%2', cwd: root, hookEvent: 'UserPromptSubmit', prompt: 'fixture prompt', ...override }),
+        tmuxPane: '%2', cwd: root, hookEvent: 'UserPromptSubmit', ...override }),
     })
     return { status: response.status, body: await response.json() }
   }
-  return { post, prompts, registered, reasons }
+  // Each committed UserPromptSubmit announces its binding once, in commit order.
+  const committed = () => registered.mock.calls.map(([entry]) => entry.sessionId)
+  return { post, registered, committed, reasons }
 }
 
-it('keeps each prompt through an HTTP registration write failure and credits it only after recovery', async () => {
+it('keeps each prompt through an HTTP registration write failure and announces it only after recovery', async () => {
   const f = await httpFixture()
   const before = readFileSync(file, 'utf8')
   fault.rename = true
-  expect(await f.post({ prompt: 'first prompt' })).toEqual({ status: 200, body: { pending: true } })
-  expect(await f.post({ prompt: 'second prompt' })).toEqual({ status: 200, body: { pending: true } })
-  expect(f.prompts).toEqual([])
+  // The model tells the two deliveries apart in the bindings they announce.
+  expect(await f.post({ model: 'first' })).toEqual({ status: 200, body: { pending: true } })
+  expect(await f.post({ model: 'second' })).toEqual({ status: 200, body: { pending: true } })
   expect(f.registered).not.toHaveBeenCalled()
   expect(registry.byAgent(source)?.sessionId).toBe('')
   expect(readFileSync(file, 'utf8')).toBe(before)
-  expect(f.reasons.some(reason => reason?.includes('registry write failure'))).toBe(true)
+  expect(f.reasons.some(reason => reason?.includes('registry storage write failed'))).toBe(true)
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual(['first prompt', 'second prompt']), { timeout: 4_000 })
-  expect(f.registered).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(f.registered.mock.calls.map(([entry]) => entry.model)).toEqual(['first', 'second']), { timeout: 4_000 })
   expect(registry.bySession(A)?.agentId).toBe(source)
 })
 
@@ -420,39 +459,39 @@ it('holds a missing announced transcript on the actual HTTP path and retries com
   const f = await httpFixture()
   rmSync(transcript)
   expect(await f.post()).toEqual({ status: 200, body: { pending: true } })
-  expect(f.prompts).toEqual([])
+  expect(f.registered).not.toHaveBeenCalled()
   writeFileSync(transcript, header())
-  await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 4_000 })
   expect(registry.bySession(A)?.agentId).toBe(source)
 })
 
 it.each(['commandcode', 'grok', 'agy', 'copilot'] as const)('admits the %s SessionStart before its deterministic transcript directories exist', async engine => {
-  const agent = registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } })!.entry
+  const agent = (await registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } }))!.entry
   const f = await httpFixture()
-  expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart', prompt: undefined }))
+  expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart' }))
     .toEqual({ status: 200, body: { ok: true } })
   expect(registry.byAgent(agent.agentId)?.sessionId).toBe(A)
   expect(registry.byAgent(agent.agentId)?.transcriptPath).toContain(join(root, engine))
   expect(f.registered).toHaveBeenCalledOnce()
-  expect(f.prompts).toEqual([])
 })
 
-it('rechecks an unwritten derived locator proof under the lock and never grants it to a reported path', () => {
-  const agent = registry.openProcessAgent({ engine: 'commandcode', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<commandcode>' } })!.entry
+it('rechecks an unwritten derived locator proof under the lock and never grants it to a reported path', async () => {
+  const agent = (await registry.openProcessAgent({ engine: 'commandcode', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<commandcode>' } }))!.entry
+  await registry.flush()
   const body = { engine: 'commandcode' as const, sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: agent.processIdentity! }
   const before = snapshot()
-  expect(() => registry.register({ ...body, transcriptPath: join(root, 'commandcode', 'projects', 'announced.jsonl') })).toThrow('not yet available')
+  await expect((async () => (await registry.register({ ...body, transcriptPath: join(root, 'commandcode', 'projects', 'announced.jsonl') })))()).rejects.toThrow('not yet available')
   unchanged(before)
   fault.beforeVerify = () => {
     expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
     mkdirSync(join(root, 'commandcode'))
   }
-  expect(() => registry.register(body)).toThrow('changed')
+  await expect((async () => (await registry.register(body)))()).rejects.toThrow('changed')
   unchanged(before)
   fault.beforeVerify = undefined
-  expect(registry.register(body)?.entry.sessionId).toBe(A)
+  expect((await registry.register(body))?.entry.sessionId).toBe(A)
 })
 
 it('the actual Stop job blocks hook admission before its first asynchronous step settles', async () => {
@@ -464,14 +503,14 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
     settlePane: () => new Promise((_resolve, reject) => { fail = reject }),
     restartJobs: { cancel: vi.fn() } as unknown as import('./restartAgent.js').AgentRestartCoordinator,
     stoppedAgents: { save: never } as unknown as import('./stoppedAgents.js').StoppedAgentStore,
-    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, trigger: never },
+    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, nudge: never },
     forgetSession: never, markDeleted: never, clearDeleted: never, stopNative: never,
   })
   const f = await httpFixture(id => stopJobs.has(id))
   const stopping = stop(source)
   const refused = expect(stopping).rejects.toThrow('fixture Stop did not proceed')
   expect(await f.post()).toEqual({ status: 200, body: { pending: true } })
-  expect(f.prompts).toEqual([])
+  expect(f.registered).not.toHaveBeenCalled()
   expect(registry.byAgent(source)?.sessionId).toBe('')
   expect(f.reasons.some(reason => reason?.includes('Stop'))).toBe(true)
   expect(never).not.toHaveBeenCalled()
@@ -479,29 +518,31 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
   await refused
 })
 
-it('recovers a peer-changed fileless binding only after fresh native source admission', () => {
-  registry.removeAgent(target)
-  const agent = registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root,
-    processIdentity: { pid: 6101, startMarker: 'fixture-start', executable: '<hermes>' } })!.entry
+it('recovers a peer-changed fileless binding only after fresh native source admission', async () => {
+  ;(await removeRegistryAgent(registry, target))
+  const agent = (await registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root,
+    processIdentity: { pid: 6101, startMarker: 'fixture-start', executable: '<hermes>' } }))!.entry
   const body = { engine: 'hermes' as const, tmuxPane: '%1', sessionId: '20261010_050000_abcdef', cwd: root, processIdentity: agent.processIdentity! }
+  await registry.flush()
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(body)).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(body)))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === agent.agentId).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
-  expect(() => registry.register(body)).toThrow('different durable owner')
-  expect(registry.register(body)?.entry.identityHold).toContain('concurrent binding')
-  const result = registry.register(body, { verifiedNativeSource: true })!
+  await expect((async () => (await registry.register(body)))()).rejects.toThrow('different durable owner')
+  expect((await registry.register(body))?.entry.identityHold).toContain('concurrent binding')
+  const result = (await registry.register(body, { verifiedNativeSource: true }))!
   expect(result.entry.identityHold).toBeUndefined()
   expect(result.entry.interpretationHold).toBeTruthy()
 })
 
-it('revokes a stale displaced-owner draft when a peer gave that owner another conversation', () => {
-  expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
+it('revokes a stale displaced-owner draft when a peer gave that owner another conversation', async () => {
+  expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
   registry.setActive(source, false)
+  await registry.flush()
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register({ ...input(A, transcript, '%2'), title: 'unconfirmed title' })).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register({ ...input(A, transcript, '%2'), title: 'unconfirmed title' })))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
@@ -510,11 +551,11 @@ it('revokes a stale displaced-owner draft when a peer gave that owner another co
   const disk = readFileSync(file, 'utf8')
   // This draft's target is outside the recovered group, but its displaced owner is
   // inside it. Returning stale orphan metadata would let binding delete that owner.
-  expect(() => registry.register(input())).toThrow('different durable owner')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('different durable owner')
   expect(registry.byAgent(target)?.engine).toBe('terminal')
   expect(registry.bySession(B)?.agentId).toBe(source)
   expect(readFileSync(file, 'utf8')).toBe(disk)
-  expect(registry.register(input())?.orphaned).toBeNull()
+  expect((await registry.register(input()))?.orphaned).toBeNull()
   expect(registry.bySession(B)?.agentId).toBe(source)
 })
 
@@ -522,23 +563,23 @@ it('revokes a stale displaced-owner draft when a peer gave that owner another co
 it('does not let a newly healthy prompt bypass its already-held predecessor', async () => {
   const f = await httpFixture()
   fault.rename = true
-  expect((await f.post({ prompt: 'first' })).body).toEqual({ pending: true })
+  expect((await f.post({ model: 'first' })).body).toEqual({ pending: true })
   fault.rename = false
-  await f.post({ prompt: 'second' })
-  await vi.waitFor(() => expect(f.prompts).toEqual(['first', 'second']), { timeout: 4_000 })
+  await f.post({ model: 'second' })
+  await vi.waitFor(() => expect(f.registered.mock.calls.map(([entry]) => entry.model)).toEqual(['first', 'second']), { timeout: 4_000 })
 })
 
 it('keeps the older hold visible when a competing delegated delivery is refused', async () => {
   const f = await httpFixture(), firedAt = Date.now()
   fault.rename = true
-  await f.post({ prompt: 'parent' }, { firedAt })
+  await f.post({}, { firedAt })
   const child = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(child, '{\n')
-  await f.post({ sessionId: B, transcriptPath: child, prompt: 'child' }, { firedAt: firedAt + 1 })
+  await f.post({ sessionId: B, transcriptPath: child }, { firedAt: firedAt + 1 })
   writeFileSync(child, header(B, true))
-  await vi.waitFor(() => expect(f.reasons.at(-1)).toContain('registry write failure'), { timeout: 3_000 })
-  expect(f.prompts).toEqual([])
+  await vi.waitFor(() => expect(f.reasons.at(-1)).toContain('registry storage write failed'), { timeout: 3_000 })
+  expect(f.registered).not.toHaveBeenCalled()
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual(['parent']), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
   expect(f.reasons.at(-1)).toBeUndefined()
 })
 
@@ -547,22 +588,94 @@ it('contains a failed status publisher without losing durable prompt notificatio
   fault.rename = true
   await f.post()
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 3_000 })
-  expect(f.registered).toHaveBeenCalledOnce()
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
 })
 
 it('does not let a delayed older ordinary hook replace a newer accepted conversation', async () => {
-  registry.register(input(A, transcript, '%2'))
+  ;(await registry.register(input(A, transcript, '%2')))
   const f = await httpFixture()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const time = Date.now() + 10_000
-  expect((await f.post({ sessionId: B, transcriptPath: other, prompt: 'newer' }, { firedAt: time + 1 })).body).toEqual({ ok: true })
-  expect((await f.post({ prompt: 'older' }, { firedAt: time })).body).toEqual({ ignored: true, reason: 'stale_hook' })
+  expect((await f.post({ sessionId: B, transcriptPath: other }, { firedAt: time + 1 })).body).toEqual({ ok: true })
+  expect((await f.post({}, { firedAt: time })).body).toEqual({ ignored: true, reason: 'stale_hook' })
   expect(registry.byAgent(source)?.sessionId).toBe(B)
-  expect(f.prompts).toEqual(['newer'])
+  expect(f.committed()).toEqual([B])
 })
 
-it('acknowledges a repeated delivery both while held and after acceptance without crediting it twice', async () => {
+// A rebind replays the new transcript's first turn only on the engine's own new-conversation hook, born after the
+// binding it replaced (lib/firstTurnReplay.ts). Codex's threads that start with no history are `startup` and `clear`;
+// a resume (the retarget's fork comes back as `codex resume`), a compaction, a fork or a hook with no source carries
+// history, and says nothing.
+it.each([
+  ['SessionStart', 'startup', true], ['SessionStart', 'clear', true], ['SessionStart', 'resume', false],
+  ['SessionStart', 'compact', false], ['SessionStart', 'fork', false], ['UserPromptSubmit', undefined, false],
+] as const)('a Codex rebind on %s %s says when the binding it replaced began only for a new conversation', async (hookEvent, from, said) => {
+  const f = await httpFixture(), time = Date.now() + 10_000
+  expect((await f.post({ hookEvent: 'SessionStart', source: 'startup' }, { firedAt: time })).body).toEqual({ ok: true })
+  expect(f.registered.mock.calls[0]![1]).not.toHaveProperty('newConversationSince')
+  const since = registry.byAgent(source)!.boundAt
+  const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
+  expect((await f.post({ sessionId: B, transcriptPath: other, hookEvent, source: from }, { firedAt: time + 1 })).body).toEqual({ ok: true })
+  const meta = f.registered.mock.calls[1]![1]
+  expect(meta.rebound).toBe(A)
+  if (said) expect(meta.newConversationSince).toBe(since)
+  else expect(meta).not.toHaveProperty('newConversationSince')
+})
+
+it.each([['clear', true], ['startup', false], ['resume', false], ['compact', false]] as const)(
+  'a Claude Code rebind on SessionStart %s says when the binding it replaced began only for a new conversation', async (from, said) => {
+    const agent = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
+      processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<claude>' } }))!.entry
+    const conversation = (id: string) => {
+      const path = join(root, '.claude', 'projects', 'fixture', `${id}.jsonl`)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, JSON.stringify({ type: 'user', cwd: root, sessionId: id, isSidechain: false }) + '\n')
+      return path
+    }
+    const f = await httpFixture(), time = Date.now() + 10_000
+    const post = (sessionId: string, value: string, firedAt: number) => f.post({ engine: 'claude', tmuxPane: '%3', sessionId,
+      transcriptPath: conversation(sessionId), hookEvent: 'SessionStart', source: value }, { firedAt })
+    expect((await post(A, 'startup', time)).body).toEqual({ ok: true })
+    const since = registry.byAgent(agent.agentId)!.boundAt
+    expect((await post(B, from, time + 1)).body).toEqual({ ok: true })
+    const meta = f.registered.mock.calls[1]![1]
+    expect(meta.rebound).toBe(A)
+    if (said) expect(meta.newConversationSince).toBe(since)
+    else expect(meta).not.toHaveProperty('newConversationSince')
+  })
+
+// An engine whose contract names no new-conversation hook never says one, whatever source its hook carries.
+it('a rebind of an engine with no new-conversation hook says nothing of when the binding it replaced began', async () => {
+  const agent = (await registry.openProcessAgent({ engine: 'grok', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<grok>' } }))!.entry
+  const f = await httpFixture(), time = Date.now() + 10_000
+  const post = (sessionId: string, firedAt: number) => f.post({ engine: 'grok', tmuxPane: '%3', sessionId, transcriptPath: undefined,
+    hookEvent: 'SessionStart', source: 'clear' }, { firedAt })
+  expect((await post(A, time)).body).toEqual({ ok: true })
+  expect((await post(B, time + 1)).body).toEqual({ ok: true })
+  expect(registry.byAgent(agent.agentId)?.sessionId).toBe(B)
+  expect(f.registered.mock.calls[1]![1].rebound).toBe(A)
+  expect(f.registered.mock.calls[1]![1]).not.toHaveProperty('newConversationSince')
+})
+
+// #4622: a resumed row no hook has bound yet (`boundAt: null`) began with its engine's process, whose start it holds.
+it('a resumed Codex row that starts a new conversation says its engine process began the binding it replaced', async () => {
+  ;(await registry.register(input(A, transcript, '%2')))
+  const saved = structuredClone(registry.byAgent(source)!)
+  ;(await removeRegistryAgent(registry, source))
+  ;(await registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%2' }]))
+  const startMarker = 'w:134400000000000000'
+  ;(await registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root,
+    processIdentity: { pid: 5102, startMarker, executable: '<codex>' } }))
+  expect(registry.byAgent(source)).toMatchObject({ sessionId: A, boundAt: null, processIdentity: { startMarker } })
+  const f = await httpFixture()
+  const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
+  expect((await f.post({ sessionId: B, transcriptPath: other, hookEvent: 'SessionStart', source: 'startup' },
+    { firedAt: Date.now() + 10_000 })).body).toEqual({ ok: true })
+  expect(f.registered.mock.calls[0]![1]).toMatchObject({ rebound: A, newConversationSince: startMarkerMs(startMarker) })
+})
+
+it('acknowledges a repeated delivery both while held and after acceptance without announcing it twice', async () => {
   const f = await httpFixture()
   const delivery = { id: 'fixture-delivery-0001' }
   fault.rename = true
@@ -570,10 +683,9 @@ it('acknowledges a repeated delivery both while held and after acceptance withou
   expect((await f.post({}, delivery)).body).toEqual({ pending: true })
   expect(await f.post({ prompt: 'conflicting prompt' }, delivery)).toEqual({ status: 409, body: { pending: false, error: 'HOOK_DELIVERY_CONFLICT' } })
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toHaveLength(1), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledOnce(), { timeout: 4_000 })
   expect((await f.post({}, delivery)).body).toEqual({ ok: true })
-  expect(f.prompts).toEqual(['fixture prompt'])
-  expect(f.registered).toHaveBeenCalledOnce()
+  expect(f.committed()).toEqual([A])
 })
 
 it('holds new deliveries at receipt capacity without evicting completed acknowledgements', async () => {
@@ -582,7 +694,7 @@ it('holds new deliveries at receipt capacity without evicting completed acknowle
   expect((await f.post({}, original)).body).toEqual({ ok: true })
   expect((await f.post({}, { id: 'fixture-delivery-0002' })).status).toBe(429)
   expect((await f.post({}, original)).body).toEqual({ ok: true })
-  expect(f.prompts).toHaveLength(1)
+  expect(f.registered).toHaveBeenCalledOnce()
 })
 
 it('bounds retained native payload bytes without dropping an already-owned prompt', async () => {
@@ -593,7 +705,7 @@ it('bounds retained native payload bytes without dropping an already-owned promp
   expect((await f.post({ prompt }, delivery)).body).toEqual({ pending: true })
   expect((await f.post({ prompt }, { id: 'fixture-delivery-0002' })).status).toBe(429)
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual([prompt]), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
   expect((await f.post({ prompt }, delivery)).body).toEqual({ ok: true })
   expect((await f.post({ prompt }, { id: 'fixture-delivery-0002' })).body).toEqual({ ok: true })
 })
@@ -606,8 +718,7 @@ it('keeps a completed delivery acknowledgement when the same process gains anoth
   row.runtimes.push({ backend: 'tmux', paneId: '%3' })
   row.primaryRuntimeKey = 'tmux\u0000%3'
   expect((await f.post({}, delivery)).body).toEqual({ ok: true })
-  expect(f.prompts).toEqual(['fixture prompt'])
-  expect(f.registered).toHaveBeenCalledOnce()
+  expect(f.committed()).toEqual([A])
 })
 
 it('refuses an HTTP hook whose matched process changed at the real core resolver continuation', async () => {
@@ -621,10 +732,9 @@ it('refuses an HTTP hook whose matched process changed at the real core resolver
   const hooks = createEngineHooks({ tmuxBackend: {}, syncSession: vi.fn(), registry: { byAgent: registry.byAgent, byRuntimeEngine: () => {
     queueMicrotask(() => { row.processIdentity!.startMarker = 'replacement' })
     return row
-  } }, agentReconciler: { triggerHint: vi.fn(async () => true), trigger: vi.fn() } as never })
+  } }, agentReconciler: { triggerHint: vi.fn(async () => true), nudge: vi.fn() } as never })
   const f = await httpFixture(() => false, 65_536, { resolveHookAgent: hooks.resolveHookAgent })
   expect((await f.post({ callerPid: 6102 })).body).toEqual({ ignored: true, reason: 'stale_hook' })
-  expect(f.prompts).toEqual([])
   expect(f.registered).not.toHaveBeenCalled()
   expect(row.sessionId).toBe('')
 })
@@ -635,8 +745,8 @@ it.each(['cursor', 'commandcode'] as const)('retains %s Stop before recovered re
     const path = commandcodeTranscriptPath(root, A)!
     mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, '{}\n')
   }
-  const owner = registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
+  const owner = (await registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
   const onTurnStop = vi.fn(), order: string[] = []
   let retain = false
   const onAdmissionStop = vi.fn((_row, unmatched) => { expect(unmatched).toBe(true); order.push('retain'); return retain })
@@ -664,9 +774,9 @@ it.each(['cursor', 'commandcode'] as const)('retains %s Stop before recovered re
 })
 
 it('claims an immediate already-bound linked Stop once, including concurrent retries', async () => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const onTurnStop = vi.fn()
   const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop: (_row, unmatched) => {
     expect(unmatched).toBe(false); return false
@@ -680,10 +790,154 @@ it('claims an immediate already-bound linked Stop once, including concurrent ret
   expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt: delivery.firedAt })
 })
 
+it('claims an already-bound linked Stop once when its registration write outlives the reply grace', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  // As the core's attach does for a bound session with a turn: it holds only an unmatched Stop.
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const delivery = { id: 'fixture-stop-slow-write-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  timers.fire(250)
+  // notify.mjs sends turn-stop once, whatever the registration answered, and leaves on pending.
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  // A duplicate in flight is the same Stop, never a second one.
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledOnce())
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), false)
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt: delivery.firedAt })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ ok: true, duplicate: true })
+  expect(onTurnStop).toHaveBeenCalledOnce()
+})
+
+it('never claims a parked linked Stop whose registration is rejected', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const log = vi.spyOn(console, 'log')
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const delivery = { id: 'fixture-stop-rejected-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  timers.fire(250)
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  // The agent goes inactive while its write is in flight: the registration is refused as stale.
+  registry.byAgent(owner.agentId)!.active = false
+  flush.release()
+  await vi.waitFor(() => expect(log.mock.calls.some(([line]) => String(line).includes('ignored · stale_hook'))).toBe(true), { timeout: 3_000 })
+  expect(f.registered).not.toHaveBeenCalled()
+  expect(onAdmissionStop).not.toHaveBeenCalled()
+  expect(onTurnStop).not.toHaveBeenCalled()
+})
+
+it('says when a parked linked Stop closes nothing once its registration is accepted', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const log = vi.spyOn(console, 'log')
+  // The agent goes inactive the moment its registration is accepted, before the parked Stop is claimed.
+  const onRegistered = vi.fn(() => { registry.byAgent(owner.agentId)!.active = false })
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop, onRegistered })
+  const delivery = { id: 'fixture-stop-unclaimed-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  timers.fire(250)
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  // Its client left on pending and hears nothing more: the daemon log is where it is seen.
+  await vi.waitFor(() => expect(log.mock.calls.map(([line]) => String(line)))
+    .toContain(`[hooks] ${A.slice(0, 8)} parked Stop not claimed · status=403`), { timeout: 3_000 })
+  expect(onRegistered).toHaveBeenCalledOnce()
+  expect(onTurnStop).not.toHaveBeenCalled()
+})
+
+it('counts a parked linked Stop in the hook receipts\' byte budget until its registration settles', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  // Room for the registration, its 200 KB parked Stop, or the 100 KB prompt below: never all three.
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop }, 250_000)
+  const delivery = { id: 'fixture-stop-parked-budget-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  timers.fire(250)
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post({ ...body, prompt: 'x'.repeat(100_000) }, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  const prompt = { ...body, hookEvent: 'beforeSubmitPrompt', prompt: 'y'.repeat(50_000) }, next = { id: 'fixture-prompt-after-park-01' }
+  expect(await f.post(prompt, next)).toEqual({ status: 429, body: expect.objectContaining({ error: 'HOOK_ADMISSION_BUSY' }) })
+  flush.release()
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  // Claimed, the parked Stop no longer holds its bytes.
+  expect((await f.post(prompt, next)).status).toBe(200)
+})
+
+it('claims a linked Stop once when it queued only behind the slow registry write of its agent\'s earlier hook', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const firedAt = Date.now()
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  // The turn's prompt hook, whose registry write a slow disk holds open.
+  const flush = hold(), prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-slow-write-01', firedAt: firedAt - 1 })
+  await flush.entered
+  timers.fire(250)
+  expect((await prompt).body).toEqual({ pending: true })
+  const delivery = { id: 'fixture-stop-queued-write-01', firedAt }
+  expect((await f.post(body, delivery)).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledTimes(2))
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), false)
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt })
+})
+
+it.each(['before', 'after'] as const)('keeps a linked Stop unmatched when the earlier hook it queued behind is held %s it arrives', async when => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const firedAt = Date.now()
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  // A held hook is a real wait, unlike a slow write: the Stop behind it may belong to an earlier turn.
+  const flush = when === 'after' ? hold() : undefined
+  if (!flush) fault.rename = true
+  const prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-held-01', firedAt: firedAt - 1 })
+  if (flush) { await flush.entered; timers.fire(250) }
+  expect((await prompt).body).toEqual({ pending: true })
+  const delivery = { id: 'fixture-stop-queued-hold-01', firedAt }
+  expect((await f.post(body, delivery)).body).toEqual({ pending: true })
+  if (flush) { fault.rename = true; flush.release() }
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  await vi.waitFor(() => expect(f.reasons.some(reason => reason?.includes('registry storage write failed'))).toBe(true), { timeout: 3_000 })
+  fault.rename = false
+  await vi.waitFor(() => expect(onAdmissionStop).toHaveBeenCalled(), { timeout: 3_000 })
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), true)
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledTimes(2))
+  expect(onTurnStop).not.toHaveBeenCalled()
+})
+
 it.each([false, true])('retains an overtaking Stop after process resolution recovers, with onWait: %s', async waiting => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   let finish: ((row: typeof owner) => void) | undefined
   const held = vi.fn(() => true), stopped = vi.fn()
   const f = await httpFixture(() => false, 65_536, { onAdmissionStop: held, onTurnStop: stopped,
@@ -709,11 +963,11 @@ it.each([false, true])('keeps a held delivery through route changes and requires
     : [{ backend: 'tmux', paneId: '%2' }, { backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')
   if (removeHint) {
     await vi.waitFor(() => expect(f.reasons.some(reason => reason?.includes('original hook pane'))).toBe(true), { timeout: 3_000 })
-    expect(f.prompts).toEqual([])
+    expect(f.registered).not.toHaveBeenCalled()
     registry.updateRuntimes(source, [{ backend: 'tmux', paneId: '%2' }, { backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')
   }
   expect((await f.post({}, delivery)).body).toEqual({ pending: true })
-  await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
   expect(registry.byAgent(source)?.primaryRuntimeKey).toBe('tmux\u0000%3')
   expect(registry.byAgent(source)?.runtimes).toEqual([{ backend: 'tmux', paneId: '%2' }, { backend: 'tmux', paneId: '%3' }])
   expect((await f.post({}, delivery)).body).toEqual({ ok: true })
@@ -721,9 +975,9 @@ it.each([false, true])('keeps a held delivery through route changes and requires
 })
 
 it('holds a same-owner linked Stop after interpretation recovered, without closing its later turn', async () => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const onTurnStop = vi.fn(), holds: boolean[] = []
   const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop: (row, unmatched) => {
     holds.push(unmatched)
@@ -752,13 +1006,13 @@ it('holds a same-owner linked Stop after interpretation recovered, without closi
 it.each(['before-followup', 'during-followup', 'during-registration', 'during-initial-resolution'] as const)('Cancel supersedes original Stop %s without closing a newer turn', async phase => {
   const { createAttach } = await import('../core/transcripts/attach.js')
   const { createSessionNormalizers } = await import('../core/transcripts/normalizers.js')
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const row = registry.byAgent(owner.agentId)!
   // Only the core's eager cancellation fence is needed. Unexpected attachment
   // or native interpretation would fail this fixture before any external access.
-  const attach = createAttach({ normalizers: createSessionNormalizers(), resolve: registry.byAgent } as import('../core/transcripts/attach.js').AttachDeps)
+  const attach = createAttach({ normalizers: createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} }), resolve: registry.byAgent } as import('../core/transcripts/attach.js').AttachDeps)
   let laterTurnOpen = false, resolutions = 0
   let finish: (() => void) | undefined
   const onTurnStop = vi.fn(() => { laterTurnOpen = false })
@@ -801,9 +1055,9 @@ it.each(['before-followup', 'during-followup', 'during-registration', 'during-in
 })
 
 it('rechecks the completion claim after a concurrent duplicate waits across recovery', async () => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const finishes: Array<() => void> = [], onAdmissionStop = vi.fn(() => false)
   let resolutions = 0
   const onTurnStop = vi.fn(() => {
@@ -831,9 +1085,9 @@ it('rechecks the completion claim after a concurrent duplicate waits across reco
 })
 
 it.each(['records', 'bytes'] as const)('never lets a linked Stop bypass refused admission at %s capacity', async capacity => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const onTurnStop = vi.fn()
   const f = await httpFixture(() => false, capacity === 'records' ? 0 : 65_536, { onTurnStop }, capacity === 'bytes' ? 0 : undefined)
   const delivery = { id: 'fixture-unowned-stop-01', firedAt: Date.now() }

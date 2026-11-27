@@ -257,7 +257,8 @@
           "executable": "opencode",
           "startMarker": "replacement"
         },
-        "none"
+        null,
+        null
       ],
       [
         "grid",
@@ -368,7 +369,8 @@
             "executable": "opencode",
             "startMarker": "replacement"
           },
-          "none"
+          null,
+          null
         ]
       },
       {
@@ -619,7 +621,8 @@
           "executable": "opencode",
           "startMarker": "replacement"
         },
-        "none"
+        null,
+        null
       ],
       [
         "grid",
@@ -742,7 +745,8 @@
             "executable": "opencode",
             "startMarker": "replacement"
           },
-          "none"
+          null,
+          null
         ]
       },
       {
@@ -1039,7 +1043,8 @@
           "executable": "opencode",
           "startMarker": "replacement"
         },
-        "none"
+        null,
+        null
       ],
       [
         "grid",
@@ -1150,7 +1155,8 @@
             "executable": "opencode",
             "startMarker": "replacement"
           },
-          "none"
+          null,
+          null
         ]
       },
       {
@@ -1439,7 +1445,8 @@
           "executable": "opencode",
           "startMarker": "replacement"
         },
-        "none"
+        null,
+        null
       ],
       [
         "grid",
@@ -1550,7 +1557,8 @@
             "executable": "opencode",
             "startMarker": "replacement"
           },
-          "none"
+          null,
+          null
         ]
       },
       {

@@ -10,6 +10,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 let root = ''
 let runtimeDir = ''
@@ -27,7 +28,7 @@ async function load() {
 function fakeGrid(dir: string): string {
   mkdirSync(dir, { recursive: true })
   const bin = join(dir, 'grid')
-  writeFileSync(bin, '#!/bin/sh\nprintf \'%s\\n\' "$@" "update-check=${GRID_NO_UPDATE_CHECK-unset}"\nexit 0\n', { mode: 0o755 })
+  writeExecutable(bin, '#!/bin/sh\nprintf \'%s\\n\' "$@" "update-check=${GRID_NO_UPDATE_CHECK-unset}"\nexit 0\n')
   return bin
 }
 
@@ -166,7 +167,7 @@ describe('gridExec', () => {
     mkdirSync(join(root, 'slow'))
     const slow = join(root, 'slow', 'grid')
     const exited = join(root, 'slow', 'exited')
-    writeFileSync(slow, `#!/bin/sh\n/bin/sleep 0.3\n: > "${exited}"\nexit 0\n`, { mode: 0o755 })
+    writeExecutable(slow, `#!/bin/sh\n/bin/sleep 0.3\n: > "${exited}"\nexit 0\n`)
     process.env.HARNESS_GRID_BIN = slow
     const { gridExec } = await load()
     const { withGridCallsPaused } = await import('./gridCalls.js')

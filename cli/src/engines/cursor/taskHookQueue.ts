@@ -8,7 +8,7 @@ interface CursorTaskHookQueueOptions {
   drainTranscript: (sessionId: string) => Promise<void>
   emit: (sessionId: string, events: LiveEvent[]) => void
   register: (sessionId: string, hook: CursorTaskHook, normalizer: CursorNormalizer) => void
-  isActive: (sessionId: string) => boolean
+  isActive: (sessionId: string, normalizer: CursorNormalizer) => boolean
   onError?: (sessionId: string, error: unknown) => void
 }
 
@@ -33,7 +33,7 @@ export class CursorTaskHookQueue {
         } catch (error) {
           this.options.onError?.(sessionId, error)
         }
-        if (!this.options.isActive(sessionId)) return
+        if (!this.options.isActive(sessionId, normalizer)) return
         this.options.emit(sessionId, startEvents)
         this.options.register(sessionId, hook, normalizer)
       })

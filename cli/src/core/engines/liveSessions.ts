@@ -6,6 +6,7 @@ import { HOLD_TIMEOUT_MS, type TailHold } from '../../watcher/watcher.js'
 import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
 import { EngineLiveError, type LiveTransport } from './liveTransport.js'
 import type { TranscriptClose } from '../../lib/transcriptControls.js'
+import { errorKind } from '../../lib/log.js'
 
 interface SessionState {
   ask: LivePull
@@ -62,10 +63,10 @@ export function createLiveSessions(deps: LiveSessionDeps) {
   let stopped = false
   const valid = (s: SessionState): boolean => !stopped && s.identity === transcriptReadIdentity(deps.bySession(s.ask.session.sessionId))
   const report = (id: string, error: unknown): void => {
-    const code = error instanceof Error ? error.message : String(error)
-    if (errors.get(id) === code) return
-    errors.set(id, code)
-    ;(deps.log ?? console.warn)(`[engine] ${id} transcript paused at its acknowledged position · ${code}`)
+    const kind = errorKind(error)
+    if (errors.get(id) === kind) return
+    errors.set(id, kind)
+    ;(deps.log ?? console.warn)(`[engine] ${id} transcript paused at its acknowledged position · ${kind}`)
   }
   const slot = async <T>(engine: string, run: () => Promise<T>): Promise<T> => {
     if ((queued.get(engine) ?? 0) >= 256) throw new EngineLiveError('ENGINE_BUSY')

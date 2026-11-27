@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InstalledDsh } from './installed.js'
 import { dshLaunch, harnessEnvToClear, DSH_SESSION_ENV } from './launch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOverrides.js'
-import { dshFromEnv } from './probe.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { HARNESS_INSTRUCTIONS } from '../lib/agentAttribution.js'
 import { env } from '../config/env.js'
@@ -36,8 +35,7 @@ describe('dshLaunch', () => {
       CIRCUIT_SKILLS_DIR: '/ws/.claude/skills',
     })
     expect(launch.args).toEqual(['--add-dir', '/ws/inputs'])
-    // What discovery reads back is exactly what was set.
-    expect(dshFromEnv(launch.env)).toBe('autonomous/circuit')
+    expect(launch.env.HARNESS_DSH).toBe('autonomous/circuit')
   })
 
   it('a manifest with no agent section adds only the three HARNESS_ variables and no argv', () => {
@@ -85,14 +83,6 @@ describe('buildLaunchOverrides with a DSH', () => {
   it('refuses to silently lose a harness when its workspace is missing', async () => {
     const built = await buildLaunchOverrides(deps, 'claude', { dsh: 'autonomous/circuit', cwd: null }, 'agent-1')
     expect(built).toMatchObject({ ok: false, error: 'DSH_WORKSPACE_MISSING' })
-  })
-})
-
-describe('dshFromEnv', () => {
-  it('accepts only a well-formed id', () => {
-    expect(dshFromEnv({ HARNESS_DSH: 'autonomous/workshop' })).toBe('autonomous/workshop')
-    expect(dshFromEnv({ HARNESS_DSH: 'not an id' })).toBeNull()
-    expect(dshFromEnv({})).toBeNull()
   })
 })
 

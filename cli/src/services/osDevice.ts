@@ -16,7 +16,9 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { setComputerUse, computerUseAvailable, computerUseOn } from '../agentClient/computerUse.js'
+import { errorKind } from '../lib/log.js'
 import { readMachineMcp } from '../lib/machineMcp.js'
+import { spawnTied } from '../lib/tied.js'
 
 /** The requests this service answers for the apps, declared in core/api.ts for the core to route. */
 export { OS_DEVICE_REQUESTS } from '../core/api.js'
@@ -115,9 +117,10 @@ export function githubLoginOf(out: string): string | null {
 /** `gh auth login`'s device flow, bounded by GITHUB_SIGN_IN_MS. BROWSER=true: the page opens on the phone,
  *  not on this computer's screen; its stdin closed, it asks nothing and prints the code. Without the
  *  screen's display either: the code is the phone's to copy, not this computer's clipboard. */
-export function githubDeviceSignIn(): GithubSignIn {
+export function githubDeviceSignIn(gh: string = GH): GithubSignIn {
   const { WAYLAND_DISPLAY: _wayland, DISPLAY: _x11, ...env } = process.env
-  const child = spawn(GH, ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web', '--skip-ssh-key'],
+  // Tied: each crash of this service left a sign-in running, waiting its 15 minutes on a code nobody would read.
+  const child = spawnTied(gh, ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web', '--skip-ssh-key'],
     { stdio: ['ignore', 'pipe', 'pipe'], env: { ...env, BROWSER: 'true', GH_PROMPT_DISABLED: '1' } })
   let output = ''
   let shown: (value: { code: string; url: string }) => void
@@ -157,10 +160,10 @@ export function execBounded(file: string, args: readonly string[], options: Exec
 }
 
 /** Start a command that outlives this daemon: its own process group, its output dropped, never waited on. */
-export function spawnDetached(file: string, args: readonly string[], input?: string): void {
-  const child = spawn(file, [...args], { detached: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'ignore', 'ignore'] })
-  // Its argv only: the input may hold a Wi-Fi password.
-  child.on('error', (error) => console.error(`[os-device] could not start ${file}:`, short(error)))
+export function spawnDetached(program: string, args: readonly string[], input?: string): void {
+  const child = spawn(program, [...args], { detached: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'ignore', 'ignore'] })
+  // Never the input: it may hold a Wi-Fi password.
+  child.on('error', (error) => console.error(`[os-device] could not start ${basename(program)}:`, errorKind(error)))
   if (input !== undefined) {
     child.stdin!.on('error', () => { /* the command exited before reading it */ })
     child.stdin!.end(input)
@@ -317,7 +320,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     checking ??= exec(PYTHON, ['-c', CHECK_NOW], { timeout: CHECK_TIMEOUT_MS })
       .then(() => { console.log('[os-device] checked for updates') })
       .catch((error: unknown) => {
-        console.error('[os-device] check for updates failed:', short(error))
+        console.error('[os-device] check for updates failed:', errorKind(error))
         checkError = 'Could not check for updates. Check its internet, then try again.'
       })
       .finally(() => { checking = null })
@@ -432,7 +435,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
       }
     } catch (error) {
       // An OS from before install-gh: sudo refuses it.
-      console.error('[os-device] github: install-gh failed:', short(error))
+      console.error('[os-device] github: install-gh failed:', errorKind(error))
       signInError = 'The GitHub CLI could not be installed here: update this computer, then try again.'
       return
     }
@@ -457,7 +460,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     signingIn = { run, ...shown }
     run.done.then(async () => {
       await exec(GH, ['auth', 'setup-git', '--hostname', 'github.com'], { timeout: GH_TIMEOUT_MS })
-        .catch((error: unknown) => console.error('[os-device] gh auth setup-git failed:', short(error)))
+        .catch((error: unknown) => console.error('[os-device] gh auth setup-git failed:', errorKind(error)))
       console.log('[os-device] github signed in')
     }, (error: unknown) => {
       if (signingIn?.run === run) signInError = short(error)
@@ -500,7 +503,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
         return await result()
       } catch (error) {
         // Never the payload: it may hold a Wi-Fi password.
-        console.error(`[os-device] ${action} failed:`, short(error))
+        console.error(`[os-device] ${action} failed:`, errorKind(error))
         return { error: 'FAILED', message: short(error) }
       }
     },

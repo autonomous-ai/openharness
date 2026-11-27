@@ -1,5 +1,5 @@
-import { availableParallelism } from 'node:os'
 import { defineConfig } from 'vitest/config'
+import { suiteWorkers } from './src/testing/suiteWorkers.js'
 
 export default defineConfig({
   test: {
@@ -7,10 +7,16 @@ export default defineConfig({
     // Gives the run a temporary folder of its own, which its workers' folders go in (vitest.tmpdir.ts).
     globalSetup: ['./src/__fixtures__/vitestRun.ts'],
     setupFiles: ['./vitest.tmpdir.ts', './vitest.setup.ts'],
-    include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
-    // These suites spawn real shells, hooks and tmux helpers with bounded
-    // deadlines. One worker per CPU starves those children on busy hosts, so
-    // take half the machine: the other half is theirs.
-    maxWorkers: Math.max(1, Math.floor(availableParallelism() / 2)),
+    // The VS Code extension's tests too: the CLI's build inlines the extension, and PR CI runs this suite for it. The
+    // gate's guard tests launch no VS Code, so PR CI runs them as well; the gate itself is `*.gate.ts`, run by hand.
+    include: ['src/**/*.test.ts', 'src/**/*.spec.ts', '../plugins/harness-device-vscode/src/**/*.test.ts',
+      '../plugins/harness-device-vscode/src/**/*.spec.ts', '../plugins/harness-device-vscode/gate/**/*.test.ts'],
+    // Half the machine's cores (src/testing/suiteWorkers.ts).
+    maxWorkers: suiteWorkers(),
+    // Many cases do real I/O: git, child processes, and disk flushes, each a full drive flush on macOS (F_FULLFSYNC).
+    // On a loaded developer Mac they run about 10 times as long as alone: a full run at load 8-10 sent cases of
+    // 0.5-2 s alone past vitest's 5 s, a different handful each run (2026-11-11). The same 30 s as
+    // vitest.portability.config.ts and testing/handoffLimits.ts. A passing case takes no longer for it.
+    testTimeout: 30_000,
   },
 })

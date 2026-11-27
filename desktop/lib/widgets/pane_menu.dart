@@ -126,30 +126,6 @@ Future<T?> showPaneMenu<T>({
   return completer.future;
 }
 
-/// A right-click menu at [at]: the same panel and rows as every dropdown, in an
-/// overlay so the click that dismisses it still lands where it was aimed.
-Future<T?> showContextMenuAt<T>({
-  required BuildContext context,
-  required Offset at,
-  required List<Widget> Function(void Function(T?) close) children,
-  double width = 240,
-}) {
-  final overlayWidth = MediaQuery.sizeOf(context).width;
-  return showPaneMenu<T>(
-    context: context,
-    position: RelativeRect.fromLTRB(
-      at.dx,
-      at.dy,
-      overlayWidth - at.dx - width,
-      0,
-    ),
-    minWidth: width,
-    maxWidth: width,
-    focusFirst: false,
-    children: children,
-  );
-}
-
 class _PaneMenuSurface extends StatelessWidget {
   const _PaneMenuSurface({required this.child});
 

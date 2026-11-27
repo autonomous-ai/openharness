@@ -10,12 +10,12 @@ setting; someone who never opens Appearance keeps today's Graphite.
 slots, and resolves the effective palette from them and the system brightness, which it follows through a
 `WidgetsBindingObserver`. No consumer of `prefs.palette` changes. Palettes gain optional ink overrides (text, muted,
 faint) so the new ones carry their own grays, and an optional dark sidebar ("island") for the light palette whose
-sidebar is a deep plum with white text; the Swarm sidebar reads its ink from a `SidebarInk` scope so shared row widgets
+sidebar is a deep plum with white text; the sidebar reads its ink from a `SidebarInk` scope so shared row widgets
 change only inside it.
 
 **Tech Stack:** Flutter (Desktop, web shares the code), `flutter_test` widget tests with a memory store.
 
-**Spec:** task #3006 brief (Dee's thread in the project chat, 2026-11-05).
+**Spec:** task #3006 brief (Dee, 2026-11-05).
 
 ## Global Constraints
 
@@ -36,7 +36,7 @@ change only inside it.
 - Match macOS: the observer is added once and removed on dispose; a system flip only changes the palette in Match mode.
 - Persistence ordering under rapid choices (the existing coalescing pattern) and tolerant loading of hand-edited ids
   (a dark id in the light slot falls back).
-- Sidebar island: every ink in the Swarm sidebar reads `SidebarInk`, and nothing outside the sidebar changes.
+- Sidebar island: every ink in the sidebar reads `SidebarInk`, and nothing outside the sidebar changes.
 
 ## Design
 
@@ -59,7 +59,7 @@ change only inside it.
 `desktop/test/theme_palettes_test.dart`
 
 **Interfaces:** `HarnessPalette.plum|night|cloud|storm`; optional `text`, `muted`, `faint`, `sidebar`, `sidebarInk`;
-`AppPalette.textPrimary/textSecondary/textFaint` read the palette's overrides when set; `AppPalette.swarmSidebar`.
+`AppPalette.textPrimary/textSecondary/textFaint` read the palette's overrides when set.
 
 - [ ] Failing test: the four exist with the brief's grounds (#FFFFFF chat and #1D1C1D text; #1A1D21 and #19171D;
       #FFFFFF, #F2F3F5, #E3E5E8 and #313338; #313338, #2B2D31, #1E1F22), contrast floors hold for every text step
@@ -90,10 +90,9 @@ moves the mode to that brightness), `followSystemBrightness()`.
 
 ## Task 4: The plum sidebar
 
-**Files:** `desktop/lib/shared/theme/app_theme.dart` (`SidebarInk`), `desktop/lib/super_tabs/project_sidebar.dart`
-(color tokens only), the sidebar's shared rows, `desktop/test/theme_palettes_test.dart`
+**Files:** `desktop/lib/shared/theme/app_theme.dart` (`SidebarInk`), the sidebar's shared rows, `desktop/test/theme_palettes_test.dart`
 
-- [ ] Failing test: in Plum the Swarm sidebar is #3F0E40 and its row text is white at 4.5:1 or better, while the same
+- [ ] Failing test: in Plum the sidebar is #3F0E40 and its row text is white at 4.5:1 or better, while the same
       rows outside the sidebar keep the page's ink.
 - [ ] Code.
 
@@ -101,5 +100,4 @@ moves the mode to that brightness), `followSystemBrightness()`.
 
 **Files:** `desktop/test/theme_palettes_shots_test.dart`
 
-- [ ] Env-gated capture of the Swarm chat with its sidebar, a thread, and Decisions in each new palette, plus the
-      Appearance pane; sent to Dee in the task.
+- [ ] Env-gated capture of the workspace in each new palette, plus the Appearance pane; sent to Dee in the task.

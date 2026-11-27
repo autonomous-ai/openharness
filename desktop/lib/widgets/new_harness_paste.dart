@@ -109,20 +109,18 @@ class _NewHarnessPasteTargetState extends State<NewHarnessPasteTarget> {
     if (!widget.enabled) return pasteText();
     // The box this paste was made in, held until the clipboard has answered.
     final target = widget.attachments;
-    await target.reading(() async {
-      final copied = await widget.readFiles();
-      if (copied.files.isNotEmpty ||
-          copied.tooLarge.isNotEmpty ||
-          copied.onDisk.isNotEmpty) {
-        return _attachCopied(target, copied);
-      }
-      if (pastedTextWins(await _clipboardText())) {
-        return _pasteText(target, pasteText);
-      }
-      final image = await widget.readImage();
-      if (image == null || image.isEmpty) return _pasteText(target, pasteText);
-      _attach(target, [HarnessAttachment(kPastedImageName, image)]);
-    });
+    final copied = await widget.readFiles();
+    if (copied.files.isNotEmpty ||
+        copied.tooLarge.isNotEmpty ||
+        copied.onDisk.isNotEmpty) {
+      return _attachCopied(target, copied);
+    }
+    if (pastedTextWins(await _clipboardText())) {
+      return _pasteText(target, pasteText);
+    }
+    final image = await widget.readImage();
+    if (image == null || image.isEmpty) return _pasteText(target, pasteText);
+    _attach(target, [HarnessAttachment(kPastedImageName, image)]);
   }
 
   void _attachCopied(HarnessAttachments target, CopiedFiles copied) => _attach(

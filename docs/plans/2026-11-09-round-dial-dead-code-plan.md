@@ -19,7 +19,6 @@
   - `ram_telemetry_init` and the `ram_psram_*` helpers; `display_lock_at`; `audio_client.h`; `audio_probe.h`.
   - Every bench and flag tool (O1-O11).
   - `esp_websocket_client`, `BOARD_REQUIRES` and every `sdkconfig` value.
-  - All thread/PM/Buddy code.
 - Comments only in `idf_component.yml`, `dependencies.lock`, `sdkconfig.defaults*`: no value or dependency change.
 - Do not flash a device. Do not push.
 

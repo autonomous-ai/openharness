@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../shortcuts/keymap_commands.dart';

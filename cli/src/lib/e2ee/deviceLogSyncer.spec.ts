@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ed25519 } from '@noble/curves/ed25519'
@@ -11,6 +11,7 @@ import { DeviceLogStore } from './deviceLogStore.js'
 import { checkDevAck, signDevAck, type DevAck } from './deviceAck.js'
 import { DeviceLogSyncer, devLogDivergence, type DeviceKeysSeen, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
 import { ADOPTED_SIGN_IN } from '../authSession.js'
+import { StateFileUnreadable } from '../secureState.js'
 import { b64d, fingerprint } from './core.js'
 
 const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64')
@@ -1027,6 +1028,23 @@ describe('DeviceLogSyncer — another key holds this machine\'s id', () => {
     expect(t.calls.conflict).toHaveBeenCalledWith(expect.objectContaining({ afterJoin: true }))
   })
 
+  it('names the holder by its fingerprint in the log, never the name a person gave it', async () => {
+    const lines: string[] = []
+    const before = setup({ log: (l) => lines.push(l) })
+    before.backend.add(box2, 'machine', MID_HOLDER, 'sentinel-old')
+    await before.syncer.register()
+    const after = setup({ log: (l) => lines.push(l) })
+    after.backend.add(phone, 'viewer', '', 'phone')
+    await after.syncer.refresh()
+    after.backend.add(box2, 'machine', MID_HOLDER, 'sentinel-new')
+    await after.syncer.register()
+    expect(after.calls.conflict).toHaveBeenCalledWith(expect.objectContaining({ label: 'sentinel-new' }))
+    expect(lines.join('\n')).not.toContain('sentinel')
+    const who = fingerprint(b64d(box2.pub))
+    expect(lines.filter((l) => l.includes(`by another key on your account: ${who} — `))).toHaveLength(1)
+    expect(lines.filter((l) => l.includes(`after it joined: ${who} — `))).toHaveLength(1)
+  })
+
   it('clears when the holder is removed, and this machine registers itself', async () => {
     const t = setup()
     t.backend.add(box2, 'machine', MID_HOLDER, 'old-install')
@@ -1659,7 +1677,8 @@ describe('DeviceLogSyncer — departed keys, sign-ins and kept accounts', () => 
       const other = FakeBackend.of('acct-2')
       t.backend.fetch.mockImplementation(other.fetch)
       await t.syncer.refresh()
-      expect(seen).toEqual([{ from: ACCT, to: 'acct-2', live: ACCT, archived: false }])
+      // The departing log is kept before the stores move: an archive that cannot take it stops the switch first.
+      expect(seen).toEqual([{ from: ACCT, to: 'acct-2', live: ACCT, archived: true }])
       expect(t.store.read()).toMatchObject({ state: { acct: 'acct-2' }, preLog: [phone.pub] })
       // And back: the kept log comes back, and so do its stores.
       who.user = 'u3'
@@ -2126,7 +2145,8 @@ function onePerPage(backend: FakeBackend): void {
 describe('DeviceLogSyncer — a log longer than a usual read', () => {
   const many = (n: number) => Array.from({ length: n }, (_, i) => key(10 + i))
 
-  // #2340: verifying 25 signed entries exceeded Vitest's default 5s timeout on a busy CI runner.
+  // The suite's own budget, never a lower one: its 45 verified pages are each a trust write flushed to disk, which took
+  // 12 s on a loaded machine (a 10 s budget here failed).
   it('a first read goes past the usual page cap, so nothing on the account is announced', async () => {
     const t = setup()
     for (const k of many(25)) t.backend.add(k, 'viewer', '', 'app')
@@ -2142,7 +2162,7 @@ describe('DeviceLogSyncer — a log longer than a usual read', () => {
     await t.syncer.refresh()
     expect(t.backend.fetch).toHaveBeenCalledTimes(20)
     expect(t.store.read().state?.head.seq).toBe(45)
-  }, 10_000)
+  })
 
   it('a review reads a list longer than the usual page cap', async () => {
     const t = setup()
@@ -2186,6 +2206,16 @@ describe('DeviceLogSyncer — register refusals', () => {
     await t.syncer.register()
     expect(t.backend.state.active[me.pub]).toBeDefined()
     expect(t.syncer.list().registerError).toBeUndefined()
+  })
+
+  it('says a refusal in words by its length, never its words', async () => {
+    const lines: string[] = []
+    const t = setup({ log: (line) => lines.push(line) })
+    t.backend.append.mockImplementationOnce(async () => ({ error: 'peer said /Users/sentinel/x' }))
+    await t.syncer.register()
+    expect(t.syncer.list().registerError).toBe('peer said /Users/sentinel/x')
+    expect(lines.join('\n')).not.toContain('sentinel')
+    expect(lines).toContain('[devlog] register refused: text(27)')
   })
 
   it('a race (STALE_HEAD) is not a refusal', async () => {
@@ -2232,7 +2262,7 @@ describe('DeviceLogSyncer.sweepStale', () => {
     expect(active(stale.pub)).toBe(false)
     expect([usedLately, young, suspended, larger, me].every((k) => active(k.pub))).toBe(true)
     expect(t.backend.entries.at(-1)).toMatchObject({ op: 'remove', pub: stale.pub, signer: me.pub })
-    expect(lines).toContain(`[devlog] removed unused device old-browser (${fingerprint(b64d(stale.pub))}), not used since 1970-01-01`)
+    expect(lines).toContain(`[devlog] removed unused device ${fingerprint(b64d(stale.pub))}, not used since 1970-01-01`)
   })
 
   it('a key last used over 180 days ago goes whatever the record says of the others', async () => {
@@ -2243,7 +2273,7 @@ describe('DeviceLogSyncer.sweepStale', () => {
     await t.syncer.register()
     await t.syncer.sweepStale()
     expect(active(old.pub)).toBe(false)
-    expect(lines).toContain(`[devlog] removed unused device app (${fingerprint(b64d(old.pub))}), last used 1970-01-01`)
+    expect(lines).toContain(`[devlog] removed unused device ${fingerprint(b64d(old.pub))}, last used 1970-01-01`)
   })
 
   it('a key with no last use is unused only when the record has run since before the cutoff', async () => {
@@ -2352,9 +2382,23 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
     expect(t.syncer.list().members.find((m) => m.pub === phone.pub)).toMatchObject({ pending: false, confirmed: { by: box2.pub, label: 'box2', at: 5_000 } })
     expect(t.syncer.list().members.find((m) => m.pub === box2.pub)?.confirmed).toBeUndefined()
     expect(t.calls.changed).toHaveBeenCalled()
-    expect(lines.some((l) => l.includes('confirmed as yours on box2'))).toBe(true)
+    expect(lines).toContain(`[devlog] ${fingerprint(b64d(phone.pub))} was confirmed as yours on ${fingerprint(b64d(box2.pub))}: no longer new here`)
     // It stays trusted as it was: an acknowledgement adds no trust and takes none away.
     expect(t.calls.drop).not.toHaveBeenCalledWith(phone.pub)
+  })
+
+  it('logs the confirmed key and the one that confirmed it by fingerprint, never the names a person gave them', async () => {
+    const lines: string[] = []
+    const t = setup({ acks: true, log: (l) => lines.push(l) })
+    t.backend.add(box2, 'machine', MID2, 'sentinel-box')
+    await t.syncer.register()
+    t.backend.add(phone, 'viewer', '', 'sentinel-phone')
+    await t.syncer.refresh()
+    t.backend.acks.push(t.backend.ack(box2, phone.pub))
+    await t.syncer.refresh()
+    expect(t.syncer.list().members.find((m) => m.pub === phone.pub)?.confirmed).toMatchObject({ label: 'sentinel-box' })
+    expect(lines.join('\n')).not.toContain('sentinel')
+    expect(lines).toContain(`[devlog] ${fingerprint(b64d(phone.pub))} was confirmed as yours on ${fingerprint(b64d(box2.pub))}: no longer new here`)
   })
 
   it('asks from just below the oldest key new here, and not at all while nothing is new', async () => {
@@ -2395,7 +2439,7 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       await t.syncer.refresh()
       expect(t.calls.announce, fail).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
       expect(t.store.read().pending, fail).toEqual([phone.pub])
-      if (fail === 'throws') expect(lines.some((l) => l.includes('could not read which devices were confirmed: down'))).toBe(true)
+      if (fail === 'throws') expect(lines.some((l) => l.includes('could not read which devices were confirmed: Error'))).toBe(true)
     }
   })
 
@@ -2549,6 +2593,19 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       expect(u.backend.postAck).not.toHaveBeenCalled()
     })
 
+    it('says which key it could not vouch for by its fingerprint, never the name a person gave it', async () => {
+      const lines: string[] = []
+      const t = setup({ acks: true, log: (l) => lines.push(l) })
+      t.backend.add(box2, 'machine', MID2, 'box2')
+      await t.syncer.register()
+      t.backend.add(phone, 'viewer', '', 'sentinel-phone')
+      await t.syncer.refresh()
+      t.backend.acksRoute = false
+      expect(await t.syncer.dismiss({ pub: phone.pub, confirm: true })).toBe(false)
+      expect(lines.join('\n')).not.toContain('sentinel')
+      expect(lines).toContain(`[devlog] could not tell your other devices that ${fingerprint(b64d(phone.pub))} is yours: they still show it as new`)
+    })
+
     it('a backend that does not take it (or predates it) leaves the dismissal here, and says so', async () => {
       const lines: string[] = []
       const t = await joined({ log: (l) => lines.push(l) })
@@ -2559,7 +2616,7 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       const u = await joined({ log: (l) => lines.push(l) })
       u.backend.postAck.mockRejectedValueOnce(new Error('boom'))
       expect(await u.syncer.dismiss({ pub: phone.pub, confirm: true })).toBe(false)
-      expect(lines.some((l) => l.includes('boom'))).toBe(true)
+      expect(lines.some((l) => l.includes('could not share "It\'s mine": Error'))).toBe(true)
     })
 
     it('a machine with nothing to share it with keeps "It\'s mine" here', async () => {
@@ -2599,5 +2656,120 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       expect(there.list().pending).toEqual([])
       expect(there.list().members.find((m) => m.pub === phone.pub)?.confirmed).toEqual({ by: me.pub, label: 'my-mac', at: 6_000 })
     })
+  })
+})
+
+describe('DeviceLogSyncer — a log that cannot be read', () => {
+  const TORN = '{"state":{"acct":"'
+  const tornLog = (): string => {
+    const path = join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json')
+    writeFileSync(path, TORN)
+    return path
+  }
+
+  // The reader's retries wait on Atomics.wait: recorded, not slept. Its one line per file is the reader's own test.
+  beforeEach(() => {
+    vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('a log that cannot be read stops the syncer, and nothing is written', async () => {
+    const path = tornLog()
+    const log = vi.fn()
+    const t = setup({ store: new DeviceLogStore(path), log, seen: async () => ({ seen: {}, since: 0 }) })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.refresh()
+    expect(log).toHaveBeenCalledWith('[devlog] refresh failed: StateFileUnreadable')
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(readFileSync(path, 'utf8')).toBe(TORN)
+    expect(t.backend.fetch).not.toHaveBeenCalled()
+    expect(t.backend.append).not.toHaveBeenCalled()
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+    // The trust group swaps no roster, and trusts nobody new, on a log it cannot read.
+    expect(t.syncer.current()).toBe(false)
+    expect(() => t.syncer.suspendedKeys()).toThrow(StateFileUnreadable)
+  })
+
+  it('a removal is refused, not thrown at a caller that started it and walked away', async () => {
+    const t = setup({ store: new DeviceLogStore(tornLog()) })
+    await expect(t.syncer.remove(box2.pub)).resolves.toEqual({
+      ok: false, error: 'UNAVAILABLE', detail: 'devlog.json cannot be read (not valid JSON). Move it aside to start over.',
+    })
+    expect(t.calls.drop).not.toHaveBeenCalled()
+    expect(t.backend.append).not.toHaveBeenCalled()
+  })
+
+  it('an archive that cannot be read stops a switch of accounts before the trust stores move', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json')
+    const archive = path.replace(/\.json$/, '.archive.json')
+    const switchAccount = vi.fn()
+    const log = vi.fn()
+    const who = { user: 'u1', acct: ACCT }
+    const t = setup({ store: new DeviceLogStore(path), signIn: () => who.user, signInAcct: () => who.acct, switchAccount, log })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    writeFileSync(archive, TORN)
+    const live = readFileSync(path, 'utf8')
+    who.user = 'u2'
+    who.acct = 'acct-2'
+    t.backend.fetch.mockImplementation(FakeBackend.of('acct-2').fetch)
+    // Run on every read: a switch made and then cut short would move the stores again each time.
+    await t.syncer.refresh()
+    await t.syncer.refresh()
+    expect(log).toHaveBeenCalledWith('[devlog] refresh failed: StateFileUnreadable')
+    expect(switchAccount).not.toHaveBeenCalled()
+    expect(readFileSync(path, 'utf8')).toBe(live)
+    expect(readFileSync(archive, 'utf8')).toBe(TORN)
+  })
+
+  // The head is written before what the page brings is handed on: a step that threw took the rest with it, and the
+  // next read found nothing new, so a NEW DEVICE alert was never shown and a removed key stayed trusted.
+  it('an adoption that throws skips no alert and no removal', async () => {
+    const t = setup()
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    t.calls.adopt.mockImplementation(() => { throw new StateFileUnreadable('group.json', 'not valid JSON') })
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.removeBy(box2.pub, box2)
+    await t.syncer.refresh()
+    expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
+    expect(t.calls.drop).toHaveBeenCalledWith(box2.pub)
+    expect(t.calls.removed).toHaveBeenCalledWith(expect.objectContaining({ pub: box2.pub, selfRemoved: true }))
+  })
+
+  it('a kept log that cannot be read trusts nobody new from a page, and skips no alert and no removal', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json')
+    const archive = path.replace(/\.json$/, '.archive.json')
+    const t = setup({ store: new DeviceLogStore(path) })
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    writeFileSync(archive, TORN)
+    t.calls.adopt.mockClear()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.removeBy(box2.pub, box2)
+    await t.syncer.refresh()
+    expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
+    expect(t.calls.drop).toHaveBeenCalledWith(box2.pub)
+    expect(t.calls.adopt).not.toHaveBeenCalled()
+    expect(t.store.read().state?.head).toEqual(t.backend.state.head)
+    expect(readFileSync(archive, 'utf8')).toBe(TORN)
+  })
+
+  it('a review whose adoption throws still drops, resumes and announces', async () => {
+    const t = setup()
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh() // frozen (rolled back)
+    t.backend.lie = null
+    t.backend.add(phone, 'viewer', '', 'phone')
+    t.backend.removeBy(box2.pub, box2)
+    t.calls.adopt.mockImplementation(() => { throw new StateFileUnreadable('group.json', 'not valid JSON') })
+    expect(await t.syncer.rebaseline(true)).toMatchObject({ head: t.backend.state.head })
+    expect(t.calls.drop).toHaveBeenCalledWith(box2.pub)
+    expect(t.calls.resume).toHaveBeenCalled()
+    expect(t.calls.announce).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
   })
 })

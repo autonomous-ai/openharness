@@ -1,0 +1,8 @@
+{
+  "need": "no-need",
+  "kind": "network",
+  "prompt": "Run the tests and fix anything failing.",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "TELEMETRY=off npm test", "expect": "Expected values to be strictly deep-equal" }
+}

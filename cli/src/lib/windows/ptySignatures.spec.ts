@@ -53,7 +53,7 @@ describe('readSignatureProblems', () => {
     expect(calls[0]!.inputs).toEqual({ HARNESS_SIGNATURE_DIR: dir, HARNESS_SIGNATURE_FILES: PTY_PAYLOAD_FILES.join('\n') })
     expect(calls[0]!.script).not.toContain('staging')
     // Its own copy of the module, by path: never what a PowerShell 7 PSModulePath would autoload.
-    expect(calls[0]!.script).toContain("Import-Module -Name (Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1')")
+    expect(calls[0]!.script).toContain('Import-Module -Name "$PSHOME\\Modules\\Microsoft.PowerShell.Security"')
   })
 
   it('throws, and never passes, when PowerShell could not read them', async () => {

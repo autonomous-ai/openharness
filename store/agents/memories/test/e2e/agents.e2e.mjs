@@ -48,7 +48,11 @@ function run(command, args, options = {}) {
 /** Harness's real installer, the one the daemon runs at start, on the throwaway Claude Code home. */
 function harnessInstalls() {
   const script = `import('./src/engines/hooks.ts').then(({ engineHooks }) => engineHooks.claude.installIn(18999, ${JSON.stringify(join(home, '.claude'))}))`
-  return run('npx', ['tsx', '--eval', script], { cwd: REPO_CLI, env: { ...process.env, HOME: home, ADAPTER_DATA_DIR: join(root, 'harness-data'), CLAUDE_CONFIG_DIR: join(home, '.claude') } })
+  const env = { ...process.env, HOME: home, ADAPTER_DATA_DIR: join(root, 'harness-data'), CLAUDE_CONFIG_DIR: join(home, '.claude') }
+  // The person's own XDG bases would point the installer at their Harness folders, not the throwaway home's.
+  delete env.XDG_DATA_HOME
+  delete env.XDG_STATE_HOME
+  return run('npx', ['tsx', '--eval', script], { cwd: REPO_CLI, env })
 }
 
 function askClaude(withDelivery) {

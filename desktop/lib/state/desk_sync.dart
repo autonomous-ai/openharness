@@ -195,6 +195,12 @@ class DeskDoc {
 /// A desk id: a tab that has been on the desk (or is bound for it) carries a
 /// random 128-bit id, never the per-window `swarm-N` two computers would both
 /// mint. `isDeskId` is how a restored layout from before the desk is told apart.
+/// Hachi's tab (docs/design/2026-11-12-hachi.md): one per account, so every computer names it alike, and
+/// the second computer to create it at the same moment finds it made (`tab.create` of a known id changes
+/// nothing). Its panes are appended (no `index`), so the first Hachi to land stays its first pane, the
+/// home every computer opens; the others close their own. Shaped as a desk id ([isDeskId]).
+const hachiTabId = '8ac10000000000000000000000000000';
+
 String newDeskId() {
   final random = Random.secure();
   final bytes = List<int>.generate(16, (_) => random.nextInt(256));
@@ -239,7 +245,7 @@ List<Map<String, dynamic>> deskDiff(List<DeskTab> before, List<DeskTab> after) {
         'op': 'pane.add',
         'tabId': tab.id,
         ...tab.panes[j].toJson(),
-        'index': j,
+        if (tab.id != hachiTabId) 'index': j,
       });
     }
     if (tab.layout != null && !tab.layout!.isEmpty) {
@@ -279,7 +285,12 @@ List<Map<String, dynamic>> deskDiff(List<DeskTab> before, List<DeskTab> after) {
     for (var j = 0; j < tab.panes.length; j++) {
       final p = tab.panes[j];
       if (!oldKeys.contains(p.key)) {
-        ops.add({'op': 'pane.add', 'tabId': tab.id, ...p.toJson(), 'index': j});
+        ops.add({
+          'op': 'pane.add',
+          'tabId': tab.id,
+          ...p.toJson(),
+          if (tab.id != hachiTabId) 'index': j,
+        });
       }
     }
     // Order among the panes both sides have: move the ones out of place.

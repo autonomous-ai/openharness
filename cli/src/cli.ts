@@ -2,7 +2,7 @@
 import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
-import { runDevicesCommand } from './devices/client.js'
+import { runDevicesCommand, runDialWatch, type DevicesClientDeps } from './devices/client.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
 /**
  * machine-adapter CLI (the `harness` command) — connect this computer to a "remote" agent.
@@ -19,39 +19,47 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeFileSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createServer } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
-import { homedir, hostname } from 'os'
+import { homedir, hostname, release } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
 import { runCoreInForeground } from './core/main.js'
 import { startCoreProcess } from './coreProcess.js'
-import { GRID_MINT_TIMEOUT_MS, backendHttpBase, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
-import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, readPid, daemonUnreachableText } from './lib/daemonState.js'
-import { sandboxed, startRefusalText } from './lib/unreachable.js'
-import { onError, BIND_WAIT_MS, connectFailure, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
+import { backendHttpBase } from './lib/backendHttpBase.js'
+import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
+import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, failForegroundStart, isAlive, readPid } from './lib/daemonState.js'
+import { onError } from './lib/commandFailure.js'
+import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
+import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
-import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
+import { collectBundleFacts, runCommand } from './lib/logBundleFacts.js'
+import { logsExportCommand } from './lib/logsExportCommand.js'
 
 import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
+import { isDaemonRunning, settlePidFile } from './lib/pidFileSettle.js'
 import { AT_LOGON_FLAG, clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
 import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
+import { readMoveRecord } from './homeMove/record.js'
+import { moveStatusLine } from './homeMove/statusLine.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeSignIn, type AuthSession } from './lib/authSession.js'
+import { AuthSessionManager, harnessSessionRequest } from './lib/authRefresh.js'
+import { computerName } from './lib/computerName.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -61,12 +69,19 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
 import { gridExec } from './lib/gridExec.js'
-import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES } from './lib/engineBin.js'
+import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES, installedEngineBin } from './lib/engineBin.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
+// Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
+import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
+import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
+import { carriedClaudePlugin, claudeRun, claudeRunIn } from './devices/claudePlugin.js'
+import { codexRunIn } from './devices/codexPlugin.js'
+import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
+import { orcaPluginRun } from './devices/orcaPlugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -79,7 +94,7 @@ import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
 import { nodeRow, readNodeStatus, type NodeStatus } from './lib/nodeStatus.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
-import { ownProcessGroup } from './lib/windows/noWindow.js'
+import { openInBrowser } from './lib/openInBrowser.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
 import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
@@ -93,6 +108,8 @@ import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
 import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayClient.js'
 import type { LinkedPeer } from './lib/e2ee/manager.js'
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
+import { StateFileUnreadable } from './lib/secureState.js'
+import { unreadableTrustLines } from './lib/trustFiles.js'
 import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { fetchManifest, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
@@ -102,7 +119,8 @@ import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
-import { prepareLogFile } from './lib/log.js'
+import { errorKind, prepareLogFile, ts } from './lib/log.js'
+import { narrowOwnEnvironment, startEnvLine } from './lib/startEnvironment.js'
 import { privacyCommand } from './lib/privacyCommand.js'
 
 
@@ -117,8 +135,9 @@ Usage: harness start [options]
 
   -f, --foreground       run the daemon in the FOREGROUND (for a supervisor; logs to stdout)
   --repair               also re-verify the managed Node runtime and repoint the launcher at it
-  --if-down              start only if it is not running and \`harness stop\` has not stopped it
-                         (what Windows's scheduled task runs; quiet otherwise)
+  --if-down              start only if it is not running, \`harness stop\` has not stopped it and
+                         \`harness flash\` or \`harness uninstall\` is not at work (what Windows's
+                         scheduled task and the Harness Device app run; quiet otherwise)
   --at-logon             with --if-down: the sign-in task's start, first forgets a \`harness stop\`
   --restart              stop the daemon that is running for this data folder and start it over
                          (without it, a running daemon is never replaced by a start that has no
@@ -166,8 +185,9 @@ Machine:
   harness start --restart      stop the daemon that is running and start it over (a start with no sign-in of its own
                                never replaces a running daemon without it)
   harness start --help         the start options; starts nothing
-  harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
-                               since the computer started (what Windows's scheduled task runs; quiet otherwise).
+  harness start --if-down      start the daemon only if it is not running, \`harness stop\` has not stopped it
+                               since the computer started and \`harness flash\` or \`harness uninstall\` is not at
+                               work (what Windows's scheduled task and the Harness Device app run; quiet otherwise).
                                --at-logon (the sign-in task's start) first forgets a \`harness stop\`
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
@@ -182,11 +202,12 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
-  harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
+  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml that has its own \`hooks:\`
+  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
-  harness swarm [list|status|machines|agents|starts]
-                               the Swarm as you read it: people, machines, agents, starts
+  harness ensure <openclaw|hermes> --name <n> --program-token-file <p> --json
+                               a program's own harness, kept across its tasks: live, resumed or new
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -198,7 +219,9 @@ Machine:
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
   harness watch <name>         follow a harness: a line (--json: an object) each time it changes, until it stops
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
+  harness delete <name>        stop a harness and erase its conversation and what Harness kept of it
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
+  harness goal open|done|list  Hachi's goals: the one its harnesses are started for (new --goal), and when it is done
   harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
   harness route [--send] -- <w>  which harness words belong to, or new work; --send types them into an idle one (programs-reply)
   harness resume <name>        open a closed harness again, with its conversation, for a program to reply to (programs-reply)
@@ -239,6 +262,8 @@ ${dshUsage()}
 ${apiUsage}
 
 ${connectionsUsage}
+
+${DEVICE_USAGE}
 
 Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device; addon state/propose/proposal
@@ -311,7 +336,7 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   const accessToken = await auth.accessToken()
   const result = await postJson<{ machine?: { machineId?: string } }>('/api/machines/resolve-computer', {
     computerId: current.computerId,
-    label: hostname(),
+    label: await computerName(),
     // Same claim the adapter-ws dial carries: a machine deleted while this computer was offline must
     // come back as 403, not as a quietly minted replacement.
     ...(current.machineId ? { machineId: current.machineId } : {}),
@@ -705,7 +730,7 @@ async function qrSignInCommand(
   const result = await qrSignIn({
     post: (path, body) => postJson(path, body),
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
-    label: hostname().slice(0, 80),
+    label: await computerName(),
     computerId: computerId(),
     ...(hooks.spoken ? {
       showCode: (code: string, expiresIn: number) => {
@@ -785,7 +810,7 @@ async function saveSignIn(
 ): Promise<SignInOutcome> {
   const signInEpoch = newSignInEpoch()
   const autonomousEnv = tokens.autonomousEnv ?? env.AUTONOMOUS_ENV
-  writeAuthSession({
+  writeSignIn({
     version: 1,
     accessToken: tokens.token,
     ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
@@ -879,7 +904,7 @@ async function browserSignIn(
         // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
         ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
         // A Harness session in place of the SSO tokens (backend lib/ssoSession.ts); an older backend sends those.
-        harnessSession: harnessSessionRequest(),
+        harnessSession: await harnessSessionRequest(),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {
@@ -901,7 +926,7 @@ async function browserSignIn(
       updatedAt: Date.now(),
       signInEpoch,
     }
-    writeAuthSession(session)
+    writeSignIn(session)
     await recordSignInAccount(session.accessToken, signInEpoch, session.autonomousEnv)
     try {
       await resolveComputerMachine()
@@ -1082,16 +1107,6 @@ function promptForCallbackUrl(redirectUri: string): {
   }
 }
 
-/** Best-effort: a failed open is not a failed connect, the URL is printed above either way. */
-function openInBrowser(url: string): void {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
-  try {
-    const child = spawn(cmd, [url], { stdio: 'ignore', ...ownProcessGroup(), shell: process.platform === 'win32' })
-    child.on('error', () => { /* no browser here (headless/ssh) — the printed URL is the fallback */ })
-    child.unref()
-  } catch { /* ignore */ }
-}
-
 /** This process is the scheduled task's `harness start --if-down` (Windows), which never forgets a `harness stop`. */
 let startedByTheTask = false
 
@@ -1105,8 +1120,15 @@ let startedByTheTask = false
  */
 async function runningDaemonPid(underLock: boolean = false): Promise<number | null> {
   if (process.platform === 'win32') return runningDaemon(processIfDownDeps(process.platform, {}, { forget: underLock }))
-  const pid = readPid()
+  const pid = await settledPid()
   return pid && isAlive(pid) ? pid : null
+}
+
+/** The pid file's pid, once a pid file that cannot be read has been asked of the daemon or set aside
+ *  (lib/pidFileSettle.ts). */
+async function settledPid(): Promise<number | null> {
+  await settlePidFile()
+  return readPid()
 }
 
 /**
@@ -1252,7 +1274,7 @@ async function resolveMachineIfUnknown(session: AuthSession): Promise<void> {
   try {
     await resolveComputerMachine(AbortSignal.timeout(RESOLVE_ON_START_TIMEOUT_MS))
   } catch (err) {
-    console.log(`  (machine id not resolved yet — ${err instanceof Error ? err.message : String(err)}; starting on the computer id, resolved on the next login or online start)`)
+    console.log(`  (machine id not resolved yet — ${errorKind(err)}; starting on the computer id, resolved on the next login or online start)`)
   }
 }
 const RESOLVE_ON_START_TIMEOUT_MS = 10_000
@@ -1331,7 +1353,7 @@ async function updateCommand(force: boolean): Promise<void> {
   // relaunch there is no pid file for several seconds, and anything that spawns `harness start` on
   // "no daemon" (the desktop app does, every few seconds) used to land a second child in that gap.
   await withSpawnLock('update', async () => {
-    const running = readPid()
+    const running = await settledPid()
     const wasRunning = !!(running && isAlive(running))
     const relaunch = async (): Promise<void> => {
       await new Promise((r) => setTimeout(r, 1000)) // grace for the backend to release the one-machine claim
@@ -1448,7 +1470,7 @@ async function logout(): Promise<void> {
 async function restartDaemonForIdentity(restartIfDown = false): Promise<void> {
   // OUR daemon, by its pid file and private socket. A login in another HOME must never restart a
   // different OS user's daemon just because it happens to hold the default TCP port.
-  const pid = readPid()
+  const pid = await settledPid()
   if (!pid || !isAlive(pid)) {
     if (!restartIfDown) return
     console.log('  starting the daemon again on this account…')
@@ -1487,7 +1509,7 @@ async function runningDaemonStatus(): Promise<{
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
-      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId(), env.ADAPTER_DATA_DIR)
+      ?? await legacyDaemonStatus(daemonPort(), await settledPid(), computerId(), env.ADAPTER_DATA_DIR)
     if (!body) return null
     const status = body as {
       version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
@@ -1620,12 +1642,18 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
     // Beside a daemon that serves this data folder, leave at once and say so, as its core would have:
     // the master would start its services and a core only to see the core refused, and end with 0.
     await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), 1_000, servedFolderDeps(env.ADAPTER_DATA_DIR, env.PORT))
+    // This process becomes the daemon, so the shell's environment would be the daemon's and every child's: only the
+    // allowlist stays, then HARNESS_ENV_FILE is read again, its variables having gone with the rest
+    // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+    console.log(`${ts()} ${narrowOwnEnvironment()}`)
     startMasterInForeground(SCRIPT_PATH)
     return
   }
   // …and a dev/tsx run (a .ts is not spawned detached): the core inline, on its own. A repo run never updates
   // itself (runForeground), so it has no update to hand over.
   if (foreground || SCRIPT_PATH.endsWith('.ts')) {
+    // The same as the master's start above: the core runs in this process, a dev run's too (the design's decision 8).
+    console.log(`${ts()} ${narrowOwnEnvironment()}`)
     if (!foreground) console.log('[cli] dev mode — running in the foreground (Ctrl-C to stop)')
     await runCoreInForeground(session, SCRIPT_PATH)
     return
@@ -1709,14 +1737,15 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     }
   }
   const logFd = openSync(LOG_FILE, 'a')
+  // The daemon gets only the allowlist of the shell that ran this start, not this process's environment: another
+  // program's session tokens would reach the daemon, its tmux server and every pane
+  // (docs/plans/2026-11-17-daemon-minimal-env-design.md). Its log says how many were left out, never which.
+  const options = daemonSpawnOptions(process.env, logFd)
+  writeSync(logFd, `${ts()} ${startEnvLine(process.env, options.env)}\n`)
   // The daemon starts on the managed runtime straight away rather than inheriting this process's
   // interpreter and waiting for some later restart to adopt it.
   // Under its own name in Activity Monitor (harnessd/processName.ts) rather than `node`.
-  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], {
-    detached: true,
-    env: { ...process.env },
-    stdio: ['ignore', logFd, logFd],
-  })
+  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], options)
   let childExited = false
   child.on('exit', () => { childExited = true })
   child.on('error', () => { childExited = true })
@@ -2068,7 +2097,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
   console.log(`    fingerprint  ${result.fingerprint}   — verify it matches on the joining machine after \`harness link connect\`\n`)
   console.log(`  ▸ Run this on the OTHER machine:  harness link connect ${session.machineId}`)
   console.log('  ⚠ Anyone with this password can link a machine to this one. Keep it private.\n')
-  if (!readPid()) console.log('  Start the adapter with `harness start` if joins are being rejected.\n')
+  if (!await settledPid()) console.log('  Start the adapter with `harness start` if joins are being rejected.\n')
   process.exit(0)
 }
 
@@ -2654,12 +2683,16 @@ async function machinesDeleteCommand(id: string | undefined, assumeYes: boolean)
 
 /** `harness status` — print the info block with the current running state. */
 async function status(): Promise<void> {
-  const pid = readPid()
+  const pid = await settledPid()
   const alive = pid != null && isAlive(pid)
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
   const signedIn = daemonStatus?.signedIn ?? session !== null
-  if (!alive) registry.load()
+  if (!alive) {
+    registry.load()
+    try { await registry.flush() }
+    catch (error) { console.error(`[registry] status flush failed · ${errorKind(error)}`) }
+  }
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
   const safeMode = alive ? readSafeModeMarker(env.ADAPTER_DATA_DIR, isAlive) : null
@@ -2700,8 +2733,13 @@ async function status(): Promise<void> {
     // `status` can say "(in your account)" from it for a while; that window is accepted.
     // A retired key with none in its place still says something, though: being removed from the
     // account is itself what signs a machine out (the daemon clears the session as it spends the key).
+    // A log that cannot be read leaves the row out: the line below names the file.
     device: (() => {
-      const devlog = new DeviceLogStore().read()
+      let devlog: ReturnType<DeviceLogStore['read']>
+      try { devlog = new DeviceLogStore().read() } catch (error) {
+        if (error instanceof StateFileUnreadable) return undefined
+        throw error
+      }
       return deviceStatusValue(
         thisDeviceFingerprint(false),
         session
@@ -2720,50 +2758,26 @@ async function status(): Promise<void> {
       authDir: alive ? daemonStatus?.authDir ?? null : AUTH_DIR,
     },
   })
-  process.exit(0)
-}
-
-/**
- * `harness logs export [--to <dir>] [--days N] [--json]` — the last week of every log this product
- * writes, zipped to the Desktop (or `--to`), secrets blanked. The file a bug report is made of; the
- * desktop app's Settings ▸ Debug ▸ Export logs runs this same command.
- */
-async function logsExportCommand(json: boolean): Promise<void> {
-  const flagValue = (name: string): string | undefined => {
-    const at = process.argv.indexOf(name)
-    return at >= 0 ? process.argv[at + 1] : undefined
-  }
-  const days = Math.max(1, Number(flagValue('--days') ?? 7) || 7)
-  const desktop = join(homedir(), 'Desktop')
-  const to = flagValue('--to') ?? (existsSync(desktop) ? desktop : process.cwd())
-  const now = new Date()
-  const notes = [`machine: ${readAuthSession()?.machineId ?? 'not signed in'}`]
-  const { zip, included } = buildLogBundle({
-    logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, days, now, version: VERSION, notes,
-    redact: redactSecretsInText,
-  })
-  mkdirSync(to, { recursive: true })
-  const path = join(to, bundleFileName(now))
-  writeFileSync(path, zip)
-  if (json) console.log(JSON.stringify({ path, included, bytes: zip.length }))
-  else {
-    console.log(`wrote ${tildify(path)} (${Math.round(zip.length / 1024)} KB)`)
-    for (const name of included) console.log(`  ${name}`)
-    if (!included.length) console.log('  (no logs found)')
-  }
+  // Only Linux moves ~/.harness; a move that is held or failed says what to do.
+  const moveLine = process.platform === 'linux' ? moveStatusLine(readMoveRecord(homedir(), process.env)) : null
+  if (moveLine) console.log(`  ${moveLine}\n`)
+  const unreadable = unreadableTrustLines()
+  if (unreadable.length) console.log(`${unreadable.join('\n')}\n`)
   process.exit(0)
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
+import { ensureCommand } from './agentClient/ensure.js'
+import { ensureDaemonForProgram } from './lib/programDaemon.js'
+import { agentOrigin, closeCommand, deleteCommand, goalCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
 import { computerUseCommand } from './agentClient/computerUse.js'
-import { browserMcpCommand } from './agentClient/browserMcp.js'
+import { browserCommand } from './agentClient/browser.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2796,9 +2810,6 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   console.log(flags.includes('--json') ? JSON.stringify({ version: VERSION, ptyProtocol: PTY_PROTOCOL }) : VERSION)
   process.exit(0)
 }
-
-/** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
-const swarmCommands = () => import('./superTabs/command.js')
 
 switch (cmd) {
   case 'privacy':
@@ -2833,9 +2844,9 @@ switch (cmd) {
     process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
-  case 'browser-mcp':
-    // A Browser agent's MCP server (lib/browserMcpArgs.ts): an engine starts it, never a person.
-    browserMcpCommand().then(code => { process.exitCode = code }).catch(onError)
+  case 'browser':
+    // An agent drives the browser its person started for it (agentClient/browser.ts).
+    browserCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'mcp': {
     const pane = sendPane(process.env)
@@ -2866,31 +2877,28 @@ switch (cmd) {
   case 'close':
     closeCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'delete':
+    deleteCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  // Hachi's goals (services/goals.ts): the daemon answers Hachi alone, so this needs no machine list.
+  case 'goal':
+    goalCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
-    break
-  // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
-  // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
-  case 'super-tab':
-    swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
-  case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
-    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
-    import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
     // Capture before sign-in: the daemon can exit cleanly when its identity changes, and the installed
     // service treats a clean exit as an intentional stop.
-    const daemonWasRunning = isDaemonRunning()
-    loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
-      entryPoint: entryPointFlag(),
-      ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
-      method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
-    })
-      .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined)
+    isDaemonRunning()
+      .then((daemonWasRunning) => loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
+        entryPoint: entryPointFlag(),
+        ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
+        method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
+      })
+        .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon || daemonWasRunning) : undefined))
       .catch(onError)
     break
   }
@@ -2908,7 +2916,8 @@ switch (cmd) {
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart')).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart'))
+      .catch(foreground ? failForegroundStart : onError)
     break
   }
   case 'join':
@@ -2931,13 +2940,18 @@ switch (cmd) {
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'hardware':
-    runDevicesCommand(rest, {
+  case 'hardware': {
+    const daemon: DevicesClientDeps = {
       port: daemonPort(),
       machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
       connect: (url, headers) => new NewCommandSocket(url, { headers }),
-    }).then(code => { process.exitCode = code }).catch(onError)
+    }
+    const run = rest[0] === 'watch'
+      ? runDialWatch(rest.slice(1), { ...daemon, stdin: process.stdin, print: (line) => console.log(line), printError: (line) => console.error(line) })
+      : runDevicesCommand(rest, daemon)
+    run.then(code => { process.exitCode = code }).catch(onError)
     break
+  }
   case 'pair':
     pairCommand(args[0]).catch(onError)
     break
@@ -2998,6 +3012,27 @@ switch (cmd) {
       origin: () => agentOrigin(),
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
+  case 'ensure': {
+    // A program's own harness, kept across its tasks (#4393): `harness new`'s own launch, behind the program's token,
+    // with the daemon started first when it is down (lib/programDaemon.ts).
+    const tokenAt = rest.indexOf('--program-token-file')
+    const withToken = tokenAt >= 0 && rest[tokenAt + 1] !== undefined
+    ensureCommand(rest, {
+      machines: usableMachines,
+      ...(withToken ? { daemonUp: () => ensureDaemonForProgram(env.ADAPTER_DATA_DIR, env.PORT) } : {}),
+      create: async (argv) => {
+        const lines: string[] = []
+        const code = await newCommand({
+          argv, cwd: process.cwd(), home: homedir(), port: daemonPort(), localMachineId: wantedDaemonIdentity(),
+          daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(), listMachines: usableMachines,
+          connect: (url, headers) => new NewCommandSocket(url, { headers }),
+          output: (line) => lines.push(line), error: (line) => lines.push(line),
+        })
+        return { code, lines }
+      },
+    }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  }
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
     break
@@ -3072,6 +3107,40 @@ switch (cmd) {
   case 'devices':
     devicesCommand(args[0], args[1], flags).catch(onError)
     break
+  case 'device':
+    runDeviceCommand(rest, {
+      dataDir: env.ADAPTER_DATA_DIR,
+      home: homedir(),
+      port: daemonPort(),
+      platform: process.platform,
+      stdin: process.stdin,
+      claude: claudeRun,
+      orcaHomes: () => readOrcaHomes(orcaHomesDeps()).then((read) => read.homes.claude),
+      claudeIn: claudeRunIn,
+      claudeFiles: carriedClaudePlugin,
+      defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
+      // Codex takes an empty CODEX_HOME for none (utils/home-dir find_codex_home), so its home is then ~/.codex.
+      codexHome: env.CODEX_HOME || join(homedir(), '.codex'),
+      codex: () => installedEngineBin('codex') !== null,
+      codexIn: codexRunIn,
+      vscode: vscodeExtensionDeps,
+      orca: orcaPluginRun,
+      env: process.env,
+      cwd: process.cwd(),
+      write: (line) => new Promise((resolve) => {
+        // A failed write's 'error' follows its callback, and unheard it would end the process with a trace on stderr:
+        // the listener stays for it, and goes once a write succeeds.
+        const failed = (): void => resolve(false)
+        process.stdout.once('error', failed)
+        process.stdout.write(`${line}\n`, (error) => {
+          if (!error) process.stdout.off('error', failed)
+          resolve(!error)
+        })
+      }),
+      out: (line) => console.log(line),
+      err: (line) => console.error(line),
+    }).then((code) => { process.exitCode = code }).catch(onError)
+    break
   case 'remote-password':
     if (args[0] === 'set') remotePasswordSetCommand(flags.includes('--json'), flags.includes('--stdin')).catch(onError)
     else if (args[0] === 'clear') remotePasswordClearCommand(flags.includes('--json')).catch(onError)
@@ -3102,16 +3171,6 @@ switch (cmd) {
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
-  case 'swarm':
-    import('./swarm/command.js')
-      .then(({ swarmCommand }) => swarmCommand(rest, {
-        out: (line) => console.log(line),
-        err: (line) => console.error(line),
-        auth: controlPlaneAuth,
-        get: (path, headers) => requestJson('GET', path, undefined, headers),
-      }, flags.includes('--json')))
-      .then((code) => { process.exitCode = code }).catch(onError)
-    break
   case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)
     import('./team/remove.js')
       .then(async ({ removeTeamAccount, teamRemovalDeps }) => {
@@ -3140,9 +3199,21 @@ switch (cmd) {
   case 'status':
     status().catch(onError)
     break
+  case 'hooks': // loaded only here: the engines' hook declarations are not every command's
+    import('./engines/hooksCommand.js').then(({ hooksCommand }) => { process.exitCode = hooksCommand(args[0], daemonPort()) }).catch(onError)
+    break
   case 'logs':
-    if (args[0] === 'export') logsExportCommand(flags.includes('--json')).catch(onError)
-    else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
+    if (args[0] === 'export') {
+      logsExportCommand({
+        args: rest, logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, version: VERSION, home: homedir(),
+        cwd: process.cwd(), now: new Date(), machineId: readAuthSession()?.machineId,
+        facts: () => collectBundleFacts({
+          self: [process.execPath, ...process.execArgv, process.argv[1]], platform: process.platform, home: homedir(),
+          env: process.env, nodeVersion: process.version, osRelease: release(), exists: existsSync, run: runCommand,
+        }),
+        out: (line) => console.log(line),
+      }).then(() => process.exit(0)).catch(onError)
+    } else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
     break
   case 'update':
     updateCommand(flags.includes('--force')).catch(onError)

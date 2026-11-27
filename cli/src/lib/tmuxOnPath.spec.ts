@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
-import { ensureTmuxOnPath, managedTmuxPath, requireTmuxAvailable, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories } from './tmuxOnPath.js'
+import { tmuxFinder } from './binaryFinder.js'
+import { ensureTmuxOnPath, managedTmuxPath, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories, type TmuxPathOutcome } from './tmuxOnPath.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const dirs: string[] = []
 const originalPath = process.env.PATH
@@ -25,14 +27,13 @@ const noManagedTmux = () => scratch('tmux-onpath-no-runtime-')
 function fakeShell(binDir: string): string {
   const dir = scratch('tmux-onpath-shell-')
   const shell = join(dir, 'sh')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 # Mimics "zsh -lic <script> $0 $1": drop the flag, run the script with the remaining positionals.
 shift
 # Hermetic: ONLY this dir, or the real tmux on the test machine leaks in and the
 # "cannot find it either" case silently passes for the wrong reason.
 PATH="${binDir}" exec /bin/sh -c "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -40,7 +41,7 @@ PATH="${binDir}" exec /bin/sh -c "$@"
 function loginOnlyShell(binDir: string): string {
   const dir = scratch('tmux-onpath-login-')
   const shell = join(dir, 'bash')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 # The daemon asks bash with '-ic'; only '-lic' reads the file this user's PATH lives in.
 case "$1" in
   -lic) ;;
@@ -49,7 +50,6 @@ esac
 shift
 PATH="${binDir}" exec /bin/sh -c "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -83,7 +83,7 @@ describe('ensureTmuxOnPath', () => {
 
     expect(outcome.state).toBe('adopted')
     if (outcome.state !== 'adopted') return
-    expect(outcome.from).toBe(binDir)
+    expect(outcome.from).toBe('login shell')
     // The point of the whole exercise: every later execFile('tmux', …) now resolves.
     expect(env.PATH?.split(delimiter)[0]).toBe(binDir)
     expect(env.PATH).toContain('/nonexistent-for-this-test')
@@ -105,12 +105,11 @@ describe('ensureTmuxOnPath', () => {
   it('finds tmux after startup chatter from the login shell', async () => {
     const binDir = fakeTmux()
     const shell = join(scratch('tmux-onpath-chatty-shell-'), 'zsh')
-    writeFileSync(shell, `#!/bin/sh
+    writeExecutable(shell, `#!/bin/sh
 shift
 printf '%s\\n' 'Now using node v25.7.0'
 PATH="${binDir}" exec /bin/sh -c "$@"
 `)
-    chmodSync(shell, 0o700)
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent-for-this-test' }
 
     const outcome = await ensureTmuxOnPath(env, shell, noManagedTmux())
@@ -147,7 +146,7 @@ PATH="${binDir}" exec /bin/sh -c "$@"
 
     const outcome = await ensureTmuxOnPath(env, fakeShell(usersBin), runtimeDir)
 
-    expect(outcome).toEqual({ state: 'adopted', path: join(usersBin, 'tmux'), from: usersBin })
+    expect(outcome).toEqual({ state: 'adopted', path: join(usersBin, 'tmux'), from: 'login shell' })
     expect(env.PATH!.split(delimiter)[0]).toBe(usersBin)
   })
 
@@ -186,13 +185,6 @@ PATH="${binDir}" exec /bin/sh -c "$@"
     expect(env.PATH).toBe('/nonexistent-for-this-test')
   })
 
-  it('fails before daemon startup when tmux is unavailable', () => {
-    expect(() => requireTmuxAvailable({
-      state: 'absent',
-      reason: 'the user\'s login shell does not resolve tmux either',
-    })).toThrow('tmux is required but unavailable')
-  })
-
   it('does not consult a shell it cannot trust', async () => {
     // A relative SHELL is not something to hand a command to.
     expect(await resolveViaLoginShell('tmux', 'sh')).toBeNull()
@@ -201,13 +193,12 @@ PATH="${binDir}" exec /bin/sh -c "$@"
     // A tmux that answers like the real one, in a directory the daemon's PATH does not list.
     const binDir = scratch('tmux-onpath-real-')
     const tmux = join(binDir, 'tmux')
-    writeFileSync(tmux, `#!/bin/sh
+    writeExecutable(tmux, `#!/bin/sh
 case "$1" in
   new-session) printf '%%7\\n' ;;
 esac
 exit 0
 `)
-    chmodSync(tmux, 0o700)
     const shell = fakeShell(binDir)
 
     // Before: exactly what the machine reported after its reboot.
@@ -227,12 +218,12 @@ exit 0
 
   it('creates the first pane with an installed tmux absent from a fresh user’s shell', async () => {
     const binDir = scratch('tmux-onpath-installed-')
-    writeFileSync(join(binDir, 'tmux'), `#!/bin/sh
+    writeExecutable(join(binDir, 'tmux'), `#!/bin/sh
 case "$1" in
   -V) printf 'tmux 3.7c\\n' ;;
   new-session) printf '%%0\\n' ;;
 esac
-`, { mode: 0o700 })
+`)
     const runtimeDir = noManagedTmux()
     process.env.PATH = '/nonexistent-for-this-test'
     const backend = new TmuxBackend()
@@ -258,21 +249,25 @@ esac
       .toEqual(['/custom/bin', '/custom/brew/bin'])
   })
 
+  it('a relative HARNESS_BIN_DIR is the home\'s, as config/env.ts reads it', () => {
+    expect(tmuxInstallDirectories({ HOME: '/home/new-user', HARNESS_BIN_DIR: 'bin' }, 'linux')).toEqual([join('/home/new-user', 'bin')])
+  })
+
   it('skips a broken install candidate and adopts the next runnable tmux', async () => {
     const broken = scratch('tmux-onpath-broken-')
     writeFileSync(join(broken, 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
     const working = scratch('tmux-onpath-working-')
-    writeFileSync(join(working, 'tmux'), '#!/bin/sh\nprintf "tmux 3.7c\\n"\n', { mode: 0o700 })
+    writeExecutable(join(working, 'tmux'), '#!/bin/sh\nprintf "tmux 3.7c\\n"\n')
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
     expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [broken, working]))
-      .toMatchObject({ state: 'adopted', path: join(working, 'tmux') })
+      .toEqual({ state: 'adopted', path: join(working, 'tmux'), from: 'standard install location' })
     expect(env.PATH?.split(delimiter)[0]).toBe(working)
   })
 
   // Under load a working tmux's `-V` took past the 2 s it was given and read as absent (flipped absent/adopted on a loaded Mac).
   it('adopts an install candidate whose version check is slow but answers, and never one that does not answer', async () => {
     const slow = scratch('tmux-onpath-slow-')
-    writeFileSync(join(slow, 'tmux'), '#!/bin/sh\n/bin/sleep 2.5\nprintf "tmux 3.7c\\n"\n', { mode: 0o700 })
+    writeExecutable(join(slow, 'tmux'), '#!/bin/sh\n/bin/sleep 2.5\nprintf "tmux 3.7c\\n"\n')
     const env: NodeJS.ProcessEnv = { PATH: '/nonexistent' }
     expect(await ensureTmuxOnPath(env, '/nonexistent/shell', noManagedTmux(), [slow]))
       .toMatchObject({ state: 'adopted', path: join(slow, 'tmux') })
@@ -281,4 +276,46 @@ esac
     expect(await ensureTmuxOnPath({ PATH: '/nonexistent' }, '/nonexistent/shell', noManagedTmux(), [hung]))
       .toMatchObject({ state: 'absent' })
   }, 2.5_000 + TMUX_CHECK_MS + 20_000) // A slow answer, then the whole limit for one that never answers.
+})
+
+describe('tmuxFinder', () => {
+  const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: 'login shell' })
+
+  // As the core retries its own (terminalBackendRecovery.ts): a tmux installed after the process started, or a login
+  // shell that timed out on a loaded Mac, otherwise left the dial with no tmux until the process restarted.
+  it('no tmux found, or a lookup that threw, is asked again once a tmux is where the core looks without a shell', async () => {
+    const answers: Array<() => Promise<TmuxPathOutcome>> = [
+      async () => { throw new Error('lookup failed') },
+      async () => ({ state: 'absent', reason: 'tmux was not found' }),
+      ADOPTED,
+    ]
+    let finds = 0
+    let there = false
+    const tmux = tmuxFinder(() => answers[finds++](), () => there)
+    expect((await tmux()).state).toBe('absent')
+    // None there yet: nothing is asked again.
+    expect((await tmux()).state).toBe('absent')
+    expect(finds).toBe(1)
+    there = true
+    expect((await tmux()).state).toBe('absent')
+    expect(await tmux()).toEqual(await ADOPTED())
+    expect(finds).toBe(3)
+    // Found, it holds.
+    expect(await tmux()).toEqual(await ADOPTED())
+    expect(finds).toBe(3)
+  })
+
+  it('asks as the core does, on a copy of this process\'s environment: its own PATH stays the master\'s', async () => {
+    const binDir = fakeTmux()
+    const shell = process.env.SHELL
+    process.env.PATH = '/nonexistent-for-this-test'
+    process.env.SHELL = fakeShell(binDir)
+    try {
+      expect(await tmuxFinder()()).toEqual({ state: 'adopted', path: join(binDir, 'tmux'), from: 'login shell' })
+      expect(process.env.PATH).toBe('/nonexistent-for-this-test')
+    } finally {
+      if (shell === undefined) delete process.env.SHELL
+      else process.env.SHELL = shell
+    }
+  })
 })

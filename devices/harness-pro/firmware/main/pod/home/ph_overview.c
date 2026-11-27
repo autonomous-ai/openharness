@@ -10,20 +10,18 @@
 // Working card (the owner's mockup, option D): while an agent works one more card comes after Notices, before tab 0, in Codex's blue
 // (the owner's pick): "Working" and the count in ph_bd_84, then up to three pets (their work scene, ink at most 128 px, feet on y 384) with the name and the
 // elapsed time under each; the working agents newest first, three to a page (nav->work_page). One POD_A_FOLLOW hit over each pet.
-// Swarm card (the owner's mockup swarm-card-v3.html, built from the Working card's frame): a desk tab linked to a Swarm (pod_model_swarm_for_tab) draws
-// the Swarm instead of its tab card, and a Swarm with no desk tab is one more page after the tabs (pod_home_swarm). Purple #6B4FA3 -> #231A3B: the Swarm's name
-// (cut with an ellipsis), under it one capsule: a white disc with the number of projects, then how many are stuck, need you and work ("1 stuck · 1 needs you",
-// "2 working" with the equaliser; too wide: "working" shrinks to the bars and the number), or "All done"; then the Leads as pets three to a page
-// (nav->swarm_page) in the Working card's slots, each in the scene of its state (ph_lead_scene), stuck first, then needs you, working, done (the Swarm's order
-// inside each, so a page turn never reshuffles), with the project and the status under it: "needs you", "stuck", "done", a working Lead only its clock
-// (m:ss); a Lead on another person's machine adds its owner in a smaller muted line. One POD_A_LEAD hit over each pet (arg = the Lead's index, id = the Swarm's).
 // Paging: the TABS frame's scroll is the tab index, POD_HOME_NOTICES the Notices card (only while notices exist) and POD_HOME_WORKING the Working card (only
 // while an agent works): the page list is pod_home_pages, so a card coming or going never moves the person to another tab: it only adds or drops a page before
 // tab 0 (and when the card shown goes, Home settles on the next page to its right).
+// The Tabs | Apps pill (home_pill) sits under every page while another app has agents (pod_home_switch).
+// App cards (the pages POD_HOME_APP0 + k, Home listing apps): the tab card's body, drawn from the same card description, filled from the app's
+// m->apps row: its own colours (pod_app_style) or the Pro's dark, its 72 px icon at the top right, no "All done" (a daemon without app cards sends
+// no `working`), marks only for the app shown's agents. One POD_A_PICK_APP hit over the card (arg = the row in m->apps, id = the app id).
 // Also here: the small helpers the other Pets screens share (the pet / logo art).
 #include <stdio.h>
 #include <string.h>
 
+#include "pod/app_icons.h"
 #include "pod/home/ph.h"
 #include "pod/pod_draw.h"
 #include "pod/pod_pet.h"
@@ -62,35 +60,24 @@ void ph_card_art(ht_scene_t *s, int cx, int cy, int side, const pod_model_t *m, 
     art_of(s, cx, cy, side, a->engine, ph_card_scene(m, a), fill, now_ms);   // the scene of its state (work, ask, rest), as the agent screen plays it
 }
 
-pod_scene_t ph_lead_scene(pod_lead_state_t st)
-{
-    return st == POD_LEAD_WORK ? POD_SCENE_WORK : st == POD_LEAD_DONE ? POD_SCENE_REST : POD_SCENE_ASK;
-}
 
-// A Lead's status line ("working · m:ss", "needs you", "stuck", "done") and its colour; `dim` is the colour of "done" (white at 60 % over whatever the line is on).
-unsigned ph_lead_status(const pod_lead_t *l, uint32_t now_ms, char *line, size_t n, unsigned dim)
-{
-    if (l->state == POD_LEAD_ASK) { snprintf(line, n, "needs you"); return PH_LEAD_ASK; }
-    if (l->state == POD_LEAD_STUCK) { snprintf(line, n, "stuck"); return PH_LEAD_STUCK; }
-    if (l->state == POD_LEAD_DONE) { snprintf(line, n, "done"); return dim; }
-    if (l->since_s) {   // working with a turn's start (the daemon's since): the clock runs on; without one (a remote Lead, or only open assignments) none
-        char t[24];
-        const uint32_t into = (int32_t)(now_ms - l->since_at_ms) > 0 ? (now_ms - l->since_at_ms) / 1000 : 0;
-        pod_fmt_elapsed(t, sizeof t, (int64_t)l->since_s + into);
-        snprintf(line, n, "working \xc2\xb7 %s", t);
-    } else snprintf(line, n, "working");
-    return PH_LEAD_WORK;
-}
-
-
-// What Home shows: the top frame's scroll (a TAB frame, which Pets never reaches, shows its own tab), clamped to the page list (pod_home_pages): the tab
-// index, POD_HOME_NOTICES / POD_HOME_WORKING for those cards, HOME_NONE with no page at all.
+// What Home shows: the top frame's scroll (a TAB frame, which Pets never reaches, shows its own tab; one that is not a tab, such as an app's ring,
+// Home's page), clamped to the page list (pod_home_pages): the tab index or app page, POD_HOME_NOTICES / POD_HOME_WORKING for those cards,
+// HOME_NONE with no page at all.
 enum { HOME_NONE = -3 };
 static int home_at(const pod_nav_t *nav, const pod_model_t *m)
 {
-    if (pod_home_pages(m, NULL, 0) < 1) return HOME_NONE;
+    if (pod_home_pages(nav, m, NULL, 0) < 1) return HOME_NONE;
     const pod_frame_t *f = nav->depth ? &nav->stack[nav->depth - 1] : NULL;
-    return pod_home_clamp(m, !f ? 0 : f->view == POD_V_TAB ? f->tab : f->scroll);
+    return pod_home_clamp(nav, m, !f ? 0 : f->view != POD_V_TAB ? f->scroll : f->tab >= 0 ? f->tab : nav->stack[0].scroll);
+}
+
+// The m->apps row of app page p, else -1.
+static int app_row(const pod_model_t *m, int p)
+{
+    uint8_t row[POD_APPS_MAX];
+    const int n = pod_home_app_cards(m, row, POD_APPS_MAX), k = p - POD_HOME_APP0;
+    return k >= 0 && k < n ? row[k] : -1;
 }
 
 // The agents of tab t (panes that name a rostered agent) and how many of them work.
@@ -103,7 +90,7 @@ static int tab_agents(const pod_model_t *m, int t, int *working)
             n++;
             w += pod_model_eff(m, &m->agents[tab->agent[k]]) == POD_WORKING;
         }
-    if (working) *working = w;
+    *working = w;
     return n;
 }
 
@@ -125,12 +112,19 @@ bool ph_home_moves(const pod_nav_t *nav, const pod_model_t *m)
     int t = home_at(nav, m), working = 0;
     if (t == HOME_NONE) return true;   // the first screen's shimmer and bar
     if (t == POD_HOME_WORKING) return true;   // the pets
-    if (t < 0) return false;   // the Notices card is still
-    const pod_swarm_t *sw = pod_home_swarm(m, t);
-    if (sw) {   // a Swarm card: a working Lead's pet and clock, the capsule's dot while a Lead needs you or is stuck
-        for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) if (sw->leads[j].state != POD_LEAD_DONE) return true;
+    if (t >= POD_HOME_APP0) {   // an app card: its row's numbers drive the pills, its ring agents the marks (an older daemon's row has no `working`)
+        const int row = app_row(m, t);
+        if (row < 0) return false;
+        if (m->apps[row].working > 0 || m->apps[row].waiting > 0) return true;
+        const pod_agent_t *ring[POD_AGENTS_MAX];
+        const int n = pod_app_agents(m, m->apps[row].id, ring, POD_AGENTS_MAX);
+        for (int k = 0; k < n; k++) {
+            const pod_state_t st = pod_model_eff(m, ring[k]);
+            if (st == POD_WORKING || st == POD_ASKING) return true;
+        }
         return false;
     }
+    if (t < 0 || t >= m->tab_count) return false;   // the Notices card is still
     tab_agents(m, t, &working);
     return working > 0 || tab_asking(m, t) > 0;
 }
@@ -232,7 +226,7 @@ static void on_baseline(ht_scene_t *s, int x, int base, const ht_pro_font_t *f, 
 
 // The first screen (mockup harness-pro-boot.html, option 5 "Shimmer"): the round dial's wordmark, larger, on its own navy ground, with a
 // light sweeping across the letters and a sliding pill in a short track. Shown for Home with no tabs (and no notices): before the first swarms
-// of a link, after a link drop, or a machine with none. No hits. It moves, so Home wakes on the 66 ms beat while it shows (ph_home_moves).
+// of a link, after a link drop, or a machine with none. No hits but the pill's two while it shows (pod_home_switch). It moves, so Home wakes on the 66 ms beat while it shows (ph_home_moves).
 // Geometry is the mockup's 720 px screen: word box top 300, 84 px, line-height 1 (baseline 373), letter-spacing -0.02em; track 260,430 200x6.
 enum { BR_BG = 0x0E1B2C, BR_INK = 0xF2F7FC, BR_LIGHT = 0x9CC6FF, BR_TRACK = 0x1B2A3D, BR_PILL = 0x5F8FD6,
        BR_BASE = 373, BR_SPACE_X100 = 168, BR_SHINE_MS = 2400, BR_SLIDE_MS = 1400,
@@ -279,12 +273,11 @@ static bool slot_logo(ht_scene_t *s, int x, int y, const char *engine, unsigned 
 }
 
 // One status pill at (x, y): fill (black 28 % over the card), a mark (equaliser, dot or none), the text. Returns its width.
-// `pad` is the side padding; `bg` false draws the mark and text alone (a segment of a capsule that is already filled).
-static int pill_pad(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned ink, const char *text, uint32_t now_ms, int pad, bool bg)
+static int pill(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned ink, const char *text, uint32_t now_ms)
 {
-    const int mark = kind == 1 ? 32 : kind == 2 ? 11 : 0, tw = ht_pro_width(&ph_sb_22, text), w = pad * 2 + (mark ? mark + 10 : 0) + tw;
-    if (bg) ht_pro_rect_aa(s, x, y, w, PILL_H, PILL_H / 2, C(fill));
-    int tx = x + pad;
+    const int mark = kind == 1 ? 32 : kind == 2 ? 11 : 0, tw = ht_pro_width(&ph_sb_22, text), w = PILL_PAD * 2 + (mark ? mark + 10 : 0) + tw;
+    ht_pro_rect_aa(s, x, y, w, PILL_H, PILL_H / 2, C(fill));
+    int tx = x + PILL_PAD;
     if (kind == 1) {   // four bars, 5 px wide 4 px apart, 30..100 % of 22 px, anchored at the bottom
         static const int phase[4] = {0, -300, -600, -150};
         for (int i = 0; i < 4; i++) {
@@ -296,10 +289,6 @@ static int pill_pad(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsign
     }
     ph_text(s, tx + (mark ? mark + 10 : 0), y + PILL_H / 2, tw + 2, &ph_sb_22, ink, text);
     return w;
-}
-static int pill(ht_scene_t *s, int x, int y, unsigned fill, int kind, unsigned ink, const char *text, uint32_t now_ms)
-{
-    return pill_pad(s, x, y, fill, kind, ink, text, now_ms, PILL_PAD, true);
 }
 
 // An engine's logo at exactly `size` (a baked one: 28, 36, 44 or 72), else a ">_" outline box of that size on `fill`.
@@ -376,24 +365,89 @@ static void notices_card(pod_out_frame_t *f, const pod_model_t *m, int x, int y,
     ph_text(s, x + NAME_X, y + LT_FOOT_CY, w - 2 * NAME_X, &ph_sb_22, PH_LETTER_MORE, foot);
 }
 
+// What a Home card shows, a tab's or an app's: card() draws only from this, so both are one body.
+typedef struct {
+    const char *name;
+    unsigned c1, c2;                          // the gradient's top and bottom, 0xRRGGBB
+    int count, working, asking;
+    bool done_pill;                           // "All done" when nobody works or asks: a tab only (an app's row may carry no `working`)
+    const pod_agent_t *agent[POD_AGENTS_MAX]; // the marks' agents, in list order (card() puts asking, working, then done first)
+    int agent_n;                              // all the Pro holds: "+N" counts from it
+    const pod_app_icon_t *icon;               // top right, the name cut short of it; NULL: the name has the card's width
+} card_t;
+
+static void tab_card(const pod_model_t *m, int t, card_t *d)
+{
+    memset(d, 0, sizeof *d);
+    tint(m, t, &d->c1, &d->c2);
+    d->name = m->tabs[t].name;
+    d->count = tab_agents(m, t, &d->working);
+    d->asking = tab_asking(m, t);
+    d->done_pill = true;
+    for (int k = 0; k < m->tabs[t].count && k < POD_PANES_MAX; k++) {
+        const int ai = m->tabs[t].agent[k];
+        if (ai >= 0 && ai < m->agent_count) d->agent[d->agent_n++] = &m->agents[ai];
+    }
+}
+
+// Item E's RGB565 widened to 0xRRGGBB (the top bits repeated into the low ones), so ph_mix and ht_rgb give it back exactly.
+static unsigned rgb_of(uint16_t c)
+{
+    const unsigned r = c >> 11, g = c >> 5 & 63, b = c & 31;
+    return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
+}
+
+static void app_card(const pod_model_t *m, int row, card_t *d)
+{
+    memset(d, 0, sizeof *d);
+    const pod_app_t *a = &m->apps[row];
+    const pod_app_style_t *st = pod_app_style(a->id);
+    d->c1 = st ? rgb_of(st->card_top) : PH_RAISED;
+    d->c2 = st ? rgb_of(st->card_bottom) : PH_GROUND;
+    d->name = a->name;
+    d->count = a->count;
+    d->working = a->working;
+    d->asking = a->waiting;
+    d->agent_n = pod_app_agents(m, a->id, d->agent, POD_AGENTS_MAX);   // only the app shown has agents on the Pro
+    d->icon = st ? st->icon72 : NULL;
+}
+
+// The card of Home page p (a tab, or an app while Home lists apps); false for any other page.
+static bool card_of(const pod_model_t *m, int p, card_t *d)
+{
+    if (p >= POD_HOME_APP0) {
+        const int row = app_row(m, p);
+        if (row < 0) return false;
+        app_card(m, row, d);
+        return true;
+    }
+    if (p < 0 || p >= m->tab_count) return false;
+    tab_card(m, p, d);
+    return true;
+}
+
 // The card's content or, for a neighbour, only its gradient and name.
-static void card(pod_out_frame_t *f, const pod_model_t *m, int t, int x, int y, int w, int h, int r, int fade, bool full, uint32_t now_ms)
+static void card(pod_out_frame_t *f, const pod_model_t *m, const card_t *d, int x, int y, int w, int h, int r, int fade, bool full, uint32_t now_ms)
 {
     ht_scene_t *s = f->scene;
-    unsigned c1, c2;
-    tint(m, t, &c1, &c2);
+    unsigned c1 = d->c1, c2 = d->c2;
     if (fade) { c1 = ph_mix(c1, PH_HOME_BG, (unsigned)fade); c2 = ph_mix(c2, PH_HOME_BG, (unsigned)fade); }
     pod_grad_aa_dither(s, x, y, w, h, r, C(c1), C(c2));   // Pets only: no banding on the card
     char name[CABLE_NAME_MAX + 4];
-    const ht_pro_font_t *nf = shown_name(name, sizeof name, m->tabs[t].name, full ? NAME_W : NAME_W * PEEK_PCT / 100, full ? NULL : &ph_sb_34);
+    const int name_w = d->icon ? NAME_W - d->icon->size - LABEL_GAP : NAME_W;
+    const ht_pro_font_t *nf = shown_name(name, sizeof name, d->name, full ? name_w : NAME_W * PEEK_PCT / 100, full ? NULL : &ph_sb_34);
     const int nx = x + (full ? NAME_X : NAME_X * PEEK_PCT / 100), nw = ht_pro_width(nf, name);
     if (!full) {   // a neighbour: the name only, faded (most of it is off the glass)
         if (nx < POD_W && nx + nw > 0) ht_pro_text(s, nx, y + 40 * PEEK_PCT / 100, nw + 2, nf, C(ph_mix(PH_CARD_INK, c1, 80)), name);
         return;
     }
-    ph_text(s, nx, y + NAME_Y + nf->height / 2, NAME_W, nf, PH_CARD_INK, name);
+    ph_text(s, nx, y + NAME_Y + nf->height / 2, name_w, nf, PH_CARD_INK, name);
+    if (d->icon) {   // the name's NAME_X margin mirrored on the right and its top on the name's line, so name and icon read as one header row
+        const ht_pro_bitmap_t b = {d->icon->rgb565, d->icon->alpha, d->icon->size, d->icon->size, 0, NULL};
+        ht_pro_image(s, x + w - NAME_X - d->icon->size, y + NAME_Y, &b);
+    }
 
-    int working, count = tab_agents(m, t, &working), asking = tab_asking(m, t);
+    const int working = d->working, count = d->count, asking = d->asking;
     char num[8];
     snprintf(num, sizeof num, "%d", count);
     const int nw2 = ht_pro_width(&ph_num_230, num);
@@ -405,16 +459,14 @@ static void card(pod_out_frame_t *f, const pod_model_t *m, int t, int x, int y, 
     int px = x + NAME_X;
     if (working > 0) { snprintf(txt, sizeof txt, "%d working", working); px += pill(s, px, y + PILL_Y, fill, 1, PH_PILL_WORK, txt, now_ms) + PILL_GAP; }
     if (asking > 0) { snprintf(txt, sizeof txt, "%d asking", asking); px += pill(s, px, y + PILL_Y, fill, 2, PH_PILL_ASK, txt, now_ms) + PILL_GAP; }
-    if (!working && !asking) pill(s, px, y + PILL_Y, fill, 0, ph_mix(0xFFFFFF, fill, 80), "\xe2\x9c\x93 All done", now_ms);
+    if (d->done_pill && !working && !asking) pill(s, px, y + PILL_Y, fill, 0, ph_mix(0xFFFFFF, fill, 80), "\xe2\x9c\x93 All done", now_ms);
 
     // the engine logos: asking, working, then done; more than five show four and "+N"
-    const pod_agent_t *ord[POD_PANES_MAX];
+    const pod_agent_t *ord[POD_AGENTS_MAX];
     int n = 0;
     for (int pass = 0; pass < 3; pass++)
-        for (int k = 0; k < m->tabs[t].count && k < POD_PANES_MAX; k++) {
-            int ai = m->tabs[t].agent[k];
-            if (ai >= 0 && ai < m->agent_count && st_of(m, &m->agents[ai]) == pass) ord[n++] = &m->agents[ai];
-        }
+        for (int k = 0; k < d->agent_n; k++)
+            if (st_of(m, d->agent[k]) == pass) ord[n++] = d->agent[k];
     const int shown = n > ICONS_MAX ? ICONS_MAX - 1 : n, iy = y + ICONS_Y;
     const unsigned bottom = ph_mix(c1, c2, 100 - (ICONS_Y + LOGO + 12) * 100 / h);
     for (int k = 0; k < shown; k++) {
@@ -497,165 +549,50 @@ static void working_card(pod_out_frame_t *f, const pod_nav_t *nav, const pod_mod
     }
 }
 
-// The Swarm card (see the header). A neighbour (full false) is the faded gradient and the Swarm's name, like a tab's.
-enum { SW_PEEK_SHOW = 56, SW_PEEK_FADE = 102, SW_PILL_Y = 116, SW_CAP_H = 58, SW_DISC = 46, SW_SEG_PAD = 13, SW_OWNER_Y = WK_TIME_Y + 30, SW_HIT_Y = 186, SW_HIT_H = 296 };
-// Centred on cx, the run's top at y.
-static void centred(ht_scene_t *s, int cx, int y, const ht_pro_font_t *f, unsigned rgb, const char *t)
-{
-    ht_pro_text(s, cx - ht_pro_width(f, t) / 2, y, ht_pro_width(f, t) + 2, f, C(rgb), t);
-}
-// The order the card shows the Leads in: ord[] = indices into sw->leads, the Swarm's order (the app's, as the cable put them) whatever their state, so a Lead
-// keeps its place as it changes; cnt[0..3] = how many are stuck, need you, working, done.
-static int lead_order(const pod_swarm_t *sw, int *ord, int *cnt)
-{
-    static const pod_lead_state_t rank[4] = {POD_LEAD_STUCK, POD_LEAD_ASK, POD_LEAD_WORK, POD_LEAD_DONE};
-    int n = 0;
-    cnt[0] = cnt[1] = cnt[2] = cnt[3] = 0;
-    for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) {
-        ord[n++] = j;
-        for (int r = 0; r < 4; r++) if (sw->leads[j].state == rank[r]) cnt[r]++;
-    }
-    return n;
-}
-// A Lead's status line on this card: "needs you", "stuck", "done", a working Lead's clock alone (ph_lead_status's line less its "working · "). Returns its colour.
-static unsigned swarm_status(const pod_lead_t *l, uint32_t now_ms, char *line, size_t n, unsigned dim)
-{
-    char full[CABLE_NAME_MAX + 4];
-    const unsigned ink = ph_lead_status(l, now_ms, full, sizeof full, dim);
-    const char *dot = l->state == POD_LEAD_WORK ? strstr(full, "\xc2\xb7 ") : NULL;
-    snprintf(line, n, "%s", dot ? dot + 3 : full);
-    return l->state == POD_LEAD_WORK ? PH_PILL_WORK : ink;   // the clock in the Working card's green
-}
-static void swarm_card(pod_out_frame_t *f, const pod_nav_t *nav, const pod_swarm_t *sw, int x, int y, int w, int h, int r, int fade, bool full, uint32_t now_ms)
-{
-    ht_scene_t *s = f->scene;
-    unsigned c1 = PH_SWARM1, c2 = PH_SWARM2;
-    if (fade) { c1 = ph_mix(c1, PH_HOME_BG, (unsigned)fade); c2 = ph_mix(c2, PH_HOME_BG, (unsigned)fade); }
-    pod_grad_aa_dither(s, x, y, w, h, r, C(c1), C(c2));
-    char name[CABLE_NAME_MAX + 4];
-    const ht_pro_font_t *nf = shown_name(name, sizeof name, sw->name, full ? NAME_W : NAME_W * PEEK_PCT / 100, full ? NULL : &ph_sb_34);
-    const int nx = x + (full ? NAME_X : NAME_X * PEEK_PCT / 100), nw = ht_pro_width(nf, name);
-    if (!full) {   // a neighbour: the name only, faded
-        if (nx < POD_W && nx + nw > 0) ht_pro_text(s, nx, y + 40 * PEEK_PCT / 100, nw + 2, nf, C(ph_mix(PH_CARD_INK, c1, 80)), name);
-        return;
-    }
-    ph_text(s, nx, y + NAME_Y + nf->height / 2, NAME_W, nf, PH_CARD_INK, name);
-
-    int ord[SWARM_LEADS_MAX], cnt[4];
-    const int lead_n = lead_order(sw, ord, cnt);
-    char txt[CABLE_NAME_MAX + 4];
-    if (!lead_n) {   // a Swarm with no project yet
-        const char *e = "No projects yet", *e2 = "Start one in the app";
-        centred(s, x + w / 2, y + 300, &ph_sb_34, ph_mix(0xFFFFFF, c1, 88), e);
-        centred(s, x + w / 2, y + 350, &ph_sb_22, ph_mix(0xFFFFFF, ph_mix(c1, c2, 40), 62), e2);
-        return;
-    }
-
-    // The capsule: black 30 % over the card, a white disc with the number of projects, then "stuck · needs you" (one segment, red when anything is stuck,
-    // else orange, with a pulsing dot), "working" (the equaliser, green), or "All done" when nothing is. Too wide: "working" gives way to the bars and the number.
-    const unsigned fill = ph_mix(0x000000, ph_mix(c1, c2, 100 - (SW_PILL_Y + SW_CAP_H / 2) * 100 / h), 30);
-    char seg[2][CABLE_NAME_MAX];
-    int kind[2], ink[2], ns = 0, work = -1;
-    const char *needs = cnt[1] == 1 ? "needs" : "need";
-    if (cnt[0] && cnt[1]) snprintf(seg[ns], sizeof seg[0], "%d stuck \xc2\xb7 %d %s you", cnt[0], cnt[1], needs);
-    else if (cnt[0]) snprintf(seg[ns], sizeof seg[0], "%d stuck", cnt[0]);
-    else if (cnt[1]) snprintf(seg[ns], sizeof seg[0], "%d %s you", cnt[1], needs);
-    if (cnt[0] || cnt[1]) { kind[ns] = 2; ink[ns] = cnt[0] ? PH_LEAD_STUCK : PH_LEAD_ASK; ns++; }
-    if (cnt[2]) { snprintf(seg[ns], sizeof seg[0], "%d working", cnt[2]); kind[ns] = 1; ink[ns] = PH_PILL_WORK; work = ns++; }
-    if (!ns) { snprintf(seg[ns], sizeof seg[0], "All done"); kind[ns] = 0; ink[ns] = ph_mix(0xFFFFFF, fill, 86); ns++; }
-    snprintf(txt, sizeof txt, "%d", sw->count > 99 ? 99 : sw->count);
-    const int dw = ht_pro_width(&ph_sb_34, txt), disc = dw + 24 > SW_DISC ? dw + 24 : SW_DISC;   // a disc, widening to a lozenge for two digits
-    const int x0 = x + NAME_X, inset = (SW_CAP_H - SW_DISC) / 2;
-    int segw[2], total;
-    for (;;) {
-        total = inset + disc + 6 + 8;
-        for (int i = 0; i < ns; i++) {
-            const int mark = kind[i] == 1 ? 32 : kind[i] == 2 ? 11 : 0;
-            segw[i] = SW_SEG_PAD * 2 + (mark ? mark + 10 : 0) + ht_pro_width(&ph_sb_22, seg[i]);
-            total += segw[i];
-        }
-        if (total <= NAME_W || work < 0 || !strchr(seg[work], ' ')) break;
-        snprintf(seg[work], sizeof seg[0], "%d", cnt[2]);
-    }
-    const int ccy = y + SW_PILL_Y + SW_CAP_H / 2;
-    ht_pro_rect_aa(s, x0, ccy - SW_CAP_H / 2, total, SW_CAP_H, SW_CAP_H / 2, C(fill));
-    ht_pro_rect_aa(s, x0 + inset, ccy - SW_DISC / 2, disc, SW_DISC, SW_DISC / 2, C(ph_mix(0xFFFFFF, fill, 92)));
-    ph_text(s, x0 + inset + (disc - dw) / 2, ccy + 1, dw + 2, &ph_sb_34, c2, txt);
-    int sx = x0 + inset + disc + 6;
-    for (int i = 0; i < ns; i++) {
-        pill_pad(s, sx, ccy - PILL_H / 2, fill, kind[i], ink[i], seg[i], now_ms, SW_SEG_PAD, false);
-        sx += segw[i];
-    }
-
-    // the Leads, three to a page, in the card's order
-    const int pages = (lead_n + WK_PER_PAGE - 1) / WK_PER_PAGE;
-    const int page = nav->swarm_page < pages ? nav->swarm_page : pages > 0 ? pages - 1 : 0;
-    const int first = page * WK_PER_PAGE, shown = lead_n - first < WK_PER_PAGE ? lead_n - first : WK_PER_PAGE;
-    const char *engine[WK_PER_PAGE] = {0};
-    pod_scene_t scene[WK_PER_PAGE] = {0};
-    int cx[WK_PER_PAGE] = {0};
-    for (int k = 0; k < shown; k++) { engine[k] = sw->leads[ord[first + k]].engine; scene[k] = ph_lead_scene(sw->leads[ord[first + k]].state); }
-    // the page's neighbour Lead peeks in at the card's edge (the next page's first at the right, the previous page's last at the left): faded, clipped to
-    // the card by a veil (it paints the ground over what spilled past the edge), no text. Drawn first so the page's own pets stand over it.
-    for (int side = -1; side <= 1; side += 2) {
-        if (side > 0 ? first + shown >= lead_n : page == 0) continue;
-        const pod_lead_t *l = &sw->leads[ord[side > 0 ? first + shown : first - 1]];
-        const pod_scene_t sc = ph_lead_scene(l->state);
-        const int sd = !strcmp(l->engine, "claude") ? 2 * WK_SIDE : WK_SIDE;
-        const int cxp = side > 0 ? x + w - SW_PEEK_SHOW + sd / 2 : x + SW_PEEK_SHOW - sd / 2;
-        const int ink = pod_pet_ink_h(l->engine, sc, sd, 8), top = y + WK_FEET - (ink ? ink : LOGO) - 12;
-        pet_at(s, y, h, c1, c2, WK_FEET, WK_SIDE, cxp, l->engine, sc, now_ms);
-        const int vx = side > 0 ? x + w - SW_PEEK_SHOW - 4 : x - sd, vw = SW_PEEK_SHOW + 4 + sd;
-        pod_veil(s, vx, top, vw, y + WK_FEET + WK_SHADOW_H - top, side > 0 ? x + w : x, side > 0, y, h, C(c1), C(c2), C(PH_HOME_BG), SW_PEEK_FADE);
-    }
-    pet_row(s, x, y, w, h, c1, c2, WK_FEET, WK_SIDE, shown, engine, scene, cx, now_ms);
-    for (int k = 0; k < shown; k++) {
-        const pod_lead_t *l = &sw->leads[ord[first + k]];
-        shown_name(txt, sizeof txt, l->project, WK_NAME_W, &ph_sb_22);
-        centred(s, cx[k], y + WK_NAME_Y, &ph_sb_22, PH_CARD_INK, txt);
-        const unsigned dim = ph_mix(0xFFFFFF, ph_mix(c1, c2, 100 - (WK_TIME_Y + 11) * 100 / h), 60);   // white at 60 % over the card
-        char line[CABLE_NAME_MAX + 4];
-        const unsigned ink = swarm_status(l, now_ms, line, sizeof line, dim);
-        shown_name(txt, sizeof txt, line, WK_NAME_W + 6, &ph_sb_22);
-        centred(s, cx[k], y + WK_TIME_Y, &ph_sb_22, ink, txt);
-        if (l->owner[0]) {   // someone else's machine: whose, small and muted
-            shown_name(txt, sizeof txt, l->owner, WK_NAME_W, &ph_mono_18);
-            centred(s, cx[k], y + SW_OWNER_Y, &ph_mono_18, ph_mix(0xFFFFFF, ph_mix(c1, c2, 100 - (SW_OWNER_Y + 12) * 100 / h), 55), txt);
-        }
-        pod_hit_add_id(f, cx[k] - WK_HIT_W / 2, y + SW_HIT_Y, WK_HIT_W, SW_HIT_H, POD_A_LEAD, ord[first + k], sw->id);
-    }
-}
-
 // A neighbour page of Home: the faded card of page p.
 static void peek(pod_out_frame_t *f, const pod_nav_t *nav, const pod_model_t *m, int p, int x, int y, int w, int h, int r, uint32_t now_ms)
 {
     if (p == POD_HOME_NOTICES) notices_card(f, m, x, y, w, h, r, PEEK_FADE, false);
     else if (p == POD_HOME_WORKING) working_card(f, nav, m, x, y, w, h, r, PEEK_FADE, false, now_ms);
-    else if (p >= 0 && pod_home_swarm(m, p)) swarm_card(f, nav, pod_home_swarm(m, p), x, y, w, h, r, PEEK_FADE, false, now_ms);
-    else if (p >= 0) card(f, m, p, x, y, w, h, r, PEEK_FADE, false, now_ms);
+    else {
+        card_t d;
+        if (card_of(m, p, &d)) card(f, m, &d, x, y, w, h, r, PEEK_FADE, false, now_ms);
+    }
 }
 
-void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
+// The Tabs | Apps pill at Home's foot: a 252 x 46 band, the cell of the list Home shows filled. The edge is two fills, as the canvas's stroke is
+// 1 px. Its two hits are the halves of the band x 180..540, y 624..720, wider than the pill so a thumb at the glass's edge still lands.
+enum { HP_X = 234, HP_Y = 640, HP_W = 252, HP_H = 46, HP_CELL = (HP_W - 8) / 2, HP_HIT_X = 180, HP_HIT_Y = 624, HP_HIT_W = 180, HP_HIT_H = 96 };
+static void home_pill(pod_out_frame_t *f, bool apps)
 {
     ht_scene_t *s = f->scene;
-    s->background = C(PH_HOME_BG);
+    ht_pro_rect_aa(s, HP_X, HP_Y, HP_W, HP_H, HP_H / 2, C(PH_BORDER));
+    ht_pro_rect_aa(s, HP_X + 2, HP_Y + 2, HP_W - 4, HP_H - 4, HP_H / 2 - 2, C(PH_GROUND));
+    ht_pro_rect_aa(s, HP_X + 4 + (apps ? HP_CELL : 0), HP_Y + 4, HP_CELL, HP_H - 8, HP_H / 2 - 4, C(PH_TRACK));
+    static const char *const label[2] = {"Tabs", "Apps"};
+    for (int k = 0; k < 2; k++) {
+        const int tw = ht_pro_width(&ph_sb_22, label[k]), cx = HP_X + 4 + k * HP_CELL + HP_CELL / 2;
+        ph_text(s, cx - tw / 2, HP_Y + HP_H / 2, tw + 2, &ph_sb_22, k == (int)apps ? PH_INK : PH_MUTED, label[k]);
+        pod_hit_add(f, HP_HIT_X + k * HP_HIT_W, HP_HIT_Y, HP_HIT_W, HP_HIT_H, k ? POD_A_HOME_APPS : POD_A_HOME_TABS, 0);
+    }
+}
+
+// One page of Home: the wordmark, the Working or Notices card, or a tab's or an app's card, each with its neighbours.
+static void home_page(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
+{
+    ht_scene_t *s = f->scene;
     const int t = home_at(nav, m);
     if (t == HOME_NONE) { wordmark(s, now_ms); return; }
     const int pw = CARD_W * PEEK_PCT / 100, ph = CARD_H * PEEK_PCT / 100, py = CARD_Y + CARD_H / 2 - ph / 2;
     const int lx = CARD_X + CARD_W / 2 - PEEK_DX - pw / 2, rx = CARD_X + CARD_W / 2 + PEEK_DX - pw / 2, pr = CARD_R * PEEK_PCT / 100;
     // The page t's neighbours are the adjacent entries of the page list.
     int16_t pg[POD_HOME_PAGES_MAX];
-    const int n = pod_home_pages(m, pg, POD_HOME_PAGES_MAX);
+    const int n = pod_home_pages(nav, m, pg, POD_HOME_PAGES_MAX);
     int at = 0;
     while (at < n - 1 && pg[at] < t) at++;
     const int prev = at > 0 ? pg[at - 1] : HOME_NONE, next = at + 1 < n ? pg[at + 1] : HOME_NONE;
-    const pod_swarm_t *own = t >= 0 ? pod_home_swarm(m, t) : NULL;
-    // A Swarm card with a Lead peeking in clips it with a veil over the neighbours' side, so the neighbours are drawn after it (2 px further out, clear of its edge).
-    const bool after = own && own->lead_n > WK_PER_PAGE && t != POD_HOME_WORKING && t != POD_HOME_NOTICES;
-    if (!after) {
-        peek(f, nav, m, prev, lx, py, pw, ph, pr, now_ms);
-        peek(f, nav, m, next, rx, py, pw, ph, pr, now_ms);
-    }
+    peek(f, nav, m, prev, lx, py, pw, ph, pr, now_ms);
+    peek(f, nav, m, next, rx, py, pw, ph, pr, now_ms);
     if (t == POD_HOME_WORKING) {
         working_card(f, nav, m, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
         return;
@@ -665,15 +602,18 @@ void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
         pod_hit_add(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_INBOX, 0);
         return;
     }
-    const pod_swarm_t *sw = pod_home_swarm(m, t);
-    if (sw) {   // a Swarm's card: its own page, or in place of its desk tab's
-        swarm_card(f, nav, sw, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
-        if (after) {
-            peek(f, nav, m, prev, lx - 2, py, pw, ph, pr, now_ms);
-            peek(f, nav, m, next, rx + 2, py, pw, ph, pr, now_ms);
-        }
-        return;
-    }
-    card(f, m, t, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
-    if (tab_agents(m, t, NULL) > 0) pod_hit_add_id(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_ENTER_TAB, t, m->tabs[t].id);
+    card_t d;
+    if (!card_of(m, t, &d)) return;
+    card(f, m, &d, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
+    if (t >= POD_HOME_APP0) {   // every app card has agents (pod_home_app_cards)
+        const int row = app_row(m, t);
+        pod_hit_add_id(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_PICK_APP, row, m->apps[row].id);
+    } else if (d.count > 0) pod_hit_add_id(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_ENTER_TAB, t, m->tabs[t].id);
+}
+
+void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
+{
+    f->scene->background = C(PH_HOME_BG);
+    home_page(f, nav, m, now_ms);
+    if (pod_home_switch(m)) home_pill(f, pod_home_apps(nav, m));   // under every page, the wordmark too: the person can always turn to Apps
 }

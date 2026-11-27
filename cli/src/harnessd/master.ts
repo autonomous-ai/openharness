@@ -5,9 +5,10 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
+import { errorKind, ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
@@ -17,7 +18,8 @@ import {
   PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, createReexec, decodeResume, fingerprint, mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec,
   removeMarker, runProbe, sweepHandovers, takeBackHandover, takeHandover, writeMarker, type HandOverDeps, type ReexecMarker,
 } from './reexec.js'
-import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, UPDATER_PROCESS, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { ServiceSupervisor, serviceOptions } from './serviceSupervisor.js'
+import { SERVICE_HOSTS, UPDATER_HOST, UPDATER_PROCESS, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -46,7 +48,14 @@ export interface MasterConfig {
    *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
    *  from, whatever is on disk by the time this master starts. */
   bundleFingerprint?: string
+  /** The pid file, removed as this master ends while it still names this master. */
   pidFile: string
+  /** Write [pid] to the pid file, whole: the entry's writer (../lib/daemonState.ts), since this folder imports no
+   *  helper. One that throws is said, as on a full disk. */
+  writePidFile(pid: number): void
+  /** The pid the pid file names; null when there is none, or it cannot be read: such a file is never taken for this
+   *  master's, so it is neither rewritten nor removed. */
+  readPidFile(): number | null
   /** Where the master records its status for `harness status` (see `writeStatusFile`). */
   statusFile?: string
   /** The log the master and its core write, kept under its cap by the master. */
@@ -56,6 +65,10 @@ export interface MasterConfig {
    *  onto the build put back on it, and starts everything after on it. */
   restoreUpdate(): string | null | void
   confirmUpdate(): void
+  /** A core is up, each time one is, on [node]: what the master's entry does then (../masterProcess.ts points the
+   *  launcher and the service definition at that Node). The Node is the one this master started the core on, which is
+   *  not its own after a rollback it could not re-execute for. One that throws is said, and stops nothing. */
+  coreUp?(node: string): void
   env?: NodeJS.ProcessEnv
   /** Defaults to `process.exit`. */
   exit?: (code: number) => void
@@ -92,8 +105,8 @@ export interface MasterConfig {
  * `takeBackHandover`), and leaving is this process's end. The lock waits a bounded while (../masterProcess.ts
  * `HANDOVER_LOCK_WAIT_MS`) for a start or a stop under way: null when it is still busy, or on any throw. The launch is bounded well inside the 45 s a `harness stop` waits on the lock. Each token is fresh. `readPid`
  * throws when the pid file cannot be read: null says it names no pid, and on that this master stays at the bound
- * (./reexec.ts `taken`), where a file it could not read is a new master it must leave to. This file's own pid-file
- * read, which takes a failure for null, is never given to it.
+ * (./reexec.ts `taken`), where a file it could not read is a new master it must leave to. `MasterConfig.readPidFile`,
+ * which takes a file it cannot read for null, is never given to it.
  */
 export type MasterHandOver = Omit<HandOverDeps, 'claim' | 'claimant' | 'takeBack' | 'leave'>
 
@@ -178,6 +191,10 @@ export function coreExecArgv(execArgv: readonly string[], heapLimitMiB: number):
 export function writeStatusFile(file: string, status: MasterStatusFile): void {
   const temp = `${file}.${status.masterPid}.tmp`
   try {
+    // Its folder first: the master's first status comes before its core has made the data folder on a fresh install,
+    // and a core that never gets that far would leave `harness status` nothing to say why.
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    // not a state file: the master imports no helper (follow-up)
     writeFileSync(temp, `${JSON.stringify(status)}\n`)
     renameSync(temp, file)
   } catch {
@@ -264,7 +281,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER}`)
     return 0
   } catch (error) {
-    say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    say(`harnessd-probe failed: ${errorKind(error)}`)
     return 1
   }
 }
@@ -273,17 +290,12 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
 export function runMaster(config: MasterConfig): Supervisor {
   ignoreLogWriteErrors()
   const { env: given, exit, onSignal, execve } = masterDefaults(config)
-  process.title = 'harnessd'
   // What the master this process was a moment ago handed on, if it was one (./reexec.ts). Taken out of
   // the environment every child is given: a core or service has no use for it, and a later re-exec
   // writes its own.
   const resume = decodeResume(given[RESUME_ENV])
   const env: NodeJS.ProcessEnv = { ...given }
   delete env[RESUME_ENV]
-  const writePidFile = (pid = process.pid): void => { writeFileSync(config.pidFile, `${pid}\n`) }
-  const readPid = (): number | null => {
-    try { return Number.parseInt(readFileSync(config.pidFile, 'utf8').trim(), 10) || null } catch { return null }
-  }
   const options = supervisorOptions(env, config.execArgv)
   const execArgv = coreExecArgv(config.execArgv, options.heapLimitMiB)
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
@@ -311,7 +323,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const handover = resume?.handover
   if (resume && !handover) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
   if (config.serviceScriptPath && config.serviceScriptPath !== config.scriptPath) {
-    log(`[harnessd] services run from ${config.serviceScriptPath}${config.bundleFingerprint ? ', as this master does' : ''}`)
+    log(`[harnessd] services run from the lean bundle${config.bundleFingerprint ? ', as this master does' : ''}`)
   }
   // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
   // again before every core starts.
@@ -334,14 +346,14 @@ export function runMaster(config: MasterConfig): Supervisor {
   const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
     const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
     const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
-    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return (error as Error).message } }
+    const write = (pid: number): string | null => { try { config.writePidFile(pid); return null } catch (error) { return errorKind(error) } }
     if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
     const failed = write(process.pid)
     if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)
     if (!mayClaimPidFile(markerFile, token)) {
       // That master may have settled on the pid file naming it before this write: still running, it is the master, and
       // a pid file naming this process, about to end, would have `harness start --if-down` start a second one.
-      if (readPid() === process.pid && alive(from)) write(from)
+      if (config.readPidFile() === process.pid && alive(from)) write(from)
       return leaving(`${stopped} as this one took over`)
     }
     log(`[harnessd] took over from the master before it (pid ${from})`)
@@ -425,7 +437,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     ...(config.handOver ? {
       handOver: {
         ...config.handOver,
-        claim: () => { writePidFile(); releaseOnExit = true },
+        claim: () => { config.writePidFile(process.pid); releaseOnExit = true },
         claimant: (handed: string) => readHandoverClaimant(markerFile, handed),
         takeBack: (handed: string) => takeBackHandover(markerFile, handed, process.pid),
         // This master's end once its replacement holds the pid file: nothing of the daemon's left to stop.
@@ -469,7 +481,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
     // core's `bound` message, and took the master down.
     claimPidFile: () => {
-      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
+      try { config.writePidFile(process.pid) } catch (error) { log(`[harnessd] could not write the pid file: ${errorKind(error)}`) }
     },
     // Removed as this master exits, below: once a handover under way (Windows) is decided.
     releasePidFile: () => { releaseOnExit = true },
@@ -489,7 +501,7 @@ export function runMaster(config: MasterConfig): Supervisor {
       // Stopped as it handed over (Windows), and the new master took over: the pid file and the marker are its.
       const end = (handedOver: boolean): void => {
         if (!handedOver) {
-          if (releaseOnExit && readPid() === process.pid) rmSync(config.pidFile, { force: true })
+          if (releaseOnExit && config.readPidFile() === process.pid) rmSync(config.pidFile, { force: true })
           // A master stopped before its first core came up has not failed to come up: its own marker goes
           // with it. Left behind by a stop, a sign-out or a shutdown in the seconds after a re-execution, it
           // made the next start roll a good update back and reject its version (recoverFailedReexec).
@@ -503,11 +515,13 @@ export function runMaster(config: MasterConfig): Supervisor {
       if (reexec) reexec.settled(end)
       else end(false)
     },
-    ...(reexec && markerFile ? {
-      reexec: reexec.reexec,
-      // The re-executed master has brought a core up: its marker has served.
-      coreUp: () => removeMarker(markerFile),
-    } : {}),
+    ...(reexec && markerFile ? { reexec: reexec.reexec } : {}),
+    // A core is up. A re-executed master's marker has served. And the master's entry hears it (`MasterConfig.coreUp`),
+    // which is never a reason for the master to stop.
+    coreUp: () => {
+      if (reexec && markerFile) removeMarker(markerFile)
+      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${errorKind(error)}`) }
+    },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))
   if (!tookOver) {

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/auth/cli_link.dart';
@@ -15,8 +14,6 @@ import 'package:harness_mobile/core/machine_cache.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/snapshot_store.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
-import 'package:harness_mobile/notify/push_channel.dart';
-import 'package:harness_mobile/notify/push_tokens.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
@@ -35,7 +32,6 @@ import 'package:harness_mobile/viewer/viewer_services.dart';
 import 'package:harness_mobile/ws/relay_codec.dart';
 import 'package:harness_mobile/ws/terminal_transport_plugin.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
-import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
 import 'agent_pager_fixture.dart';
 import 'viewer/fake_http.dart';
@@ -153,18 +149,6 @@ class FakeApi extends ApiClient {
     return onMachines();
   }
 
-  /// The push addresses told to the backend, and those taken back. Never the network.
-  final List<PushAddress> pushRegistered = [];
-  final List<PushAddress> pushForgotten = [];
-
-  @override
-  Future<void> registerPushToken(PushAddress address) async =>
-      pushRegistered.add(address);
-
-  @override
-  Future<void> forgetPushToken(PushAddress address) async =>
-      pushForgotten.add(address);
-
   // No acknowledgements ("It's mine" said on another device) unless a test serves some: never the network.
   @override
   Future<List<Object?>?> deviceAcks(int since) async => null;
@@ -200,33 +184,6 @@ class FakeApi extends ApiClient {
     return {'accepted': true};
   }
 
-  /// Answers each Swarm chat file sent; records what was sent, by
-  /// `tab/conversation/name`. Never the network.
-  final List<String> swarmUploads = [];
-
-  /// The cancel token each chat file upload was handed.
-  final swarmUploadCancels = <CancelToken>[];
-
-  Future<Map<String, dynamic>> Function() onSwarmUpload = () async => {
-    'attachment': <String, dynamic>{'id': 'att'},
-  };
-
-  @override
-  Future<Map<String, dynamic>> uploadSwarmAttachment({
-    required String tabId,
-    required String conversationId,
-    required String name,
-    required String mime,
-    required SwarmOutgoingFile file,
-    required CancelToken cancel,
-    required void Function(double sent) onProgress,
-    bool Function()? stillWanted,
-  }) {
-    swarmUploadCancels.add(cancel);
-    swarmUploads.add('$tabId/$conversationId/$name');
-    return onSwarmUpload();
-  }
-
   /// Answers `/api/auth/me` in place of [profile] when set — held open, or
   /// throwing.
   Future<Map<String, dynamic>?> Function()? onProfile;
@@ -236,19 +193,6 @@ class FakeApi extends ApiClient {
     profileReads++;
     final answer = onProfile;
     return answer == null ? profile : await answer();
-  }
-
-  /// The Swarm reads asked of the backend itself.
-  final swarmReads = <String>[];
-
-  /// Answers them when set. Unset, this client has no sign-in to read with, so
-  /// the read goes on through a machine.
-  Future<Object?> Function(String path)? onSwarmRead;
-
-  @override
-  Future<Object?> swarmRead(String path) {
-    swarmReads.add(path);
-    return onSwarmRead?.call(path) ?? super.swarmRead(path);
   }
 
   @override
@@ -530,7 +474,6 @@ ViewerRig viewerApp({
   LocalKeyValueStore? storage,
   Duration turnActivityTimeout = const Duration(seconds: 12),
   ProductMeasurement? productMeasurement,
-  PushTokens? pushTokens,
 }) {
   final session = AuthSession(storage: MemoryKeyValueStore());
   final viewer = FakeViewer(session);
@@ -546,7 +489,6 @@ ViewerRig viewerApp({
     viewer: viewer,
     paneLayoutStore: storage == null ? null : PaneLayoutStore(storage: storage),
     systemNotices: SilentSystemNotices(),
-    pushTokens: pushTokens,
     machineCache:
         machineCache ??
         (storage == null ? null : MachineCache(store: MemorySnapshotStore())),

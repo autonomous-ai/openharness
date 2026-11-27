@@ -11,14 +11,12 @@
  * Both need the same thing: a durable-enough file and a bound on how much accumulates over time.
  */
 import { randomUUID } from 'node:crypto'
-import { constants, createWriteStream } from 'node:fs'
-import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
 import { env } from '../config/env.js'
 
 /** Where they land. */
-export const PASTE_DROPS_DIR = join(env.ADAPTER_DATA_DIR, 'paste-drops')
+const PASTE_DROPS_DIR = join(env.ADAPTER_DATA_DIR, 'paste-drops')
 const RETENTION_MS = 24 * 60 * 60 * 1000
 
 /** Best-effort: a prune failure must never block a paste/drop that is otherwise fine. */
@@ -72,32 +70,3 @@ export async function writePasteDropFile(originalFilename: string, bytes: Uint8A
 }
 
 const dropPath = (originalFilename: string) => join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalFilename)}`)
-
-/** As `writePasteDropFile`, written as [source] yields, never held whole: a Super Tab chat file of up to 256 MB
- *  (superTabs/attachments.ts). A source that throws (past its size, short, stalled) leaves no file, not even part of one. */
-export async function writePasteDropStream(originalFilename: string, source: AsyncIterable<Uint8Array>): Promise<string> {
-  await ensureDir()
-  const path = dropPath(originalFilename)
-  try {
-    await pipeline(source, createWriteStream(path, { flags: 'wx' }))
-  } catch (error) {
-    await rm(path, { force: true }).catch(() => {})
-    throw error
-  }
-  return path
-}
-
-/** A copy of [source], a file in this folder, under its own name: each delivery of a file two agents were sent has its own,
- *  so one agent editing it never changes the other's. A clone that takes no room where the
- *  disk can (APFS, btrfs), a copy elsewhere. A failed copy leaves no file. */
-export async function copyPasteDropFile(source: string, originalFilename: string): Promise<string> {
-  await ensureDir()
-  const path = dropPath(originalFilename)
-  try {
-    await copyFile(source, path, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE)
-  } catch (error) {
-    await rm(path, { force: true }).catch(() => {})
-    throw error
-  }
-  return path
-}

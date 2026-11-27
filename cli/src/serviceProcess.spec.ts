@@ -7,7 +7,13 @@ const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | 
 vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), unixSocketPath: () => local.socket }))
 // The test's own console stays as it is: it is shared with every other test in this worker.
 const stamped = vi.hoisted(() => ({ times: 0 }))
-vi.mock('./lib/log.js', async (real) => ({ ...await real<object>(), installTimestampedConsole: () => { stamped.times++ } }))
+// Nor is it handed a handler that exits it: the handler is lib/log.ts's, tested there.
+const fatal = vi.hoisted(() => ({ calls: [] as unknown[][] }))
+vi.mock('./lib/log.js', async (real) => ({
+  ...await real<object>(),
+  installTimestampedConsole: () => { stamped.times++ },
+  exitOnFatal: (...args: unknown[]) => { fatal.calls.push(args) },
+}))
 // What the master said leaves process.env as the process starts (lib/harnessdEnv.ts): held here, as there,
 // but in a store each test starts empty, since the process is every test's in this worker.
 const harnessd = vi.hoisted(() => ({ held: {} as Record<string, string> }))
@@ -27,7 +33,7 @@ vi.mock('./lib/harnessdEnv.js', async (real) => {
 
 describe('a service in its own process', () => {
   const title = process.title
-  afterEach(() => { process.title = title; local.socket = '/data/daemon-18473.sock'; harnessd.held = {}; vi.restoreAllMocks() })
+  afterEach(() => { local.socket = '/data/daemon-18473.sock'; harnessd.held = {}; vi.restoreAllMocks() })
 
   it('can run every service the master knows, and the updater it runs beside them, and loads each one\'s runner on its own', async () => {
     expect([...SERVICE_RUNNERS.keys()].sort()).toEqual([...KNOWN_SERVICES, ...UPDATER_HOST.services].sort())
@@ -64,7 +70,8 @@ describe('a service in its own process', () => {
     expect(loaded).toEqual(['search'])
     // The token is the service's to connect with, and no child's: out of process.env before any service loads.
     expect(inherited).toEqual([undefined])
-    expect(process.title).toBe('harnessd-search')
+    // Named by the link it was exec'd through and nothing else: a title put its environment in `pgrep -f` on macOS.
+    expect(process.title).toBe(title)
     // Its lines are stamped like the core's and the master's in the log they share.
     expect(stamped.times).toBe(1)
     expect(seen).toEqual([{ dataDir: expect.any(String), socketPath: '/data/daemon-18473.sock', machineId: expect.any(String), token: 'token' }])
@@ -82,51 +89,46 @@ describe('a service in its own process', () => {
       await running.stop()
     } finally { delete process.env.HARNESSD_SERVICE }
     expect(started).toEqual(['workspaces', 'usage'])
-    expect(process.title).toBe('harnessd-edge')
+    expect(process.title).toBe(title)
     expect(hosted[0].options).toEqual({ name: 'edge', services: ['workspaces', 'usage'] })
     expect(hosted[0].services).toHaveLength(2)
     expect(stops.workspaces).toHaveBeenCalledOnce()
     expect(stops.usage).toHaveBeenCalledOnce()
   })
 
-  // The review of #1765: with the Swarm off, the edge host still loaded its retention and the agent cleanup kept its
-  // members. Its side is loaded only on, only for a service that acts on it, and handed to it there.
-  it('hands the Swarm\'s side only to the services that act on it, only while the Swarm is on', async () => {
-    const swarm = { retainedHarnesses: () => new Set(['member']) } as never
-    const load = vi.fn(async () => swarm)
-    const run = async (named: string, env: Record<string, string | undefined>) => {
-      const seen: ServiceProcessOptions[] = []
-      const runners = new Map(['agentCleanup', 'sharing', 'handoff', 'models', 'search', 'workspaces'].map(name =>
-        [name, async () => (options: ServiceProcessOptions) => { seen.push(options); return { stop: vi.fn() } }]))
-      const saved = process.env.HARNESS_SWARM
-      if (env.HARNESS_SWARM === undefined) delete process.env.HARNESS_SWARM; else process.env.HARNESS_SWARM = env.HARNESS_SWARM
-      try { await startServiceProcess(named, { runners, host: fakeHost().host, swarm: load }) } finally {
-        if (saved === undefined) delete process.env.HARNESS_SWARM; else process.env.HARNESS_SWARM = saved
-      }
-      return seen.map(options => options.swarm)
-    }
-    for (const named of ['agentCleanup', 'sharing', 'handoff', 'models']) expect(await run(named, {}), named).toEqual([swarm])
-    expect(await run('workspaces,agentCleanup', {})).toEqual([swarm, swarm])
-    expect(load).toHaveBeenCalledTimes(5)
-    expect(await run('search,workspaces', {})).toEqual([undefined, undefined])
-    for (const off of ['off', 'OFF', '0', 'false', 'no']) expect(await run('workspaces,agentCleanup,models', { HARNESS_SWARM: off }), off).toEqual([undefined, undefined, undefined])
-    expect(load).toHaveBeenCalledTimes(5)
+  it('a service process that throws or rejects logs its kind and exits 1', async () => {
+    const order: string[] = []
+    const runners = new Map([['search', async () => { order.push('load'); return () => { order.push('start'); return { stop: () => {} } } }]])
+    const { host } = fakeHost()
+    await startServiceProcess('search', { runners, host, fatal: (tag) => { order.push(`fatal ${tag}`) } })
+    // Before any service loads: Node's own report of an error nothing caught is its message and stack, into the daemon's log.
+    expect(order).toEqual(['fatal [service search]', 'load', 'start'])
+    // By default to stderr, which the master made the daemon's log, under the process's name: `edge` for the host it shares.
+    fatal.calls = []
+    process.env.HARNESSD_SERVICE = 'edge'
+    try {
+      await startServiceProcess('search', { runners, host })
+    } finally { delete process.env.HARNESSD_SERVICE }
+    expect(fatal.calls).toEqual([['[service edge]', 2]])
   })
 
-  it('leaves off a service that cannot start and runs the others; with none started it fails as a lone one did', async () => {
+  it('leaves off a service that cannot start and runs the others; with none started it exits 1, as a lone one did', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const exit = vi.fn((code: number): never => { throw new Error(`exit ${code}`) })
     const fails = async () => () => { throw new Error('injected fault: usage') }
     const runners = new Map([['usage', fails], ['monitor', async () => () => ({ stop: () => {} })]])
     const { host, hosted } = fakeHost()
-    await startServiceProcess('usage,monitor', { runners, host })
+    await startServiceProcess('usage,monitor', { runners, host, exit })
     expect(hosted[0].services).toHaveLength(1)
-    expect(error).toHaveBeenCalledWith('[service usage] did not start · injected fault: usage')
-    await expect(startServiceProcess('usage', { runners, host })).rejects.toThrow('injected fault: usage')
+    expect(error).toHaveBeenCalledWith('[service usage] did not start · Error')
+    // An exit, never the error thrown on: Node would print it whole, its words and its stack, into the daemon's log.
+    await expect(startServiceProcess('usage', { runners, host, exit })).rejects.toThrow('exit 1')
     // Nothing started, no process beats for it: the master sees it end before its first heartbeat.
     expect(hosted).toHaveLength(1)
     const thrown = new Map([['usage', async () => () => { throw 'not an error' }]])
-    await expect(startServiceProcess('usage', { runners: thrown, host })).rejects.toBe('not an error')
-    expect(error).toHaveBeenCalledWith('[service usage] did not start · not an error')
+    await expect(startServiceProcess('usage', { runners: thrown, host, exit })).rejects.toThrow('exit 1')
+    expect(error).toHaveBeenCalledWith('[service usage] did not start · string')
+    expect(exit.mock.calls).toEqual([[1], [1]])
   })
 
   it('refuses, with exit 2 and why, a service this build does not know or a core with no socket', async () => {

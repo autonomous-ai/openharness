@@ -1,14 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, STARTING_MS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
-import { AgentClientError, type Daemon, type Where } from './daemon.js'
+import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -98,6 +101,16 @@ const started = (ledger: Ledger, by: string, child: string, childMachine = 'm', 
 
 const ev = (type: string, payload: Record<string, unknown> = {}) => ({ type, payload })
 
+/** Each inspect answers idle with the next of [counts], the last staying; `undefined`: a daemon from before the field. */
+const counting = (d: FakeDaemon, counts: unknown[]) => {
+  d.extra.agent_close = (payload) => {
+    if (payload.mode !== 'inspect') return { closed: true }
+    const n = counts.length > 1 ? counts.shift() : counts[0]
+    return n === undefined ? { activity: 'idle' } : { activity: 'idle', backgroundCommands: n }
+  }
+}
+const answeredTurn = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
+
 describe('harness ps', () => {
   it('lists the harnesses here: who you are, state, who started each, and what each is about', async () => {
     const d = new FakeDaemon()
@@ -106,7 +119,7 @@ describe('harness ps', () => {
     started(h.ledger, 'lead', 'kid')
     expect(await psCommand([], h.deps)).toBe(EXIT.ok)
     const text = h.out.join('\n')
-    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\.\nCan start harnesses: yes\.\nYours: 1 open of 4 · 1 of 20 starts in the last 10 minutes\nNAME +AGENT +STATE +STARTED BY +ACTIVE +FOLDER/)
+    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\.\nCan start harnesses: yes\.\nYours: 1 open of 8 · 1 of 20 starts in the last 10 minutes\nNAME +AGENT +STATE +STARTED BY +ACTIVE +FOLDER/)
     expect(text).toMatch(/kid +Codex +working +you +1m +\/work\/kid \(main\)\n  kid recap/)
     expect(text).toMatch(/lead +Claude Code +idle +person \(you\)/)
     expect(text).not.toContain('sh ')
@@ -200,6 +213,29 @@ describe('harness ps', () => {
     const person = harness(d, { pane: undefined })
     expect(await psCommand([], person.deps)).toBe(EXIT.ok)
     expect(person.out.join('\n')).toMatch(/^NAME +AGENT/)
+  })
+
+  // A launch that failed for a named reason started nothing: what the person reads says why, live or stopped.
+  it('says why a harness never started, before what it is about, live or stopped', async () => {
+    const d = new FakeDaemon()
+    const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' } as const
+    d.frames = [frame('taken', { launch: inUse }), frame('gone', { status: 'stopped', launch: { state: 'failed', error: 'OPENCLAW_FOLDER_GONE' } }), frame('fine', { launch: { state: 'ready' } }),
+      // Not confirmed is not failed: its engine may be running (the desk says "Not confirmed").
+      frame('unsure', { launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'Check the terminal.' } })]
+    const h = harness(d, { pane: undefined })
+    expect(await psCommand(['--all'], h.deps)).toBe(EXIT.ok)
+    const out = h.out.join('\n')
+    expect(out).toMatch(/^taken .*\n  failed: Another OpenClaw is using this folder\. Give each run its own --local folder\.$/m)
+    expect(out).toMatch(/^gone .*\n  failed: OPENCLAW_FOLDER_GONE$/m)
+    expect(out).toMatch(/^fine .*\n  fine recap$/m)
+    expect(out).toMatch(/^unsure .*\n  unsure recap$/m)
+    const json = harness(d, { pane: undefined })
+    expect(await psCommand(['--all', '--json'], json.deps)).toBe(EXIT.ok)
+    const rows = JSON.parse(json.out[0]).harnesses as Array<{ name: string; failure?: unknown }>
+    expect(rows.find((r) => r.name === 'taken')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_IN_USE', detail: inUse.detail })
+    expect(rows.find((r) => r.name === 'gone')!.failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: null })
+    expect(rows.find((r) => r.name === 'fine')!.failure).toBeUndefined()
+    expect(rows.find((r) => r.name === 'unsure')!.failure).toBeUndefined()
   })
 
   it('prints JSON for programs, and asks for stopped ones with --all', async () => {
@@ -344,6 +380,47 @@ describe('harness show', () => {
     expect(lines.at(-1)).toBe('Next: harness close kid  (once you have what you need)')
   })
 
+  it('says how many background commands an idle harness still runs, and offers wait, never close, while any does', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame('kid')]
+    answeredTurn(d, 'kid')
+    counting(d, [2])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.slice(-2)).toEqual(['2 background commands running', 'Next: harness wait kid  (until its background commands end)'])
+    expect(h.out.join('\n')).not.toContain('harness close')
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'idle', backgroundCommands: 2, next: [{ run: 'harness wait kid', when: 'until its background commands end' }] })
+    counting(d, [1])
+    const one = harness(d)
+    expect(await showCommand(['kid'], one.deps)).toBe(EXIT.ok)
+    expect(one.out.at(-2)).toBe('1 background command running')
+    // Whoever started it: the person is told to wait too.
+    counting(d, [2])
+    const person = harness(d, { pane: undefined })
+    expect(await showCommand(['kid'], person.deps)).toBe(EXIT.ok)
+    expect(person.out.at(-1)).toBe('Next: harness wait kid  (until its background commands end)')
+    // None, a daemon from before the field, or a field that is no whole number: as before.
+    for (const [count, read] of [[0, 0], [undefined, null], ['2', null], [-1, null], [1.5, null]] as const) {
+      counting(d, [count])
+      const text = harness(d)
+      expect(await showCommand(['kid'], text.deps)).toBe(EXIT.ok)
+      expect(text.out.join('\n')).not.toContain('background command')
+      expect(text.out.at(-1)).toBe('Next: harness close kid  (once you have what you need)')
+      const asJson = harness(d)
+      expect(await showCommand(['kid', '--json'], asJson.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(asJson.out[0]).backgroundCommands).toBe(read)
+    }
+    // Working: no count at all.
+    delete d.extra.agent_close
+    d.screens.set('kid', ['working'])
+    const working = harness(d)
+    expect(await showCommand(['kid', '--json'], working.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(working.out[0])).not.toHaveProperty('backgroundCommands')
+  })
+
   it('names wait for a working harness, and never close for one the caller did not start', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' }), frame('busy', { activity: { state: 'working' } }), frame('theirs')]
@@ -370,6 +447,21 @@ describe('harness show', () => {
     const parsed = JSON.parse(json.out[0])
     expect(parsed.state).toBe('needs-input')
     expect(parsed.next).toEqual([{ tell: 'tell the person; only they answer it (a question or a permission).' }])
+  })
+
+  it('says why a harness never started', async () => {
+    const d = new FakeDaemon()
+    const gone = { state: 'failed', error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." } as const
+    d.frames = [frame('gone', { sessionId: '', status: 'stopped', launch: gone }), frame('fine', { sessionId: '' })]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['gone'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['gone on studio: stopped · Codex · started by person', 'folder: /work/gone (main)', "failed: This run's OpenClaw folder is gone.", 'No turn yet.'])
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['gone', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).failure).toEqual({ error: 'OPENCLAW_FOLDER_GONE', detail: gone.detail })
+    const fine = harness(d, { pane: undefined })
+    expect(await showCommand(['fine', '--json'], fine.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(fine.out[0]).failure).toBeUndefined()
   })
 
   it('says when there is no turn yet, or no transcript to read', async () => {
@@ -470,6 +562,34 @@ describe('harness wait', () => {
     expect(d.requests.filter((r) => r.type === 'agent_close').every((r) => r.payload.mode === 'inspect')).toBe(true)
   })
 
+  it('holds while an idle harness still runs background commands, and says how many when it times out', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid')]
+    answeredTurn(d, 'kid')
+    counting(d, [1, 1, 1, 0, 0])
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    // Three looks held, then two idle looks.
+    expect(inspects(d)).toBe(5)
+    expect(h.out).toEqual(['kid: idle · read it: harness show kid'])
+    counting(d, [2])
+    const text = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out).toEqual(['kid: timeout · 2 background commands running; wait again or read it: harness show kid'])
+    const json = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s', '--json'], json.deps)).toBe(EXIT.timeout)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'timeout', backgroundCommands: 2, next: [{ run: 'harness wait kid', when: 'to keep waiting' }] })
+    // A timeout while it works says so, with no count.
+    delete d.extra.agent_close
+    d.screens.set('kid', ['working'])
+    const working = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s'], working.deps)).toBe(EXIT.timeout)
+    expect(working.out).toEqual(['kid: timeout · still working; wait again or read it: harness show kid'])
+    const workingJson = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '3s', '--json'], workingJson.deps)).toBe(EXIT.timeout)
+    expect(JSON.parse(workingJson.out.join('\n')).harnesses[0]).not.toHaveProperty('backgroundCommands')
+  })
+
   it('reads no screen while the daemon says it is working', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('kid', { activity: { state: 'working' } })]
@@ -554,6 +674,36 @@ describe('harness wait', () => {
     const g = harness(s)
     expect(await waitCommand(['x'], g.deps)).toBe(EXIT.stopped)
     expect(g.out[0]).toBe('x: gone · it is gone')
+  })
+
+  // A first launch the guard held shows as starting while it starts again by itself, then up or failed by a bound
+  // (docs/plans/2026-11-25-held-launch-recovery-plan.md, decision 3): `wait` needs nothing new for it. With no session
+  // the daemon has no activity for it (core/turns/activity.ts `activityFrame`).
+  const startingAgain = () => frame('b1', { sessionId: '', status: 'active', activity: null, launch: { state: 'starting' }, createdAt: new Date(NOW - STARTING_MS - 60_000).toISOString() })
+  const unreadable = (d: FakeDaemon) => { d.extra.agent_close = (payload) => payload.mode === 'inspect' ? { activity: 'unknown' } : { closed: true } }
+
+  it('waits through a first launch starting again: never idle, failed or held, and times out still waiting', async () => {
+    const d = new FakeDaemon()
+    d.frames = [startingAgain()]
+    unreadable(d)
+    const h = harness(d)
+    expect(await waitCommand(['b1', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['b1: timeout · still working; wait again or read it: harness show b1'])
+    const json = harness(d)
+    expect(await waitCommand(['b1', '--timeout', '3s', '--json'], json.deps)).toBe(EXIT.timeout)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'timeout' })
+  })
+
+  it('ends on the failed state a bound gives it, with its words', async () => {
+    const d = new FakeDaemon()
+    d.frames = [startingAgain()]
+    unreadable(d)
+    const detail = 'This harness did not start. Close it and open a new one.'
+    let looks = 0
+    d.extra.agents_list = () => ({ agents: [looks++ < 3 ? d.frames[0] : { ...d.frames[0], launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail } }] })
+    const h = harness(d)
+    expect(await waitCommand(['b1'], h.deps)).toBe(EXIT.failed)
+    expect(h.out).toEqual([`b1: failed · ${detail}`])
   })
 
   it('tells where to look for a harness that is gone, and gives each one\'s next in JSON', async () => {
@@ -725,9 +875,10 @@ describe('refusals and the person', () => {
 
   it('refuses a start over the open limit with its reason, the switch off and an orphan with theirs', async () => {
     const d = new FakeDaemon()
-    d.frames = [frame('lead', { engine: 'claude' }), ...['a', 'b', 'c', 'd'].map((id) => frame(id))]
+    const kids = Array.from({ length: SPAWN_LIMITS.livePerHarness }, (_, i) => `k${i}`)
+    d.frames = [frame('lead', { engine: 'claude' }), ...kids.map((id) => frame(id))]
     const h = harness(d)
-    for (const kid of ['a', 'b', 'c', 'd']) started(h.ledger, 'lead', kid)
+    for (const kid of kids) started(h.ledger, 'lead', kid)
     const full = await (await agentOrigin(h.deps))!.check().catch((e) => e)
     expect(full).toBeInstanceOf(AgentClientError)
     expect([full.code, full.reason]).toEqual(['SPAWN_LIMIT', 'OPEN_LIMIT'])
@@ -760,6 +911,205 @@ describe('refusals and the person', () => {
   })
 })
 
+describe('a harness held for the person', () => {
+  it('wait ends on a held one with exit 3 and its sentence, in text and JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.needsInput)
+    expect(h.out[0]).toBe('kid: held · This Harness install is incomplete. Reinstall Harness. Only the person can fix this.')
+    const json = harness(d)
+    expect(await waitCommand(['kid', '--json'], json.deps)).toBe(EXIT.needsInput)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true,
+      next: [{ tell: 'tell the person: This Harness install is incomplete. Reinstall Harness.' }] })
+  })
+
+  it('wait ends on a held one over a working screen, at the first look', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' }, namedState: REPLACED_PROGRAM })]
+    d.screens.set('kid', ['working'])
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.needsInput)
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('wait does not end on a recovering state, and says it when the time is up', async () => {
+    for (const sentence of [OTHER_ENGINE_STATES.lost, 'A state from a newer Harness.']) {
+      const d = new FakeDaemon()
+      d.frames = [frame('kid', { activity: { state: 'working' }, namedState: sentence })]
+      const h = harness(d)
+      expect(await waitCommand(['kid', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+      expect(h.out[0]).toBe(`kid: timeout · ${sentence} Wait again or read it: harness show kid`)
+      const json = harness(d)
+      expect(await waitCommand(['kid', '--timeout', '1s', '--json'], json.deps)).toBe(EXIT.timeout)
+      const result = JSON.parse(json.out.join('\n')).harnesses[0]
+      expect(result).toMatchObject({ state: 'timeout', namedState: sentence })
+      expect(result).not.toHaveProperty('needsPerson')
+    }
+  })
+
+  it('wait with --any returns on the held one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('busy', { activity: { state: 'working' } }), frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['busy,kid', '--any'], h.deps)).toBe(EXIT.needsInput)
+  })
+
+  it('show says held, the sentence and to tell the person, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' }, namedState: MISSING_HELPER })]
+    d.screens.set('kid', ['working'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: held · Codex · started by you')
+    expect(h.out[1]).toBe('held: This Harness install is incomplete. Reinstall Harness.')
+    expect(h.out.at(-1)).toContain('tell the person: This Harness install is incomplete. Reinstall Harness.')
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true,
+      next: [{ tell: 'tell the person: This Harness install is incomplete. Reinstall Harness.' }] })
+  })
+
+  it('show gives a recovering state as the screen says, with its sentence', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { namedState: OTHER_ENGINE_STATES.unavailable })]
+    d.screens.set('kid', ['idle'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: idle · Codex · started by you')
+    expect(h.out[1]).toBe(OTHER_ENGINE_STATES.unavailable)
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    const result = JSON.parse(json.out[0])
+    expect(result).toMatchObject({ state: 'idle', namedState: OTHER_ENGINE_STATES.unavailable })
+    expect(result).not.toHaveProperty('needsPerson')
+  })
+})
+
+describe('a harness starting, or whose launch failed here', () => {
+  const firstTask = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'OpenClaw did not take the first task. Close it and start it again.' } as const
+  const inUse = { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE', detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' } as const
+  const starting = (id: string) => frame(id, { engine: 'openclaw', sessionId: '', starting: true })
+  // A failed launch leaves its row inactive: the frame says offline.
+  const failed = (id: string, launch: Frame['launch'] = firstTask) => frame(id, { engine: 'openclaw', sessionId: '', status: 'offline', launch })
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('show says starting and to wait, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [starting('kid')]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: starting · OpenClaw · started by person')
+    expect(h.out.at(-1)).toBe('Next: harness wait kid  (until it stops working)')
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'starting', next: [{ run: 'harness wait kid' }] })
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('show says failed and why, reading no screen', async () => {
+    const d = new FakeDaemon()
+    // Live for a moment while its row is saved: still failed, and its screen is not read.
+    d.frames = [frame('kid', { engine: 'openclaw', sessionId: '', launch: firstTask })]
+    const h = harness(d, { pane: undefined })
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: failed · OpenClaw · started by person')
+    expect(h.out).toContain(`failed: ${firstTask.detail}`)
+    const json = harness(d, { pane: undefined })
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    const result = JSON.parse(json.out[0])
+    expect(result).toMatchObject({ state: 'failed', failure: { error: 'FIRST_TASK_NOT_TAKEN', detail: firstTask.detail }, next: [] })
+    expect(result).not.toHaveProperty('needsPerson')
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('ps lists one starting and one failed', async () => {
+    const d = new FakeDaemon()
+    d.frames = [starting('new'), failed('lost')]
+    const h = harness(d, { pane: undefined })
+    expect(await psCommand([], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toMatch(/^new +OpenClaw +starting /m)
+    expect(h.out.join('\n')).toMatch(/^lost +OpenClaw +failed /m)
+    const json = harness(d, { pane: undefined })
+    expect(await psCommand(['--json'], json.deps)).toBe(EXIT.ok)
+    const rows = JSON.parse(json.out[0]).harnesses as Array<{ name: string; state: string }>
+    expect(rows.map((r) => [r.name, r.state])).toEqual([['new', 'starting'], ['lost', 'failed']])
+  })
+
+  it('wait keeps waiting while it starts, though its screen and last turn say idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { starting: true })]
+    answeredTurn(d, 'kid')
+    const h = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out[0]).toBe('kid: timeout · still working; wait again or read it: harness show kid')
+  })
+
+  it('wait ends on a launch that failed here with exit 1 and why, in text and JSON', async () => {
+    for (const launch of [firstTask, inUse]) {
+      const d = new FakeDaemon()
+      d.frames = [failed('kid', launch)]
+      const h = harness(d)
+      expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.failed)
+      expect(h.out[0]).toBe(`kid: failed · ${launch.detail}`)
+      const json = harness(d)
+      expect(await waitCommand(['kid', '--json'], json.deps)).toBe(EXIT.failed)
+      expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'failed', failure: { error: launch.error, detail: launch.detail } })
+    }
+  })
+
+  it('wait exits 1 for a failed launch beside a stopped harness, and 3 beside a held one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [failed('kid'), frame('old', { status: 'stopped' }), frame('held', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['kid,old'], h.deps)).toBe(EXIT.failed)
+    const held = harness(d)
+    expect(await waitCommand(['kid,held'], held.deps)).toBe(EXIT.needsInput)
+  })
+
+  it('watch says started while it starts, and failed once its launch failed', async () => {
+    const d = new FakeDaemon()
+    d.frames = [starting('kid')]
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => [l.event, l.state])).toEqual([['started', 'starting']])
+    d.frames = [failed('kid')]
+    const f = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], f.deps)).toBe(EXIT.timeout)
+    expect(lines(f.out).map((l) => [l.event, l.state])).toEqual([['failed', 'failed']])
+  })
+
+  it('watch says why a launch failed, in text and JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [failed('kid', inUse)]
+    const json = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], json.deps)).toBe(EXIT.timeout)
+    expect(lines(json.out)[0]).toMatchObject({ event: 'failed', failure: { error: inUse.error, detail: inUse.detail } })
+    const text = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '10s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out[0]).toMatch(new RegExp(`Z kid: failed: ${inUse.detail.replace(/\./g, '\\.')}$`))
+  })
+
+  it('wait and watch read back past a page of heartbeat runs to the last turn', async () => {
+    const d = new FakeDaemon()
+    // Just started: with no turn found, wait would take it for one whose task is not typed yet.
+    d.frames = [frame('kid', { createdAt: '2026-10-11T12:00:00Z' })]
+    d.pages.set('s-kid', [
+      { events: [ev('heartbeat'), ev('heartbeat')], hasMore: true, oldestCursor: '1' },
+      { events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' })], hasMore: false },
+    ])
+    const h = harness(d)
+    expect(await waitCommand(['kid', '--timeout', '30s'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid: idle · read it: harness show kid')
+    const w = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], w.deps)).toBe(EXIT.timeout)
+    expect(lines(w.out).map((l) => [l.event, l.summary])).toEqual([['done', 'Fixed.']])
+  })
+})
+
 describe('harness close', () => {
   it('closes a harness the agent started, once it is idle', async () => {
     const d = new FakeDaemon()
@@ -767,7 +1117,7 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 4.'])
+    expect(h.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'])
     expect(d.requests.at(-1)).toMatchObject({ type: 'agent_close', payload: { agentId: 'kid', sessionId: 's-kid', mode: 'idle' } })
     const now = harness(d)
     expect(await closeCommand(['kid', '--now', '--json'], now.deps)).toBe(EXIT.ok)
@@ -782,7 +1132,7 @@ describe('harness close', () => {
     started(h.ledger, 'lead', 'kid')
     started(h.ledger, 'lead', 'other')
     expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.ok)
-    expect(h.out.join('\n')).toBe('kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 1 open of 4.')
+    expect(h.out.join('\n')).toBe('kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 1 open of 8.')
     const json = harness(d)
     expect(await closeCommand(['other', '--json'], json.deps)).toBe(EXIT.ok)
     expect(JSON.parse(json.out[0])).toEqual({ name: 'other', id: 'other', closed: true, effect: 'Its conversation is kept; the person can resume it.', next: [], open: 1 })
@@ -841,7 +1191,8 @@ describe('harness close', () => {
       { error: 'SESSION_NOT_IDLE', activity: 'working' }, { error: 'SESSION_NOT_IDLE', activity: 'needs_input' },
       { error: 'AGENT_CHANGED' }, { error: 'CLOSE_FAILED', detail: 'disk full' }, { error: 'CLOSE_FAILED' },
     ]
-    d.extra.agent_close = () => replies.shift()!
+    // It looks first: the screen reads idle with nothing running, and the close answers each refusal.
+    d.extra.agent_close = (p) => (p.mode === 'inspect' ? { activity: 'idle' } : replies.shift()!)
     const h = harness(d, { pane: undefined })
     for (let i = 0; i < 5; i++) expect(await closeCommand(['k'], h.deps)).toBe(EXIT.failed)
     expect(h.err).toEqual([
@@ -866,7 +1217,7 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['kid on studio: closed. It had not started a conversation, so none was kept.\nNext: nothing; you have 0 open of 4.'])
+    expect(h.out).toEqual(['kid on studio: closed. It had not started a conversation, so none was kept.\nNext: nothing; you have 0 open of 8.'])
     expect(await closeCommand(['kid', '--now', '--json'], h.deps)).toBe(EXIT.ok)
     expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It had not started a conversation, so none was kept.', next: [], open: 0 })
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.failed)
@@ -887,7 +1238,68 @@ describe('harness close', () => {
     expect(readFileSync(ledgerPath(dir), 'utf8').trim().split('\n')).toHaveLength(2)
     const unwritable = harness(d, { ledger: (data) => Object.assign(new Ledger(ledgerPath(data)), { append: () => { throw new Error('read-only') } }) })
     expect(await closeCommand(['kid'], unwritable.deps)).toBe(EXIT.ok)
-    expect(unwritable.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 4.'])
+    expect(unwritable.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'])
+  })
+
+  it('refuses one that still runs background commands, and sends no close', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame('kid')]
+    counting(d, [2])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    const modes = () => d.requests.filter((r) => r.type === 'agent_close').map((r) => r.payload.mode)
+    expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['kid: 2 background commands running; --now closes anyway'])
+    expect(modes()).toEqual(['inspect'])
+    const json = harness(d)
+    expect(await closeCommand(['kid', '--json'], json.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(json.out[0])).toEqual({ error: 'WORKING', detail: 'kid: 2 background commands running; --now closes anyway' })
+    const mcp = harness(d, { env: { HARNESS_VIA_MCP: '1' } })
+    expect(await closeCommand(['kid'], mcp.deps)).toBe(EXIT.failed)
+    expect(mcp.err).toEqual(['kid: 2 background commands running; now: true closes anyway'])
+    // --now does not look.
+    d.requests = []
+    expect(await closeCommand(['kid', '--now'], harness(d).deps)).toBe(EXIT.ok)
+    expect(modes()).toEqual(['now'])
+  })
+
+  it('closes as before when none runs, when the daemon cannot say, and when it is not idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame('kid')]
+    const modes = () => d.requests.filter((r) => r.type === 'agent_close').map((r) => r.payload.mode)
+    started(harness(d).ledger, 'lead', 'kid')
+    const closes = async () => {
+      d.requests = []
+      const h = harness(d)
+      const code = await closeCommand(['kid'], h.deps)
+      return { code, out: h.out, err: h.err }
+    }
+    for (const count of [0, undefined]) {
+      counting(d, [count])
+      expect(await closes()).toEqual({ code: EXIT.ok, out: ['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 8.'], err: [] })
+      expect(modes()).toEqual(['inspect', 'idle'])
+    }
+    d.extra.agent_close = (p) => (p.mode === 'inspect' ? { activity: 'working' } : { error: 'SESSION_NOT_IDLE', activity: 'working' })
+    expect(await closes()).toEqual({ code: EXIT.failed, out: [], err: ['kid is working. Wait for it (harness wait kid), or close it anyway with --now.'] })
+    expect(modes()).toEqual(['inspect', 'idle'])
+    // An inspect that fails: the close is still sent.
+    d.extra.agent_close = (p) => { if (p.mode === 'inspect') throw new Error('gone'); return { closed: true } }
+    expect((await closes()).code).toBe(EXIT.ok)
+    expect(modes()).toEqual(['inspect', 'idle'])
+  })
+
+  it('looks at a harness on another machine through that machine', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    office.frames = [frame('kid')]
+    const machines = async () => [{ machineId: 'm', label: 'studio', status: 'online', current: true }, { machineId: 'office-id', label: 'office', status: 'online', current: false }]
+    const h = harness(d, { pane: undefined, machines, others: { 'office-id': office } })
+    counting(office, [2])
+    expect(await closeCommand(['--machine', 'office', 'kid'], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['kid: 2 background commands running; --now closes anyway'])
+    counting(office, [0])
+    expect(await closeCommand(['--machine', 'office', 'kid'], h.deps)).toBe(EXIT.ok)
+    expect(office.requests.filter((r) => r.type === 'agent_close').map((r) => r.payload.mode)).toEqual(['inspect', 'inspect', 'idle'])
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
   })
 
   it('closes one harness at a time, by name', async () => {
@@ -895,6 +1307,98 @@ describe('harness close', () => {
     expect(await closeCommand([], h.deps)).toBe(EXIT.usage)
     expect(await closeCommand(['a', 'b'], h.deps)).toBe(EXIT.usage)
     expect(h.err).toContain('Close one harness at a time.')
+  })
+})
+
+describe('harness delete', () => {
+  const KID = 'kid', CREATED = '2026-10-11T10:00:00Z'
+  const KEPT = "OpenClaw's store is kept: delete its session with OpenClaw."
+  /** A daemon whose purge answers inspect with a review and delete with [deleted]; the person asks unless [over] says. */
+  const setupDelete = (deleted: Record<string, unknown> = { deleted: true }, over: Partial<ClientDeps> = { pane: undefined }) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead'), frame(KID, { sessionId: 's1', createdAt: CREATED }), frame('old', { status: 'stopped' }),
+      frame('claw', { engine: 'openclaw' }), frame('theirs'), frame('devin-1', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null })]
+    d.extra.agent_purge = (payload) => payload.mode === 'inspect' ? { reviewId: 'r1' } : deleted
+    const run = async (argv: string[]) => {
+      const h = harness(d, over)
+      return { code: await deleteCommand(argv, h.deps), out: h.out, err: h.err }
+    }
+    const requests = (type: string) => d.requests.filter((r) => r.type === type).map((r) => r.payload)
+    return { d, run, requests }
+  }
+
+  it('deletes a running harness and a closed one: inspect, then delete with its session data and the folder kept', async () => {
+    const { run, requests } = setupDelete()
+    expect(await run([KID])).toMatchObject({ code: EXIT.ok, out: ['kid on studio: deleted. Its conversation and everything Harness kept of it are erased.'] })
+    expect(requests('agent_purge')).toEqual([
+      { agentId: KID, sessionId: 's1', createdAt: Date.parse(CREATED), mode: 'inspect' },
+      { agentId: KID, sessionId: 's1', createdAt: Date.parse(CREATED), mode: 'delete', reviewId: 'r1', choices: { sessionData: true, worktreeData: false } },
+    ])
+    expect((await run(['old'])).code).toBe(EXIT.ok)
+    expect(requests('agent_purge').at(-1)).toMatchObject({ agentId: 'old', sessionId: 's-old', mode: 'delete' })
+  })
+
+  it('asks for a harness with no conversation yet (still starting) by none, as purge reads its row', async () => {
+    const { d, run, requests } = setupDelete()
+    d.frames.push(frame('fresh', { sessionId: '', status: 'starting' }))
+    expect((await run(['fresh'])).code).toBe(EXIT.ok)
+    expect(requests('agent_purge').map((r) => r.sessionId)).toEqual([null, null])
+  })
+
+  it('says what was kept and why', async () => {
+    const { run } = setupDelete({ deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
+    expect((await run(['claw'])).out).toEqual(['claw on studio: deleted. Everything Harness kept of it is erased.', KEPT])
+    expect(JSON.parse((await run(['claw', '--json'])).out[0])).toEqual({ name: 'claw', id: 'claw', deleted: true, kept: [{ what: 'engine-store', reason: KEPT }] })
+    const none = setupDelete()
+    expect(JSON.parse((await none.run([KID, '--json'])).out[0])).toEqual({ name: KID, id: KID, deleted: true, kept: [] })
+  })
+
+  it('refuses an agent a harness it did not start, and its own; the person deletes anything', async () => {
+    const agent = setupDelete({ deleted: true }, {})
+    const theirs = await agent.run(['theirs'])
+    expect(theirs).toMatchObject({ code: EXIT.refused, err: ['You did not start theirs, so you may not delete it. Only the person can.'] })
+    expect(await agent.run(['lead'])).toMatchObject({ code: EXIT.refused, err: ['That is your own harness. The person deletes it.'] })
+    const left = setupDelete({ deleted: true }, { pane: '%gone', where: () => ({ ...where, harnessPane: true }) })
+    expect((await left.run(['theirs'])).code).toBe(EXIT.refused)
+    expect(agent.requests('agent_purge')).toEqual([])
+    expect(left.requests('agent_purge')).toEqual([])
+    const mine = setupDelete({ deleted: true }, {})
+    started(new Ledger(ledgerPath(dir)), 'lead', KID)
+    expect((await mine.run([KID])).code).toBe(EXIT.ok)
+    const person = setupDelete()
+    expect((await person.run(['theirs'])).code).toBe(EXIT.ok)
+  })
+
+  it('says purge\'s own refusals as they are', async () => {
+    const lead = setupDelete()
+    lead.d.extra.agent_purge = () => ({ error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' })
+    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: ['This harness is already being deleted.'] })
+    expect(lead.requests('agent_purge')).toHaveLength(1)
+    const refused = setupDelete({ error: 'DELETE_REFUSED', detail: 'The harness did not stop. No session data was deleted.' })
+    expect(await refused.run([KID])).toMatchObject({ code: EXIT.failed, err: ['The harness did not stop. No session data was deleted.'] })
+    const bare = setupDelete({ error: 'DELETE_FAILED' })
+    expect(await bare.run([KID])).toMatchObject({ code: EXIT.failed, err: ['Could not delete kid.'] })
+  })
+
+  it('works on this computer only, one harness at a time, and never a cloud one', async () => {
+    const { run, requests } = setupDelete()
+    expect(await run(['--machine', 'office', 'kid'])).toMatchObject({ code: EXIT.usage, err: ['harness delete works on this computer only.', expect.stringContaining('Usage: harness delete <name> [--json]')] })
+    expect((await run([])).err[0]).toBe('Name the harness to delete.')
+    expect((await run(['a', 'b'])).err[0]).toBe('Delete one harness at a time.')
+    expect(await run(['devin-1'])).toMatchObject({ code: EXIT.usage, err: ["devin-1 runs in its maker's cloud: delete it there.", expect.any(String)] })
+    expect(requests('agent_purge')).toEqual([])
+  })
+
+  it('never reaches another machine through a harness the agent started there', async () => {
+    const { d } = setupDelete({ deleted: true }, {})
+    const mini = new FakeDaemon()
+    mini.frames = [frame('far')]
+    started(new Ledger(ledgerPath(dir)), 'lead', 'far', 'mini')
+    const h = harness(d, { others: { mini } })
+    expect(await deleteCommand(['far'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('far runs on another machine: harness delete works on this computer only.')
+    expect([...d.requests, ...mini.requests].filter((r) => r.type === 'agent_purge')).toEqual([])
+    expect(mini.closed).toBe(true)
   })
 })
 
@@ -944,6 +1448,28 @@ describe('harness new, run by an agent', () => {
     setAgentSettingsForTest(dir, { agentsStartAgents: true })
     signedOutForTest()
     await expect((await agentOrigin(harness(d).deps))!.check()).rejects.toThrow(AGENTS_START_AGENTS_OFF)
+  })
+
+  it('lets the Hachi harness start harnesses while the account has Hachi on, and no other agent; records the start as Hachi\'s', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' })]
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: true })
+    const hachi = (await agentOrigin(harness(d, { pane: '%hachi' }).deps))!
+    await expect(hachi.check()).resolves.toBeUndefined()
+    expect(hachi.hachi).toBe(true)
+    // Its starts say so in the ledger: the machine a harness runs on reads it for `harness tell` and the hand-over.
+    hachi.pending!('m', { creationId: 'c1', name: 'api-fix', engine: 'codex' })
+    await hachi.created('m', { id: 'kid', name: 'api-fix' }, 'c1')
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.parentOf({ machineId: 'm', agentId: 'kid' })?.by).toEqual({ machineId: 'm', agentId: 'hachi', name: 'hachi', engine: 'claude', hachi: true })
+    expect(ledger.pendingOf({ machineId: 'm', agentId: 'hachi' }, NOW)).toEqual([])
+    // Turning Hachi on is the person's yes to Hachi alone: any other agent still needs agents-start-agents.
+    const lead = (await agentOrigin(harness(d).deps))!
+    await expect(lead.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
+    expect(lead).not.toHaveProperty('hachi')
+    // Hachi off: Hachi is an agent like any other.
+    setAgentSettingsForTest(dir, { agentsStartAgents: false, hachi: false })
+    await expect((await agentOrigin(harness(d, { pane: '%hachi' }).deps))!.check()).rejects.toMatchObject({ code: 'TURNED_OFF' })
   })
 
   it('names its own harness as the one that started the new one; an agent outside Harness names none', async () => {
@@ -1058,7 +1584,7 @@ describe('harness new, run by an agent', () => {
     started(l, 'lead', 'far', 'mini', NOW - 3_600_000)
     expect(spawnRefusal(lead, live, l, 'm', NOW)).toBeNull()
     live.add('mini/far')
-    expect(spawnRefusal(lead, live, l, 'm', NOW)).toBe('You have 4 harnesses running. Close one you are done with first (harness close <name>).')
+    expect(spawnRefusal(lead, live, l, 'm', NOW)).toBe('You have 8 harnesses running. Close one you are done with first (harness close <name>).')
     const crowd = new Ledger(ledgerPath(mkdtempSync(join(dir, 'crowd-'))))
     const busy = new Set<string>()
     for (let i = 0; i < SPAWN_LIMITS.livePerMachine; i++) {
@@ -1071,10 +1597,11 @@ describe('harness new, run by an agent', () => {
     expect(spawnRefusal(lead, new Set(), quick, 'm', NOW)).toBe('You started 20 harnesses in 10 minutes. Wait, or work with the ones you have.')
   })
 
-  it('keeps a harness another agent started from starting more: four of its own at most, one level down', () => {
-    // Owner, October 12: "be very careful about when to start a new agent so we don't waste user token". They were eight
-    // and two levels: a harness an agent started could start more, and each of those spent the person's tokens.
-    expect(SPAWN_LIMITS).toMatchObject({ livePerHarness: 4, depth: 1, livePerMachine: 40, perWindow: 20 })
+  it('keeps a harness another agent started from starting more: eight of its own at most, one level down', () => {
+    // Owner, October 12: "be very careful about when to start a new agent so we don't waste user token". Two levels went
+    // then: a harness an agent started could start more, and each of those spent the person's tokens. Eight at once came
+    // back on November 11 (four in between): one level down and forty a computer are what stop a runaway.
+    expect(SPAWN_LIMITS).toMatchObject({ livePerHarness: 8, depth: 1, livePerMachine: 40, perWindow: 20 })
     const l = new Ledger(ledgerPath(dir))
     const kid = { machineId: 'm', agentId: 'kid', name: 'kid', engine: 'codex' }
     // The person's harness: no line, no parent.
@@ -1109,7 +1636,7 @@ describe('harness new, run by an agent', () => {
     const empty = new Ledger(ledgerPath(mkdtempSync(join(dir, 'waiting-'))))
     expect(spawnRefusal(lead, new Set(), empty, 'm', NOW, waiting(SPAWN_LIMITS.livePerHarness - 1))).toBeNull()
     expect(spawnRefusal(lead, new Set(), empty, 'm', NOW, waiting(SPAWN_LIMITS.livePerHarness)))
-      .toBe('You have 4 harnesses running or starting. Close one you are done with first (harness close <name>).')
+      .toBe('You have 8 harnesses running or starting. Close one you are done with first (harness close <name>).')
     const crowd = new Ledger(ledgerPath(mkdtempSync(join(dir, 'crowd-waiting-'))))
     const busy = new Set<string>()
     for (let i = 0; i < SPAWN_LIMITS.livePerMachine - 1; i++) {
@@ -1387,6 +1914,25 @@ describe('an agent asking again for a harness it already has', () => {
     expect(h.ledger.pendingOf({ machineId: 'm', agentId: 'lead' }, NOW)).toEqual([])
     expect(h.ledger.parentOf({ machineId: 'm', agentId: 'k5' })?.child).toEqual({ machineId: 'm', agentId: 'k5', name: 'cx', creationId: 'c5' })
   })
+
+  // The create is already sent by then: a refusal ("try again") would start a second harness.
+  it('a harness asked for or started while the ledger is busy is said, never refused', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d, { ledger: (data) => new Ledger(ledgerPath(data), 20) })
+    const origin = (await agentOrigin(h.deps))!
+    // Another writer, alive, holds the ledger's lock past the wait.
+    mkdirSync(join(dir, 'agent-client'), { recursive: true })
+    writeFileSync(`${ledgerPath(dir)}.lock`, JSON.stringify({ pid: process.ppid, startMarker: '' }))
+    expect(origin.pending!('m', { creationId: 'c6', name: 'cx', engine: 'codex' }))
+      .toBe('Harness could not record that you asked for cx: it may still start. Do not start it again.')
+    expect(await origin.created('m', { id: 'k6', name: 'cx' }, 'c6'))
+      .toBe('cx is starting, but Harness could not record that you started it. Do not start it again.')
+    expect(await origin.created('m', { id: 'k7' }, 'c7'))
+      .toBe('The harness is starting, but Harness could not record that you started it. Do not start it again.')
+    rmSync(`${ledgerPath(dir)}.lock`)
+    expect(origin.pending!('m', { creationId: 'c8', name: 'cy', engine: 'codex' })).toBeNull()
+  })
 })
 
 describe('a harness on another machine, named with --machine', () => {
@@ -1570,11 +2116,12 @@ describe('spawnCheck and spawnCount', () => {
 
   it('counts what the limits count, and names the limit that refuses', () => {
     const ledger = new Ledger(ledgerPath(dir))
-    for (const kid of ['a', 'b', 'c', 'd']) started(ledger, 'lead', kid)
-    const live = new Set(['m/a', 'm/b', 'm/c', 'm/d'])
-    expect(spawnCount(lead, live, ledger, NOW)).toEqual({ open: 4, starts: 4, depth: 0, oldestStartAt: NOW })
+    const kids = Array.from({ length: SPAWN_LIMITS.livePerHarness }, (_, i) => `k${i}`)
+    for (const kid of kids) started(ledger, 'lead', kid)
+    const live = new Set(kids.map(kid => `m/${kid}`))
+    expect(spawnCount(lead, live, ledger, NOW)).toEqual({ open: 8, starts: 8, depth: 0, oldestStartAt: NOW })
     expect(spawnCheck(lead, live, ledger, 'm', NOW)).toEqual({ reason: 'OPEN_LIMIT', message: spawnRefusal(lead, live, ledger, 'm', NOW) })
-    expect(spawnCheck(lead, new Set(['m/a']), ledger, 'm', NOW)).toBeNull()
+    expect(spawnCheck(lead, new Set(['m/k0']), ledger, 'm', NOW)).toBeNull()
     expect(spawnCheck({ ...lead, startedByAgent: true }, new Set(), ledger, 'm', NOW)).toEqual({ reason: 'DEPTH', message: DEPTH_REFUSAL })
   })
 
@@ -1610,7 +2157,7 @@ describe('harness whoami', () => {
     expect(h.out.join('\n')).toBe([
       'You: Claude Code "lead" (lead), inside Harness, on studio.',
       'Can start harnesses: yes.',
-      'Yours: 1 open of 4 · 1 of 20 starts in the last 10 minutes · other machines: office (running), box (offline)',
+      'Yours: 1 open of 8 · 1 of 20 starts in the last 10 minutes · other machines: office (running), box (offline)',
     ].join('\n'))
     expect(d.closed).toBe(true)
     // The list the daemon keeps, never the backend: a request left open held the process for 10 to 35 s (review).
@@ -1860,6 +2407,23 @@ describe('harness tell', () => {
       at: NOW, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Now add tests.' })
   })
 
+  it('lets the Hachi harness tell what it started while the account has Hachi on, and no other agent', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', dsh: HACHI_ID }), frame('lead', { engine: 'claude' }), frame('kid'), frame('other')]
+    const r = told()
+    started(new Ledger(ledgerPath(dir)), 'hachi', 'kid')
+    started(new Ledger(ledgerPath(dir)), 'lead', 'other')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: true })
+    expect(await tellCommand(['kid', '--', 'Add a test.'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m', { action: 'tell', pane: '%hachi', machine: 'studio', agentId: 'kid', text: 'Add a test.' }]])
+    const lead = harness(d, { record: r.record })
+    expect(await tellCommand(['other', '--', 'x'], lead.deps)).toBe(EXIT.refused)
+    expect(lead.err.join('\n')).toContain('agents-tell-agents')
+    setAgentSettingsForTest(dir, { agentsTellAgents: false, hachi: false })
+    expect(await tellCommand(['kid', '--', 'x'], harness(d, { record: r.record, pane: '%hachi' }).deps)).toBe(EXIT.refused)
+    expect(r.calls).toHaveLength(1)
+  })
+
   it('on another machine, says who tells it: that machine checks its own record', async () => {
     const d = new FakeDaemon(), far = new FakeDaemon('m2')
     d.frames = [frame('lead', { engine: 'claude' })]
@@ -2041,6 +2605,23 @@ describe('harness watch', () => {
     expect(said[3]).toMatchObject({ state: 'idle', summary: 'Fixed: 12 passed.', tools: 1 })
   })
 
+  it('says held once with its sentence, and working again once the hold is gone', async () => {
+    const d = new FakeDaemon()
+    const looks = [
+      frame('kid', { activity: { state: 'working' } }),
+      frame('kid', { namedState: MISSING_HELPER }),
+      frame('kid', { namedState: MISSING_HELPER }),
+      frame('kid', { activity: { state: 'working' } }),
+    ]
+    d.frames = [looks[0]]
+    let round = 0
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); d.frames = [looks[Math.min(++round, looks.length - 1)]] } })
+    expect(await watchCommand(['kid', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'held', 'working'])
+    expect(said[1]).toMatchObject({ state: 'held', namedState: MISSING_HELPER })
+  })
+
   it('says idle, not done, for a harness with nothing asked of it, once it is past its start', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('new', { createdAt: '2026-10-11T11:00:00Z' })]
@@ -2122,7 +2703,254 @@ describe('harness watch', () => {
   })
 })
 
-describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
+describe('wait and watch on pushed events', () => {
+  /** A daemon that pushes the state events of the harnesses a tool names (`agents_watch`, core/toolWatches.ts). */
+  class PushingDaemon extends FakeDaemon {
+    watched: string[][] = []
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
+    refuse = false
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
+      this.requests.push({ type: 'agents_watch', payload: { agentIds } })
+      if (this.refuse) return false
+      this.watched.push([...agentIds])
+      this.heard = heard
+      return true
+    }
+    push(agentId: string): void { this.heard?.(agentId, { type: 'agent_activity', payload: { agentId } }) }
+  }
+  const lists = (d: FakeDaemon) => d.requests.filter((r) => r.type === 'agents_list').length
+  const answered = (d: FakeDaemon, id: string) => d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: 'fix it' }), ev('tool_start'), ev('text_delta', { content: 'Fixed.' }), ev('done')], hasMore: false }])
+  /** A sleep the test drives: a short one (a look to confirm) passes at once; a long one (the backstop) runs the next
+   *  of [then], which pushes, and passes only when [then] has nothing left. */
+  const driven = (h: { advance: (ms: number) => void }, slept: number[], then: Array<() => void>) => (ms: number) => {
+    slept.push(ms)
+    const next = ms > 1_000 ? then.shift() : undefined
+    if (!next) { h.advance(ms); return Promise.resolve() }
+    setImmediate(next)
+    return new Promise<void>(() => {})
+  }
+
+  it('wait asks nothing while the daemon says the harness works, and looks again when a change is pushed', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [() => { d.frames = [frame('kid')]; d.push('kid') }])
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['kid: idle · read it: harness show kid'])
+    expect(d.watched).toEqual([['kid']])
+    // Woken by the push, then one look to confirm it stayed idle (#1180): no round at all while it worked.
+    expect(slept).toEqual([60_000, 1_000])
+  })
+
+  it('wait is not woken by a harness it did not name', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    const h = harness(d)
+    h.deps.sleep = (ms) => {
+      if (ms <= 1_000) { h.advance(ms); return Promise.resolve() }
+      setImmediate(() => {
+        d.push('other')
+        setImmediate(() => setImmediate(() => { d.frames = [frame('kid')]; d.push('kid') }))
+      })
+      return new Promise<void>(() => {})
+    }
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    // The list `opened` reads, the working look, then the idle look and the one confirming it: none for `other`.
+    expect(lists(d)).toBe(4)
+  })
+
+  it('wait takes a change pushed while it looked, and looks again at once', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    let looks = 0
+    d.extra.agents_list = () => {
+      const agents = d.frames
+      // The turn ends as the wait's first look is answered: the push lands before it sleeps.
+      if (++looks === 2) { d.frames = [frame('kid')]; d.push('kid') }
+      return { agents }
+    }
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([1_000])
+  })
+
+  it('wait waits on a push for a harness its screen says works, once its Working claim lapsed (a long quiet step)', async () => {
+    const d = new PushingDaemon()
+    // The daemon's activity is unknown 30 s into a step that writes nothing (lib/turnActivity.ts); the screen still works.
+    d.frames = [frame('kid', { activity: { state: 'unknown' } })]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [() => { d.frames = [frame('kid')]; d.push('kid') }])
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([60_000, 1_000])
+  })
+
+  // The goal test on a GitHub Linux runner (e2e/openclawShow.e2e.ts, row 13): the run's end, pushed, was looked at while
+  // OpenClaw still drew the run, and the wait slept on a push that never came until its 1 m timeout.
+  it('wait looks every interval at a harness only its screen says works, the daemon saying idle: that screen ends unpushed', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await waitCommand(['kid', '--timeout', '1m'], h.deps)).toBe(EXIT.ok)
+    expect(slept).toEqual([1_000, 1_000])
+  })
+
+  it('watch looks every interval at a harness only its screen says works, the daemon saying idle, and says done', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['working', 'idle'])
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [])
+    expect(await watchCommand(['kid', '--json', '--timeout', '1m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out.map((l) => JSON.parse(l).event)).toEqual(['working', 'done'])
+    expect(slept).toEqual([1_000, 1_000, 58_000])
+  })
+
+  it('wait looks every interval at a draft in its box: the person typing is pushed by nothing', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    d.screens.set('kid', ['draft'])
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await waitCommand(['kid', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(slept).toEqual([1_000, 1_000, 1_000])
+  })
+
+  it('wait still looks every interval while it follows a cloud harness, which has no push', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } }), frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, activity: { state: 'working' }, cloud: { state: 'working' } })]
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await waitCommand(['kid,devin', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    expect(d.watched).toEqual([['kid']])
+    expect(slept).toEqual([1_000, 1_000, 1_000, 1_000, 1_000])
+  })
+
+  it('wait looks every interval when the daemon is too old to push to tools, or its watch failed', async () => {
+    const old = new PushingDaemon()
+    old.refuse = true
+    const failed = new PushingDaemon()
+    failed.watch = async () => { throw new AgentClientError('TIMEOUT', 'slow') }
+    for (const d of [old, failed]) {
+      d.frames = [frame('kid', { activity: { state: 'working' } })]
+      const h = harness(d)
+      const slept: number[] = []
+      h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+      expect(await waitCommand(['kid', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+      expect(slept).toEqual([1_000, 1_000, 1_000])
+    }
+  })
+
+  it('wait asks about once a minute, not twenty times, while a harness here works (requests per waiting agent per minute)', async () => {
+    const perMinute = async (d: FakeDaemon) => {
+      d.frames = [frame('kid', { activity: { state: 'working' } })]
+      const h = harness(d, { intervalMs: 3_000 })
+      expect(await waitCommand(['kid', '--timeout', '10m'], h.deps)).toBe(EXIT.timeout)
+      return d.requests.length / 10
+    }
+    // Before: one `agents_list` every 3 s. After: the watch, then one look a minute (the backstop) and one a change.
+    expect(await perMinute(new FakeDaemon())).toBe(20.2)
+    expect(await perMinute(new PushingDaemon())).toBe(1.3)
+  })
+
+  it('watch prints each change as it is pushed, and asks nothing between them', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    answered(d, 'kid')
+    const slept: number[] = []
+    const h = harness(d)
+    h.deps.sleep = driven(h, slept, [
+      // A permission on its screen: the turn's Working claim lapsed (lib/turnActivity.ts), which is pushed.
+      () => { d.frames = [frame('kid', { activity: { state: 'unknown' } })]; d.screens.set('kid', ['needs_input']); d.push('kid') },
+      // Answered, it works again, then its turn ends.
+      () => { d.frames = [frame('kid', { activity: { state: 'working' } })]; d.push('kid') },
+      () => { d.frames = [frame('kid')]; d.screens.set('kid', ['idle']); d.push('kid') },
+    ])
+    expect(await watchCommand(['kid', '--json', '--timeout', '30m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out.map((l) => JSON.parse(l).event)).toEqual(['working', 'needs_person', 'working', 'done'])
+    expect(d.watched).toEqual([['kid']])
+    // A push for each change, one look to confirm the idle one, then nothing but the backstop, a minute at a time.
+    expect(slept.slice(0, 4)).toEqual([60_000, 60_000, 60_000, 1_000])
+    expect(slept.slice(4, -1).every((ms) => ms === 60_000)).toBe(true)
+  })
+
+  it('waits a minute between looks while held, as while working', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await watchCommand(['kid', '--timeout', '3m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid: held: This Harness install is incomplete. Reinstall Harness.'])
+    expect(slept).toEqual([60_000, 60_000, 60_000])
+  })
+
+  it('watch says background while commands run, again when their number changes, and done once none does', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    answered(d, 'kid')
+    counting(d, [2, 2, 1, 1, 0, 0])
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await watchCommand(['kid', '--json', '--timeout', '8s'], h.deps)).toBe(EXIT.timeout)
+    const said = h.out.map((l) => JSON.parse(l))
+    expect(said.map((l) => [l.event, l.state, l.backgroundCommands])).toEqual([['background', 'idle', 2], ['background', 'idle', 1], ['done', 'idle', 0]])
+    expect(said[0].summary).toBeUndefined()
+    expect(said[2].summary).toBe('Fixed.')
+    // Their end is pushed by nothing: a look every interval until it is done, then the backstop (cut by the timeout).
+    expect(slept).toEqual([1_000, 1_000, 1_000, 1_000, 1_000, 3_000])
+  })
+
+  it('watch says the count in words, and done as before for a daemon from before the field', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid')]
+    answered(d, 'kid')
+    counting(d, [2])
+    const text = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '2s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out).toEqual(['12:00:00Z kid: background: 2 background commands running'])
+    counting(d, [undefined])
+    const old = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '2s'], old.deps)).toBe(EXIT.timeout)
+    const said = old.out.map((l) => JSON.parse(l))
+    expect(said.map((l) => l.event)).toEqual(['done'])
+    expect(said[0].backgroundCommands).toBeNull()
+  })
+
+  it('watch looks every interval at a cloud harness, or on a daemon too old to push', async () => {
+    const cloudFrame = frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, activity: { state: 'working' }, cloud: { state: 'working' } })
+    const old = new PushingDaemon()
+    old.refuse = true
+    for (const [d, f] of [[new PushingDaemon(), cloudFrame], [old, frame('kid', { activity: { state: 'working' } })]] as const) {
+      d.frames = [f]
+      const h = harness(d)
+      const slept: number[] = []
+      h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+      expect(await watchCommand([f.name!, '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+      expect(d.watched).toEqual([])
+      expect(slept).toEqual([1_000, 1_000, 1_000])
+    }
+  })
+})
+
+describe('the tell and reply of an agent another agent started, with no starter here', () => {
   const asked = () => {
     const calls: Array<[string, Record<string, unknown>]> = []
     const record: Rpc = async (target, payload) => { calls.push([target.machineId, payload]); return { id: 'm0000001', state: 'queued' } }
@@ -2130,14 +2958,13 @@ describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
   }
   beforeEach(() => { setAgentSettingsForTest(dir, { agentsTellAgents: true }) })
 
-  // A Swarm session here (the Swarm started it: an agent, no starter on this machine), as a person's Buddy was: the person's
-  // own harness is not one it started, so neither is asked of the machine.
+  // The person's own harness is not one it started, so neither is asked of the machine.
   it('refuses its person\'s own harness, asking the machine nothing', async () => {
     const d = new FakeDaemon()
-    d.frames = [frame('swarm', { engine: 'claude', startedBy: 'agent' }), frame('web')]
+    d.frames = [frame('started', { engine: 'claude', startedBy: 'agent' }), frame('web')]
     const r = asked()
-    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], harness(d, { record: r.record, pane: '%swarm' }).deps)).toBe(EXIT.refused)
-    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], harness(d, { record: r.record, pane: '%swarm' }).deps)).toBe(EXIT.refused)
+    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], harness(d, { record: r.record, pane: '%started' }).deps)).toBe(EXIT.refused)
+    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], harness(d, { record: r.record, pane: '%started' }).deps)).toBe(EXIT.refused)
     expect(r.calls).toEqual([])
   })
 })
@@ -2188,6 +3015,16 @@ describe('harness reply to a harness in a pane (a program acting for the person)
     expect(h.err.join('\n')).toMatch(/waiting for the person.*Only they answer that/)
     h = program(d, { record: r.record })
     expect(await replyCommand(['done', '--', 'x'], h.deps)).not.toBe(EXIT.ok)
+    expect(r.calls).toEqual([])
+  })
+
+  it('is refused while the harness is starting, though its screen says idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { engine: 'openclaw', starting: true })]
+    const r = replied()
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toBe('kid is starting: wait for it, then reply.')
     expect(r.calls).toEqual([])
   })
 
@@ -2558,5 +3395,433 @@ describe('harness resume (a program acting for the person reopens a closed harne
     away.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
     expect(await replyCommand(['--machine', 'office', 'weather', '--', 'add dark mode'], away.deps)).toBe(EXIT.refused)
     expect(away.err[0]).toContain('Resume it with harness resume --machine office weather, then reply')
+  })
+})
+
+describe('harness goal (Hachi\'s goals, services/goals.ts)', () => {
+  const goal = (id: string, over: Record<string, unknown> = {}) => ({ id, title: 'flaky login test', harnesses: [], openedAt: NOW, lastStartAt: null, doneAt: null, ...over })
+  /** A daemon whose goals service answers [answers] by type, and records what it was asked. */
+  const goals = (answers: Record<string, (payload: Record<string, unknown>) => Record<string, unknown>>) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('hachi', { engine: 'claude', tmuxPane: '%lead' })]
+    Object.assign(d.extra, answers)
+    return d
+  }
+
+  it('opens a goal in the person\'s words, from Hachi\'s pane, and says how to start its work', async () => {
+    const d = goals({ goal_open: (payload) => ({ goal: goal('3fa2b1c9', { title: payload.title }) }) })
+    const h = harness(d)
+    expect(await goalCommand(['open', 'flaky', 'login', 'test'], h.deps)).toBe(EXIT.ok)
+    expect(d.requests).toEqual([{ type: 'goal_open', payload: { title: 'flaky login test', pane: '%lead' } }])
+    expect(h.out).toEqual(['Goal 3fa2b1c9 opened: flaky login test.\nNext: harness new <agent> --goal 3fa2b1c9 --name <name> <project> -- <task>  (for each piece of its work)'])
+    expect(d.closed).toBe(true)
+    const json = harness(d)
+    expect(await goalCommand(['open', 'flaky login test', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ goal: { id: '3fa2b1c9', title: 'flaky login test' }, next: [{ run: expect.stringContaining('--goal 3fa2b1c9') }] })
+  })
+
+  it('closes a goal, and is refused (exit 5) one no harness was started for', async () => {
+    let started = false
+    const d = goals({ goal_done: (payload) => started ? { goal: goal(String(payload.id), { doneAt: NOW }) }
+      : { error: 'GOAL_EMPTY', message: 'No harness was started for that goal, so it is not done.' } })
+    const empty = harness(d)
+    expect(await goalCommand(['done', 'g1'], empty.deps)).toBe(EXIT.refused)
+    expect(empty.err).toEqual(['No harness was started for that goal, so it is not done.'])
+    started = true
+    const done = harness(d)
+    expect(await goalCommand(['done', 'g1'], done.deps)).toBe(EXIT.ok)
+    expect(done.out).toEqual(['Goal g1 done: flaky login test.'])
+    expect(d.requests.at(-1)).toEqual({ type: 'goal_done', payload: { id: 'g1', pane: '%lead' } })
+    const json = harness(d)
+    expect(await goalCommand(['done', 'g1', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ goal: { id: 'g1', doneAt: NOW } })
+  })
+
+  it('lists the goals: open ones and those closed this week, with how many harnesses each has', async () => {
+    const d = goals({ goal_list: () => ({ goals: [goal('g2', { title: 'review api', harnesses: [{ machineId: 'm', creationId: 'c1', agentId: 'a1' }] }),
+      goal('g1', { harnesses: [{}, {}], doneAt: NOW })] }) })
+    const h = harness(d)
+    expect(await goalCommand(['list'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['g2  open  1 harness    review api\ng1  done  2 harnesses  flaky login test'])
+    const json = harness(d)
+    expect(await goalCommand(['list', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).goals.map((g: { id: string }) => g.id)).toEqual(['g2', 'g1'])
+    const none = harness(goals({ goal_list: () => ({ goals: [] }) }))
+    expect(await goalCommand(['list'], none.deps)).toBe(EXIT.ok)
+    expect(none.out).toEqual(['No goals.'])
+  })
+
+  it('exits 5 for any caller but Hachi, as every refusal, and 1 for a daemon that keeps no goals', async () => {
+    const d = goals({
+      goal_open: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+      goal_done: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+      goal_list: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }),
+    })
+    for (const argv of [['open', 'x'], ['done', 'g1'], ['list']]) {
+      const h = harness(d, { pane: undefined })
+      expect(await goalCommand([...argv, '--json'], h.deps)).toBe(EXIT.refused)
+      expect(JSON.parse(h.out[0])).toMatchObject({ error: 'NOT_HACHI', code: 'NOT_HACHI', detail: 'Only Hachi keeps goals.' })
+    }
+    // No pane at all is asked as none: the service refuses it.
+    expect(d.requests.every((r) => r.payload.pane === '')).toBe(true)
+    // A daemon from before goals answers with no words of its own.
+    const old = harness(goals({}))
+    expect(await goalCommand(['list'], old.deps)).toBe(EXIT.failed)
+    expect(old.err).toEqual(['Harness did not keep the goal (UNKNOWN).'])
+  })
+
+  it('takes a title to open, one id to close, nothing to list, and no machine', async () => {
+    const d = goals({})
+    for (const [argv, said] of [
+      [['open'], 'Give the goal in the person\'s words: harness goal open <title>'],
+      [['done'], 'Name one goal by its id.'],
+      [['done', 'a', 'b'], 'Name one goal by its id.'],
+      [['list', 'x'], 'harness goal list takes nothing more.'],
+      [['shut', 'g1'], 'Unknown goal command shut.'],
+      [['list', '--machine', 'office'], 'harness goal takes no --machine: Hachi keeps its goals where it runs.'],
+    ] as const) {
+      const h = harness(d)
+      expect(await goalCommand(argv, h.deps)).toBe(EXIT.usage)
+      expect(h.err[0]).toBe(said)
+    }
+    const help = harness(d)
+    expect(await goalCommand([], help.deps)).toBe(EXIT.ok)
+    expect(help.out[0]).toBe(GOAL_USAGE)
+    expect(d.requests).toEqual([])
+  })
+
+  it('gives harness new --goal its check and its record, asked of the caller\'s own daemon', async () => {
+    const d = goals({
+      goal_list: () => ({ goals: [goal('g1'), goal('g2', { doneAt: NOW })] }),
+      goal_add: (payload) => payload.id === 'g1' ? { goal: goal('g1') } : { error: 'GOAL_DONE', message: 'That goal is done.' },
+    })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d)
+    const origin = (await agentOrigin(h.deps))!
+    await expect(origin.goal!.check('g1')).resolves.toBeUndefined()
+    await expect(origin.goal!.check('g2')).rejects.toMatchObject({ code: 'GOAL_DONE' })
+    await expect(origin.goal!.check('g9')).rejects.toMatchObject({ code: 'UNKNOWN_GOAL', message: 'No goal g9. harness goal list lists them.' })
+    expect(await origin.goal!.add('g1', { machineId: 'm', creationId: 'c1', agentId: 'k1' })).toBeNull()
+    expect(d.requests.at(-1)).toEqual({ type: 'goal_add', payload: { id: 'g1', machineId: 'm', creationId: 'c1', agentId: 'k1', pane: '%lead' } })
+    expect(await origin.goal!.add('g2', { machineId: 'm', creationId: 'c2' })).toBe('It was started, but not recorded under goal g2: That goal is done.')
+    // Hachi's goals are refused to anyone else by the service, through the same check.
+    const other = harness(goals({ goal_list: () => ({ error: 'NOT_HACHI', message: 'Only Hachi keeps goals.' }) }))
+    await expect((await agentOrigin(other.deps))!.goal!.check('g1')).rejects.toMatchObject({ code: 'NOT_HACHI' })
+  })
+})
+
+describe('harness ps --machines (every machine of the account in one read)', () => {
+  const machines = async () => [
+    { machineId: 'm', label: 'studio', status: 'running', current: true },
+    { machineId: 'office-id', label: 'office', status: 'running', current: false },
+    { machineId: 'laptop-id', label: 'laptop', status: 'offline', current: false },
+    { machineId: 'mini-id', label: 'Mac mini', status: 'running', current: false },
+    // Another account's machine shared with this one is not the person's own: never listed.
+    { machineId: 'shared-id', label: 'lab', status: 'running', current: false, sharedBy: 'Ana' },
+  ]
+  /** studio here, office answering, laptop not linked, and the mini answering nothing at all. */
+  const fleet = () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' } })]
+    office.frames = [frame('api', { engine: 'claude' })]
+    const opened: string[] = []
+    let late: FakeDaemon | null = null
+    const h = harness(d, { machines, answerMs: 20, open: async (_w, machineId) => {
+      opened.push(machineId ?? 'm')
+      if (!machineId || machineId === 'm') return d
+      if (machineId === 'office-id') return office
+      if (machineId === 'mini-id') {
+        // Opens only after the answer is due: closed once it does, never listed.
+        await new Promise((done) => setTimeout(done, 60))
+        return late = new FakeDaemon('mini-id')
+      }
+      throw new AgentClientError('NO_PEER_LINK', 'not linked')
+    } })
+    started(h.ledger, 'lead', 'kid')
+    started(h.ledger, 'lead', 'api', 'office-id')
+    return { d, office, h, opened, late: () => late }
+  }
+
+  it('asks every machine at once, and lists one that does not answer in time as unreachable, never leaves it out', async () => {
+    const { h, office, opened, late } = fleet()
+    expect(await psCommand(['--machines'], h.deps)).toBe(EXIT.ok)
+    const text = h.out.join('\n')
+    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\./)
+    expect(text).toContain('studio (this machine):\nNAME')
+    expect(text).toMatch(/kid +Codex +working +you /)
+    expect(text).toMatch(/office:\nNAME[^\n]*\napi +Claude Code +idle +you /)
+    expect(text).toContain('laptop: unreachable. not linked')
+    expect(text).toContain('Mac mini: unreachable. It did not answer in 5 s.')
+    expect(text).not.toContain('lab')
+    expect(opened.sort()).toEqual(['laptop-id', 'm', 'mini-id', 'office-id'])
+    expect(office.closed).toBe(true)
+    await new Promise((done) => setTimeout(done, 80))
+    expect(late()?.closed).toBe(true)
+  })
+
+  it('answers a program in JSON: each machine, whether it answered, and its harnesses', async () => {
+    const { h } = fleet()
+    expect(await psCommand(['--machines', '--json'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n'))
+    expect(said.you).toBe('lead')
+    expect(said.machines.map((m: Record<string, unknown>) => [m.machine, m.state])).toEqual([
+      ['studio', 'ok'], ['office', 'ok'], ['laptop', 'unreachable'], ['Mac mini', 'unreachable']])
+    expect(said.machines[1]).toMatchObject({ machineId: 'office-id', current: false, harnesses: [{ name: 'api', machine: 'office', startedBy: 'you', yours: true }] })
+    expect(said.machines[2]).toEqual({ machineId: 'laptop-id', machine: 'laptop', current: false, state: 'unreachable', detail: 'not linked' })
+    expect(said.machines[3]).toMatchObject({ state: 'unreachable', detail: 'It did not answer in 5 s.' })
+  })
+
+  it('closes the line to a machine that opened but did not list in time, so nothing holds the process', async () => {
+    const d = new FakeDaemon(), slow = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' })]
+    slow.request = () => new Promise(() => {})
+    const h = harness(d, { machines, answerMs: 20, open: async (_w, machineId) => !machineId || machineId === 'm' ? d : machineId === 'office-id' ? slow : Promise.reject(new Error('no')) })
+    expect(await psCommand(['--machines'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toContain('office: unreachable. It did not answer in 5 s.')
+    expect(slow.closed).toBe(true)
+  })
+
+  it('takes no --machine and no names beside it', async () => {
+    const { h, d } = fleet()
+    expect(await psCommand(['--machines', '--machine', 'office'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('--machines lists every machine: leave out --machine.')
+    expect(await psCommand(['--machines', 'kid'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('harness ps takes no names. To read one: harness show kid')
+    expect(d.requests).toEqual([])
+  })
+
+  it('asks at most 32 other machines; the rest are listed as not asked', async () => {
+    const many = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true },
+      ...Array.from({ length: 34 }, (_, i) => ({ machineId: `id-${i}`, label: `box-${i}`, status: 'running', current: false }))]
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const asked: string[] = []
+    const h = harness(d, { machines: many, answerMs: 20, open: async (_w, machineId) => {
+      if (!machineId || machineId === 'm') return d
+      asked.push(machineId)
+      const other = new FakeDaemon(machineId)
+      return other
+    } })
+    expect(await psCommand(['--machines', '--json'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n')).machines as Array<Record<string, unknown>>
+    expect(asked).toHaveLength(32)
+    expect(said.filter((m) => m.state === 'not_asked').map((m) => m.machine)).toEqual(['box-32', 'box-33'])
+    const text = harness(d, { machines: many, answerMs: 20, open: h.deps.open })
+    expect(await psCommand(['--machines'], text.deps)).toBe(EXIT.ok)
+    expect(text.out.join('\n')).toContain('box-33: not asked; at most 32 machines are asked at once.')
+  })
+})
+
+describe('harness show --work (the result in facts, read on the machine that owns the harness)', () => {
+  const pr = { status: 'found', number: 412, url: 'https://github.com/o/api/pull/412', state: 'Open', title: 'Fix the flaky login test' }
+  const checked = { rows: [{ url: pr.url, status: 'found', changedFiles: 2, additions: 31, deletions: 8, ci: 'passing',
+    checks: { passed: 5, failed: 0, pending: 0, total: 5 } }] }
+  const owning = (answers: Record<string, Handler>) => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('api-fix', { project: { cwd: '/work/api', branch: 'fix-login' } })]
+    Object.assign(d.extra, answers)
+    return d
+  }
+
+  it('says its branch, its pull request, the files and lines it changed, and its checks', async () => {
+    const d = owning({ git_pull_request: () => pr, git_pull_requests_status: () => checked })
+    const h = harness(d)
+    started(h.ledger, 'lead', 'api-fix')
+    expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual([
+      'api-fix on studio: idle · Codex · started by you',
+      'branch: fix-login · PR #412 (Open): 2 files, +31 -8, checks passing (5 of 5)',
+      'https://github.com/o/api/pull/412',
+    ])
+    expect(d.requests.filter((r) => r.type.startsWith('git_'))).toEqual([
+      { type: 'git_pull_request', payload: { agentId: 'api-fix' } },
+      { type: 'git_pull_requests_status', payload: { urls: [pr.url] } },
+    ])
+    // Facts only: no turn is read.
+    expect(d.requests.some((r) => r.type === 'session_get')).toBe(false)
+    const json = harness(d)
+    expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out.join('\n'))).toEqual({ name: 'api-fix', id: 'api-fix', agent: 'Codex', machine: 'studio', state: 'idle', startedBy: 'you',
+      work: { branch: 'fix-login', pullRequest: { number: 412, url: pr.url, state: 'Open', title: 'Fix the flaky login test',
+        files: 2, additions: 31, deletions: 8, ci: 'passing', checks: { passed: 5, failed: 0, pending: 0, total: 5 } } } })
+  })
+
+  it('says when there is no pull request yet, or its machine could not read one', async () => {
+    for (const [answer, said, pullRequest] of [
+      [{ status: 'none' }, 'branch: fix-login · no pull request', 'none'],
+      [{ status: 'unavailable' }, 'branch: fix-login · its pull request could not be read on its machine', 'unavailable'],
+    ] as const) {
+      const d = owning({ git_pull_request: () => answer })
+      const h = harness(d)
+      expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+      expect(h.out[1]).toBe(said)
+      const json = harness(d)
+      expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(json.out.join('\n')).work).toEqual({ branch: 'fix-login', pullRequest })
+    }
+    // A machine whose read fails or never answers is the same as unavailable.
+    const failing = owning({ git_pull_request: () => { throw new AgentClientError('TIMEOUT', 'slow') } })
+    const h = harness(failing)
+    expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[1]).toBe('branch: fix-login · its pull request could not be read on its machine')
+  })
+
+  it('keeps the pull request when its files and checks could not be read (gh signed out there)', async () => {
+    for (const status of [{ rows: [{ url: pr.url, status: 'unavailable', error: 'GH_SIGNED_OUT' }] }, { error: 'OWNER_REQUIRED' }]) {
+      const d = owning({ git_pull_request: () => pr, git_pull_requests_status: () => status })
+      const h = harness(d)
+      expect(await showCommand(['api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+      expect(h.out[1]).toBe('branch: fix-login · PR #412 (Open)')
+      const json = harness(d)
+      expect(await showCommand(['api-fix', '--work', '--json'], json.deps)).toBe(EXIT.ok)
+      expect(JSON.parse(json.out.join('\n')).work.pullRequest).toEqual({ number: 412, url: pr.url, state: 'Open', title: 'Fix the flaky login test' })
+    }
+  })
+
+  it('reads a harness on another machine on that machine, and has no work to read for a cloud harness', async () => {
+    const d = new FakeDaemon(), office = owning({ git_pull_request: () => ({ status: 'none' }) })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const machines = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true }, { machineId: 'office-id', label: 'office', status: 'running', current: false }]
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    expect(await showCommand(['--machine', 'office', 'api-fix', '--work'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['api-fix on office: idle · Codex · started by person', 'branch: fix-login · no pull request'])
+    expect(office.requests.some((r) => r.type === 'git_pull_request')).toBe(true)
+    expect(d.requests.some((r) => r.type === 'git_pull_request')).toBe(false)
+    d.frames.push(frame('devin', { engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, cloud: { state: 'idle' } }))
+    const cloud = harness(d)
+    expect(await showCommand(['devin', '--work'], cloud.deps)).toBe(EXIT.usage)
+    expect(cloud.err[0]).toBe('devin runs in its maker\'s cloud: it has no folder here to read. Its links are in harness show devin.')
+  })
+})
+
+describe('harness watch --mine (one stream for every harness the caller started, on every machine)', () => {
+  class PushingDaemon extends FakeDaemon {
+    watched: string[][] = []
+    heard: ((agentId: string, event: PushedEvent) => void) | null = null
+    async watch(agentIds: string[], heard: (agentId: string, event: PushedEvent) => void): Promise<boolean> {
+      this.watched.push([...agentIds])
+      this.heard = heard
+      return true
+    }
+  }
+  const machines = async () => [{ machineId: 'm', label: 'studio', status: 'running', current: true }, { machineId: 'office-id', label: 'office', status: 'running', current: false }]
+  /** lead started kid and api here, rev on office, and old here long since stopped; theirs is someone else's. */
+  const fleet = () => {
+    const d = new PushingDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' } }), frame('api', { activity: { state: 'working' } }),
+      frame('theirs', { activity: { state: 'working' } }), frame('old', { status: 'stopped' })]
+    office.frames = [frame('rev', { engine: 'claude', activity: { state: 'working' } })]
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    for (const kid of ['kid', 'api', 'old']) started(h.ledger, 'lead', kid)
+    started(h.ledger, 'lead', 'rev', 'office-id')
+    return { d, office, h }
+  }
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('prints the lines watch prints for each of them, with its machine, until every one has stopped (exit 4)', async () => {
+    const { d, office, h } = fleet()
+    let round = 0
+    h.deps.sleep = async (ms) => {
+      h.advance(ms)
+      round++
+      if (round === 1) { d.frames = d.frames.filter((f) => f.id !== 'kid') }
+      if (round === 2) { office.frames = [] }
+      if (round === 3) { d.frames = d.frames.filter((f) => f.id !== 'api') }
+    }
+    expect(await watchCommand(['--mine', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => `${l.name}@${l.machine} ${l.event}`)).toEqual([
+      'kid@studio working', 'api@studio working', 'rev@office working',
+      'kid@studio stopped', 'rev@office stopped', 'api@studio stopped',
+    ])
+    expect(said.some((l) => l.name === 'theirs' || l.name === 'old')).toBe(false)
+    // This machine's are followed by push; the other machine's are looked at, as watch looks at one there.
+    expect(d.watched).toEqual([['kid', 'api']])
+    expect(office.closed).toBe(true)
+  })
+
+  it('names the machine in a person-readable line too', async () => {
+    const { h } = fleet()
+    expect(await watchCommand(['--mine', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid @studio: working', '12:00:00Z api @studio: working', '12:00:00Z rev @office: working'])
+  })
+
+  it('sleeps a minute while every one is followed by push, and looks every interval while one on another machine works', async () => {
+    const { d, office, h } = fleet()
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms); if (slept.length === 2) office.frames = [] }
+    expect(await watchCommand(['--mine', '--json', '--timeout', '5m'], h.deps)).toBe(EXIT.timeout)
+    expect(slept.slice(0, 3)).toEqual([1_000, 1_000, 60_000])
+    expect(d.watched).toEqual([['kid', 'api']])
+  })
+
+  it('says a machine it cannot reach, and follows the rest', async () => {
+    const { d, h } = fleet()
+    h.deps.open = async (_w, machineId) => {
+      if (!machineId || machineId === 'm') return d
+      throw new AgentClientError('NO_PEER_LINK', 'That machine is not linked to this one.')
+    }
+    expect(await watchCommand(['--mine', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.err).toEqual(['office: not followed. That machine is not linked to this one.'])
+    expect(h.out.map((l) => l.split(' ')[1])).toEqual(['kid', 'api'])
+  })
+
+  it('stops following a machine whose line drops, says so, and follows the rest', async () => {
+    const { office, h } = fleet()
+    let round = 0
+    h.deps.sleep = async (ms) => {
+      h.advance(ms)
+      if (++round === 1) office.request = async () => { throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.') }
+    }
+    expect(await watchCommand(['--mine', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
+  })
+
+  it('stops following a machine whose line drops in the middle of a round, and the rest are still followed (review of #4200)', async () => {
+    // The list answers, then a read for the same round fails: its turn (`session_get`), or its stopped row.
+    for (const after of [
+      (office: FakeDaemon) => { office.frames = [frame('rev', { engine: 'claude', activity: { state: 'working' }, updatedAt: '2026-10-11T11:59:30Z' })] },
+      (office: FakeDaemon) => { office.frames = [] },
+    ]) {
+      const { d, office, h } = fleet()
+      let round = 0
+      h.deps.sleep = async (ms) => {
+        h.advance(ms)
+        round++
+        if (round === 1) {
+          after(office)
+          const real = office.request.bind(office)
+          office.request = async (type, payload = {}) => {
+            if (type === 'agents_list' && !payload.includeStopped) return real(type, payload)
+            throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')
+          }
+        }
+        // This machine's go on after it: kid stops, and is still said.
+        if (round === 2) d.frames = d.frames.filter((f) => f.id !== 'kid')
+      }
+      expect(await watchCommand(['--mine', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+      expect(h.err).toEqual(['office: no longer followed. The connection to Harness closed.'])
+      expect(lines(h.out).map((l) => `${l.name} ${l.event}`)).toEqual(['kid working', 'api working', 'rev working', 'kid stopped'])
+    }
+  })
+
+  it('says so when the caller has none running, and refuses a caller that is no agent (exit 5)', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const none = harness(d)
+    expect(await watchCommand(['--mine'], none.deps)).toBe(EXIT.ok)
+    expect(none.out).toEqual(['You have no harnesses running.'])
+    const person = harness(d, { pane: undefined })
+    expect(await watchCommand(['--mine'], person.deps)).toBe(EXIT.refused)
+    expect(person.err[0]).toBe('harness watch --mine follows the harnesses an agent started: run it in that agent\'s pane.')
+  })
+
+  it('takes no name and no --machine with --mine', async () => {
+    const { h, d } = fleet()
+    expect(await watchCommand(['--mine', 'kid'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('--mine follows every harness you started: leave out the name.')
+    expect(await watchCommand(['--mine', '--machine', 'office'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('--mine follows every harness you started, on every machine: leave out --machine.')
+    expect(d.requests).toEqual([])
   })
 })

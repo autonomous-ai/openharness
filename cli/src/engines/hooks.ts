@@ -4,6 +4,7 @@ import { hooks as codex } from './codex/hookContract.js'
 import { installHookSettings, type HookEngine } from './kit/hookSettings.js'
 import { isChildSession, knownTranscript } from './kit/hookRules.js'
 import { closeTurnOnStop } from './kit/stopHook.js'
+import { errorKind } from '../lib/log.js'
 
 /**
  * The engines' hooks as they declare them: data only. Installation, the hook server and turn closing load
@@ -34,13 +35,19 @@ export function hooksFor(name: string | null | undefined): EngineHooks | undefin
   return name && Object.hasOwn(engineHooks, name) ? engineHooks[name as keyof typeof engineHooks] : undefined
 }
 
+/** Whether a hook is its engine's own word for a conversation that starts with no history (HookContract.newConversation). */
+export function startsNewConversation(engine: string, hookEvent: string | undefined, source: string | null | undefined): boolean {
+  const signal = Object.hasOwn(hookContracts, engine) ? hookContracts[engine as keyof typeof hookContracts].newConversation : undefined
+  return !!signal && signal.event === hookEvent && !!source && signal.sources.includes(source)
+}
+
 /**
  * A broken admission check must never let a delegated session claim its parent's pane. The hook server asks
  * this before it credits a prompt or registers, and `registry.register` asks it again, so the two agree.
  */
 export function admitHook(engine: string, body: HookSession): HookAdmission {
   try { return hooksFor(engine)?.admit?.(body) ?? { accepted: true } } catch (error) {
-    console.warn(`[hooks] ${engine} admission failed:`, error instanceof Error ? error.message : error)
+    console.warn(`[hooks] ${engine} admission failed:`, errorKind(error))
     return { accepted: false, reason: 'engine_hook_failed' }
   }
 }

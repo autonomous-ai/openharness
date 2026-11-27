@@ -813,8 +813,8 @@ class EnvironmentCheckList extends StatelessWidget {
       return Platform.isLinux ? '$base · tmux, ps' : base;
     }
     if (Platform.isLinux) return '$base · installs with apt';
-    // macOS: one in-app step; the item's detail says whether Homebrew or the
-    // managed download does it.
+    // macOS: one in-app step; the item's detail says where the managed
+    // download puts tmux.
     return '$base · ${steps.first.detail.toLowerCase()}';
   }
 

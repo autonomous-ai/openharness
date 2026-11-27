@@ -38,8 +38,7 @@ The person is using Harness, not Windows administration. So:
 | Picks an engine that isn't installed | Launch stops: "Installing engines is not supported on Windows yet: install it, then try again." | Same as a Mac: the row says it will install and shows the exact line, then "Installing Grok. The harness starts once it is installed." and the agent starts by itself |
 | The install fails | Nothing to retry | "Grok could not be installed: <the installer's own last line>." with **Try again** |
 | Windows blocks the program | A pane that closes, or a generic failure | "Windows blocked Grok: Smart App Control does not trust it. Choose another engine." |
-| No Git for Windows | Buddy and setup scripts refuse with a URL | Harness installs it in the background, asking nothing. If that can't work, whatever needs Git says so with the link |
-| Plays a voice message | Opens another program | Plays in the chat with the waveform, as on a Mac |
+| No Git for Windows | Setup scripts refuse with a URL | Harness installs it in the background, asking nothing. If that can't work, whatever needs Git says so with the link |
 | Opens a web pane | Shows only a URL | The page, beside its terminal. Menus and dialogs show over it normally |
 | Web pane without WebView2 | Shows only a URL | The URL, **Open in browser**, and "Install Microsoft Edge WebView2 to see it here." |
 | Pastes an image into an agent | The file's path | The image, as on a Mac |
@@ -52,7 +51,7 @@ The person is using Harness, not Windows administration. So:
 
 ## Review Focus
 
-- A PC with a Team account holding the configured port: every local command reaches the daemon (Task 1).
+- Another account holding the configured port: every local command reaches the daemon (Task 1).
 - An engine installer killed halfway, or the PC restarted during it: the next launch recovers and never waits forever (Task 5).
 - Two windows asking for the same engine at once: one install, both start (Task 5).
 - A Windows user name with a space or non-English letters: installs, hooks and helpers still work (Tasks 5, 3).
@@ -60,25 +59,16 @@ The person is using Harness, not Windows administration. So:
 
 ---
 
-## PR A: finish Buddy and Swarm reach (#2979, pushed, CI running)
+## PR A: one daemon record lookup (#2979)
 
 ### Task 1: One daemon record lookup (done)
 `configuredPortOf` in `cli/src/lib/daemonRecord.ts`, used by `daemonPipe`, `daemonPipeNow`, `daemonFetch`, `localSocketPath`.
-
-### Task 2: Guard refuses drive paths (done)
-`outward` in `cli/src/lib/buddyGuard.ts`.
-
-### Task 3: Swarm's git on Windows (done)
-`sendPane` in `superTabs/gitCredential.ts` and `case 'mcp'`. `swarmGitHubLaunch` no longer returns null on Windows. Real Git 2.55 ran the helper, hooks and identity on the PC.
-
-### Task 4: No Buddy without Git Bash (done, its words move in Task 6)
-`prepareSwarmSkill` refuses, naming Git for Windows.
 
 ---
 
 ## PR B: everything a Windows person touches (`fix/windows-small-gaps`)
 
-Done, committed locally: Team engine report; Import on Windows; `harness remote`; image paste; window forward; time zone; voice; standard web view.
+Done, committed locally: `harness remote`; image paste; window forward; time zone; standard web view.
 
 ### Task 5: Engines install themselves
 
@@ -130,13 +120,13 @@ Each vendor's own Windows installer, checked 2026-11-04:
 
 ### Task 6: Git for Windows, with no click at all (done)
 
-`desktop/lib/bootstrap/windows_git_setup.dart`: where Git is missing, the app installs it once with `winget ... --scope user --silent`, in the background, which asks nothing. Without winget, or if it fails, Harness goes on, and a Buddy's launch says what it needs.
+`desktop/lib/bootstrap/windows_git_setup.dart`: where Git is missing, the app installs it once with `winget ... --scope user --silent`, in the background, which asks nothing. Without winget, or if it fails, Harness goes on, and whatever needs Git says so with the link.
 
 ### Task 7: Windows words, everywhere
 
-**Files:** `desktop/lib/notify/system_notifications.dart:160,202,523`, `desktop/lib/settings/sections/terminal_section.dart:363`, `desktop/lib/super_tabs/swarm_accounts.dart:114`, `desktop/lib/devices/wifi_robots.dart:520-535`, `desktop/lib/autonomous_device/autonomous_device_cli.dart:24`, `cli/src/messages/tell.ts:104,108`, `cli/src/superTabs/planCommand.ts:22`, `cli/src/superTabs/host.ts:1770`, `cli/src/lib/autonomous-device/discovery.ts:14`. Create: `desktop/test/windows_words_test.dart`.
+**Files:** `desktop/lib/notify/system_notifications.dart:160,202,523`, `desktop/lib/settings/sections/terminal_section.dart:363`, `desktop/lib/devices/wifi_robots.dart:520-535`, `desktop/lib/autonomous_device/autonomous_device_cli.dart:24`, `cli/src/messages/tell.ts:104,108`, `cli/src/lib/autonomous-device/discovery.ts:14`. Create: `desktop/test/windows_words_test.dart`.
 
-- [ ] **Test:** walk `desktop/lib` and fail on a string holding `this Mac`, `your Mac`, `macOS`, `⌘`, `System Settings` or `brew install`, unless the file is on a short list of Mac-only code (`team_account_setup.dart`'s Mac words, `core/process_responsibility.dart`, `core/browser_label.dart`), or the string sits behind a platform check on that line.
+- [ ] **Test:** walk `desktop/lib` and fail on a string holding `this Mac`, `your Mac`, `macOS`, `⌘`, `System Settings` or `brew install`, unless the file is on a short list of Mac-only code (`core/process_responsibility.dart`, `core/browser_label.dart`), or the string sits behind a platform check on that line.
 - [ ] Replace each with the helper. Each has its Windows sentence from the table above.
 - [ ] `wifi_robots.dart`: on Windows the blocked text names Windows Firewall, and its button opens `ms-settings:windowsdefender`.
 - [ ] `system_notifications.dart`: on Windows, **Open settings** opens `ms-settings:notifications`.
@@ -152,15 +142,6 @@ Each vendor's own Windows installer, checked 2026-11-04:
 ### Task 9: A computer without WebView2 (done)
 
 Windows 11 ships WebView2, and Windows Update brings it to Windows 10, so this is rare: the pane keeps **Open in browser** and says what would show it here.
-
-### Task 10: `harness team model`, without running elevated in the Team's folder
-
-**Files:** `cli/src/team/model.ts:123`, `cli/src/team/windowsTeam.ts`, Team daemon reader in `cli/src/superTabs/service.ts`, specs.
-
-The Mac's way runs as root inside the Team account's home. On Windows that lets the Team account plant a link for an elevated write, so it follows the sign-in's handoff instead (`writeWindowsHandoff`):
-
-- [ ] Test: `team model set` writes a handoff file only the Team account and the owner can read, through the existing ACL'd handoff folder, with no administrator prompt. The Team daemon reads it at its next tick as itself, writes its own `connections.json` and `settings.json`, deletes the handoff, and reports the result in its status file. `team model set` waits for that report.
-- [ ] Implement; a refused or unreadable handoff is reported with its reason. Run; commit.
 
 ### Task 11: A silent dial resets over its cable
 
@@ -181,10 +162,7 @@ On the PC, with the signed build and the CLI bundle, in order, one screenshot pe
 - [ ] Fresh account: open the app, sign in, reach New Harness with no typing beyond the sign-in.
 - [ ] New Harness with Kilo absent: see the install line, click, see "Installing Kilo", the agent answers.
 - [ ] Repeat with one PowerShell engine (Amp); then start one that fails, and use **Try again**.
-- [ ] Swarm: add this PC, start a dev agent, send it a message, read its reply, see it commit and push to a scratch repository with the App's token.
-- [ ] Buddy: add one on this PC, message it, read its reply (needs the backend live).
 - [ ] Web pane: a page beside a terminal; open a menu over it, a dialog over it, switch tabs, drag panes, resize, 150% display scale.
-- [ ] Voice: a clip from the Mac plays in the chat; seek and speed.
 - [ ] Devices: the Wi-Fi list shows robots; pair one; plug in a dial, see it attach, unplug and replug.
 - [ ] Paste an image into Claude Code. `harness remote` in a tile.
 - [ ] Look for any Mac word, console flash, or surprise prompt. Each one found becomes a fix before this task is done.
@@ -209,25 +187,7 @@ One PR per step. First rerun `cargo check` on current main on the PC for the tru
 
 ### Task 15: Sharing this PC with guests
 
-Its own spec first, because it is a security boundary, reusing the Team account's tested parts. To the person it is the Mac's form and one permission prompt.
+Its own spec first, because it is a security boundary. To the person it is the Mac's form and one permission prompt.
 
 - [ ] Spike: can one daemon drive panes on a second `harness-pty` in another account? The answer sets the design.
 - [ ] Write `docs/superpowers/specs/<date>-windows-guests-design.md` with the Design section and take it to security review, then its own plan.
-
----
-
-## A wide Buddy, in a real sandbox
-
-### Task 16: Sandbox for a wide Buddy's shell
-
-**Dropped 2026-11-04:** #2832 gave every Buddy its owner's full rights, on a Mac too. There is no wide mode left to sandbox.
-
-Per the spec's W8.
-
-**Files:** Create `cli/src/lib/windows/buddySandbox.ts` and spec. Modify `cli/src/lib/buddyGuard.ts:166` (`buddyLaunchWide`), `cli/src/lib/swarmSkills.ts`, `cli/src/lib/windows/ptyPayload.ts` and `cli/scripts/publish-pty-payload.sh` (one more signed file), `cli/src/lib/uninstall/deps.ts`, `cli/src/team/windowsTeam.ts` (privacy probe).
-
-- [ ] **Step 1: Spike on the PC.** Install the runtime there, run a command as the sandbox account, and confirm each row of the spec's table, that `CLAUDE_CODE_SHELL_PREFIX` applies on Windows, and that `git` and `gh` work inside. The source of `srt-win.exe` is found here too.
-- **Facts read 2026-11-04.** The helper's source is public (`vendor/srt-win-src` in `anthropic-experimental/sandbox-runtime`, Rust), so Harness builds it at a pinned commit and signs it in the pty payload. API: `SandboxManager.initialize(config)`, `wrapWithSandboxArgv(command, binShell)`, `reset()`, `checkWindowsSandboxStatus()`, `installWindowsSandbox({ profileExclude })`, `resolveSrtWin({ ... })`. `CLAUDE_CODE_SHELL_PREFIX` wraps Bash tool calls **and hook commands**, passing the command as one shell-quoted argument. So the wrapper runs inside the sandbox by default, and outside only for an exact match of this session's own hook lines from its settings file, or a command the guard allowed as `harness ...`. Exec-form hooks skip the prefix, which keeps the guard's own run simple if the wrapper must stay small.
-- [ ] **Step 2: Failing tests.** `buddyLaunchWide` on win32 is wide only with a proven sandbox and null otherwise; the wrapper runs a `harness` command outside and every other command inside; `profileExclude` holds Harness's closed list in Windows terms (`.ssh`, browser profiles, `AppData\Roaming\Microsoft\Credentials`, engine homes); a Team account in the sandbox group fails the privacy check.
-- [ ] **Step 3: Implement**, with the one prompt's words: "Let your Buddy read your files? Windows will ask once. It can't change anything or see your passwords." Declined, the Buddy stays in its folder and nothing is asked again until the person turns it on.
-- [ ] **Step 4:** Run the specs and gates. Commit. Security review, because this is what the 10-29 ruling was about.

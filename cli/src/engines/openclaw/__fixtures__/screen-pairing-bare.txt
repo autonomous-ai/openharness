@@ -1,0 +1,45 @@
+│
+◇
+
+🦞 OpenClaw 2026.11.2 (b556fdf) — I have a SOUL.md and I'm not afraid to use it.
+
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session plain
+
+ Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed `openclaw devices
+ approve <requestId>` command and reconnect (pass the same --url and --token/--password flags if you connected with
+ explicit credentials).
+ disconnected | device approval needed: preview latest request
+ agent main | session plain | unknown | deliver:off | tokens ?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

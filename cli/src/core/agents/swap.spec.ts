@@ -7,18 +7,16 @@ import { checkPidRuntime, terminateDeletedAgent } from '../../lib/deleteAgentFal
 import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionActive } from '../../lib/processTable.js'
 import { AgentRestartCoordinator } from '../../lib/restartAgent.js'
 import { setAgentSignaller } from '../../lib/processSignals.js'
-import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
+import { createPaneSwap, type PaneSwapDeps } from './swap.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { NATIVE_LAUNCH_MARKER } from '../../lib/nativePaneHold.js'
-import { stopConflictingBackgroundJob } from '../../lib/claudeBackgroundJob.js'
 
 vi.mock('../../lib/deleteAgentFallback.js', async (real) => ({ ...await real<object>(), terminateDeletedAgent: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']) }))
-vi.mock('../../lib/claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => null) }))
 vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
   ...await real<object>(),
@@ -33,6 +31,9 @@ const runtime = { backend: 'tmux', paneId: '%4' } as never
 const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', registeredAt: 100, tmuxPane: '%4', cwd: '/work', ...over }) as RegisteredSession
 
+/** Core's stop of a `claude --bg` job holding the session (core/engines/backgroundJobs.ts), as main.ts hands it in. */
+const stopBackgroundJob = vi.fn(async (_engine: string, _ask: unknown, _log: (line: string) => void) => {})
+
 /** The pane the last `setup` swaps in, on its fake tmux backend (`restartTargetOf`'s answer). */
 let latest: { backend: never; runtime: never }
 const place = () => latest
@@ -42,6 +43,7 @@ function setup(row: RegisteredSession | null = session()) {
     holdOpen: vi.fn(async () => ({ state: 'succeeded' })),
     respawn: vi.fn(async () => ({ state: 'succeeded' })),
     respawnRefusal: vi.fn(async (request: { env?: Record<string, string> }) => request.env ? 'too old' : null),
+    isHeld: vi.fn(async (_runtime: unknown, _token: string) => true),
   }
   latest = { backend: tmuxBackend as never, runtime }
   const deps: PaneSwapDeps = {
@@ -49,6 +51,7 @@ function setup(row: RegisteredSession | null = session()) {
     prepareSessionResume: vi.fn(),
     keepAbandonedConversation: vi.fn(),
     stopNative: vi.fn(async () => {}),
+    stopBackgroundJob: stopBackgroundJob,
   }
   return { deps, tmuxBackend, swap: createPaneSwap(deps) }
 }
@@ -59,6 +62,19 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { native })
     prepared.buildArgv({ resumeSessionId: 's1', bypassPermission: false })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('claude', expect.objectContaining({ native, resumeSessionId: 's1' }))
+  })
+  it('reads its own launch\'s held shell by that launch\'s token', async () => {
+    const { swap, tmuxBackend } = setup()
+    const prepared = swap.paneSwapDeps(session(), place(), { native: { token: 'tok-1' } as NativeLaunch })
+    expect(await prepared.heldShell?.()).toBe(true)
+    expect(tmuxBackend.isHeld).toHaveBeenCalledExactlyOnceWith(runtime, 'tok-1')
+  })
+  it('has no held-shell read without a native launch or a backend that can tell', () => {
+    const { swap } = setup()
+    expect(swap.paneSwapDeps(session(), place(), {}).heldShell).toBeUndefined()
+    expect(swap.paneSwapDeps(session(), place(), { native: {} as NativeLaunch }).heldShell).toBeUndefined()
+    const cannotTell = { holdOpen: vi.fn(), respawn: vi.fn() } as never
+    expect(swap.paneSwapDeps(session(), { backend: cannotTell, runtime }, { native: { token: 'tok-1' } as NativeLaunch }).heldShell).toBeUndefined()
   })
   it('hands the owner\'s launch words to the argv builder, which puts them last, for a restart, a retarget and a host move alike', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { ownerArgs: ['--chrome'] })
@@ -71,9 +87,25 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { env: { CLAUDE_CONFIG_DIR: '/custom' } })
     expect(prepared.stopConflictingJob).toBeDefined()
     await prepared.stopConflictingJob!()
-    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       sessionId: 's1', env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/custom' }),
-    }))
+    }), expect.any(Function))
+    // What the stop says reaches the daemon's log as a resume's.
+    const said = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      stopBackgroundJob.mock.lastCall![2]('stopped background job bg-1 holding session s1')
+      expect(said).toHaveBeenCalledWith('[resume] stopped background job bg-1 holding session s1')
+    } finally { said.mockRestore() }
+  })
+  it('prepares the conversation only while the swap holds: its history is replaced under the same check', async () => {
+    const { deps, swap } = setup(session({ engine: 'codex' }))
+    let holds = true
+    await swap.paneSwapDeps(session({ engine: 'codex' }), place(), {}, null, () => holds).prepareResume!()
+    const [prepared, current] = vi.mocked(deps.prepareSessionResume).mock.lastCall!
+    expect(prepared).toEqual(session({ engine: 'codex' }))
+    expect(current()).toBe(true)
+    holds = false
+    expect(current()).toBe(false)
   })
   it('skips the background-job check for a non-Claude engine', () => {
     const prepared = setup(session({ engine: 'codex' })).swap.paneSwapDeps(session({ engine: 'codex' }), place())
@@ -94,9 +126,9 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { native, env: { CLAUDE_CONFIG_DIR: '/native/claude-home' } })
     expect(prepared.stopConflictingJob).toBeDefined()
     await prepared.stopConflictingJob!()
-    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+    expect(stopBackgroundJob).toHaveBeenCalledWith('claude', expect.objectContaining({
       sessionId: 's1', env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/native/claude-home' }),
-    }))
+    }), expect.any(Function))
   })
   it('refuses, before anything is stopped, a relaunch Windows would run through cmd.exe; builds no launch script for it', () => {
     vi.mocked(buildEngineLaunchArgv).mockClear()
@@ -191,8 +223,10 @@ describe('the pane-process swap', () => {
   it('prepares the resume, holds the pane open and respawns it in the home folder, saying why when tmux will not', async () => {
     const { deps, tmuxBackend, swap } = setup()
     const swapDeps = swap.paneSwapDeps(session(), place(), { env: { GRID_KEY: 'k' } })
-    swapDeps.prepareResume?.()
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(session())
+    await swapDeps.prepareResume?.()
+    // With no hold of its own, the history is replaced as the restart's own checks allow.
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(session(), expect.any(Function))
+    expect(vi.mocked(deps.prepareSessionResume).mock.lastCall![1]()).toBe(true)
     swapDeps.keepAbandoned?.()
     expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(session())
     // Asked of tmux with the relaunch's own environment, before anything is stopped.
@@ -226,7 +260,7 @@ describe('the pane-process swap', () => {
     vi.useFakeTimers()
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ pid: 9, startMarker: 'm' } as never)
     const waiting = swapDeps.waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + SWAP_SETTLE_MS)
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS)
     expect(await waiting).toEqual({ pid: 9, startMarker: 'm' })
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(ptyBackend, pty, 'claude')
     expect(tmuxBackend.holdOpen).not.toHaveBeenCalled()
@@ -307,7 +341,7 @@ describe('the pane-process swap', () => {
     const found = { pid: 99, startMarker: 'now' }
     vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValueOnce(found as never).mockResolvedValueOnce({ ...found } as never)
     const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + 300 + SWAP_SETTLE_MS)
+    await vi.advanceTimersByTimeAsync(150 + 300 + ENGINE_SETTLE_MS)
     expect(await waiting).toEqual(found)
     // Asked of the pane's own backend, about the pane being swapped.
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(tmuxBackend, runtime, 'claude')
@@ -315,6 +349,20 @@ describe('the pane-process swap', () => {
     // 150, 300, 600, then 750 ms at a time: the budget is spent on the look that crosses 8 s.
     await vi.advanceTimersByTimeAsync(9_000)
     expect(await never).toBeNull()
+  })
+
+  // A Node engine started as `node` (Claude Code installed with npm) renames itself (process.title), which on
+  // Linux changes its `comm`, the row's executable, but not its pid or start; the publication's refresh compares
+  // the executable.
+  it('returns the later look of a process that renamed itself while settling', async () => {
+    vi.useFakeTimers()
+    const { swap } = setup()
+    vi.mocked(resolvePaneEngineProcess)
+      .mockResolvedValueOnce({ pid: 99, startMarker: 'now', executable: 'node' } as never)
+      .mockResolvedValueOnce({ pid: 99, startMarker: 'now', executable: 'codex' } as never)
+    const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS)
+    expect(await waiting).toEqual({ pid: 99, startMarker: 'now', executable: 'codex' })
   })
 
   // A launch the engine refuses (`codex resume` after an update dropped it) runs for an instant: seen in
@@ -330,7 +378,7 @@ describe('the pane-process swap', () => {
       .mockResolvedValueOnce(lasting as never).mockResolvedValueOnce({ pid: 99, startMarker: 'later' } as never)
       .mockResolvedValueOnce(lasting as never).mockResolvedValueOnce({ ...lasting } as never)
     const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + SWAP_SETTLE_MS + 300 + SWAP_SETTLE_MS + 600 + SWAP_SETTLE_MS)
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS + 300 + ENGINE_SETTLE_MS + 600 + ENGINE_SETTLE_MS)
     expect(await waiting).toEqual(lasting)
     expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(6)
     // One that never stays up is no engine: the wait ends as one that found none.

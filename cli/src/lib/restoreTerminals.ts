@@ -95,7 +95,7 @@ export function restoreTerminals(options: RestoreTerminalsOptions): RestoreTermi
     },
     probeProcess: async (runtime, engine) => resolvePaneEngineProcess(backendOf(runtime), runtime, engine),
     paneState: async (runtime) => backendOf(runtime).paneState(runtime),
-    clearRemainOnExit: async (runtime) => backendOf(runtime).releaseHold(runtime),
+    clearRemainOnExit: async (runtime, current) => backendOf(runtime).releaseHold(runtime, current),
     killPane: async (runtime) => { await backendOf(runtime).kill(runtime) },
   }
 }

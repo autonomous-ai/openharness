@@ -23,7 +23,7 @@ describe('launch preparation authority', () => {
     { cwd: '/replacement' }, { engine: 'codex' }, { sessionId: 'replacement' }, { registeredAt: 3 },
     { boundAt: 3 }, { processIdentity: { pid: 42, startMarker: 'replacement' } },
     { runtimes: [{ backend: 'tmux', paneId: '%8' }] }, { codexHome: '/profile' },
-    { dsh: 'fixture/other' }, { dshRuntime: 'other' }, { swarmSkill: { role: 'agent', key: 'other' } }, { agent: 'other' },
+    { dsh: 'fixture/other' }, { dshRuntime: 'other' }, { agent: 'other' },
     { gridLaunch: { model: 'replacement' } }, { scmLaunch: { kind: 'fixture' } },
     { subscriptionModel: 'replacement' }, { permissionMode: 'auto' }, { bypassPermission: true },
     { active: false }, { launch: { state: 'held', service: 'store' } }, { externalResume: { token: 'other' } },
@@ -32,6 +32,17 @@ describe('launch preparation authority', () => {
     const current = createLaunchAuthority({ byAgent: () => row, revision: () => 1, cancelled: () => false })(row.agentId)
     Object.assign(row, change)
     expect(current()).toBe(false)
+  })
+
+  it.each([
+    [{ state: 'ready' }, undefined],
+    [undefined, { state: 'ready' }],
+  ] as const)('keeps its target when a ready launch is written %j and read %j', (before, after) => {
+    const row = agent()
+    if (before) row.launch = { ...before }
+    const current = createLaunchAuthority({ byAgent: () => row, revision: () => 1, cancelled: () => false })(row.agentId)
+    if (after) row.launch = { ...after }; else delete row.launch
+    expect(current()).toBe(true)
   })
 
   it('allows display-only updates and route ordering without losing the original target', () => {

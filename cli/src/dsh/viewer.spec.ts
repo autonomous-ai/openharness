@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PathToWatchDeps } from '../lib/pathToWatch.js'
 import type { InstalledDsh } from './installed.js'
 import { spawnDshCommand } from './shell.js'
 import { DshViewerManager, buildViewerUrl, freeLoopbackPort, resolveViewer, waitForLoopbackPort } from './viewer.js'
@@ -19,18 +20,37 @@ vi.mock('node:net', async (importOriginal) => {
 })
 
 // Every artifact watcher the manager opens, and whether it was closed: what a viewer that failed must not keep.
-const watchers = vi.hoisted(() => [] as Array<{ closed: boolean }>)
+const watchers = vi.hoisted(() => [] as Array<{
+  closed: boolean; watcher: import('chokidar').FSWatcher; paths: string | string[]; options: import('chokidar').ChokidarOptions | undefined
+  ready: Promise<void>
+}>)
+/**
+ * Set by a case that announces each file event itself: its watch then hears nothing from the machine. macOS hands a watch
+ * its events in batches, on a loaded Mac many seconds after the write (12 s seen at load 20), so a wait for one has no
+ * bound, and one that lands late would rescan between the case's own steps.
+ */
+const silent = vi.hoisted(() => ({ on: false }))
 vi.mock('chokidar', async (importOriginal) => {
   const actual = await importOriginal<typeof import('chokidar')>()
+  const { EventEmitter: Emitter } = await import('node:events')
   const watch = ((...args: Parameters<typeof actual.watch>) => {
-    const watcher = actual.watch(...args)
-    const seen = { closed: false }
+    const watcher = silent.on
+      ? Object.assign(new Emitter(), { close: async () => undefined }) as unknown as import('chokidar').FSWatcher
+      : actual.watch(...args)
+    // Taken at creation: chokidar says `ready` once, after its first read of the folder.
+    const seen = { closed: false, watcher, paths: args[0], options: args[1], ready: new Promise<void>((resolve) => { watcher.once('ready', () => resolve()) }) }
     watchers.push(seen)
     const close = watcher.close.bind(watcher)
     watcher.close = () => { seen.closed = true; return close() }
     return watcher
   }) as typeof actual.watch
   return { ...actual, watch, default: { ...actual.default, watch } }
+})
+/** This computer, unless a case says Windows. */
+const toWatch = vi.hoisted(() => ({ deps: undefined as PathToWatchDeps | undefined }))
+vi.mock('../lib/pathToWatch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/pathToWatch.js')>()
+  return { pathToWatch: (path: string) => actual.pathToWatch(path, toWatch.deps) }
 })
 
 function fakeChild(): ChildProcess & { exitWith: (code: number) => void } {
@@ -184,6 +204,35 @@ describe('DshViewerManager', () => {
       expect(manager!.url('a1')).toBe('http://127.0.0.1:4000/')
     })
 
+    it('logs the viewer and a preview by their ports, never the workspace or the page\'s address', async () => {
+      // A workspace folder names the person's home, and a page's address can carry a path: Export logs sends the log off.
+      const logs: string[] = []
+      const answers = new Map<number, (up: boolean) => void>()
+      manager = new DshViewerManager({
+        onUrl: () => {},
+        log: (line) => logs.push(line),
+        freePort: async () => 4790,
+        waitForPort: (port) => port === 4790 ? Promise.resolve(true) : new Promise((resolve) => { answers.set(port, resolve) }),
+        spawn: (() => fakeChild()) as unknown as typeof import('./shell.js').spawnDshCommand,
+        reservedPorts: () => [18473],
+      })
+      const answer = async (port: number, up: boolean): Promise<void> => { answers.get(port)?.(up); await new Promise((r) => setImmediate(r)) }
+      await manager.start('a1', web(), '/Users/sentinel/ws')
+      manager.setVerdictPreview('a1', 'http://127.0.0.1:18473/Users/sentinel')
+      manager.setVerdictPreview('a1', 'https://example.com/Users/sentinel')
+      manager.setVerdictPreview('a1', 'http://127.0.0.1:5173/Users/sentinel')
+      await answer(5173, false)
+      manager.setVerdictPreview('a1', 'http://127.0.0.1:5174/Users/sentinel')
+      await answer(5174, true)
+      expect(logs).toEqual([
+        '[dsh] acme/thing viewer up on 127.0.0.1:4790',
+        '[dsh] acme/thing preview on port 18473 refused · a loopback page of the agent\'s own, not this daemon',
+        '[dsh] acme/thing preview refused · a loopback page of the agent\'s own, not this daemon',
+        '[dsh] acme/thing preview on port 5173 did not listen within 10 min · the package\'s viewer stays',
+        '[dsh] acme/thing viewer shows the agent\'s preview on port 5174',
+      ])
+    })
+
     it('never names the daemon\'s own port, and follows a preview named before the viewer started', async () => {
       const { asked, listen } = previewSetup([18473])
       manager!.setVerdictPreview('a1', 'http://127.0.0.1:18473/')
@@ -205,22 +254,27 @@ describe('DshViewerManager', () => {
   })
 
   it('restarts a viewer that exits, then gives up after four exits in a minute', async () => {
-    let clock = 0
-    const { spawned, urls } = setup({ now: () => clock })
-    await manager!.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
-    expect(urls).toEqual(['http://127.0.0.1:4790/'])
-    spawned[0].child.exitWith(1)
-    expect(urls.at(-1)).toBeNull()
-    // The restart is scheduled with a real timer (1s); the fourth exit inside the window gives up.
-    for (let i = 0; i < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 1_100 * 2 ** i))
-      expect(spawned).toHaveLength(i + 2)
-      clock += 1_000
-      spawned[i + 1].child.exitWith(1)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let clock = 0
+      const { spawned, urls } = setup({ now: () => clock })
+      await manager!.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
+      expect(urls).toEqual(['http://127.0.0.1:4790/'])
+      spawned[0].child.exitWith(1)
+      expect(urls.at(-1)).toBeNull()
+      // The restart waits 1 s, then 2 s, then 4 s; the fourth exit inside the window gives up.
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(1_000 * 2 ** i)
+        expect(spawned).toHaveLength(i + 2)
+        clock += 1_000
+        spawned[i + 1].child.exitWith(1)
+      }
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(spawned).toHaveLength(4)
+    } finally {
+      vi.useRealTimers()
     }
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(spawned).toHaveLength(4)
-  }, 15_000)
+  })
 
   it('stops publish null and forgets the agent', async () => {
     const { urls } = setup()
@@ -284,11 +338,9 @@ describe('viewer.use (spec 1.1)', () => {
     expect(used.ok && used.viewer).toEqual({ id: 'acme/viewer', dir: '/real/acme/viewer', command: 'viewer.sh', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step', '.glb'] })
     const narrowed = resolveViewer(dsh({ use: 'acme/viewer', artifactExtensions: ['.step'] }), lookup)
     expect(narrowed.ok && narrowed.viewer.artifactExtensions).toEqual(['.step'])
-    const missing = resolveViewer(dsh({ use: 'acme/nope' }), lookup)
-    expect(missing.ok).toBe(false)
-    expect(!missing.ok && missing.error).toContain('not installed')
+    expect(resolveViewer(dsh({ use: 'acme/nope' }), lookup)).toEqual({ ok: false, code: 'VIEWER_NOT_INSTALLED' })
     const notViewer = resolveViewer(dsh({ use: 'acme/viewer' }), () => dsh({ command: 'x', url: 'http://127.0.0.1:${port}/' }))
-    expect(!notViewer.ok && notViewer.error).toContain('not a viewer package')
+    expect(notViewer).toEqual({ ok: false, code: 'NOT_A_VIEWER_PACKAGE' })
   })
 
   it('launches a used viewer in the package directory, naming both the harness and the viewer in the env', async () => {
@@ -312,7 +364,11 @@ describe('viewer.use (spec 1.1)', () => {
       const bare = new DshViewerManager({ onUrl: () => undefined, log: (l) => logs.push(l), lookup: () => undefined })
       await bare.start('a10', dsh({ use: 'acme/viewer' }), '/ws')
       expect(bare.url('a10')).toBeNull()
-      expect(logs.join(' ')).toContain('not installed')
+      expect(logs).toContain('[dsh] VIEWER_NOT_INSTALLED · agent a10 has no viewer pane')
+      // The viewer a manifest names is someone else's words: the line says why by a code, never what it names.
+      await bare.start('a11', dsh({ use: '/Users/sentinel/x' }), '/ws')
+      expect(logs.join('\n')).not.toContain('sentinel')
+      expect(logs).toContain('[dsh] VIEWER_NOT_INSTALLED · agent a11 has no viewer pane')
     } finally {
       await manager.stopAll()
     }
@@ -323,7 +379,7 @@ describe('viewer.use (spec 1.1)', () => {
     const used = resolveViewer(dsh({ use: 'acme/viewer' }), () => bare)
     expect(used.ok && used.viewer.artifactExtensions).toEqual([])
     const none: InstalledDsh = { ...dsh({ command: 'x', url: 'y' }), manifest: { spec: 1, id: 'acme/thing', name: 'Thing', engine: 'claude' } }
-    expect(resolveViewer(none, lookup)).toEqual({ ok: false, error: 'acme/thing has no viewer' })
+    expect(resolveViewer(none, lookup)).toEqual({ ok: false, code: 'NO_VIEWER' })
   })
 })
 
@@ -444,7 +500,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await other.start('a2', d, '/ws')
     expect(spawned).toEqual([])
     expect(urls).toEqual([])
-    expect(logs).toEqual(['[dsh] acme/thing viewer: no free port · EMFILE', '[dsh] acme/thing viewer: no free port · no ports left'])
+    expect(logs).toEqual(['[dsh] acme/thing viewer: no free port · Error', '[dsh] acme/thing viewer: no free port · string'])
   })
 
   it('a stop while the port is being found, or while the viewer comes up, publishes nothing', async () => {
@@ -469,16 +525,87 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     expect(urls).toEqual([])
   })
 
-  it('logs what the viewer prints, up to forty lines, without blank lines or zsh noise, and a failure to start', async () => {
+  it('logs the size of each line the viewer prints, never its words, up to forty lines, without blank lines or zsh noise, and a failure to start', async () => {
+    // A viewer reads the person's workspace: what it prints (a traceback, a notebook's output) can quote their work.
     const { spawned, logs, manager } = setup()
     await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
-    const printed = Array.from({ length: 45 }, (_, i) => `line ${i}`)
+    const printed = Array.from({ length: 45 }, (_, i) => `SECRET line ${i}`)
     spawned[0].stdout!.emit('data', Buffer.from(`\n${printed.slice(0, 20).join('\n')}\n   \n`))
     spawned[0].stderr!.emit('data', Buffer.from(`zsh: can't change option: zle\n${printed.slice(20).join('\n')}\n`))
     spawned[0].emit('error', new Error('spawn EACCES'))
-    const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer · '))
-    expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer · ${line}`))
-    expect(logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+    const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer printed '))
+    expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer printed a line of ${line.length} chars`))
+    expect(logs.join('\n')).not.toContain('SECRET')
+    expect(logs).toContain('[dsh] acme/thing viewer could not start · Error')
+  })
+
+  it('names a watcher close timeout and completes its stop within the cleanup deadline', async () => {
+    const { manager, logs } = setup()
+    await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/', artifactExtensions: ['.step'] }), root)
+    const watcher = watchers.at(-1)!.watcher
+    await watcher.close()
+    watcher.close = () => new Promise(() => {})
+    vi.useFakeTimers()
+    try {
+      const stopped = manager.stop('a1')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await stopped
+      expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_TIMEOUT')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a viewer change does not wait on the old watcher or revive after a later same-id start', async () => {
+    const { manager, spawned, urls } = setup()
+    const viewer = dsh({ command: 'v', url: 'http://127.0.0.1:${port}/', artifactExtensions: ['.step'] })
+    await manager.start('a1', viewer, root)
+    const watcher = watchers.at(-1)!.watcher
+    const close = watcher.close.bind(watcher)
+    let release!: () => void
+    watcher.close = async () => { await close(); await new Promise<void>(resolve => { release = resolve }) }
+    const moved = manager.start('a1', viewer, join(root, 'other'))
+    try {
+      await vi.waitFor(() => expect(spawned).toHaveLength(2))
+      await manager.stop('a1')
+      await manager.start('a1', viewer, root)
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await moved
+      expect(spawned).toHaveLength(3)
+      expect(manager.url('a1')).toBe('http://127.0.0.1:4792/')
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4792/')
+    } finally {
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await moved
+    }
+  })
+
+  it('a held watcher close cannot keep the old URL alive or clear a same-id replacement', async () => {
+    const { urls, spawned, manager } = setup()
+    const viewer = dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] })
+    await manager.start('a1', viewer, root)
+    const watcher = watchers.at(-1)!.watcher
+    const queuedChange = watcher.listeners('change')[0] as (path: string) => void
+    const close = watcher.close.bind(watcher)
+    let release!: () => void
+    watcher.close = async () => { await close(); await new Promise<void>(resolve => { release = resolve }) }
+    const stopped = manager.stop('a1')
+    try {
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=', null])
+      await manager.start('a1', viewer, root)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4791/?file=')
+      queuedChange(join(root, 'late.step'))
+      spawned[0].exitWith(0)
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await stopped
+      expect(manager.url('a1')).toBe('http://127.0.0.1:4791/?file=')
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=', null, 'http://127.0.0.1:4791/?file='])
+    } finally {
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await stopped
+    }
   })
 
   it('an exit after a stop is ignored; an exit during a stop publishes null and restarts nothing', async () => {
@@ -486,23 +613,35 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const workspace = join(root, 'ws')
     mkdirSync(workspace)
     await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/', artifactExtensions: ['.step'] }), workspace)
-    // the stop is waiting on the artifact watcher to close when the child goes
-    const stopping = manager.stop('a1')
-    spawned[0].emit('exit', null, 'SIGTERM')
-    await stopping
-    spawned[0].exitWith(0)
-    await settle(1_200)
-    expect(spawned).toHaveLength(1)
-    expect(urls).toEqual(['http://127.0.0.1:4790/', null])
-    expect(logs.filter((line) => line.includes('restarting'))).toEqual([])
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      // the stop is waiting on the artifact watcher to close when the child goes
+      const stopping = manager.stop('a1')
+      spawned[0].emit('exit', null, 'SIGTERM')
+      await stopping
+      spawned[0].exitWith(0)
+      // past every restart delay
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(spawned).toHaveLength(1)
+      expect(urls).toEqual(['http://127.0.0.1:4790/', null])
+      expect(logs.filter((line) => line.includes('restarting'))).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a viewer killed by a signal is restarted, and the log says which signal', async () => {
-    const { spawned, logs, manager } = setup({ now: undefined })
-    await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
-    spawned[0].emit('exit', null, 'SIGSEGV')
-    expect(logs.at(-1)).toBe('[dsh] acme/thing viewer exited SIGSEGV · restarting in 1000ms')
-    await vi.waitFor(() => expect(spawned).toHaveLength(2), { timeout: 3_000 })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { spawned, logs, manager } = setup({ now: undefined })
+      await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
+      spawned[0].emit('exit', null, 'SIGSEGV')
+      expect(logs.at(-1)).toBe('[dsh] acme/thing viewer exited SIGSEGV · restarting in 1000ms')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(spawned).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('gives up after four exits inside a minute, naming how the last one ended', async () => {
@@ -550,7 +689,9 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       }) as typeof spawnDshCommand
       const { logs, urls, manager } = setup({ spawn: noGitBash })
       await manager.start('a1', watched(), workspace)
-      expect(logs).toContain("[dsh] acme/thing viewer could not start · This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.")
+      // The log names the missing shell by its code; what to install is said where the person reads it, as the harness's
+      // install is refused.
+      expect(logs).toContain('[dsh] acme/thing viewer could not start · SHELL_UNAVAILABLE')
       expect(watchers).toHaveLength(1)
       expect(watchers[0].closed).toBe(true)
       // The agents' scans attach every live agent again; the same viewer that just failed is not started each time.
@@ -568,8 +709,13 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       await manager.start('a1', watched(), workspace)
       expect(logs).toContain('[dsh] acme/thing viewer did not listen on 4790 within 60s')
       // The stop ends the child; its exit is not a crash to restart.
-      spawned[0].emit('exit', null, 'SIGTERM')
-      await settle(1_200)
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        spawned[0].emit('exit', null, 'SIGTERM')
+        await vi.advanceTimersByTimeAsync(60_000)
+      } finally {
+        vi.useRealTimers()
+      }
       expect(spawned).toHaveLength(1)
       expect(logs.filter((line) => line.includes('restarting'))).toEqual([])
       expect(watchers[0].closed).toBe(true)
@@ -580,7 +726,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     it('a viewer whose process could not be started, or that found no port, closes its watch', async () => {
       const failing = setup({ waitForPort: async () => { failing.spawned[0].emit('error', new Error('spawn EACCES')); return false } })
       await failing.manager.start('a1', watched(), workspace)
-      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · Error')
       expect(watchers[0].closed).toBe(true)
       const noPort = setup({ freePort: async () => { throw new Error('EMFILE') } })
       await noPort.manager.start('a2', watched(), workspace)
@@ -600,43 +746,123 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     }
     at('models/old.step', 1_000)
     const { urls, logs, manager } = setup()
-    await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
-    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
-    await settle(300)
+    silent.on = true
+    try {
+      await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
+      const { watcher: inner, paths, options } = watchers.at(-1)!
+      // chokidar watches the workspace and what is in it, and skips what the artifact scan skips inside it
+      expect(paths).toBe(workspace)
+      const ignored = options!.ignored as (path: string) => boolean
+      expect([workspace, join(workspace, 'models'), join(workspace, 'models', 'new.step')].map(ignored)).toEqual([false, false, false])
+      expect([join(workspace, 'node_modules'), join(workspace, '.cache')].map(ignored)).toEqual([true, true])
 
-    at('models/new.step', 2_000)
-    await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step'), { timeout: 5_000 })
-    // not artifacts, or not where artifacts are looked for: nothing changes
-    at('notes.txt', 3_000)
-    at('node_modules/lib/newest.step', 3_000)
-    at('.cache/newest.step', 3_000)
-    // the same newest file touched again, twice inside the debounce: one rescan, same answer
-    at('models/new.step', 2_001)
-    at('models/new.step', 2_002)
-    await settle(900)
-    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
+      // each write is announced as chokidar would, and the rescan's debounce runs on a held clock
+      const announce = (event: 'add' | 'change' | 'unlink', rel: string): boolean => inner.emit(event, join(workspace, rel))
+      const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      at('models/new.step', 2_000)
+      announce('add', 'models/new.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step')
+      // not artifacts, or not where artifacts are looked for: no rescan
+      for (const rel of ['notes.txt', 'node_modules/lib/newest.step', '.cache/newest.step']) {
+        at(rel, 3_000)
+        announce('add', rel)
+      }
+      expect(state.rescanTimer).toBeNull()
+      // the same newest file touched again, twice inside the debounce: one rescan, same answer
+      at('models/new.step', 2_001)
+      announce('change', 'models/new.step')
+      at('models/new.step', 2_002)
+      announce('change', 'models/new.step')
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
 
-    rmSync(join(workspace, 'models', 'new.step'))
-    await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/old.step'), { timeout: 5_000 })
-    rmSync(join(workspace, 'models', 'old.step'))
-    await vi.waitFor(() => expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file='), { timeout: 5_000 })
+      rmSync(join(workspace, 'models', 'new.step'))
+      announce('unlink', 'models/new.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/old.step')
+      rmSync(join(workspace, 'models', 'old.step'))
+      announce('unlink', 'models/old.step')
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=')
 
-    const inner = (manager as unknown as { states: Map<string, { watcher: EventEmitter }> }).states.get('a1')!.watcher
-    inner.emit('error', new Error('EMFILE'))
-    inner.emit('error', 'lost')
-    expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · EMFILE', '[dsh] artifact watch error · lost'])
+      inner.emit('error', new Error('EMFILE'))
+      inner.emit('error', 'lost')
+      expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · Error', '[dsh] artifact watch error · string'])
 
-    // a stop with a rescan still pending cancels it, and a watcher that fails to close does not fail the stop
-    const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
-    const close = state.watcher.close.bind(state.watcher)
-    state.watcher.close = async () => { await close(); throw new Error('close failed') }
-    at('models/newest.step', 5_000)
-    await vi.waitFor(() => expect(state.rescanTimer).not.toBeNull(), { timeout: 5_000 })
-    await manager.stop('a1')
-    await settle(500)
-    expect(urls.at(-1)).toBeNull()
-    expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
+      // a stop with a rescan still pending cancels it, and a watcher that fails to close does not fail the stop
+      const close = state.watcher.close.bind(state.watcher)
+      state.watcher.close = async () => { await close(); throw new Error('close failed') }
+      at('models/newest.step', 5_000)
+      announce('add', 'models/newest.step')
+      expect(state.rescanTimer).not.toBeNull()
+      await manager.stop('a1')
+      expect(vi.getTimerCount()).toBe(0)
+      expect(urls.at(-1)).toBeNull()
+      expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
+      expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_FAILED · Error')
+    } finally {
+      vi.useRealTimers()
+      silent.on = false
+    }
   }, 20_000)
+
+  it('follows an artifact written while the watch is still starting', async () => {
+    // chokidar reads the workspace after start() has scanned it and counts what it finds there as already present:
+    // a file written in between, as an agent that writes one at once does, waited for the next change to be shown.
+    const workspace = join(root, 'ws')
+    mkdirSync(join(workspace, 'models'), { recursive: true })
+    const at = (rel: string, seconds: number): void => {
+      writeFileSync(join(workspace, rel), rel)
+      utimesSync(join(workspace, rel), seconds, seconds)
+    }
+    at('models/old.step', 1_000)
+    const { urls, manager } = setup()
+    const starting = manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), workspace)
+    const { ready } = watchers.at(-1)!
+    at('models/new.step', 2_000)
+    await starting
+    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
+    await ready
+    expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step', 'http://127.0.0.1:4790/?file=models/new.step'])
+  })
+
+  // libuv aborts the process at the first change in a folder watched by an 8.3 short name (lib/pathToWatch.ts), as an
+  // agent's folder can be. A short name is another name of the same folder, as a link is here.
+  it('on Windows watches the workspace by its long name, and follows the newest artifact in it', async () => {
+    const long = join(root, 'hxdialtest')
+    const short = join(root, 'HXDIAL~1')
+    mkdirSync(join(long, 'models'), { recursive: true })
+    symlinkSync(long, short)
+    const at = (rel: string, seconds: number): void => {
+      writeFileSync(join(long, rel), rel)
+      utimesSync(join(long, rel), seconds, seconds)
+    }
+    at('models/old.step', 1_000)
+    toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
+    silent.on = true
+    try {
+      const { urls, manager } = setup()
+      await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] }), short)
+      const { watcher: inner, paths } = watchers.at(-1)!
+      expect(paths).toBe(long)
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=models/old.step'])
+      // announced by hand, by the path chokidar names under the folder it watches, and the rescan's debounce runs on a
+      // held clock
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      at('models/new.step', 2_000)
+      inner.emit('add', join(long, 'models', 'new.step'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4790/?file=models/new.step')
+    } finally {
+      vi.useRealTimers()
+      silent.on = false
+      toWatch.deps = undefined
+    }
+  })
 
   it('runs a real viewer through the user\'s shell, on the port it was given, and stops it', async () => {
     const urls: Array<string | null> = []

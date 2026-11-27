@@ -1,7 +1,7 @@
 /**
  * What the connectors service in its own process may ask of the core (`service_query`, core/serviceLinks.ts):
  * `connector_vault`, the account's connected services kept the same on every computer
- * (lib/connectors/vaultSync.ts). Its `op` is one of:
+ * (lib/connectors/vaultSync.ts), answered here by lib/connectors/vaultOps.ts. Its `op` is one of:
  * - `read`: the account's envelope and revision (`GET /api/connector-vault`), signed in by the core;
  * - `write`: an envelope over a revision (`PUT /api/connector-vault`), answered as the backend answers;
  * - `seal`: this computer's connections sealed for the account's machines by the gateway, which holds the
@@ -11,7 +11,7 @@
  * Only the connectors service is answered; it reaches no other path of the backend this way.
  */
 import type { CoreApi } from './api.js'
-import { answerVaultOp } from '../lib/connectors/vaultSync.js'
+import { answerVaultOp } from '../lib/connectors/vaultOps.js'
 
 type Payload = Record<string, unknown>
 

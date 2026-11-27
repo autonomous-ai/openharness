@@ -10,33 +10,42 @@ import { nodeStatus } from '../lib/nodeStatus.js'
  *   - the relay (gateway/gateway.ts): the backend link, the E2EE manager and its sessions, P2P;
  *   - the windows' own sessions to the owner's other machines (lib/remoteRelay.ts `RemoteRelayPool`);
  *   - the trust group (lib/e2ee/groupSyncer.ts) and the account's device key log (deviceLogSyncer.ts);
- *   - the Wi-Fi device's direct links (lib/autonomous-device/direct.ts), which carry its E2EE sessions;
+ *   - the Wi-Fi device's direct links (lib/autonomous-device/direct.ts), which carry its E2EE sessions, and its
+ *     routes of the door about them (`harness autonomous-device discover`, `pair`, `list`, `status`, `revoke`);
  *   - the daemon's own commands about the keys (`harness pair`, `unpair`, `group`, `devices`, …).
  *
- * The core gives it what it cannot hold itself: its events (`GatewayEvents`), the account's tokens and the
- * backend's REST answers, both through `core.account` (a service holds no credential), and a few facts
- * that it says again whenever they change (`GatewayOps.account`, `reachable`, …).
+ * The core gives it what it cannot hold itself: its events (`GatewayEvents`) and a few facts that it says again
+ * whenever they change (`GatewayOps.account`, `reachable`, …). The account's tokens are its own to renew
+ * (lib/authRefresh.ts): it is the one part of the daemon that meets the backend, and the core asks it for a token
+ * (`GatewayOps.accessToken`), so the core calls no other host (the core audit of 2026-11-12, decision 4).
  */
 import { renameSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createProductUsage } from './productUsage.js'
+import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { env } from '../config/env.js'
-import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, WindowRelay } from '../core/api.js'
+import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
 import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
+import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import { AuthSessionManager } from '../lib/authRefresh.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { thisDeviceLabel } from '../lib/daemonState.js'
 import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
+import type { DevLogMember } from '../lib/e2ee/deviceLog.js'
+import {
+  DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome, type DeviceRemovalNotice,
+} from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
@@ -47,6 +56,8 @@ import { TabRelaySockets } from './tabRelay.js'
 import { openVault, sealVault } from '../lib/e2ee/connectorVault.js'
 import { shareWindows } from './share.js'
 import { createAccountHttp } from './accountHttp.js'
+import { accountRoutes, gatewayHttp } from './accountRoutes.js'
+import { keyRoutes, type KeyOps } from './keyRoutes.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
@@ -57,20 +68,27 @@ export interface GatewayHost {
   autonomousEnv: string
   /** Signed in when the core started: the trust group syncs, and the device key log registers this machine. */
   signedIn: boolean
-  /** The account's tokens, as `core.account` hands them out; it never holds the session itself. */
-  tokens: Pick<AuthSessionManager, 'accessToken'>
+  /** Who renews the account's tokens: its process's one manager (gateway/gatewayProcess.ts), so a renewal in flight is
+   *  shared by every start; absent, one of its own, when the gateway runs in the core's process. */
+  tokens?: Pick<AuthSessionManager, 'accessToken'>
   /** Local identity for the guest list; the core reports these facts without doing network work. */
   machineName: string
   hostname: string
   machines?(state: import('../core/api.js').GatewayMachines): void
   /** The account's sign-in as it stood when the core started; `GatewayOps.account` says it again. */
   account: GatewayAccount
+  /** Whether the Wi-Fi device's service serves, its process asked for and waited for a while (core/wifi.ts `serving`):
+   *  its direct links run only while it does. Absent: nothing to wait for. */
+  wifiServing?(): Promise<boolean>
 }
 
 export interface StartedGateway {
   port: RelayGateway
   ops: GatewayOps
   windowRelay: Required<WindowRelay>
+  /** Its routes of the door (core/api.ts `SERVICE_HTTP_ROUTES`): the Wi-Fi device's and the account's, as the core hands
+   *  them on. */
+  requests: ServiceRequests
   stop(): Promise<void>
 }
 
@@ -123,13 +141,59 @@ export function unknownHelloReader(
   }
 }
 
+/**
+ * The gateway's `onUnpaired`: the trust group keeps the key out here, and the account's device key log takes it out
+ * too, whatever the group's side throws (a block list that cannot be written): left in the log, its next read would
+ * trust the key again. The throw goes on to the manager, which says it.
+ */
+export function unpairedHandler(
+  group: Pick<GroupSyncer, 'unpaired'>, devlog: () => Pick<DeviceLogSyncer, 'remove'> | null,
+): (identityPub: string) => void {
+  return (identityPub) => {
+    try {
+      group.unpaired(identityPub)
+    } finally {
+      void devlog()?.remove(identityPub)
+    }
+  }
+}
+
+/**
+ * The device key log's `postAck`: the backend keeps "It's mine". A refusal names the backend's code; anything else
+ * there is the backend's own text, logged by its length.
+ */
+export async function postDeviceAck(http: Pick<ReturnType<typeof createAccountHttp>, 'backend'>, ack: unknown): Promise<boolean> {
+  const r = await http.backend('POST', '/api/device-keys/acks', { ack }, ACK_POST_TIMEOUT_MS)
+  if (r.status !== 200 && r.status !== 404) console.log(`[devlog] the backend did not keep "It's mine" (${r.status}: ${codeOrLength((r.body.error as { code?: unknown } | undefined)?.code)})`)
+  return r.status === 200
+}
+
+/**
+ * The device key log's `announce`. A device's label is what a person named it, and Export logs sends the log off the
+ * machine: the line says its kind and fingerprint, and only the windows get the label.
+ */
+export function announceNewDevice(events: Pick<GatewayEvents, 'toWindows'>, m: DevLogMember): void {
+  const fp = fingerprint(b64d(m.pub))
+  console.log(`[devlog] NEW DEVICE on this account: ${fp} (${m.kind}) — not yours? harness devices remove ${fp}`)
+  events.toWindows({ type: 'device_key_added', payload: { pub: m.pub, label: m.label, kind: m.kind, machineId: m.machineId, at: m.addedAt, fingerprint: fp } })
+}
+
+/** The device key log's `removed`: as `announceNewDevice`, the line names both devices by their fingerprints. */
+export function reportRemovedDevice(events: Pick<GatewayEvents, 'toWindows'>, n: DeviceRemovalNotice): void {
+  if (n.selfRemoved) console.log(`[devlog] ${n.fingerprint} (${n.kind}) signed out of this account`)
+  else if (n.signerPending) console.log(`[devlog] ⚠ ${n.fingerprint} (${n.kind}) was removed by a NEW device you have not looked at: ${n.signerFingerprint} — not yours? harness devices remove ${n.signerFingerprint}`)
+  else console.log(`[devlog] ${n.fingerprint} (${n.kind}) was removed from this account by ${n.signerFingerprint}`)
+  events.toWindows({ type: 'device_key_removed', payload: { ...n } })
+}
+
 /** Pairing errors as `harness pair` maps them to HTTP. */
 const PAIR_STATUS: Record<string, number> = {
   NO_INTENT: 409, EXPIRED: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503,
   RATE_LIMITED: 429, BUSY: 409, TIMEOUT: 504,
 }
 
-export function startGateway(host: GatewayHost): StartedGateway {
+export function startGateway(given: GatewayHost): StartedGateway {
+  const host = { ...given, tokens: given.tokens ?? new AuthSessionManager(backendHttpBase()) }
   let account = host.account
   let reachable: Set<string> | null = null
   const accountHttp = createAccountHttp({
@@ -154,6 +218,9 @@ export function startGateway(host: GatewayHost): StartedGateway {
     sample: gatewayResourceSample(),
     // The gateway runs on the daemon's Node, as every service of the master does.
     node: () => nodeStatus(),
+    // The devices count the dial's day into their own file in the same data folder (their core.dataDir is the core's):
+    // read here, so no dial count goes through the core.
+    dialFile: join(env.ADAPTER_DATA_DIR, DIAL_USAGE_FILE),
   }) : null
   // The choice is read at once, so collection starts with the gateway; its first report waits for its first
   // tick, a random 10 to 60 seconds on (gateway/productUsage.ts), rather than the second a release started it.
@@ -246,11 +313,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
   groupSyncer = syncer
   gateway.groupSync = syncer
   gateway.onPeerLinked = (peer) => syncer.linked(peer)
-  gateway.onUnpaired = (pub) => {
-    syncer.unpaired(pub)
-    // Unpairing a device here takes it out of the account's log too — or the log would trust it again.
-    void devLogSyncer?.remove(pub)
-  }
+  gateway.onUnpaired = unpairedHandler(syncer, () => devLogSyncer)
   // Started once this machine is signed in: at start, or on the first link-up after a sign-in that the
   // core told it of (`ops.account`).
   let groupStarted = false
@@ -282,7 +345,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
       try {
         switchAccountTrust(from, to)
       } catch (err) {
-        console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
+        console.log(`[devlog] could not swap the trust stores to the new account: ${errorKind(err)}`)
       }
       gateway.e2ee.reloadPaired()
       // Sessions to the old account's machines, and who the group last synced with, are that account's.
@@ -308,11 +371,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
       const acks = r.status === 200 ? (r.body.data as { acks?: unknown } | undefined)?.acks : undefined
       return Array.isArray(acks) ? acks : null
     },
-    postAck: async (ack) => {
-      const r = await accountHttp.backend('POST', '/api/device-keys/acks', { ack }, ACK_POST_TIMEOUT_MS)
-      if (r.status !== 200 && r.status !== 404) console.log(`[devlog] the backend did not keep "It's mine" (${r.status}: ${String((r.body.error as { code?: unknown } | undefined)?.code ?? '')})`)
-      return r.status === 200
-    },
+    postAck: (ack) => postDeviceAck(accountHttp, ack),
     append: async (entry) => {
       const p = await gateway.appendDeviceLog(entry as unknown as Record<string, unknown>)
       if (!p) return null
@@ -332,17 +391,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     tombstoned: (pub) => !!syncer.tombstoned(pub),
     blocked: (pub) => !!syncer.isBlocked(pub),
     isTrusted: (pub) => gateway.pairedPeers().some((p) => p.identityPub === pub),
-    announce: (m) => {
-      const fp = fingerprint(b64d(m.pub))
-      console.log(`[devlog] NEW DEVICE on this account: ${m.label || '(no name)'} (${m.kind}) ${fp} — not yours? harness devices remove ${fp}`)
-      host.events.toWindows({ type: 'device_key_added', payload: { pub: m.pub, label: m.label, kind: m.kind, machineId: m.machineId, at: m.addedAt, fingerprint: fp } })
-    },
-    removed: (n) => {
-      if (n.selfRemoved) console.log(`[devlog] ${n.label || '(no name)'} signed out of this account (${n.fingerprint})`)
-      else if (n.signerPending) console.log(`[devlog] ⚠ ${n.label || '(no name)'} (${n.fingerprint}) was removed by a NEW device you have not looked at: ${n.signerLabel || 'another device'} (${n.signerFingerprint}) — not yours? harness devices remove ${n.signerFingerprint}`)
-      else console.log(`[devlog] ${n.label || '(no name)'} (${n.fingerprint}) was removed from this account by ${n.signerLabel || 'another device'}`)
-      host.events.toWindows({ type: 'device_key_removed', payload: { ...n } })
-    },
+    announce: (m) => announceNewDevice(host.events, m),
+    removed: (n) => reportRemovedDevice(host.events, n),
     conflict: (c) => {
       host.events.toWindows({ type: 'device_conflict', payload: { pub: c.pub, label: c.label, fingerprint: c.fingerprint, addedAt: c.addedAt, afterJoin: c.afterJoin } })
     },
@@ -427,25 +477,29 @@ export function startGateway(host: GatewayHost): StartedGateway {
     if (!hit || !selector.trim()) return { ok: false, error: 'NOT_FOUND' }
     return { ok: true, pub: hit.pub, label: hit.label, fingerprint: hit.fingerprint }
   }
-  const refusal = (error: unknown): { refused: { code: string; message: string } } =>
-    ({ refused: { code: String((error as { code?: unknown }).code ?? 'INTERNAL'), message: error instanceof Error ? error.message : String(error) } })
   const devicePairs = () => gateway.listPairs().filter((p) => p.role === 'device')
+  /** The direct links, once the Wi-Fi device's service serves: a device they connected to a service that is not there
+   *  would be answered by nothing. Waited for first, as the core asks for that service's process. */
+  const directLink = async (): Promise<AutonomousDeviceDirect> => {
+    if (!direct) await host.wifiServing?.().catch(() => false)
+    if (!direct) throw deviceRefusal('UNAVAILABLE', 'The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.')
+    return direct
+  }
+  /** A failure of the links or the pairings without a code of its own is said as an internal one, as it always was. */
+  const coded = async <T>(run: () => T | Promise<T>): Promise<T> => {
+    try { return await run() } catch (error) {
+      throw typeof (error as { code?: unknown } | null)?.code === 'string' ? error : deviceRefusal('INTERNAL', error instanceof Error ? error.message : String(error))
+    }
+  }
   /** The account's machines the connections are sealed for and opened from: the verified log's, neither
    *  suspended nor pending (lib/e2ee/connectorVault.ts). */
   const vaultMachines = (): string[] => devlog.list().members
     .filter((m) => m.kind === 'machine' && !m.suspended && !m.pending)
     .map((m) => m.pub)
 
-  const ops: GatewayOps = {
-    backend: (async (method: string, path: string, body?: unknown) => {
-      const answer = await accountHttp.backend(method, path, body)
-      // Whatever the answer: a request that timed out may still have changed the choice.
-      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
-      return answer
-    }) as GatewayOps['backend'],
-    machines: accountHttp.machines,
-    mintGridName: accountHttp.mintGridName,
-    status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
+  /** The keys' routes of the door (gateway/keyRoutes.ts): `harness pair`, `unpair`, `remote-password`, `link connect`'s
+   *  mutual half, `group` and `devices`, and the window's Devices list. */
+  const keyOps: KeyOps = {
     // `harness pair <code>` → run CPace toward the waiting browser; map the result to an HTTP outcome.
     pair: async (code) => {
       const r = await gateway.pair(code)
@@ -502,27 +556,19 @@ export function startGateway(host: GatewayHost): StartedGateway {
       if (r && 'error' in r) return { status: 409, body: { error: r.error } }
       return r ? { status: 200, body: { ...r, applied: confirm } } : { status: 502, body: { error: 'LOG_UNAVAILABLE' } }
     },
-    wifi: async ({ op, device, code, id }) => {
-      try {
-        if (op === 'discover') {
-          if (!direct) throw Object.assign(new Error('The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
-          return { result: { devices: await direct.discover() } }
-        }
-        if (op === 'pair') {
-          if (!direct) throw Object.assign(new Error('The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
-          return { result: await direct.pair(String(device), String(code)) }
-        }
-        if (op === 'pairStatus') {
-          const pending = gateway.pendingPair()
-          return { result: pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' } }
-        }
-        if (op === 'list') return { result: { devices: devicePairs().map(p => ({ ...p, id: p.fingerprint })) } }
-        if (!devicePairs().some(p => p.fingerprint === id)) throw Object.assign(new Error('Device pairing not found'), { code: 'UNKNOWN_DEVICE' })
-        const result = gateway.revoke(String(id))
-        if (!result.ok) throw Object.assign(new Error(result.error), { code: result.error })
-        return { result: { revoked: 1 } }
-      } catch (error) { return refusal(error) }
-    },
+  }
+
+  const ops: GatewayOps = {
+    accessToken: (options) => host.tokens.accessToken(options),
+    backend: (async (method: string, path: string, body?: unknown) => {
+      const answer = await accountHttp.backend(method, path, body)
+      // Whatever the answer: a request that timed out may still have changed the choice.
+      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
+      return answer
+    }) as GatewayOps['backend'],
+    machines: accountHttp.machines,
+    mintGridName: accountHttp.mintGridName,
+    status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
     wifiService: (on) => {
       if (on) { startDirect(); return }
       direct?.stop()
@@ -563,17 +609,57 @@ export function startGateway(host: GatewayHost): StartedGateway {
         const identity = relayIdentityStore.getIdentity()
         const machines = vaultMachines()
         const plaintext = openVault(envelope, identity, new Set([...machines, b64e(identity.pub)]))
-        if (plaintext === null) return null
-        const sealedFor = new Set(Object.keys((envelope as { keys?: Record<string, unknown> }).keys ?? {}))
+        const sealedFor = new Set(Object.keys((envelope as { keys?: Record<string, unknown> } | null)?.keys ?? {}))
+        if (plaintext === null) {
+          // Signed by a key the log no longer holds, or sealed for none of the account's machines: no machine
+          // of the account will ever open it (one signed in again has a new key), so it is waited on by
+          // none. Said so, the connectors service writes its own connections over it. Not a way in for the
+          // backend: it could already drop the envelope, and what is written is sealed for the log's machines.
+          // A key still in the log, even one nobody has said is theirs yet (pending), may be confirmed and
+          // open it: waited on.
+          const inLog = new Set(devlog.list().members.filter((m) => m.kind === 'machine').map((m) => m.pub))
+          const sender = (envelope as { sender?: unknown } | null)?.sender
+          const senderInLog = typeof sender === 'string' && inLog.has(sender)
+          const openable = [...sealedFor].some((pub) => inLog.has(pub))
+          return senderInLog && openable ? null : { stranded: true as const }
+        }
         return { plaintext, complete: machines.every((pub) => sealedFor.has(pub)) }
       },
     },
+  }
+
+  // The Wi-Fi device's routes about its pairings and direct links (lib/autonomous-device/localHttp.ts checks them).
+  const deviceHttp = deviceRoutes({
+    discover: () => coded(async () => ({ devices: await (await directLink()).discover() })),
+    pairStart: ({ code, device }) => coded(async () => (await directLink()).pair(device, code)),
+    pairStatus: () => coded(() => {
+      const pending = gateway.pendingPair()
+      return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
+    }),
+    list: () => coded(() => ({ devices: devicePairs().map(p => ({ ...p, id: p.fingerprint })) })),
+    // The sessions on a direct link whose app said hello, each still its identity's device's.
+    status: () => coded(() => {
+      const sessions = gateway.directDeviceSessions()
+      return { transport: 'direct', connected: sessions > 0, paired: devicePairs().length, sessions, proto: 1 }
+    }),
+    revoke: ({ id }) => coded(() => {
+      if (!devicePairs().some(p => p.fingerprint === id)) throw deviceRefusal('UNKNOWN_DEVICE', 'Device pairing not found')
+      const result = gateway.revoke(id)
+      if (!result.ok) throw deviceRefusal(result.error, result.error)
+      return { revoked: 1 }
+    }),
+  })
+  // The keys' (gateway/keyRoutes.ts), and the account's (gateway/accountRoutes.ts), through `ops.backend`: a choice written
+  // there is read again at once.
+  const requests: ServiceRequests = {
+    gateway_http: gatewayHttp(deviceHttp, keyRoutes(keyOps), accountRoutes((method, path, body) => ops.backend(method, path, body))),
   }
 
   return {
     port: gateway,
     ops,
     windowRelay,
+    requests,
     stop: async () => {
       // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
       // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it. A write

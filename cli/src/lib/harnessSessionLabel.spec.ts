@@ -6,7 +6,9 @@ import { buildHarnessSessionLabel, harnessPaneOwner, isHarnessSessionFor, ownedH
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 
 const dirs: string[] = []
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+// The real-tmux case's home: its panes' zsh may still write history there after kill-server returns, so removal is
+// asked again on ENOTEMPTY, as testing/isolatedTmux.ts removes its own folder.
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) })
 
 describe('panes created in the same millisecond', () => {
   it('allocates distinct names for the same engine and keeps discovery recognition', () => {
@@ -24,7 +26,7 @@ describe('panes created in the same millisecond', () => {
   it('starts two real private panes concurrently with names allocated at the identical clock value', async () => {
     const home = mkdtempSync(join(tmpdir(), 'pane-label-'))
     dirs.push(home)
-    const tmux = await isolatedTmux({ ...process.env, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
+    const tmux = await isolatedTmux({ HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
     try {
       // Start the disposable server first: this tests name allocation, not a tmux startup race.
       await tmux.run('new-session', '-d', '-s', 'fixture-bootstrap', '/bin/sh', '-c', 'sleep 60')
@@ -102,7 +104,7 @@ describe('the tag on a tmux before 3.0', () => {
     // session, carries no tag of its own: the window's was taken for it, and it was styled as an agent.
     const home = mkdtempSync(join(tmpdir(), 'pane-owner-home-'))
     dirs.push(home)
-    const tmux = await isolatedTmux({ ...process.env, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
+    const tmux = await isolatedTmux({ HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
     try {
       const tag = '0123456789abcdef'
       await tmux.run('new-session', '-d', '-s', 'harness-claude-1', '-x', '80', '-y', '24')

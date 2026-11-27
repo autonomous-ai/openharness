@@ -2,7 +2,7 @@
  * The source-control seam: what Harness asks of a project's SCM, in one shape, so a second system can
  * be added beside git rather than swapped in — the rule CONTRIBUTING.md already sets for multiplexers.
  * Today the only implementation wraps the git path — `gitProject.ts` (detect, prepare),
- * `agentProject.ts` (describe), `branchNaming.ts` (rename), `worktreeSweep.ts` (sweep) — and changes
+ * `agentProject.ts` (describe), `branchNaming.ts` (rename) — and changes
  * nothing about it. The git assumptions those modules make (the `.git` file marker,
  * `branch.<name>.harness` config keys, `refs/heads/…` validation, `git status --porcelain` as
  * "dirty") stay inside the git implementation and never reach a caller.
@@ -67,9 +67,6 @@ export interface PrepareOptions {
   /** What the workspace's work starts from — git: a `refs/heads/…` or `refs/remotes/…` ref.
    *  Absent: the SCM's own default (git: `HEAD`). */
   base?: string
-  /** No `base` was named: start from the remote's default branch, brought up to date first, instead of from where
-   *  the source checkout is (git: `origin`'s default branch, fetched). Absent: the SCM's own default. */
-  fromDefaultBranch?: boolean
   /** The name the workspace's line of work takes — git: its branch. Absent: made up. */
   name?: string
   /** `name` exists already and is taken as it is, rather than created from `base`. */
@@ -90,8 +87,6 @@ export interface ScmProject {
   describe(cwd: string): Promise<ScmDescription | null>
   /** Once the session has a title (today: `nameBranchAfterSession`): the new name, or null when nothing was renamed. */
   rename(cwd: string, title: string | null): Promise<string | null>
-  /** Remove idle isolated workspaces nothing uses (today: `sweepWorktrees`); the paths removed. */
-  sweep(input: { root: string; inUse: Iterable<string | null | undefined>; now?: number; idleMs?: number }): Promise<string[]>
   /** Env to put in the pane at launch and every relaunch (git: nothing). */
   launchEnv(record: ScmLaunchRecord): Record<string, string>
   /** Before Harness itself writes into project files the SCM may hold read-only (the instruction files

@@ -5,55 +5,125 @@
  *
  * The daemon finds it through `HARNESSD_TEST_DIAL_PORT`, the one thing that differs from a dial on USB:
  * a pseudo-terminal is not on the USB bus that discovery reads.
+ *
+ * Windows has no pseudo-terminal a COM port can be: there the dial serves a pipe (`listen`), and the serial stand-in the
+ * daemon runs as its `harness-serial.exe open` carries the port's bytes to it
+ * (src/cable/__fixtures__/fakeHarnessSerial.mjs, `FAKE_SERIAL_OPEN=bridge:<endpoint>`).
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CableDecoder, CableType, encodeCableFrame } from '../../src/cable/cableFrame.js'
+import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
+
+export type { DialMessage }
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-export type DialMessage = Record<string, unknown> & { t?: string }
+/**
+ * The firmware version it greets with: the round firmware in this repo, so the daemon treats it as a dial of today, whose
+ * moves made by code are not reported (cableSession.ts `echoesCodeMoves`). The `-e2e` suffix is on purpose: the echo
+ * guard reads only its X.Y.Z prefix, while an image is offered only to a plain X.Y.Z (fwPush.ts `shouldOffer`), so even a
+ * daemon under test that reads a manifest (CABLE_FW_DISABLE off) never offers this dial one.
+ */
+const FAKE_DIAL_FW = `${roundFirmwareVersion()}-e2e`
+
+function roundFirmwareVersion(): string {
+  const file = join(here, '../../../devices/harness-device/firmware/version.txt')
+  let version: string
+  try { version = readFileSync(file, 'utf8').trim() } catch (error) {
+    throw new Error(`the fake dial cannot read the round firmware version at ${file}: ${(error as Error).message}`)
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`the round firmware version at ${file} is not X.Y.Z: "${version}"`)
+  return version
+}
+
+/** The rows a `settings.set` changes on the round firmware, and their type. It takes `character` and `straightTitle`
+ *  and drops them (ui_settings_apply: Focus is its only face, drawn straight across), and never takes `face` or `round`,
+ *  its glass. Voice language is held in 8 bytes, its end included (CFG_VLANG_MAX). */
+const KEPT_SETTINGS: Record<string, 'boolean' | 'number' | 'string'> = {
+  brightness: 'number', muted: 'boolean', quiet: 'boolean', focusFace: 'boolean', scrollReversed: 'boolean', voiceLang: 'string',
+}
+
+/** Voice language as the firmware reads it back: cut to 7 bytes, not characters (snprintf into CFG_VLANG_MAX), and an
+ *  empty one read as English (config_load_voicelang). A cut through a character decodes as the daemon would decode it. */
+function voiceLangHeld(value: string): string {
+  return Buffer.from(value, 'utf8').subarray(0, 7).toString('utf8') || 'en'
+}
 
 export interface FakeDialOptions {
   /** What it calls itself in its greeting; two dials on one desk differ by it. */
   mac?: string
   /** The settings it says it holds when it greets, as the firmware reads them from its flash. */
   settings?: Record<string, unknown>
-  /** The capabilities its greeting names (`swarmCard: 'v1'`, …), as a firmware that speaks them does. */
+  /** Keep a `settings.set` as the round firmware does (cable_client.c handle_settings_set), so a desk can check a
+   *  setting end to end. Off by default: hardwareWatch.e2e.ts answers for the dial by hand and expects it silent. */
+  keepsSettings?: boolean
+  /** The capabilities its greeting names (`stats: 'turn-v1'`, …), as a firmware that speaks them does. */
   capabilities?: Record<string, string>
+}
+
+/** The dial's end of the cable: what carries its bytes to the daemon, and what lets the cable go. */
+interface Cable {
+  write(bytes: Uint8Array): void
+  close(): Promise<void>
 }
 
 export class FakeDial {
   readonly messages: DialMessage[] = []
   /** When each message arrived, ms since the epoch: the gaps are what a dial reads as its daemon's health. */
   readonly arrivedAt: number[] = []
-  private readonly decoder = new CableDecoder()
   private readonly mac: string
+  /** A copy: a kept `settings.set` changes it, never the caller's object. */
   private readonly settings?: Record<string, unknown>
+  private readonly keepsSettings: boolean
   private readonly capabilities: Record<string, string>
   /** When the daemon last said anything, and whether it has welcomed this dial since it last went quiet. */
   private heardAt = 0
   private welcomed = false
   private cadence: ReturnType<typeof setInterval> | null = null
+  private readonly model = new DialCarousel()
+  private readonly refreshing: ReturnType<typeof setInterval>
 
-  private constructor(private readonly bridge: ChildProcess, readonly path: string, options: FakeDialOptions) {
+  private constructor(private readonly cable: Cable, readonly path: string, options: FakeDialOptions) {
     this.mac = options.mac ?? 'e2:e0:00:00:00:01'
-    this.settings = options.settings
+    this.settings = options.settings && { ...options.settings }
+    this.keepsSettings = options.keepsSettings ?? false
     this.capabilities = options.capabilities ?? {}
-    bridge.stdout!.on('data', (chunk: Buffer) => {
-      this.decoder.feed(chunk, (frame) => {
-        if (frame.type !== CableType.Json) return
-        let message: DialMessage
-        try { message = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as DialMessage } catch { return }
-        this.messages.push(message)
-        this.arrivedAt.push(Date.now())
-        this.heardAt = Date.now()
-        if (message.t === 'welcome') this.welcomed = true
-        // A dial that stops answering for 20 seconds is taken as unplugged (cableSession SILENCE_MS).
-        if (message.t === 'ping') this.send({ t: 'pong' })
-      })
+    this.refreshing = setInterval(() => this.model.refresh(), CAROUSEL_REFRESH_MS)
+  }
+
+  /** What the daemon sent, framed by [decoder]: one for each connection, so a frame cut short by a port that closed is
+   *  never joined to the next connection's bytes. */
+  private hear(decoder: CableDecoder, chunk: Buffer): void {
+    decoder.feed(chunk, (frame) => {
+      if (frame.type !== CableType.Json) return
+      let message: DialMessage
+      try { message = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as DialMessage } catch { return }
+      this.messages.push(message)
+      this.arrivedAt.push(Date.now())
+      this.heardAt = Date.now()
+      if (message.t === 'welcome') this.welcomed = true
+      this.model.heard(message)
+      // A dial that stops answering for 20 seconds is taken as unplugged (cableSession SILENCE_MS).
+      if (message.t === 'ping') this.send({ t: 'pong' })
+      if (message.t === 'settings.set' && this.keepsSettings && this.settings) this.keep(message)
     })
+  }
+
+  /** As the firmware: only the rows it changes and holds, only with a value of their type, brightness clamped to a
+   *  whole number, Voice language as it reads it back, then the values it now holds read back. */
+  private keep(message: DialMessage): void {
+    const settings = this.settings!
+    for (const [key, type] of Object.entries(KEPT_SETTINGS)) {
+      const value = message[key]
+      if (!(key in settings) || typeof value !== type) continue
+      settings[key] = key === 'brightness' ? Math.trunc(Math.min(100, Math.max(0, value as number)))
+        : key === 'voiceLang' ? voiceLangHeld(value as string) : value
+    }
+    this.send({ t: 'settings.state', ok: true, settings: { ...settings } })
   }
 
   static async open(options: FakeDialOptions = {}): Promise<FakeDial> {
@@ -68,15 +138,76 @@ export class FakeDial {
       })
       bridge.once('exit', (code) => { clearTimeout(timer); reject(new Error(`the pseudo-terminal bridge exited (${code}): ${said}`)) })
     })
-    return new FakeDial(bridge, path, options)
+    const dial = new FakeDial({
+      write: (bytes) => { bridge.stdin!.write(bytes) },
+      close: async () => {
+        if (bridge.exitCode !== null) return
+        const exited = new Promise<void>((done) => bridge.once('exit', () => done()))
+        bridge.stdin!.end()
+        const timer = setTimeout(() => bridge.kill('SIGKILL'), 3_000)
+        await exited
+        clearTimeout(timer)
+      },
+    }, path, options)
+    const decoder = new CableDecoder()
+    bridge.stdout!.on('data', (chunk: Buffer) => dial.hear(decoder, chunk))
+    return dial
+  }
+
+  /**
+   * A dial that serves [endpoint], a pipe or a Unix socket: the connection made to it is the cable. A port the daemon
+   * opens again connects again, and the newer connection is the cable from then on. What it sends while nothing is
+   * connected is lost, as on a port nobody holds; `greet` sends again until it is heard.
+   */
+  static async listen(endpoint: string, options: FakeDialOptions = {}): Promise<FakeDial> {
+    let cable: Socket | null = null
+    const server = createServer()
+    const dial = new FakeDial({
+      write: (bytes) => { if (cable && !cable.destroyed) cable.write(bytes) },
+      close: async () => {
+        cable?.destroy()
+        await new Promise<void>((done) => server.close(() => done()))
+      },
+    }, endpoint, options)
+    server.on('connection', (socket) => {
+      cable?.destroy()
+      cable = socket
+      const decoder = new CableDecoder()
+      socket.on('data', (chunk: Buffer) => dial.hear(decoder, chunk))
+      // A stand-in that ends as its port closes can reset the connection: the port's next open connects anew.
+      socket.on('error', () => {})
+      socket.on('close', () => { if (cable === socket) cable = null })
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(endpoint, () => { server.off('error', reject); resolve() })
+    })
+    return dial
   }
 
   private hello(): DialMessage {
-    return { t: 'hello', product: 'harness', proto: 3, mac: this.mac, fw: '0.0.0-e2e', hw: 'e2e', ...this.capabilities, ...(this.settings ? { settings: this.settings } : {}) }
+    return { t: 'hello', product: 'harness', proto: 3, mac: this.mac, fw: FAKE_DIAL_FW, hw: 'e2e', ...this.capabilities, ...(this.settings ? { settings: this.settings } : {}) }
   }
 
   send(message: DialMessage): void {
-    this.bridge.stdin!.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
+    this.cable.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
+  }
+
+  /** One chunk of what its microphone heard, between a `voice.begin` and its `voice.end`, as the firmware sends it. */
+  audio(pcm: Buffer): void {
+    this.cable.write(encodeCableFrame(CableType.Pcm, pcm))
+  }
+
+  /** What the glass shows: the tiles in order, the agent on the face (`null` is "Choose a pane"), the agents refused. */
+  carousel(): { tiles: string[]; active: string | null; refused: number } {
+    const { tiles, active, refused } = this.model
+    return { tiles: [...tiles], active: tiles[active] ?? null, refused }
+  }
+
+  /** A tap on an app in APPS (ui_habitat.c `app_pick`): the pick goes to the daemon, and its ring lands on the face. */
+  pick(app: string): void {
+    this.send({ t: 'app.pick', app })
+    this.model.picked(app)
   }
 
   /** The first message from the daemon that passes `test`, waiting up to `ms` for it. */
@@ -87,6 +218,26 @@ export class FakeDial {
       if (found) return found
       if (Date.now() > deadline) throw new Error(`the dial heard no ${what} in ${ms}ms (heard: ${this.messages.map((m) => m.t).join(', ') || 'nothing'})`)
       await new Promise((done) => setTimeout(done, 100))
+    }
+  }
+
+  /**
+   * A person's turn to [agentId], again every 2 s until [probe] gives a value, polling every 50 ms; that value. The daemon
+   * drops a dial's `focus` for the first second of a switch it drives itself (cableSession.ts, `APP_SWITCH_REPAINT_MS`):
+   * a turn that falls in that time is lost, so it is made again, as a person turns again when the window did not follow.
+   */
+  async turnUntil<T>(agentId: string, what: string, probe: () => T | undefined, ms = 60_000): Promise<T> {
+    const deadline = Date.now() + ms
+    let sentAt = 0
+    for (;;) {
+      const got = probe()
+      if (got !== undefined) return got
+      if (Date.now() > deadline) throw new Error(`the dial's turn to ${agentId} never gave ${what} in ${ms}ms`)
+      if (Date.now() - sentAt >= 2_000) {
+        this.send({ t: 'focus', agentId })
+        sentAt = Date.now()
+      }
+      await new Promise((done) => setTimeout(done, 50))
     }
   }
 
@@ -128,7 +279,7 @@ export class FakeDial {
 
   /** Bytes that are no frames, straight onto the port: what a broken or hostile board sends. */
   flood(bytes: Buffer): void {
-    this.bridge.stdin!.write(bytes)
+    this.cable.write(bytes)
   }
 
   /** The first welcome after `since`, waiting up to `ms`: a daemon that started again behind the port. */
@@ -139,11 +290,7 @@ export class FakeDial {
   async close(): Promise<void> {
     if (this.cadence) clearInterval(this.cadence)
     this.cadence = null
-    if (this.bridge.exitCode !== null) return
-    const exited = new Promise<void>((done) => this.bridge.once('exit', () => done()))
-    this.bridge.stdin!.end()
-    const timer = setTimeout(() => this.bridge.kill('SIGKILL'), 3_000)
-    await exited
-    clearTimeout(timer)
+    clearInterval(this.refreshing)
+    await this.cable.close()
   }
 }

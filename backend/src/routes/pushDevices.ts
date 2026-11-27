@@ -1,12 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
-import { dropPushDevice, registerPushDevice } from '../push/devices.js'
+import { dropPushDevice } from '../push/devices.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
 
-/** A phone registers at each signed-in launch and when its token changes, and drops it at sign-out: a loop meets this, nothing else. */
+/** Legacy phones unregister at sign-out; a loop meets this bound, nothing else. */
 const CHANGES_PER_MINUTE = 20
 const allowChange = createRateLimiter('push-devices', 60_000, CHANGES_PER_MINUTE)
 
@@ -17,17 +17,11 @@ const body = z.object({
 }).strict()
 
 /**
- * A phone's push token for the signed-in person (push/devices.ts, task #2905): kept at sign-in, so a thread reply or a tag
- * reaches the phone while the app is closed, and dropped at sign-out, while the sign-in still works to say so.
+ * Swarm push is gone. Keep this exact POST contract so older mobile clients can unregister their own token.
+ * Remove only after supported callers are gone and at least 30 days after the last push-enabled supported client
+ * (2026-12-16 at the earliest). Token registration is refused by gone.ts; the existing TTL expires records left behind.
  */
 export async function pushDeviceRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Body: z.infer<typeof body> }>('/api/push-devices', { preHandler: validateBody(body) }, async (req, reply) => {
-    const user = req.user!
-    if (!(await allowChange.allows(user.sub))) return sendError(reply, 'Too many changes to this phone\'s notifications. Try again in a minute.', 'RATE_LIMITED', 429)
-    await registerPushDevice(prisma, user.sub, req.body, Date.now())
-    sendSuccess(reply, { ok: true })
-  })
-
   app.post<{ Body: z.infer<typeof body> }>('/api/push-devices/drop', { preHandler: validateBody(body) }, async (req, reply) => {
     const user = req.user!
     if (!(await allowChange.allows(user.sub))) return sendError(reply, 'Too many changes to this phone\'s notifications. Try again in a minute.', 'RATE_LIMITED', 429)

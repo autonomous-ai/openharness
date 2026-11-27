@@ -21,11 +21,12 @@
  * credential into `ps` output for every user on the machine, for the life of the call; an environment
  * variable would put it in `/proc/<pid>/environ` and in anything the child later spawns.
  */
-import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
 import { gridEnvelopes } from './gridEnvelope.js'
 import { gridCallStarted } from './gridCalls.js'
 import { gridBinaryPath, gridChildEnv, gridCommand } from './gridExec.js'
+import { spawnTied } from './tied.js'
 
 /** The flag on `grid login` that means "read the token off stdin" (autonomous-grid's `cli/parser.py`).
  *  WHICH `grid` is not decided here: `gridBinaryPath()` (lib/gridExec.ts) answers that for every grid
@@ -135,9 +136,10 @@ export async function handOffToGrid(
   const ended = await gridCallStarted()
   return await new Promise<GridHandoffResult>((resolve) => {
     const command = gridCommand(binary, args)
-    let child: ReturnType<typeof spawn>
+    let child: ChildProcess
     try {
-      child = spawn(command.file, command.args, {
+      // Tied: each crash of the command that runs this left a grid sign-in running on its own.
+      child = spawnTied(command.file, command.args, {
         stdio: ['pipe', opts.json ? 'pipe' : 'inherit', opts.json ? 'pipe' : 'inherit'],
         // The human path inherits stderr, which is a terminal — exactly where grid would offer
         // `grid update` for a binary the harness pins. See GRID_NO_UPDATE_CHECK_VAR in gridExec.ts.

@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './lib/modelManagerBundle.mjs'
 
 const cli = resolve(process.argv[2] || fileURLToPath(new URL('../dist/cli.js', import.meta.url)))
 const root = mkdtempSync(join(tmpdir(), 'core-harness-upgrade-'))
@@ -17,7 +17,7 @@ const packages = [
   ['harness-monitor', 'harness-monitor', readHarnessMonitorBundle],
   ['memories', 'memories', readMemoriesBundle],
 ]
-const env = { ...process.env, DSH_DIR: dshDir, ADAPTER_DATA_DIR: join(root, 'data'),
+const env = { ...process.env, DSH_DIR: dshDir, ADAPTER_DATA_DIR: join(root, 'data'), HARNESS_AUTH_DIR: join(root, 'auth'),
   ADAPTER_COMPUTER_ID: 'core-upgrade-test', ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id') }
 const run = (...args) => execFileSync(process.execPath, [cli, 'dsh', ...args], {
   cwd: root, env, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'],
@@ -60,6 +60,23 @@ try {
   run('builtins')
   assert.deepEqual(index(), upgraded, 'repeated startup must reuse the installed core revisions')
   console.log('PASS release bundle migrates existing official core packages; prior files, workspaces and Store apps are retained')
+
+  // Hachi is generated only while the account's switch is on here (lib/agentSettings.ts, as the core's sync keeps it).
+  assert(!index().some(row => row.id === 'autonomous/hachi'), 'Hachi must not be generated while its switch is off')
+  mkdirSync(env.HARNESS_AUTH_DIR, { recursive: true })
+  mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
+  writeFileSync(join(env.HARNESS_AUTH_DIR, 'session.json'), JSON.stringify({ version: 1, accessToken: 'upgrade-test', autonomousEnv: 'prod',
+    computerId: 'core-upgrade-test', machineId: 'machine-upgrade-test', updatedAt: 0 }))
+  writeFileSync(join(env.ADAPTER_DATA_DIR, 'agent-settings.json'), JSON.stringify({ version: 2, accountId: 'account-upgrade-test',
+    machineId: 'machine-upgrade-test', hachi: true }))
+  run('builtins')
+  const hachi = index().find(row => row.id === 'autonomous/hachi')
+  assert.equal(hachi?.source, 'builtin:hachi')
+  const hachiSource = fileURLToPath(new URL('../../store/agents/hachi', import.meta.url))
+  for (const [path, file] of Object.entries(readHachiBundle(hachiSource))) assert.equal(readFileSync(join(hachi.dir, path), 'utf8'), file.content, `hachi/${path}`)
+  assert.deepEqual(readFileSync(join(hachi.dir, 'skills/harness/SKILL.md')),
+    readFileSync(fileURLToPath(new URL('../../plugins/harness/skills/harness/SKILL.md', import.meta.url))))
+  console.log('PASS release bundle generates Hachi, with the harness skill, only while its switch is on')
 
   const monitor = upgraded.find(row => row.id === 'autonomous/harness-monitor')
   process.env.HARNESS_MONITOR_CONFIG = join(root, 'policy.jsonc')

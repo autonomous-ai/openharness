@@ -14,22 +14,20 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type SuperTabsCore, type SuperTabScreen, type SuperTabTyped, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
-import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
-import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
 
 /** An agent as the core shows it to an experiment (core/experimentQueries.ts `shown`). */
-export type ShownAgent = RegisteredSession & { displayName?: string; terminalAvailable?: boolean; selectedModel?: string | null; dshContext?: AgentDshContext | null }
+export type ShownAgent = AgentView & { displayName?: string; terminalAvailable?: boolean; selectedModel?: string | null; dshContext?: AgentDshContext | null }
 
 /** The agents a process was last told of, and how it asks the core to act. Those it is never told of read
  *  as none, and with no way to ask, it acts on nothing. */
 export interface AgentsView {
   live?: () => ShownAgent[]
-  advertised?: () => RegisteredSession[]
+  advertised?: () => AgentView[]
   /** Ask the core (`CoreConnection.query`, services/process.ts), for an experiment that acts. */
   ask?: (query: string, payload: Payload) => Promise<Payload>
   /** The delivered turns it makes and hears of, through `ask` (services/turnsLink.ts). */
@@ -43,11 +41,11 @@ export interface AgentsView {
 }
 
 /** Whether what the core sent is an agent. */
-export const isSession = (value: unknown): value is RegisteredSession =>
+export const isSession = (value: unknown): value is AgentView =>
   !!value && typeof value === 'object' && typeof (value as { agentId?: unknown }).agentId === 'string'
 
 /** The agents in a core's answer (`{ agents: [...] }`), or null when it is not one. */
-export function agentsIn(answer: Record<string, unknown> | null | undefined): RegisteredSession[] | null {
+export function agentsIn(answer: Record<string, unknown> | null | undefined): AgentView[] | null {
   return Array.isArray(answer?.agents) ? answer.agents.filter(isSession) : null
 }
 
@@ -91,10 +89,6 @@ export const UNASKED = {
   lastTurn: CoreApi['transcripts']['lastTurn']
 }
 
-/** The core's answer to a terminal read or write, or why there is none, in words the Lead reads. */
-const terminalAnswer = (asked: Promise<Record<string, unknown>>): Promise<SuperTabTyped | SuperTabScreen> => asked.then(
-  answer => answer.ok === true ? answer as SuperTabScreen : { ok: false, error: String(answer.error ?? 'The terminal could not be reached.') },
-  () => ({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' }))
 
 export function processCoreApi(dataDir: string, service: string, view: AgentsView = {}): CoreApi {
   const live = (): ShownAgent[] => view.live?.() ?? []
@@ -124,21 +118,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       live,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
-      closeSwarm: async request => await (ask?.('close_swarm', { ...request }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
-        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
-      keepLeadAlive: async agentId => {
-        const answer = await ask?.('keep_lead_alive', { agentId }).catch(() => null)
-        if (answer?.ok === true) return { ok: true }
-        return answer?.ok === false && typeof answer.error === 'string'
-          ? { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
-          : { ok: false, error: 'SERVICE_UNAVAILABLE' }
-      },
-      closeMember: async (agentId, creationId) => await (ask?.('close_member', { agentId, ...(creationId ? { creationId } : {}) }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
-        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
-      stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
-      gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
-      creationStatus: async creationId => creationObservation(creationId,
-        (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),
       advertised: () => view.advertised?.() ?? [],
       terminalAvailable: (agentId) => live().find((session) => session.agentId === agentId)?.terminalAvailable === true,
@@ -179,15 +158,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       recent: async () => [],
       asks: async () => [],
       ...(view.deliveries?.turns ?? DELIVERIES_OFF),
-      // The connected service identity decides the namespace; the payload cannot
-      // grant another process permission to write a queued instruction.
-      leaseDeliveries: async (maker, leases) => maker === service &&
-        (await ask?.('lease_deliveries', { leases }).catch(() => null))?.leased === true,
-      // A core from before this question answers with an error: nothing said holds it, and the write checks as before.
-      holdOf: async (agentId, deliveryId) => {
-        const hold = (await ask?.('delivery_hold', { agentId, deliveryId }).catch(() => null))?.hold
-        return typeof hold === 'string' ? hold : null
-      },
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
@@ -217,15 +187,16 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           ? { accountId: answer.accountId, email: answer.email } : null
       },
       onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
+      // The account's machines are not an experiment's to read: none declares `/api/machines` (core/api.ts
+      // `EXPERIMENT_BACKEND_ROUTES`), and the devices' process asks the core for the list by its own link.
       ...UNASKED.account,
-      // The account's machine list is the one read of `/api/machines` the core's `backend` answer gives an experiment
-      // already, so a service that is not asked for it gets the same refusal for it as for any other path. The Super
-      // Tab service's route context needs it: in its own process it saw none (the 2026-10-19 manual run).
-      machines: () => backend('GET', '/api/machines'),
     },
     clients: {
       viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
+      // A goal Hachi closed, for every window of the account (core/agentQueries.ts `hachi_goal_done`). One the core
+      // cannot take now is lost, as a count is: the goal is closed and kept, and its notice is a courtesy.
+      hachiGoalDone: (notice) => { void ask?.('hachi_goal_done', { ...notice }).catch(() => {}) },
       // Handed to the core in order; whether the relay took it is the core's to know, and a lost observer's
       // close follows.
       observer: (connId, type, payload) => {
@@ -242,6 +213,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       get autonomousEnv() { return daemon().autonomousEnv },
     },
     wifi: UNASKED.wifi,
+    // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
+    // the core cannot take now is lost: counters are measures, never state.
+    count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },
     // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
     // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
     // id travels as `questionId`: `requestId` is the query's own, which the link writes over.
@@ -251,19 +225,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
         unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
       } satisfies CloudCore,
-      // The Super Tab service's waits (superTabs/inCore/attention.ts), the whole set each time: a core that missed one
-      // hears the next, and a new core the host's first roster (superTabs/host.ts).
-      superTabs: {
-        attention: (items) => { void ask('super_tab_attention', { items }).catch(() => {}) },
-        // The Swarm cards, whole each time they change, and one Lead's recap (superTabs/inCore/cards.ts).
-        cards: (items) => { void ask('super_tab_cards', { items }).catch(() => {}) },
-        cardRecap: (recap) => { void ask('super_tab_card_recap', { recap }).catch(() => {}) },
-        shareObservers: () => { void ask('super_tab_observers', {}).catch(() => {}) },
-        // A Lead's read of a member's terminal and its typing (superTabs/inCore/terminal.ts), answered by the core.
-        screen: (agentId, scrollback) => terminalAnswer(ask('super_tab_screen', { agentId, scrollback })) as Promise<SuperTabScreen>,
-        input: (agentId, text, keys) => terminalAnswer(ask('super_tab_input', { agentId, text, keys })),
-        inputIfScreen: (agentId, keys, screen) => terminalAnswer(ask('super_tab_input_if_screen', { agentId, keys, screen })),
-      } satisfies SuperTabsCore,
     } : {}),
   }
 }

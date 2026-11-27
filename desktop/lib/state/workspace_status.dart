@@ -94,11 +94,8 @@ String? _autoName(AppNotifier app, Swarm tab) {
 /// With Auto rename on, a name from the tab's machine replaces the vote.
 Map<String, String> workspaceTabNames(AppNotifier app) {
   final candidates = <String, List<_TabName>>{};
-  // A tab showing a Swarm is called what the Swarm is called, whatever its
-  // panes run: never their folder, project or type (task #2647).
-  bool namedBySwarm(Swarm tab) => tab.isSuperTab && tab.superTabId != null;
   for (final tab in app.swarms) {
-    if (tab.nameIsCustom || namedBySwarm(tab)) {
+    if (tab.nameIsCustom) {
       candidates[tab.id] = [];
       continue;
     }
@@ -153,7 +150,7 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
   final autoNames = {for (final tab in app.swarms) tab.id: _autoName(app, tab)};
   return {
     for (final tab in app.swarms)
-      tab.id: tab.nameIsCustom || namedBySwarm(tab)
+      tab.id: tab.nameIsCustom
           ? tab.name
           : tab.isStore
           ? 'store'

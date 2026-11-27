@@ -6,7 +6,9 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { env } from '../config/env.js'
 import { prisma } from './prisma.js'
 import { ensureIndex } from './db/indexes.js'
-import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
+import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageMetric, type ProductUsageReport } from '../types/productUsage.js'
+import type { DialUsageMetric } from '../types/dialUsage.js'
+import type { VoiceUsageMetric } from './voiceUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
 import { PRODUCT_USAGE_RECEIPT_DAYS, PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
@@ -56,8 +58,12 @@ async function productUsageChoices(userIds: string[], db: Db): Promise<Map<strin
   return choices
 }
 
+/** A signed-in report: product names and the dial's. Declared here, not in types/productUsage.ts, whose bytes the
+ * CLI's core shares and which knows nothing of the dial. */
+export type UsageReport = Omit<ProductUsageReport, 'counters'> & { counters: Partial<Record<ProductUsageMetric | DialUsageMetric, number>> }
+
 /** Identity is used for permission only. Neither it nor the report body reaches analytics storage. */
-export async function ingestProductUsage(userId: string, report: ProductUsageReport, now = new Date()) {
+export async function ingestProductUsage(userId: string, report: UsageReport, now = new Date()) {
   if (!validDay(report.day, now)) return { accepted: false, reason: 'EXPIRED' }
   return ingestCounters(report, userId, now)
 }
@@ -96,6 +102,17 @@ async function apartPrefixes(tx: Pick<Prisma.TransactionClient, 'user'>, reports
   return reports.map(r => r.context?.channel === 'testing' ? 'testing:' : r.userId && staffAccounts.get(r.userId) ? 'staff:' : '')
 }
 export function resetStaffAccountsForTests(): void { staffAccounts.clear() }
+
+/** [apartPrefixes]' answer for one account, outside a report: one read for an account not seen yet. */
+async function staffAccount(userId: string): Promise<boolean> {
+  const known = staffAccounts.get(userId)
+  if (known !== undefined) return known
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+  if (staffAccounts.size >= STAFF_ACCOUNTS_MAX) staffAccounts.clear()
+  const staff = !!user?.email.toLowerCase().endsWith(STAFF_EMAIL)
+  staffAccounts.set(userId, staff)
+  return staff
+}
 
 interface QueuedReport { id: string; day: string; revision?: number; context?: ProductUsageContext; userId?: string
   increments: UsageIncrement[] }
@@ -168,7 +185,7 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
 async function pauseForConflict(error: unknown, attempt: number, started: number): Promise<void> {
   const code = (error as { code?: string } | null)?.code
   const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
-  // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
+  // A Mongo lock wait comes without a Prisma code, labelled transient.
   const transient = error instanceof Error && error.message.includes('TransientTransactionError')
   if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
     || performance.now() - started + pause >= 1000) throw error
@@ -274,6 +291,26 @@ export async function recordRelayUsage(userId: string, now: Date, metric: RelayU
   }
 }
 
+let voiceWarnedAt = 0
+
+/** A transcribed clip's totals (lib/voiceUsage.ts), under the account's "Share product usage data" like a relay connect,
+ * the team's under `staff:`. No `testing:`: a clip carries no build channel. Counted in memory and written once a
+ * minute (`createRelayTotals`). Never throws, so the voice route need not wait for it. */
+export async function recordVoiceUsage(userId: string, now: Date, increments: Array<[VoiceUsageMetric, number]>): Promise<void> {
+  try {
+    if (!(await relayEnabled(userId))) return
+    const prefix = (await staffAccount(userId)) ? 'staff:' : ''
+    const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
+    for (const [metric, value] of increments) if (value) relayTotals.add(dayUtc, prefix + metric, value)
+  } catch {
+    // The account and the database's error stay out of the log, as for relay connects.
+    if (Date.now() - voiceWarnedAt >= 60_000) {
+      voiceWarnedAt = Date.now()
+      console.warn('[product-usage] Some voice counts are unavailable.')
+    }
+  }
+}
+
 const STAFF_EMAIL = '@autonomous.ai'
 
 /** A keyed pseudonym: the same person maps to the same subject; the id never reaches the marks. */
@@ -288,24 +325,24 @@ export function resetActivityMarksForTests(): void { marked.clear(); markedDay =
 let activityWarnedAt = 0
 
 /** Fire-and-forget from the relay touch points; never awaited by a socket, never throws. */
-export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean; hosting?: boolean },
+export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean },
   key: string = env.PRODUCT_USAGE_SUBJECT_KEY): Promise<void> {
-  if (!key || (!mark.surface && !mark.worked && !mark.hosting)) return
+  if (!key || (!mark.surface && !mark.worked)) return
   try {
     const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
     const day = dayUtc.toISOString().slice(0, 10)
     if (day !== markedDay) { marked.clear(); markedDay = day }
     const subject = activitySubject(userId, key)
-    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}|${mark.hosting ? 'h' : ''}`
+    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}`
     if (marked.has(seen)) return
     if (!(await productUsageChoice(userId)).enabled) return
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true, email: true } })
     if (!user) return
     const where = { subject_dayUtc: { subject, dayUtc } }
-    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}), ...(mark.hosting ? { hosting: true } : {}) }
+    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}) }
     try {
       await prisma.productUsageActivity.upsert({ where, update, create: {
-        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true, ...(mark.hosting ? { hosting: true } : {}),
+        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true,
         signupDay: new Date(Math.floor(user.createdAt.getTime() / DAY) * DAY),
         staff: user.email.toLowerCase().endsWith(STAFF_EMAIL),
         expiresAt: new Date(dayUtc.getTime() + ACTIVITY_DAYS * DAY),

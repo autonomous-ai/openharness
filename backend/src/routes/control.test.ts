@@ -90,9 +90,8 @@ describe("a Harness Team account's old sign-in against every control route", () 
     // The table is the real one: the sweep covered the account's sensitive routes, not an empty list.
     for (const route of ['GET /api/machines', 'POST /api/auth/handoff', 'GET /api/auth/me', 'GET /api/connector-vault', 'GET /api/desk',
       'POST /api/auth/qr/approve', 'POST /api/device-auth/approve', 'GET /api/grid/profile', 'PUT /api/machines/:machineId/share',
-      'GET /api/agent-messages', 'GET /api/harness-shares', 'GET /api/super-tabs/list', 'POST /api/super-tabs/:tabId/join',
+      'GET /api/agent-messages', 'GET /api/harness-shares', 'GET /api/super-tabs/*', 'POST /api/super-tabs/*',
       'GET /api/mobile/v1/overview', 'POST /api/device-keys', 'POST /api/machines/resolve-computer', 'GET /api/device-keys',
-      'GET /api/super-tabs/hosts/:machineId/changes', 'POST /api/super-tabs/:tabId/commands', 'PUT /api/harness-shares/:id',
-      'POST /api/super-tabs/:tabId/github-token']) expect(swept).toContain(route)
+      'PUT /api/harness-shares/:id']) expect(swept).toContain(route)
   })
 })

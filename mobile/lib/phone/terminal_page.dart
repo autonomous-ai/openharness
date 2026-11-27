@@ -19,10 +19,18 @@ import 'package:flutter/semantics.dart'
     show CustomSemanticsAction, SemanticsService;
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
+import 'package:harness_mobile/chat/agent_settings_sheet.dart';
+import 'package:harness_mobile/chat/chat_attach_sheet.dart';
+import 'package:harness_mobile/chat/chat_composer.dart';
+import 'package:harness_mobile/chat/chat_mic_button.dart';
+import 'package:harness_mobile/chat/chat_view.dart';
+import 'package:harness_mobile/chat/chat_view_store.dart';
+import 'package:harness_mobile/chat/engine_sign_in.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
     show Agent, AgentProject, ConnectionStatus;
+import 'package:harness_mobile/core/runtime_model_name.dart';
 import 'package:harness_mobile/core/first_task.dart';
 import 'package:harness_mobile/terminal/terminal_prompt_zone.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -35,12 +43,14 @@ import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 import 'package:harness_mobile/terminal/elicitation_press.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
+import 'package:harness_mobile/terminal/claude_permission.dart';
+import 'package:harness_mobile/terminal/codex_permission.dart';
+import 'package:harness_mobile/terminal/opencode_footer.dart';
+import 'package:harness_mobile/terminal/claude_first_run.dart';
 import 'package:harness_mobile/terminal/question_pane.dart';
 import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_find.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
-import 'package:harness_mobile/core/agent_handoff.dart'
-    show supportsAgentHandoff;
 import 'package:harness_mobile/widgets/engine_identity.dart'
     show engineIdentity;
 import 'package:harness_mobile/widgets/fork_agent_dialog.dart';
@@ -57,7 +67,6 @@ import 'delete_agent.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
 import 'new_agent_chooser.dart';
-import 'out_of_sight.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
@@ -84,10 +93,46 @@ import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
-import 'package:harness_mobile/swarm/swarm_home_root.dart';
-import 'package:harness_mobile/swarm/swarm_mark.dart';
 
 import 'voice_input_controller.dart';
+
+/// Whether [agent] can show as Chat UI: a Terminal harness is a shell, with no conversation for a chat to show, so its
+/// menu offered "Show chat" and the tap left it on a blank terminal (Pixel 8 Pro, 2026-11-19).
+@visibleForTesting
+bool showsAsChat(Agent? agent) => agent != null && agent.engine != null && agent.engine != 'terminal';
+
+/// The chip in Chat UI's composer: the engine as people know it, then the model and effort the daemon saw it running
+/// (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the grid model it was moved to.
+///
+/// OpenCode's own footer comes first for an OpenCode agent ([opencodeOnScreen], `terminal/opencode_footer.dart`): it
+/// names the model as people know it (`DeepSeek V4.1 Flash Free`) where the machine has only its id
+/// (`opencode/deepseek-v4.1-flash-free`), and it is the one place that names any before OpenCode's first session.
+@visibleForTesting
+String? chatModelChip(
+  Agent? agent,
+  ({String name, String? effort})? Function() opencodeOnScreen,
+) {
+  if (agent == null || agent.engine == null) return null;
+  final engine = engineIdentity(
+    agent.engine,
+    displayName: agent.engineDisplayName,
+  ).label;
+  final grid = agent.gridModel;
+  if (grid != null && grid.isNotEmpty) return '$engine $grid';
+  final reported = runtimeModelDetails(
+    agent.selectedModel,
+    agentId: agent.id,
+    engine: agent.engine,
+  );
+  final running =
+      (agent.engine == 'opencode' ? opencodeOnScreen() : null) ??
+      (reported == null
+          ? null
+          : (name: reported.name, effort: reported.effort as String?));
+  return running == null
+      ? engine
+      : '$engine ${modelLabelWithEffort(running.name, running.effort)}';
+}
 
 /// One agent's terminal, filling the phone. The header says whose it is and whether it is live;
 /// everything below it is the same [TerminalPanel] a desktop tile draws, minus that tile's own
@@ -249,6 +294,9 @@ typedef _PageFacts = ({
   bool imagePaste,
   String? machineName,
   String? asking,
+  bool? engineSignedIn,
+  bool? engineInstalled,
+  bool enginesChecking,
 });
 
 class _TerminalPageState extends State<TerminalPage>
@@ -264,6 +312,10 @@ class _TerminalPageState extends State<TerminalPage>
   /// one pane, so opening an agent from the Machines tab closes the pane belonging to a
   /// TerminalPage still sitting in the Agents tab's stack.
   bool _hadPane = false;
+
+  /// What the veil over this page says while Change agent runs from it (`Switching to Codex…`), or
+  /// null. Held from the pick until the new agent replaces this page, or the switch stops.
+  String? _switchingTo;
 
   /// The agent's name as the last list to carry it knew it.
   ///
@@ -784,6 +836,11 @@ class _TerminalPageState extends State<TerminalPage>
       // one signal the title carries about the rest of the fleet, missing until something
       // unrelated happened to rebuild the page.
       asking: _askingElsewhere(),
+      // Chat UI's Sign in, Continue and "Checking…" read these. Left out, "Checking…" stayed for minutes after the
+      // machine answered in under a second, and Sign in after the engine was signed in (Pixel, 2026-11-26).
+      engineSignedIn: machine?.engines[agent?.engine ?? '']?.signedIn,
+      engineInstalled: machine?.engines[agent?.engine ?? '']?.installed,
+      enginesChecking: machine?.engines.inFlight != null,
     );
   }
 
@@ -824,29 +881,38 @@ class _TerminalPageState extends State<TerminalPage>
     setState(() => _facts = facts);
   }
 
-  SwarmHomeChoice? _swarmHome;
-
-  void _swarmHomeChanged() {
-    if (mounted) setState(() {});
-  }
-
-  /// Back to Swarm Home, while this terminal is what Swarm Home's agent opened: the terminal is the
-  /// root page then, so no pop can leave it. Null with Swarm off, with Swarm Home showing, and
-  /// outside the shell.
-  VoidCallback? get _backToSwarm {
-    final home = _swarmHome;
-    if (home == null || !home.harnessOverSwarm) return null;
-    return PhoneShellScope.maybeOf(context)?.onShowSwarm;
-  }
-
   @override
   void initState() {
     super.initState();
     if (kTypingTrace) typingEvent('switch: terminal page mounted');
     WidgetsBinding.instance.addObserver(this);
-    // Not a dependency (the scope never notifies): the shell's own choice of root is what changes.
-    _swarmHome = PhoneShellScope.maybeOf(context)?.home
-      ?..addListener(_swarmHomeChanged);
+    widget.notifier.addListener(_onNotifier);
+    chatViewStore.addListener(_onChatView);
+    // So the first menu already knows whether Change agent can be offered (see [_showActions]).
+    final listed = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    // After the first frame: the probe notifies as it starts, and a page built inside another
+    // widget's build would mark that one dirty mid-build.
+    if (listed != null && AppNotifier.changeAgentTarget(listed) != null) {
+      // Asked again unless its engine is already known signed in there: Chat UI's Sign in reads it too, and a report
+      // from before the engine was installed (a new computer, its first harness) would hide that it is signed out.
+      final known = widget.notifier
+          .stateOf(widget.machineId)
+          ?.engines[listed.engine ?? ''];
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(
+            widget.notifier.probeEngines(
+              widget.machineId,
+              force: known?.signedIn != true,
+            ),
+          );
+        }
+      });
+    }
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     // A session already taking input when the page comes ticks nothing to raise from.
@@ -861,25 +927,6 @@ class _TerminalPageState extends State<TerminalPage>
     // Which of the page's rebuilds an inherited widget asked for — against
     // `page.update` (its parent) and `page.build` (all of them).
     if (kTypingTrace) typingCount('page.deps');
-    _listenToApp(!OutOfSight.of(context));
-  }
-
-  /// Whether [_onNotifier] is listening.
-  bool _listeningToApp = false;
-
-  /// Listens to the app only while this page can be seen. Out of sight
-  /// (Harness under Swarm Home, [OutOfSight]) every tick of the app was a
-  /// read of the facts, and a rebuild whenever one moved, for a page nobody
-  /// is looking at. Shown again, the rebuild that brings it back reads the
-  /// facts afresh in [build], so nothing is missed.
-  void _listenToApp(bool on) {
-    if (on == _listeningToApp) return;
-    _listeningToApp = on;
-    if (on) {
-      widget.notifier.addListener(_onNotifier);
-    } else {
-      widget.notifier.removeListener(_onNotifier);
-    }
   }
 
   /// Releases the resize hold when this page is parked mid-animation.
@@ -890,7 +937,7 @@ class _TerminalPageState extends State<TerminalPage>
   void didUpdateWidget(TerminalPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (kTypingTrace) typingCount('page.update');
-    if (_listeningToApp && !identical(oldWidget.notifier, widget.notifier)) {
+    if (!identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.removeListener(_onNotifier);
       widget.notifier.addListener(_onNotifier);
     }
@@ -920,9 +967,27 @@ class _TerminalPageState extends State<TerminalPage>
     }
   }
 
+  /// Chat UI's Sign in while this agent's engine is signed out on its machine ([AppNotifier.engineSignedOut]): one a
+  /// page, for the engine it was made for.
+  EngineSignIn? _engineSignIn;
+
+  EngineSignIn _signInFor(Agent agent) {
+    final held = _engineSignIn;
+    if (held != null && held.engine == agent.engine) return held;
+    held?.dispose();
+    return _engineSignIn = EngineSignIn.of(
+      widget.notifier,
+      machineId: widget.machineId,
+      agentId: widget.agentId,
+      engine: agent.engine ?? 'claude',
+      folder: agent.project?.cwd,
+    );
+  }
+
   @override
   void dispose() {
-    _swarmHome?.removeListener(_swarmHomeChanged);
+    _engineSignIn?.dispose();
+    chatViewStore.removeListener(_onChatView);
     _endCardTimer?.cancel();
     // A take started here must not come back to a page that is gone.
     final session = widget.notifier
@@ -944,7 +1009,7 @@ class _TerminalPageState extends State<TerminalPage>
     _scrollback.dispose();
     _dropFindBack();
     _find?.dispose();
-    _listenToApp(false);
+    widget.notifier.removeListener(_onNotifier);
     _daemon?.noteQuestion(
       this,
       machineId: widget.machineId,
@@ -1064,34 +1129,12 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Says what went wrong, above the mic for two seconds, the way tmux's `display-message` does.
   /// Nothing that went right is said: its effect is on screen, and a tap is felt.
-  ///
-  /// Over a [_hold], which comes back once the two seconds are up.
   void _flash(String text, {bool error = false}) {
     _barMessageTimer?.cancel();
     _barMessage.value = (text: text, error: error);
     _barMessageTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) _barMessage.value = _held;
+      if (mounted) _barMessage.value = null;
     });
-  }
-
-  /// What the line above the mic says for as long as something is on its way, rather than for a
-  /// [_flash]'s two seconds — a Change agent, which is several round trips to the computer. Null
-  /// when nothing is.
-  ///
-  /// ⚠️ **Two seconds were not enough to say it.** The first switch tried waited half a minute on
-  /// the computer, and "switching to Claude…" had gone after two seconds: the terminal looked as if
-  /// nothing had been asked, and the only sign left was a menu row nobody had open.
-  String? _barHold;
-
-  ({String text, bool error})? get _held =>
-      _barHold == null ? null : (text: _barHold!, error: false);
-
-  /// Says [text] above the mic until it is held no more (null). A flash showing now keeps its two
-  /// seconds and hands back to this.
-  void _hold(String? text) {
-    _barHold = text;
-    if (_barMessageTimer?.isActive ?? false) return;
-    _barMessage.value = _held;
   }
 
   /// This page's `⋯` menu while it is up — see [_putMenuAway].
@@ -1660,6 +1703,180 @@ class _TerminalPageState extends State<TerminalPage>
   /// terminal (the desktop, on a click there) while the take was being spoken. Speaking to a
   /// harness is as plain a claim on it as a tap or a scroll, and so are a tapped answer and
   /// Interrupt; [why] names which in the log. Null when it cannot be had in 6s.
+  /// Settings ▸ Chat UI or this agent's own switch moved.
+  void _onChatView() {
+    if (mounted) setState(() {});
+  }
+
+  /// This agent shows as chat (`chat/chat_view.dart`) — when it is chosen, and the agent keeps a
+  /// conversation to show: a shell has none, and an agent whose engine has not named its session yet
+  /// has nothing to read.
+  bool get _showsChat {
+    if (!chatViewStore.showsChat(widget.machineId, widget.agentId)) {
+      return false;
+    }
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    // No session is no reason for a terminal: an agent nobody has talked to yet shows an empty chat.
+    return showsAsChat(agent);
+  }
+
+  void _setShowsChat(bool chat) => unawaited(
+    chatViewStore.setShowsChat(widget.machineId, widget.agentId, chat),
+  );
+
+  /// A message from Chat UI's composer: the same `message` the mic's words go as, on a terminal this
+  /// phone takes back first if another has it.
+  Future<bool> _sendChat(String text) async {
+    final session = await _sessionForInput(why: 'chat');
+    if (session == null) {
+      if (mounted) _flash('✗ not sent', error: true);
+      return false;
+    }
+    return session.sendComposerText(text);
+  }
+
+  String? _chatModelOnScreen(Agent? agent) =>
+      chatModelChip(agent, _opencodeOnScreen);
+
+  /// The model and effort OpenCode's footer names, kept between reads: the footer is off the screen while OpenCode
+  /// redraws, as the terminal first fills and each time the keyboard resizes it (45 rows to 24 and back, measured on a
+  /// Pixel 8 Pro), and the chip read just "OpenCode" then.
+  ({String name, String? effort})? _opencodeOnScreen() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    final footer = session == null ? null : opencodeFooter(session.terminal);
+    if (footer != null) _footerModel = footer;
+    return footer ?? _footerModel;
+  }
+
+  ({String name, String? effort})? _footerModel;
+
+  /// Chat UI's `+`: a picture or a file for the agent, the same ways the key strip's `img` offers —
+  /// and only those the machine's CLI can take.
+  void _attachToChat(TerminalSession session, MachineState? machine) {
+    final images = machine?.terminalImagePasteAvailable == true;
+    final files = machine?.terminalPasteFileAvailable == true;
+    final options = <ChatAttachOption>[
+      if (images)
+        (
+          icon: LucideIcons.image,
+          title: 'Photos',
+          detail: null,
+          onTap: () => unawaited(_sendImage(session, ImageSource.gallery)),
+        ),
+      if (images)
+        (
+          icon: LucideIcons.camera,
+          title: 'Camera',
+          detail: null,
+          onTap: () => unawaited(_sendImage(session, ImageSource.camera)),
+        ),
+      if (files)
+        (
+          icon: LucideIcons.paperclip,
+          title: 'Files',
+          detail: 'PDF, text, code…',
+          onTap: () => unawaited(_sendFile(session)),
+        ),
+    ];
+    if (options.isEmpty) {
+      _flash('This computer cannot take attachments yet', error: true);
+      return;
+    }
+    unawaited(showChatAttachSheet(context, options));
+  }
+
+  /// The permission mode this agent's Claude Code shows in its footer, read off the terminal under the chat.
+  String? _claudePermissionOnScreen() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    return session == null ? null : claudePermissionMode(session.terminal);
+  }
+
+  /// Each engine's commands that open a picker of its own the Model sheet stands for. Claude Code's `/permissions` is
+  /// not one: it edits its tool rules, not its mode.
+  static const _sheetCommands = {
+    'claude': {'/model', '/effort'},
+    'codex': {'/model', '/permissions', '/approvals'},
+    'opencode': {'/models', '/effort'},
+  };
+
+  /// The mode this page last put Codex in through `/permissions`: Codex draws none on screen to read back, and the
+  /// machine still holds the one it started with.
+  String? _codexPermission;
+
+  /// The Model sheet's permission pick. Claude Code takes it in place, by its own Shift+Tab on the terminal this phone
+  /// holds, and Codex by its own `/permissions` menu; OpenCode takes a mode only as it starts, so it is started again
+  /// in it, the conversation kept.
+  Future<String?> _changePermission(String mode) async {
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    final engine = agent?.engine;
+    if (engine != 'claude' && engine != 'codex') {
+      return widget.notifier.restartAgentWithPermission(
+        widget.machineId,
+        widget.agentId,
+        mode,
+      );
+    }
+    final session = await _sessionForInput(why: 'permission');
+    if (session == null) return "Couldn't reach the agent's terminal.";
+    if (engine == 'codex') {
+      final taken = await setCodexPermission(
+        session.terminal,
+        session.outputTicks,
+        mode,
+      );
+      if (taken) _codexPermission = mode;
+      return taken
+          ? null
+          : "Codex didn't take it. Empty its prompt and try again.";
+    }
+    final reached = await cycleClaudePermission(
+      session.terminal,
+      session.outputTicks,
+      mode,
+    );
+    return reached
+        ? null
+        : "Claude Code here doesn't offer that mode. Start a new harness in it.";
+  }
+
+  /// The Model sheet's Clear prompt: the key strip's `clear` (Ctrl+K, Ctrl+U), then a wait for the agent to redraw —
+  /// the machine reads the prompt off the pane, and a pick sent before the redraw would find the words still there.
+  Future<bool> _clearPromptForModel() async {
+    final session = await _sessionForInput(why: 'clear');
+    if (session == null) return false;
+    final redrawn = Completer<void>();
+    void heard() {
+      if (!redrawn.isCompleted) redrawn.complete();
+    }
+
+    session.outputTicks.addListener(heard);
+    session.clearPrompt();
+    await redrawn.future.timeout(
+      const Duration(milliseconds: 1500),
+      onTimeout: () {},
+    );
+    session.outputTicks.removeListener(heard);
+    return true;
+  }
+
+  /// Stop from Chat UI: Esc, as in the agent's own terminal.
+  Future<void> _stopChat() async {
+    final session = await _sessionForInput(why: 'chat');
+    session?.terminal.keyInput(TerminalKey.escape);
+  }
+
   Future<TerminalSession?> _sessionForInput({String why = 'voice'}) async {
     TerminalSession? current() =>
         widget.notifier.paneOfAgent(widget.machineId, widget.agentId)?.session;
@@ -2438,7 +2655,11 @@ class _TerminalPageState extends State<TerminalPage>
       // Left set, the page would land saying the agent had GONE for any frame that beats the
       // attach to it, and the branch below takes the whole pager down for that.
       _hadPane = false;
-    } else if (_hadPane) {
+    } else if (_hadPane && _switchingTo == null) {
+      // ⚠️ Not mid-switch: Change agent stops this agent before the new one opens, and leaving then
+      // put another harness on screen while the switch ran (Pixel 8 Pro, 2026-11-19). The switch
+      // replaces this page itself — see [_changeAgent].
+      //
       // The pane this page was showing is gone while it was the one being READ — another tab
       // opened a different agent, or the agent was deleted. Leave rather than spin: there is
       // nothing here to come back.
@@ -2543,7 +2764,68 @@ class _TerminalPageState extends State<TerminalPage>
     // Read once: the body reserves it, and search subtracts what the body
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
-    return Scaffold(
+    // This agent as chat: its conversation over the terminal, which stays attached under it — the
+    // open question is read off the terminal's screen and its answer keyed into it.
+    final chat = agent != null && !agentGone && _showsChat
+        ? widget.notifier.chatConversations.open(
+            widget.machineId,
+            widget.agentId,
+            agent.sessionId,
+            streamsText: agent.engine == 'opencode' || agent.engine == 'kilo',
+          )
+        : null;
+    // Signed out there, the agent waits on its engine's first-run screens, which a chat cannot show: Sign in instead,
+    // with the composer and the chip off (Pixel, 2026-11-26).
+    // Read live, by the builders below as well: the page is not built again when the engines are read again, and once
+    // Codex was signed in, Sign in stayed until the page was opened again (Pixel, 2026-11-26).
+    bool signedOutNow() =>
+        chat != null &&
+        agent != null &&
+        widget.notifier.engineSignedOut(widget.machineId, agent);
+    final signedOut = signedOutNow();
+    // Signed in, a new Claude harness can still wait on the first-run screens it opened on before (MSI, 2026-11-26: the
+    // app gone before it started the harness again): read off its screen, only while its chat is empty, so a chat under
+    // way never redraws for the terminal's output.
+    final firstRunSession =
+        !signedOut &&
+            chat != null &&
+            chat.items.isEmpty &&
+            agent?.engine == 'claude'
+        ? session
+        : null;
+    bool waitsOnFirstRun() =>
+        firstRunSession != null &&
+        claudeFirstRunOnScreen(firstRunSession.terminal);
+    EngineSignIn? signInNow() =>
+        agent != null && (signedOutNow() || waitsOnFirstRun())
+        ? _signInFor(agent)
+        : null;
+    final signIn = signInNow();
+    // Its engines read again as the page came, not answered yet: a report from before the engine was installed (the New
+    // dialog's, on a new computer) says neither signed in nor out, and Continue showed for ten seconds before Sign in
+    // (Pixel, 2026-11-26). Neither is offered until the machine answers.
+    bool checkingNow() =>
+        widget.notifier.stateOf(widget.machineId)?.engines.inFlight != null;
+    // Continue only where the machine said signed in: one that could not say (its answer timed out) is asked to sign in,
+    // which is right either way, never told a setup is all that is left.
+    bool signedInNow() =>
+        widget.notifier
+            .stateOf(widget.machineId)
+            ?.engines[agent?.engine ?? '']
+            ?.signedIn ==
+        true;
+    // What the panel and the composer listen to while a sign-in is shown: the sign-in tells them once it is done, after
+    // the engines were read again.
+    Listenable withSignIn(Listenable listenable) =>
+        signIn == null ? listenable : Listenable.merge([listenable, signIn]);
+    // The chip's sheet opens on a list already here: asked once per agent, as its chat first shows.
+    if (chat != null) {
+      widget.notifier.prefetchAgentModelChoices(
+        widget.machineId,
+        widget.agentId,
+      );
+    }
+    final scaffold = Scaffold(
       // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
       backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
       // ⚠️ No fab. New agent is the `+` in the header — see the note there.
@@ -2732,7 +3014,11 @@ class _TerminalPageState extends State<TerminalPage>
                                                   // Whether it also HOLDS one that is already
                                                   // up is a separate question, and the pager asks
                                                   // it on every swipe — see [_shouldFocus].
-                                                  focused: _shouldFocus,
+                                                  // Never under Chat UI: the composer
+                                                  // has the keyboard there.
+                                                  focused:
+                                                      _shouldFocus &&
+                                                      chat == null,
                                                   // What the bar is finding — see [_openFind].
                                                   find: _find,
                                                   // Asks again when `focused` did
@@ -2874,6 +3160,64 @@ class _TerminalPageState extends State<TerminalPage>
                                   else if (session != null &&
                                       !session.hasScreen)
                                     Positioned.fill(child: placeholder),
+                                  if (chat != null &&
+                                      (signIn != null ||
+                                          firstRunSession != null))
+                                    Positioned.fill(
+                                      child: ListenableBuilder(
+                                        listenable: withSignIn(
+                                          firstRunSession?.outputTicks ?? chat,
+                                        ),
+                                        builder: (context, _) {
+                                          final now = signInNow();
+                                          if (now == null) {
+                                            return ChatTranscriptView(
+                                              conversation: chat,
+                                              topInset: 72,
+                                              question:
+                                                  _questionWatcher?.view,
+                                              onAnswer: (view, number) =>
+                                                  _tapAnswer(view, (
+                                                    label: '',
+                                                    number: number,
+                                                  )),
+                                              onAnswerInTerminal: () =>
+                                                  _setShowsChat(false),
+                                            );
+                                          }
+                                          return EngineSignInPanel(
+                                            signIn: now,
+                                            setup: signedInNow(),
+                                            checking: checkingNow(),
+                                            engineName:
+                                                agent?.engine == 'codex'
+                                                ? 'Codex'
+                                                : 'Claude Code',
+                                            machineName:
+                                                machine
+                                                    ?.machine
+                                                    .displayName ??
+                                                'this computer',
+                                          );
+                                        },
+                                      ),
+                                    )
+                                  else if (chat != null)
+                                    Positioned.fill(
+                                      child: ChatTranscriptView(
+                                        conversation: chat,
+                                        // Under the title, which floats over the
+                                        // page's top as it does over a terminal.
+                                        topInset: 72,
+                                        question: _questionWatcher?.view,
+                                        onAnswer: (view, number) => _tapAnswer(
+                                          view,
+                                          (label: '', number: number),
+                                        ),
+                                        onAnswerInTerminal: () =>
+                                            _setShowsChat(false),
+                                      ),
+                                    ),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
                                   // [TerminalActionColumn].
@@ -2915,6 +3259,70 @@ class _TerminalPageState extends State<TerminalPage>
                           // its field has one, at the terminal's foot while not.
                           if (session != null && _find != null)
                             TerminalFindBar(find: _find!, onClose: _closeFind)
+                          else if (chat != null)
+                            ListenableBuilder(
+                              // The terminal's redraws too only while the chip reads OpenCode's footer: a rebuild of
+                              // the composer per chunk drawn is a cost no other agent pays.
+                              // And while a new Claude harness may be on its first-run screens.
+                              listenable: withSignIn(
+                                session != null &&
+                                        (agent?.engine == 'opencode' ||
+                                            firstRunSession != null)
+                                    ? Listenable.merge([
+                                        chat,
+                                        session.outputTicks,
+                                      ])
+                                    : chat,
+                              ),
+                              builder: (context, _) {
+                                // Off while the engine is signed out or its first-run screens are up: words
+                                // would go into them.
+                                final blocked = signInNow() != null;
+                                return ChatComposer(
+                                working: chat.working,
+                                enabled: !blocked,
+                                // A terminal another app holds is taken back by the send
+                                // itself ([_sendChat]), as a tap on it would be.
+                                onSend: _sendChat,
+                                onStop: () => unawaited(_stopChat()),
+                                onAttach: session != null && !blocked
+                                    ? () => _attachToChat(session, machine)
+                                    : null,
+                                model: _chatModelOnScreen(agent),
+                                onModel: blocked ? null : () => unawaited(
+                                  showAgentSettingsSheet(
+                                    context,
+                                    widget.notifier,
+                                    machineId: widget.machineId,
+                                    agentId: widget.agentId,
+                                    livePermission: switch (agent?.engine) {
+                                      'claude' => _claudePermissionOnScreen,
+                                      'codex' => () => _codexPermission,
+                                      _ => null,
+                                    },
+                                    liveModel: agent?.engine == 'opencode'
+                                        ? _opencodeOnScreen
+                                        : null,
+                                    onPermission: _changePermission,
+                                    onClearPrompt: _clearPromptForModel,
+                                  ),
+                                ),
+                                // The phone's own voice input, as the terminal's mic.
+                                mic: session == null || blocked
+                                    ? null
+                                    : ChatMicButton(
+                                        voice: widget.voice,
+                                        session: session,
+                                      ),
+                                commands: () => widget.notifier.agentCommands(
+                                  widget.machineId,
+                                  widget.agentId,
+                                ),
+                                sheetCommands:
+                                    _sheetCommands[agent?.engine] ?? const {},
+                              );
+                              },
+                            )
                           else if (session != null)
                             TerminalInputDock(
                               session: session,
@@ -2970,9 +3378,6 @@ class _TerminalPageState extends State<TerminalPage>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             TerminalTitle(
-                              backInset: _backToSwarm == null
-                                  ? 0
-                                  : _BackToSwarm.inset,
                               sample: SampleMode.maybeOf(context) != null,
                               name:
                                   agent?.displayName ?? _cachedAgentName ?? '',
@@ -2989,14 +3394,8 @@ class _TerminalPageState extends State<TerminalPage>
                               // The paired daemon at the title's right end: its
                               // sprite, a tap from its sheet. Nothing outside the
                               // signed-in shell (the sample). See `daemon_chip.dart`.
-                              // Before it, while Swarm is on: what the Swarms ask of
-                              // the person, a tap from them. See `swarm_mark.dart`.
-                              daemon: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SwarmMark(margin: EdgeInsets.only(left: 12)),
-                                  DaemonChip(margin: EdgeInsets.only(left: 12)),
-                                ],
+                              daemon: const DaemonChip(
+                                margin: EdgeInsets.only(left: 12),
                               ),
                               // Only over a screen: with none, [_MachineAway] says it
                               // in the terminal's place, and saying it twice is noise.
@@ -3028,30 +3427,11 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     ),
-                    // The way back to Swarm, for a terminal opened from it. ⚠️ The terminal is
-                    // then the ROOT page, so there is nothing under it to pop and iOS has no
-                    // system back: the only way out was the dim Swarm mark in the title, which
-                    // folds away with it while the history is read. This stays, outside the slide.
-                    if (_backToSwarm case final toSwarm?) ...[
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        child: _BackToSwarm(onBack: toSwarm),
-                      ),
-                      if (defaultTargetPlatform == TargetPlatform.iOS)
-                        Positioned(
-                          top: 0,
-                          bottom: 0,
-                          left: 0,
-                          width: _BackToSwarm.edge,
-                          child: _EdgeBack(onBack: toSwarm),
-                        ),
-                    ],
                     // ⚠️ No `[42/1380]` at the top right while reading back, by the owner's
                     // call (2026-09-27): "we don't need the scrolling indicator". The history
                     // scrolls like any list; scrolling down is the way back to the stream.
                     // The line above the mic: what is going on, in a few words — see [_statusLine].
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       Positioned(
                         left: 0,
                         right: 0,
@@ -3075,7 +3455,7 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     // How loud the take is: a glow behind the mic that swells with the voice.
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       ListenableBuilder(
                         listenable: widget.voice,
                         builder: (context, _) =>
@@ -3101,7 +3481,7 @@ class _TerminalPageState extends State<TerminalPage>
                     // way the home screen stays whole under Siri. Laid over the
                     // whole page so its capsule, rising as it talks, still takes
                     // taps.
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       Positioned(
                         left: 0,
                         right: 0,
@@ -3180,6 +3560,10 @@ class _TerminalPageState extends State<TerminalPage>
         ],
       ),
     );
+    final switching = _switchingTo;
+    return switching == null
+        ? scaffold
+        : Stack(children: [scaffold, _SwitchingVeil(label: switching)]);
   }
 
   /// Pops after the frame: this runs from inside a build, where popping a route synchronously is
@@ -3232,6 +3616,11 @@ class _TerminalPageState extends State<TerminalPage>
     TerminalSession? session,
   }) {
     final agentName = agent.displayName;
+    // Change agent is offered only where the machine reported both engines installed and signed in:
+    // asked now for the next time the menu opens, at most once a run ([AppNotifier.probeEngines]).
+    if (AppNotifier.changeAgentTarget(agent) != null) {
+      unawaited(widget.notifier.probeEngines(widget.machineId));
+    }
     Route<void>? shown;
     final closed = showPhoneSheet(
       context,
@@ -3254,6 +3643,19 @@ class _TerminalPageState extends State<TerminalPage>
       sections: [
         PhoneSheetSection(
           actions: [
+            // This agent as chat or as its terminal, whatever Settings ▸ Chat UI says for the rest.
+            if (_showsChat)
+              PhoneSheetAction(
+                icon: LucideIcons.squareTerminal300,
+                label: 'Show terminal',
+                onTap: () => _setShowsChat(false),
+              )
+            else if (showsAsChat(agent))
+              PhoneSheetAction(
+                icon: LucideIcons.messagesSquare300,
+                label: 'Show chat',
+                onTap: () => _setShowsChat(true),
+              ),
             // First, because it is the one used mid-conversation: iOS has no paste gesture on a
             // terminal (long-press is selection there), and the soft keyboard has no paste key.
             // Hidden rather than dimmed while the stream is read-only: reclaiming is the header's
@@ -3612,33 +4014,30 @@ class _TerminalPageState extends State<TerminalPage>
     }
   }
 
-  /// Change agent: pick the engine, and the harness goes on there with the conversation handed
-  /// over — then the new one opens in place of this one. See [AppNotifier.changeAgent].
-  ///
-  /// The choices are the desktop picker's rows in its words: the agent it is on now, and for each
-  /// other whether the conversation goes with it or it starts a new one in the same project.
+  /// Change agent: the conversation moves to the other engine, Claude Code to Codex or back — then
+  /// the new one opens in place of this one. See [AppNotifier.changeAgent].
   ///
   /// ⚠️ **What opens the new agent is captured before the wait.** The switch stops this agent, and
   /// this page can leave on its own while the answer is still out (its pane goes — see
   /// `_hadPane`); the shell, which puts an agent on the home screen, is still there to open it.
   Future<void> _changeAgent(Agent agent) async {
     final current = agent.engine;
+    final other = AppNotifier.changeAgentTarget(agent);
+    if (other == null) return;
+    String title(String id) =>
+        id == 'claude' ? 'Claude Code' : engineIdentity(id).label;
     final picked = await showNewAgentChooser<String>(
       context,
       title: 'Change agent',
       hint: 'Search agents',
       items: [
-        for (final id in AppNotifier.agentChangeEngines())
+        for (final id in [?current, other])
           ChooserItem(
             value: id,
-            title: id == 'claude' ? 'Claude Code' : engineIdentity(id).label,
+            title: title(id),
             subtitle: id == current
                 ? 'Current agent'
-                : id == 'opencode'
-                ? 'Muse Spark 1.3 · continue with recent context'
-                : supportsAgentHandoff(id)
-                ? 'Continue this project with recent context'
-                : 'New conversation in the same project',
+                : 'Move this conversation',
             selected: id == current,
           ),
       ],
@@ -3646,33 +4045,39 @@ class _TerminalPageState extends State<TerminalPage>
     if (picked == null || picked == current || !mounted) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     final shell = PhoneShellScope.maybeOf(context);
-    // Held for the whole switch — see [_barHold].
-    _hold('switching to ${engineIdentity(picked).label}…');
+    // A veil for the whole switch, the page held under it: several round trips to the computer,
+    // and nothing on this page is the person's to touch until it ends.
+    setState(() => _switchingTo = 'Switching to ${title(picked)}…');
+    _putMenuAway();
     final result = await widget.notifier.changeAgent(
       widget.machineId,
       widget.agentId,
       picked,
     );
-    if (mounted) {
-      _hold(null);
-      // Before the answer is said: a menu opened in the wait would cover it — see [_putMenuAway].
-      _putMenuAway();
-    }
     final said = result.error ?? result.notice;
     if (said != null) messenger?.showSnackBar(SnackBar(content: Text(said)));
     final next = result.agentId;
-    if (result.error != null || next == null || next == widget.agentId) return;
+    if (result.error != null || next == null || next == widget.agentId) {
+      // Nothing replaces this page: the veil goes, and a pane that went meanwhile is left as usual.
+      if (mounted) setState(() => _switchingTo = null);
+      return;
+    }
+    final notifier = widget.notifier, machineId = widget.machineId;
+    final moved = widget.agentId;
     if (mounted) {
       openAgent(
         context,
-        widget.notifier,
-        widget.machineId,
+        notifier,
+        machineId,
         next,
         replacingCurrentPage: true,
       );
     } else {
-      shell?.onOpenAgent(widget.machineId, next);
+      shell?.onOpenAgent(machineId, next);
     }
+    // Only now, with the new agent on screen — see [AppNotifier.deleteMovedConversation].
+    final kept = await notifier.deleteMovedConversation(machineId, moved);
+    if (kept != null) messenger?.showSnackBar(SnackBar(content: Text(kept)));
   }
 
   /// Stopping the agent: the last card of its sheet, alone.
@@ -3922,6 +4327,51 @@ class _AgentGone extends StatelessWidget {
             child: const Text('Open another harness'),
           ),
         ],
+      ),
+    ),
+  );
+}
+
+/// Over the whole page while Change agent runs from it: a spinner and what is happening, taking
+/// every tap. The switch stops this agent before the new one opens, so the page under it may show
+/// nothing at all for a while; without this the person saw it empty, or another harness.
+class _SwitchingVeil extends StatelessWidget {
+  const _SwitchingVeil({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Positioned.fill(
+    child: TerminalLook.read(
+      context,
+      () => AbsorbPointer(
+        child: ColoredBox(
+          color: AppPalette.windowBg.withValues(alpha: 0.92),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox.square(
+                  dimension: 26,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppPalette.accent,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: AppPalette.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     ),
   );
@@ -4736,36 +5186,14 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   void initState() {
     super.initState();
     widget.reading.addListener(_toggled);
+    widget.terminal?.addListener(_output);
     terminalFontStore.addListener(_changed);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _listenToOutput(!OutOfSight.of(context));
-  }
-
-  /// Whether [_output] is listening.
-  bool _listeningToOutput = false;
-
-  /// Follows the output only while the terminal can be seen. Out of sight
-  /// (Harness under Swarm Home, [OutOfSight]) the output stays in the buffer,
-  /// and the rebuild that shows the terminal again places it by what is there
-  /// then.
-  void _listenToOutput(bool on) {
-    if (on == _listeningToOutput) return;
-    _listeningToOutput = on;
-    if (on) {
-      widget.terminal?.addListener(_output);
-    } else {
-      widget.terminal?.removeListener(_output);
-    }
   }
 
   @override
   void didUpdateWidget(_AnchoredTerminal old) {
     super.didUpdateWidget(old);
-    if (_listeningToOutput && !identical(old.terminal, widget.terminal)) {
+    if (!identical(old.terminal, widget.terminal)) {
       old.terminal?.removeListener(_output);
       widget.terminal?.addListener(_output);
     }
@@ -4779,7 +5207,7 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
 
   @override
   void dispose() {
-    _listenToOutput(false);
+    widget.terminal?.removeListener(_output);
     widget.reading.removeListener(_toggled);
     terminalFontStore.removeListener(_changed);
     super.dispose();
@@ -5089,64 +5517,6 @@ class _SampleEndCard extends StatelessWidget {
       ),
     );
   }
-}
-
-/// The way back to Swarm Home over the terminal's top left corner: a chevron, as iOS draws back on
-/// a pushed page, on the terminal's own ground so the output never reads through it. It sits
-/// outside the header's slide, so it is there while the history is read back too.
-class _BackToSwarm extends StatelessWidget {
-  const _BackToSwarm({required this.onBack});
-
-  final VoidCallback onBack;
-
-  /// Room the title leaves for it: what its box takes, less the gutter the title keeps anyway,
-  /// so the name starts where the box ends and no letter is under it.
-  static const inset = TtyBackButton.width - Tty.origin;
-
-  /// The width of the iOS edge swipe's strip ([_EdgeBack]).
-  static const edge = 20.0;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tty.ground,
-        borderRadius: const BorderRadius.only(bottomRight: Radius.circular(14)),
-      ),
-      child: TtyBackButton(onPressed: onBack),
-    );
-  }
-}
-
-/// iOS's edge swipe back: a drag from the left edge that goes far enough, or is flung. A strip
-/// only [_BackToSwarm.edge] wide, so the terminal keeps every other touch. Android has no such
-/// swipe and is not given one: its system back is the shell's.
-class _EdgeBack extends StatefulWidget {
-  const _EdgeBack({required this.onBack});
-
-  final VoidCallback onBack;
-
-  @override
-  State<_EdgeBack> createState() => _EdgeBackState();
-}
-
-class _EdgeBackState extends State<_EdgeBack> {
-  double _dragged = 0;
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    key: const ValueKey('terminal-edge-back'),
-    behavior: HitTestBehavior.translucent,
-    onHorizontalDragStart: (_) => _dragged = 0,
-    onHorizontalDragUpdate: (details) => _dragged += details.delta.dx,
-    onHorizontalDragEnd: (details) {
-      if (_dragged > 80 || (details.primaryVelocity ?? 0) > 700) {
-        HapticFeedback.selectionClick();
-        widget.onBack();
-      }
-    },
-  );
 }
 
 /// Find's hold on the back gesture — see `_TerminalPageState._findBack`.

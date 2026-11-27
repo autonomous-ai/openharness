@@ -15,6 +15,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { hashOf } from '../lib/log.js'
 import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/hook-installers.golden.json', import.meta.url))
@@ -31,13 +32,17 @@ type Via = 'install' | 'installIn'
 interface Target { engine: Engine; via: Via; home: string; file: string; cmd: string; otherCmd: string; elsewhere: string }
 interface Case { name: string; setup?: (target: Target) => void; noHome?: boolean; permissions?: boolean }
 
-/** The events each former installer wrote, with their matchers, to build the files a current install leaves. */
-const EVENTS: Record<Engine, Array<{ event: string; matcher?: string }>> = {
-  claude: ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'].map((event) => ({ event })),
-  codex: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }],
+/** The events each installer writes, with their matchers and an event's own timeout, to build the files a current install leaves. */
+const EVENTS: Record<Engine, Array<{ event: string; matcher?: string; timeout?: number }>> = {
+  claude: [...['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'].map((event) => ({ event })),
+    { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' },
+    { event: 'PreToolUse', matcher: 'AskUserQuestion' }, ...['PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop'].map((event) => ({ event }))],
+  codex: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
+    { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }],
 }
-const current = (engine: Engine, cmd: string, timeout = 5) => ({
-  hooks: Object.fromEntries(EVENTS[engine].map(({ event, matcher }) => [event, [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout }] }]])),
+const current = (engine: Engine, cmd: string, timeout?: number) => ({
+  hooks: Object.fromEntries(EVENTS[engine].map(({ event, matcher, timeout: own }) =>
+    [event, [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: timeout ?? own ?? 5 }] }]])),
 })
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2) + '\n'
 const write = (file: string, text: string, mode?: number): void => {
@@ -299,6 +304,9 @@ beforeAll(async () => {
   delete process.env.CLAUDE_PROJECTS_DIR
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
+  // A home Harness ran in before the XDG move (`~/.harness` is in it) while the modules resolve their paths, so the hooks
+  // name `<home>/.harness/…` and the record holds for every platform. The first case's reset empties the home again.
+  mkdirSync(join(root, 'home', '.harness'), { recursive: true })
   // A regression (a home that is not the throwaway one) must fail here, before any installer writes.
   expect(homedir()).toBe(join(root, 'home'))
   vi.resetModules()
@@ -318,9 +326,9 @@ beforeAll(async () => {
   const { hooks: codex } = await import('./codex/hookContract.js')
   const hashes: Array<[string, string]> = []
   for (const [cmd, token] of commands.filter(([, token]) => token.startsWith('<command codex'))) {
-    for (const { event, matcher } of EVENTS.codex) {
+    for (const { event, matcher, timeout: own = 5 } of EVENTS.codex) {
       // 30: the case that finds Harness's hook current with a timeout of its own, recorded as the file has it.
-      for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout }), `<hash ${event} ${token.slice(1, -1)}${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
+      for (const timeout of [own, 30]) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout }), `<hash ${event} ${token.slice(1, -1)}${timeout === own ? '' : ` timeout ${timeout}`}>`])
     }
   }
   // Agent Messages' block (kit/messagesHook.ts), the same command in every case: its command and Codex's hash of it.
@@ -328,8 +336,11 @@ beforeAll(async () => {
   const messages = messagesCommand(join(root, 'home', '.harness', 'agent-messages'))
   for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, 'PostToolUse', undefined, { command: messages, timeout }), `<hash PostToolUse messages${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
   hashes.push([messages, '<messages command>'])
+  // The log names each settings file, and the hook script, by its hash (lib/log.ts hashOf): each known one by its path.
+  const named = [notify.HOOK_SCRIPT, ...(['claude', 'codex'] as const).flatMap((engine) => (['install', 'installIn'] as const).map((via) => join(all[engine][via], FILE[engine])))]
+  const pathHashes = named.map((path): [string, string] => [hashOf(path), `<hash ${path}>`])
   // The real path first: on macOS the temporary folder is reached through /var, and Codex keys by /private/var.
-  tokens = [...hashes, ...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
+  tokens = [...hashes, ...commands, ...pathHashes, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
 })
 
 afterAll(() => {
@@ -341,7 +352,7 @@ afterAll(() => {
 
 // These recorded cases exposed destructive recovery, unknown ownership or
 // permission failures. Keep their original artifact and assert preservation.
-const HELD = new Set(['empty file', 'whitespace only', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array',
+const HELD = new Set(['empty file', 'whitespace only', 'malformed JSON', 'JSON null', 'JSON array',
   'JSON string', 'JSON number', 'hooks is a string', 'hooks is an array', 'hooks is null', 'an event is not a list',
   'odd blocks', 'a command that is not text', 'a dangling symlink', 'a symlink into a missing folder',
   'a read-only file', 'an unreadable file', 'a read-only folder', 'a read-only folder holding a writable file', 'the file is a folder'])

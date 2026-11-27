@@ -5,7 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "cable/cable_types.h"   // ID_MAX, CABLE_NAME_MAX, SWARM_ID_MAX, cable_swarm_t, cable_tile_t
+#include "cable/cable_types.h"   // ID_MAX, CABLE_NAME_MAX, SWARM_ID_MAX, cable_swarm_t, cable_tile_t, cable_app_t
+
+#define POD_APPS_MAX CABLE_APPS_MAX                 // 16
+typedef cable_app_t pod_app_t;                      // { char id[16]; char name[24]; uint8_t count, waiting, working; }
+// What the daemon lets the Pod do with an agent (`caps` on its `agent` row, letters s v f a): S see it, V talk to it,
+// F open it, A answer its questions. An agent the daemon says nothing about can do all four, as on the round dial.
+enum { POD_CAP_S = 1, POD_CAP_V = 2, POD_CAP_F = 4, POD_CAP_A = 8, POD_CAPS_ALL = 15 };
 
 #define POD_AGENTS_MAX 32
 #define POD_TABS_MAX   24
@@ -37,13 +43,6 @@ typedef struct {
     uint32_t since_ms, elapsed_s, event_ms;
     bool has_event;                      // event_ms is set (an agent with none takes any feed, wrap or not)
     char activity[POD_ACTIVITY_BYTES], question[320], recap[POD_RECAP_BYTES];
-    // The open question's Super Tab (the shared project it was asked in; "" = a plain question) and what it needs
-    // (pod_attention_t: decision or stuck; NONE without a Super Tab). Set and cleared with question[].
-    char super_tab[SUPER_TAB_MAX];
-    uint8_t attention;
-    // What a Super Tab question holds back (a pod_state_t): the state the agent's turns and sweeps would have given it,
-    // taken once the question closes. Before the first such feed, the state it had when asked.
-    uint8_t wait_after;
     char verb[POD_VERB_BYTES];
     char steps[POD_STEPS_MAX][POD_STEP_BYTES];   // this turn's tools and previous activity sentences, newest first (cut on a codepoint)
     uint16_t step_at_s[POD_STEPS_MAX];   // seconds into the turn each step arrived (steps[] order); 0xFFFF = unknown (no turn start seen)
@@ -75,6 +74,10 @@ typedef struct {
     // This turn plays the pet's second working scene (POD_SCENE_WORK_ALT, Claude's builder) instead of its first (the
     // chef): drawn once as the turn starts (pod_model_random), kept until it ends, so every screen shows the same one.
     bool work_alt;
+    char host[16];                       // the app the agent lives in ("codex", "vscode", ...), "" when not said
+    // POD_CAP_* granted (pod_model_agent_app, from the agent's `agent` row); POD_CAPS_ALL when the daemon sent no caps,
+    // and for every agent that came from the library or a tab's members (no `agent` row).
+    uint8_t caps;
 } pod_agent_t;
 
 typedef struct { int16_t x1, y1, x2, y2; } pod_rect_t;   // 0..1000
@@ -98,7 +101,6 @@ typedef struct {
 typedef enum { POD_UNREAD_FINISHED, POD_UNREAD_FAILED } pod_unread_kind_t;
 typedef struct {
     char agent[ID_MAX], name[CABLE_NAME_MAX], token[POD_TOKEN_MAX], text[POD_UNREAD_TEXT];
-    char tab[ID_MAX], chat_id[ID_MAX];   // a Swarm chat's notice (tab set): agent = the Lead's id, name = its project, tab = the Swarm's id, chat_id = the chat it is about
     bool ask;                            // filed by a question (not a finished turn): it goes when the question closes
     pod_unread_kind_t kind;              // FAILED when the agent's last turn ended in an error
     uint32_t at_ms;
@@ -121,20 +123,18 @@ typedef struct {
     uint8_t unread_count;
     pod_read_out_t reads[POD_READS_MAX];
     uint8_t read_count;
-    // The Swarm cards (hello swarmCard:v1): the daemon's list, in card order, with each Lead's cached recap text (PSRAM, owned here).
-    pod_swarm_t swarms[SWARMS_CARD_MAX];
-    uint8_t swarm_n;                     // the received ones, in the order of want[]
-    char want[SWARMS_CARD_MAX][ID_MAX];  // the last `supertabs` id list: set and order; a Swarm not here is dropped, one not received yet is absent
-    uint8_t want_n;
-    bool swarm_ids;                      // a `supertabs` list has arrived on this link (want[] is then the truth; before it, a Swarm that is not here may just not be sent yet)
-    // supertab.focus: the desktop opened this Swarm project. Kept until the view that acts on it clears focus_pending (a focus for a
-    // Swarm the list does not hold yet waits for it).
-    bool focus_pending;
-    char focus_tab[ID_MAX], focus_lead[ID_MAX];
-    // The PM | Buddy segment the person just tapped on this Swarm (the pill draws it selected at once); the Swarm's next supertab frame ends it.
-    pod_side_t side_press;
-    char side_press_swarm[ID_MAX];
-    uint32_t side_press_ms;              // the device clock when it was tapped
+    pod_app_t apps[POD_APPS_MAX];        // the last `apps` frame's list, in its order; rows past app_count are zero
+    uint8_t app_count;
+    char app_shown[CABLE_APP_ID_MAX];    // `shown`: the app whose ring the daemon sends ("" none)
+    bool apps_switch;                    // the welcome listed `apps.switch`
+    bool machine_view;                   // the last agents.end said view:"machine"
+    // A Harness window is open: the last agents.end's tab was non-empty, OR the last swarms frame listed at least one
+    // tab (while the view is an app's ring the daemon sends tab:"" but keeps sending the window's swarms).
+    bool has_window;
+    // The two inputs of has_window, the model's own: readers use has_window. swarm_n counts the items the swarms frame
+    // listed, before the tabs with no agent are hidden.
+    bool tab_open;
+    uint8_t swarm_n;
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -179,46 +179,24 @@ void pod_model_turn(pod_model_t *, const char *id, const char *kind, const char 
 // turn.stats: the last turn's test and commit counts (-1 leaves a field unknown). Unknown agents are ignored.
 void pod_model_turn_stats(pod_model_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
 void pod_model_question(pod_model_t *, const char *id, const char *text);
-// The same for a Super Tab's question: super_tab (NULL or "" = a plain one, attention ignored) and what it needs.
-// Unlike a plain one it survives the agent's turns and library sweeps: only question_close (or the link) ends it.
-void pod_model_question_tab(pod_model_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
-// What the agent's open question asks for: DECISION or STUCK while it asks (pod_model_eff) a Super Tab's question, else NONE.
-pod_attention_t pod_model_attention(const pod_model_t *, const pod_agent_t *);
 void pod_model_question_close(pod_model_t *, const char *id);
 void pod_model_recap(pod_model_t *, const char *id, const char *recap, bool restore);
+// A drop also forgets the apps, app_shown, apps_switch, machine_view and tab_open (the next session says them again);
+// swarm_n stays with the tabs.
 void pod_model_link(pod_model_t *, bool up);
 
-// ---- the Swarm cards ----
-// The `supertabs` id list (at most SWARMS_CARD_MAX, bad or repeated ids skipped): Swarms not listed are dropped and their texts freed, the
-// rest are put in this order; a listed Swarm not received yet stays absent until pod_model_supertab brings it.
-void pod_model_supertab_ids(pod_model_t *, const char (*ids)[ID_MAX], int n);
-// One `supertab` frame: replaces that Swarm's data (a new one is placed by the id list's order). A Lead that was in the old data (same Lead id)
-// keeps its recap state and text; the texts of Leads that left are freed. Stamps since_at_ms with now_ms. Ignored when the id is not in the list.
-void pod_model_supertab(pod_model_t *, const pod_swarm_t *s, uint32_t now_ms);
-// A Lead's last message: LOADED with a copy of `text` (cut to SWARM_TEXT_MAX - 1 on a codepoint), or EMPTY when `none`. Unknown Swarm/Lead: dropped.
-void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
-// The Lead view asks for / lets go of a Lead's last message: loading puts a cold one (NONE) to LOADING (the texts arrive as pod_model_supertab_recap);
-// close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
-void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
-void pod_model_supertab_close(pod_model_t *, const char *tab, const char *lead);
-// A tap on the pill: the segment shows selected on this Swarm until its next supertab frame (NONE clears it). `buddy_unread` of the Lead is the glue's to clear.
-void pod_model_side_press(pod_model_t *, const char *swarm_id, pod_side_t side, uint32_t now_ms);
-enum { POD_SIDE_PRESS_MS = 3000 };   // as POD_SUPERTAB_RETRY_MS: how long a tap waits for the daemon's frame
-// The side the pill and the body show for this Swarm (PM or BUDDY): the tapped segment while the daemon has not answered, else the Swarm's own (NONE counts
-// as PM). A press older than POD_SIDE_PRESS_MS is dropped: the frame it asked for may never come. The view and the glue both read it, so they cannot disagree.
-pod_side_t pod_model_side_shown(const pod_model_t *, const pod_swarm_t *);
-// The Buddy side of a Lead that has none is showing: "No Buddy here yet", no bubble, nothing to talk to.
-bool pod_model_no_buddy(const pod_model_t *, const pod_swarm_t *, const pod_lead_t *);
-// The milliseconds left before the press on this Swarm lapses; 0 when there is none.
-uint32_t pod_model_side_press_left_ms(const pod_model_t *, const pod_swarm_t *);
-// Mark (unread) or clear the lilac dot of a Buddy chat; the Lead must be held. True when the mark changed.
-bool pod_model_buddy_mark(pod_model_t *, const char *tab, const char *lead, bool unread);
-// supertab.focus: record it as pending (focus_pending, focus_tab, focus_lead); the latest one wins.
-void pod_model_supertab_focus(pod_model_t *, const char *tab, const char *lead);
-const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *, const char *tab_id);   // the desk tab's Swarm (its `tab` link); NULL for "" or none
-const pod_swarm_t *pod_model_swarm(const pod_model_t *, const char *swarm_id);
-// Index of the Lead in the Swarm, or -1.
-int pod_model_lead_index(const pod_swarm_t *, const char *lead_id);
+// ---- apps ----
+// Every setter here bumps revision only when a field a reader sees changed (an unchanged push costs no redraw).
+// The whole list, replaced: n clamped to 0..POD_APPS_MAX (NULL apps: no rows), NULL shown: "".
+void pod_model_apps(pod_model_t *, const pod_app_t *apps, int n, const char *shown);
+void pod_model_apps_switch(pod_model_t *, bool on);
+// From agents.end: view:"machine", and whether its tab was non-empty.
+void pod_model_view(pod_model_t *, bool machine_view, bool tab_open);
+// An agent's app and caps, from its `agent` row. pod_ui_roster calls this for every row before pod_model_agents_end, so
+// the nav sync after it sees each app's ring. Unknown id: ignored; NULL host: ""; caps & POD_CAPS_ALL.
+void pod_model_agent_app(pod_model_t *, const char *id, const char *host, uint8_t caps);
+const char *pod_host_name(const char *host);     // "ChatGPT" for codex; unknown, "" or NULL: "Terminal"
+const char *pod_host_see_it(const char *host);   // "See it in ChatGPT": a literal, valid forever
 
 const pod_agent_t *pod_model_find(const pod_model_t *, const char *id);
 // The agents with the most recent task (the newer of act_ms and lib_ms), at most max, newest first. An agent with
@@ -249,7 +227,6 @@ void pod_model_unread_add(pod_model_t *, const char *agent, const char *name, co
 // The whole list at once (notif.replace): clear, then append in the order given (first = newest). One per agent, at most
 // POD_UNREAD_MAX; an append past that or for an agent already listed is dropped.
 void pod_model_unread_clear(pod_model_t *);
-void pod_model_unread_clear_agents(pod_model_t *);   // as clear, but the Swarm notices stay
 void pod_model_unread_append(pod_model_t *, const char *agent, const char *name, const char *token, const char *text, uint32_t now_ms);
 // Read elsewhere (notif.seen): drop the agent's entry. With a token, only an entry that has that token or none. True if dropped.
 bool pod_model_unread_seen(pod_model_t *, const char *agent, const char *token);
@@ -258,11 +235,6 @@ bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
 // How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
 int pod_notice_count(const pod_model_t *);
-// A Swarm chat's notice (supertab.notice): an entry like an agent's, keyed by its Lead (one per Lead, the newest replacing, the 16 cap shared), named by the Lead's
-// project. Nothing is filed for a Swarm or Lead the model does not hold. The read drops only the entry of that tab, Lead AND chat (true when it did), so one that
-// arrives before its notice, or for another chat, leaves the row alone.
-void pod_model_swarm_notice(pod_model_t *, const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t now_ms);
-bool pod_model_swarm_notice_read(pod_model_t *, const char *tab, const char *lead, const char *chat_id);
 // The entry of a question that was just asked (the toast needs one): like pod_model_unread_add, marked `ask`.
 void pod_model_unread_ask(pod_model_t *, const char *agent, const char *name, const char *text, uint32_t now_ms);
 // Take the queued notif.read frames (at most max); returns the count.

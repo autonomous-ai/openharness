@@ -29,12 +29,15 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); f
 
 async function setup(over: Partial<PurgeDeps> = {}, rows = [row]) {
   const { PurgeAgentService } = await import('./purgeAgentService.js')
+  // The worktree's answers on the module a test spies on, as workspaces give them (lib/worktreeDeletion.ts).
+  const deletion = await import('./worktreeDeletion.js')
   const live = new Map(rows.map(entry => [entry.agentId, entry])), saved = new Map<string, RegisteredSession>()
   const deleted = vi.fn(), stop = vi.fn(async (id: string) => { saved.set(id, live.get(id)!); live.delete(id) })
   const service = new PurgeAgentService({ live: (id: string) => live.get(id), sessions: () => [...live.values(), ...saved.values()],
     stopped: { get: (id: string) => saved.get(id) ?? null, beginResume: () => 'fixture-reservation',
       finishResume: () => {}, remove: (id: string) => saved.delete(id) },
-    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, ...over,
+    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted,
+    worktrees: () => deletion.worktreeAnswers(deletion), ...over,
   } as unknown as PurgeDeps)
   const request = { agentId: row.agentId, sessionId: row.sessionId, createdAt: row.registeredAt }
   return { service, live, saved, stop, deleted, request }
@@ -106,8 +109,11 @@ it.each(['shared conversation', 'saved binding'])('keeps history when %s changes
   const removeTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockImplementation(async () => {
     await Promise.resolve()
     if (change === 'saved binding') { ctx.saved.get(row.agentId)!.boundAt! += 1; return }
-    const owner = registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%90077' }] })!
-    Object.assign(owner, { sessionId: ID, transcriptPath: path })
+    const owner = (await registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%90077' }] }))!
+    const bound = await registry.register({ engine: 'codex', cwd, sessionId: ID, transcriptPath: path,
+      codexHome: join(root, 'CODEX_HOME'), runtimes: owner.runtimes,
+      processIdentity: { pid: 90077, executable: 'codex', startMarker: 'fixture' } })
+    expect(bound?.entry.agentId).toBe(owner.agentId)
     expect(registry.list().some(entry => entry.agentId === owner.agentId && entry.sessionId === ID)).toBe(true)
   })
   const plan = await ctx.service.request({ ...ctx.request, mode: 'inspect', includeWorktree: true })

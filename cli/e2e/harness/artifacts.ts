@@ -13,14 +13,16 @@
  * left is the failures, and only those are uploaded. Written synchronously, so a worker that dies or a
  * test that times out leaves everything up to that moment.
  *
- * A vitest setup file (vitest.e2e.config.ts): its hooks are the first registered, so they run around
- * every test's own.
+ * Kept only once `keepArtifacts` has registered its hooks, which the vitest setup file artifactsSetup.ts does first,
+ * so they run around every test's own. Until then this is a plain library: a script that imports the harness outside a
+ * test run (scripts/windows-dial-e2e/desk.mts, harness/abandonedWorker.ts) keeps nothing, with or without the variable
+ * it inherits from a CI shard, since there is no test to file its output under.
  */
 import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { afterAll, beforeEach, expect } from 'vitest'
 
-const ROOT = process.env.E2E_ARTIFACTS_DIR || null
+let root: string | null = null
 
 /** A test's name as a folder: what a person can still read, and nothing a path cannot hold. */
 export function folderName(name: string): string {
@@ -30,20 +32,20 @@ export function folderName(name: string): string {
 
 /** The folder of the test file running in this worker ([path], or the one vitest says is running). */
 function fileFolder(path?: string): string | null {
-  // Asked of vitest only when artifacts are kept: a daemon started outside a test run (e2e/harness/abandonedWorker.ts) has no state to ask.
-  if (!ROOT) return null
+  // Asked of vitest only when artifacts are kept, which is only inside a test run: outside one it has no state to ask.
+  if (!root) return null
   path ??= expect.getState().testPath
-  return path ? join(ROOT, folderName(basename(path).replace(/\.e2e\.ts$/, ''))) : null
+  return path ? join(root, folderName(basename(path).replace(/\.e2e\.ts$/, ''))) : null
 }
 
 let current: string | null = null
 
 /** Whether this run keeps artifacts at all: callers skip work whose only use is an artifact. */
 export function artifactsEnabled(): boolean {
-  return ROOT !== null
+  return root !== null
 }
 
-/** Append [text] to `<the running test's folder>/<name>`. A no-op unless E2E_ARTIFACTS_DIR is set. */
+/** Append [text] to `<the running test's folder>/<name>`. A no-op unless artifacts are kept (`keepArtifacts`). */
 export function artifactLog(name: string, text: string): void {
   const folder = current ?? (fileFolder() && join(fileFolder()!, 'outside-tests'))
   if (!folder || !text) return
@@ -53,7 +55,10 @@ export function artifactLog(name: string, text: string): void {
   } catch { /* a full or missing disk must not fail the test this only records */ }
 }
 
-if (ROOT) {
+/** Keep artifacts in E2E_ARTIFACTS_DIR, when it is set, from here on: call once, from a vitest setup file. */
+export function keepArtifacts(): void {
+  root = process.env.E2E_ARTIFACTS_DIR || null
+  if (!root) return
   let failed = false
   beforeEach((context) => {
     // A test skipped from inside (`ctx.skip()`) never calls its onTestFinished: nothing it wrote failed.

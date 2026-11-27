@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,11 +11,15 @@ import 'package:harness/browser/browser_setup_dialog.dart';
 import 'package:harness/browser/browser_stream.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import '../support/fake_browser_view.dart';
 
@@ -51,6 +57,12 @@ class _App extends AppNotifier {
   }
 
   final asked = <String>[];
+
+  /// What the machine answers the next Stop with, when it does not take it.
+  Object? stopRefused;
+
+  /// Holds the Stop's answer until it completes.
+  Completer<void>? stopHeld;
   final streams = <({BrowserStream stream, List<(String, Map)> frames})>[];
   var availability = const BrowserAvailability(BrowserAvailability.needsSetup);
 
@@ -100,6 +112,17 @@ class _App extends AppNotifier {
       asked.add('retry $agentId');
 
   @override
+  Future<void> agentBrowserStart(String machineId, String agentId) async =>
+      asked.add('start $agentId');
+
+  @override
+  Future<void> agentBrowserStop(String machineId, String agentId) async {
+    asked.add('stop $agentId');
+    if (stopHeld case final held?) await held.future;
+    if (stopRefused case final refused?) throw refused;
+  }
+
+  @override
   Future<BrowserSettings> agentBrowserSettings(
     String machineId,
     String agentId,
@@ -127,6 +150,7 @@ void main() {
     WidgetTester tester,
     AgentBrowser? browser, {
     bool thisComputer = true,
+    bool visible = true,
   }) async {
     app.browser(browser);
     await tester.pumpWidget(
@@ -141,6 +165,7 @@ void main() {
               machineId: 'm',
               agentId: 'a1',
               thisComputer: thisComputer,
+              visible: visible,
               onClose: () => closed++,
               newView: () {
                 final view = FakeBrowserView(ready: true);
@@ -262,7 +287,7 @@ void main() {
     await show(tester, needsSetup, thisComputer: false);
     expect(find.text('Set up Browser on Ken Mac first'), findsOneWidget);
     expect(find.byType(FilledButton), findsNothing);
-    expect(find.byType(TextButton), findsNothing);
+    expect(find.text('Install'), findsNothing);
   });
 
   testWidgets('podman_install_failed shows Retry on this computer only, and '
@@ -314,6 +339,20 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     expect(app.streams.single.frames.last.$1, 'agent_browser_close');
     expect(await app.streams.single.stream.closed, 'closed');
+  });
+
+  testWidgets('a tile out of sight ends its stream, and opens another back '
+      'in sight', (tester) async {
+    await showOpen(tester);
+    await show(tester, ready, visible: false);
+    expect(app.streams.single.frames.last.$1, 'agent_browser_close');
+    expect(key('browser-screen'), findsNothing);
+    await show(tester, ready);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
   });
 
   testWidgets('opening a stream reports agent_browser_opened once, with no '
@@ -441,6 +480,124 @@ void main() {
     expect(key('browser-screen'), findsOneWidget);
   });
 
+  // anh Dee, 2026-11-12: Stop showed "Starting browser…" while the browser was being stopped.
+  testWidgets('Stop shows "Stopping browser…" from the press until the '
+      'machine says the browser is off, never "Starting browser…"', (
+    tester,
+  ) async {
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    expect(app.asked, ['stop a1']);
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(key('browser-screen'), findsNothing);
+    // The machine ends the stream; an older one may say starting before off.
+    await closeWith(tester, 'agent');
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    app.browser(const AgentBrowser(state: 'starting'));
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    expect(find.text('Starting browser…'), findsNothing);
+    expect(find.text('Browser stopped'), findsNothing);
+    expect(app.streams, hasLength(1));
+    app.browser(null);
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsNothing);
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+    // The next Start is a start again.
+    app.browser(const AgentBrowser(state: 'starting'));
+    await tester.pump();
+    expect(find.text('Starting browser…'), findsOneWidget);
+  });
+
+  testWidgets('a Stop the machine does not take goes back to the screen, '
+      'with why', (tester) async {
+    app.stopRefused = const WsRequestFailure(
+      responseType: 'agent_browser_stop_result',
+      code: 'UNSUPPORTED',
+    );
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsNothing);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
+    expect(find.text('Update Harness on Ken Mac first'), findsOneWidget);
+  });
+
+  testWidgets('a refused request is logged by its code', (tester) async {
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() => appLog = previousLog);
+    app.stopRefused = const WsRequestFailure(
+      responseType: 'agent_browser_stop_result',
+      code: 'NOT_OWNER',
+      detail: 'zebra-orchard is busy',
+    );
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+
+    final line = stream.entries.singleWhere(
+      (e) => e.category == 'browser' && e.message.startsWith('request to'),
+    );
+    expect(line.message, 'request to m failed');
+    expect(line.error, 'agent_browser_stop_result: NOT_OWNER');
+    for (final e in stream.entries) {
+      expect('${e.message} ${e.error}', isNot(contains('zebra-orchard')));
+    }
+    expect(find.text('Only its owner can open this browser'), findsOneWidget);
+  });
+
+  // Review, 2026-11-12: CLI 0.6.40 with its browser in its own process never sent the agent's frame again after a
+  // Stop, and the panel said Stopping for good.
+  testWidgets('a Stop the machine takes while it still says the browser is '
+      'on goes back to what it says, never Stopping for good', (tester) async {
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    await tester.pump(BrowserStream.openTimeout);
+    await tester.pump();
+    expect(find.text('Stopping browser…'), findsNothing);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
+  });
+
+  // Review, 2026-11-12: the first Stop's wait ended the Stopping a second Stop still waited on the machine for.
+  testWidgets('a second Stop still being sent keeps "Stopping browser…" past '
+      'the first Stop\'s wait', (tester) async {
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 15));
+    app.stopHeld = Completer<void>();
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 10));
+    expect(find.text('Stopping browser…'), findsOneWidget);
+    app.stopHeld!.complete();
+    await tester.pump();
+    app.browser(null);
+    await tester.pump();
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+  });
+
   testWidgets('Paste sends the clipboard\'s text to the browser, and the gear '
       'opens Browser settings, whose back returns to the screen', (
     tester,
@@ -471,6 +628,81 @@ void main() {
     app.answer();
     await tester.pump();
     expect(key('browser-screen'), findsOneWidget);
+  });
+
+  testWidgets('off shows the line and Start, and the gear opens the '
+      'settings', (tester) async {
+    await show(tester, null);
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+    expect(key('swarm-browser-stop'), findsNothing);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.descendant(
+              of: key('swarm-browser-paste'),
+              matching: find.byType(IconButton),
+            ),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(key('swarm-browser-start'));
+    await tester.pump();
+    expect(app.asked, ['start a1']);
+    expect(app.streams, isEmpty);
+
+    await tester.tap(key('swarm-browser-settings'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Browser settings'), findsOneWidget);
+    await tester.tap(key('browser-settings-back'));
+    await tester.pump();
+    expect(find.text('A sandboxed Chrome the agent drives'), findsOneWidget);
+  });
+
+  testWidgets('Stop is an icon in the header in every state but off', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    for (final browser in [
+      const AgentBrowser(state: 'setup', step: 'installing'),
+      const AgentBrowser(state: 'starting'),
+      ready,
+      const AgentBrowser(state: 'failed', error: 'podman_down'),
+      const AgentBrowser(state: 'failed', error: 'needs_setup'),
+    ]) {
+      app.asked.clear();
+      await show(tester, browser);
+      expect(key('swarm-browser-stop'), findsOneWidget, reason: browser.state);
+      // An icon as the gear is, named by its tooltip to a screen reader too, with no word in the header.
+      expect(find.byTooltip('Stop'), findsOneWidget);
+      expect(
+        tester.getSemantics(
+          find.descendant(
+            of: key('swarm-browser-stop'),
+            matching: find.byType(IconButton),
+          ),
+        ),
+        containsSemantics(tooltip: 'Stop', isButton: true),
+      );
+      expect(find.text('Stop'), findsNothing);
+      expect(
+        tester.getSize(key('swarm-browser-stop')),
+        tester.getSize(key('swarm-browser-settings')),
+      );
+      // Before the gear.
+      expect(
+        tester.getRect(key('swarm-browser-stop')).right,
+        lessThanOrEqualTo(tester.getRect(key('swarm-browser-settings')).left),
+      );
+      await tester.tap(find.byTooltip('Stop'));
+      await tester.pump();
+      expect(app.asked, ['stop a1'], reason: browser.state);
+      await tester.pumpWidget(const SizedBox());
+    }
+    await show(tester, null);
+    expect(key('swarm-browser-stop'), findsNothing);
+    semantics.dispose();
   });
 
   testWidgets('the panel closes from its ×', (tester) async {

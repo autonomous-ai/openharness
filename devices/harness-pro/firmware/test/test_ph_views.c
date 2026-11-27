@@ -4,18 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pod/app_icons.h"
 #include "pod/home/ph.h"
 #include "pod/pod_draw.h"
 #include "pod/pod_nav.h"
 #include "pod/pod_view_shared.h"
 #include "pro_canvas.h"
 
-// A recap only lands on a Lead that was asked for (LOADING), as the Lead view does: the fixtures ask first.
-static void asked_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
-{
-    pod_model_supertab_loading(m, tab, lead);
-    pod_model_supertab_recap(m, tab, lead, "", text, at, none);
-}
 
 static int checks;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); abort(); } checks++; } while (0)
@@ -31,6 +26,13 @@ static const ht_run_t *text_run(const char *t) {
 static const ht_run_t *text_prefix(const char *p) { for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && !strncmp(S.runs[i].text, p, strlen(p))) return &S.runs[i]; return NULL; }
 static const pod_hit_t *nth_hit(pod_action_t a, int n) { for (int i = 0; i < F.hit_count; i++) if (F.hits[i].action == a && n-- == 0) return &F.hits[i]; return NULL; }
 static int hits_of(pod_action_t a) { int n = 0; for (int i = 0; i < F.hit_count; i++) n += F.hits[i].action == a; return n; }
+static bool has_page(const pod_nav_t *nav, const pod_model_t *m, int page)
+{
+    int16_t p[POD_HOME_PAGES_MAX];
+    const int n = pod_home_pages(nav, m, p, POD_HOME_PAGES_MAX);
+    for (int i = 0; i < n; i++) if (p[i] == page) return true;
+    return false;
+}
 
 // The scene in S, rastered from empty: every below-1x frame marked for baking (a Codex face or recap pet) got its arena entry (none dropped for want of
 // room: a dropped one is resampled every frame), and the arena use is exactly those entries' pixels, within BAKE_ARENA_PX (360 K, pod_draw.c).
@@ -56,13 +58,77 @@ static void check_baked(void)
 
 // Page dots (a small anti-aliased pill in the bottom band, y >= 660): Pets has none on any page.
 static int dot_runs(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && (S.runs[i].w == 12 || S.runs[i].w == 11 || S.runs[i].w == 32) && S.runs[i].pro_height <= 12 && S.runs[i].y >= 660; return n; }
-// The run holding the name/title: centred on x 360 within 2 px.
-static const ht_run_t *rect_at(int x, int y, int w, int h) {
-    for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT_AA && S.runs[i].x == x && S.runs[i].y == y && S.runs[i].w == w && (!h || S.runs[i].pro_height == h)) return &S.runs[i];
+static bool centred_run(const ht_run_t *r) { return r && r->x + r->w / 2 >= 360 - 2 && r->x + r->w / 2 <= 360 + 2; }
+
+// Home's Tabs | Apps pill: how many runs sit at (x, y, w, h) with this radius and colour.
+static int aa_at(int x, int y, int w, int h, int r, unsigned rgb)
+{
+    int n = 0;
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *u = &S.runs[i];
+        n += u->pro_kind == K_RECT_AA && u->x == x && u->y == y && u->w == w && u->pro_height == h && u->radius == r && u->fg == ht_rgb(rgb);
+    }
+    return n;
+}
+// The pill's label `t` in ph_sb_22 and `rgb`, centred on x cx within 2 px.
+static bool pill_label(const char *t, int cx, unsigned rgb)
+{
+    const ht_run_t *r = text_run(t);
+    if (!r || r->pro_font != &ph_sb_22 || r->fg != ht_rgb(rgb)) return false;
+    const int mid = r->x + ht_pro_width(&ph_sb_22, t) / 2;
+    return mid >= cx - 2 && mid <= cx + 2;
+}
+static bool pill_hit(pod_action_t a, int x)
+{
+    const pod_hit_t *h = nth_hit(a, 0);
+    return hits_of(a) == 1 && h->x == x && h->y == 624 && h->w == 180 && h->h == 96 && h->arg == 0 && !h->id[0];
+}
+// The pill's five runs and two hits, the filled cell on Apps when `apps`, else on Tabs.
+static void check_pill(bool apps)
+{
+    CHECK(aa_at(234, 640, 252, 46, 23, PH_BORDER) == 1 && aa_at(236, 642, 248, 42, 21, PH_GROUND) == 1);
+    CHECK(aa_at(apps ? 360 : 238, 644, 122, 38, 19, PH_TRACK) == 1 && aa_at(apps ? 238 : 360, 644, 122, 38, 19, PH_TRACK) == 0);
+    CHECK(pill_label("Tabs", 299, apps ? PH_MUTED : PH_INK) && pill_label("Apps", 421, apps ? PH_INK : PH_MUTED));
+    CHECK(pill_hit(POD_A_HOME_TABS, 180) && pill_hit(POD_A_HOME_APPS, 360));
+    CHECK(ph_runs(&F) <= HT_RUNS);
+}
+static void check_no_pill(void)
+{
+    CHECK(aa_at(234, 640, 252, 46, 23, PH_BORDER) == 0 && !text_run("Tabs") && !text_run("Apps"));
+    CHECK(hits_of(POD_A_HOME_TABS) == 0 && hits_of(POD_A_HOME_APPS) == 0 && ph_runs(&F) <= HT_RUNS);
+}
+
+// App cards: the main card's gradient carries exactly top -> bottom (RGB565).
+static bool card_grad(uint16_t top, uint16_t bottom)
+{
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind != POD_GRAD || r->x != 90 || r->y != 56 || r->w != 540 || r->pro_height != 560) continue;
+        uint16_t g[2];
+        memcpy(g, r->text, sizeof g);
+        return g[0] == top && g[1] == bottom;
+    }
+    return false;
+}
+// Image runs whose top sits in y0..y1 (the marks band) and the 12 px state dots there.
+static int images_in(int y0, int y1) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_IMAGE && S.runs[i].y >= y0 && S.runs[i].y <= y1; return n; }
+static int dots_in(int y0, int y1) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 12 && S.runs[i].pro_height == 12 && S.runs[i].y >= y0 && S.runs[i].y <= y1; return n; }
+static bool no_text_has(const char *part) { for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && strstr(S.runs[i].text, part)) return false; return true; }
+// The one POD_A_PICK_APP hit, over the whole card.
+static bool pick_hit(int arg, const char *id)
+{
+    const pod_hit_t *h = nth_hit(POD_A_PICK_APP, 0);
+    return hits_of(POD_A_PICK_APP) == 1 && h->x == 90 && h->y == 56 && h->w == 540 && h->h == 560 && h->arg == arg && !strcmp(h->id, id);
+}
+// The app card's name run: the largest-face text at x 134 on the card's top line.
+static const ht_run_t *app_name(void)
+{
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind == K_TEXT && r->x == 134 && r->y < 56 + 80 && (r->pro_font == &ph_sb_48 || r->pro_font == &ph_sb_34)) return r;
+    }
     return NULL;
 }
-static bool centred_at(const ht_run_t *r, int cx) { return r && r->x + r->w / 2 >= cx - 2 && r->x + r->w / 2 <= cx + 2; }
-static bool centred_run(const ht_run_t *r) { return r && r->x + r->w / 2 >= 360 - 2 && r->x + r->w / 2 <= 360 + 2; }
 
 int main(void) {
     {   // Home's equaliser: four 8 px bars 5 px apart, anchored at the bottom of a 36 px box, 40..100 % tall, moving with the clock
@@ -513,46 +579,6 @@ int main(void) {
         snprintf(M.agents[0].name, sizeof M.agents[0].name, "%s", "an-agent-name-that-is-far-too-long-for-the-toast-to-hold-on-one-line");
         fresh(); ph_toast(&F, &M, pod_model_unread_find(&M, "b"), t0, t0 + 1000);
         for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT) CHECK(S.runs[i].x + S.runs[i].w <= 640 + 40 - 26 + 2);
-
-        // A Super Tab's question: "name · Super Tab", the question, a still full bar (amber decision, red stuck), its own edge; no timer
-        snprintf(M.agents[0].name, sizeof M.agents[0].name, "%s", "api");
-        pod_model_question_tab(&M, "b", "Staging first, or straight to prod?", "Launch v2", POD_ATTN_DECISION);
-        pod_model_unread_ask(&M, "b", "api", "Staging first, or straight to prod?", t0);
-        u = pod_model_unread_find(&M, "b");
-        for (uint32_t age = POD_TOAST_SLIDE_MS; age <= 60000; age += 4950) {
-            fresh(); ph_toast(&F, &M, u, t0, t0 + age);
-            CHECK(S.count <= 9 && S.runs[0].fg == ht_rgb(0x6A4A1C) && S.runs[0].y == 24);
-            int bars = 0;
-            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT && S.runs[i].pro_height == 7) {
-                bars++;
-                CHECK(S.runs[i].w == 588 && S.runs[i].x == 66 && S.runs[i].fg == ht_rgb(0xFFB340));   // full, whatever the time
-            }
-            CHECK(bars == 1);
-            const ht_run_t *nm = text_run("api"), *tag = text_run("\xc2\xb7 Launch v2"), *msg = text_run("Staging first, or straight to prod?");
-            CHECK(nm && nm->fg == ht_rgb(PH_TOAST_NAME) && nm->pro_font == &ph_sb_26 && nm->x == 140);
-            CHECK(tag && tag->fg == ht_rgb(0x8EA3BD) && tag->pro_font == &ph_sb_22 && tag->x == nm->x + ht_pro_width(&ph_sb_26, "api") + 7);
-            CHECK(msg && msg->fg == ht_rgb(PH_TOAST_INK) && msg->x == nm->x);
-            CHECK(hits_of(POD_A_BANNER) == 1);
-        }
-        pod_model_question_tab(&M, "b", "Stuck: e2e failed 3 times", "Launch v2", POD_ATTN_STUCK);
-        pod_model_unread_ask(&M, "b", "api", "Stuck: e2e failed 3 times", t0);
-        u = pod_model_unread_find(&M, "b");
-        fresh(); ph_toast(&F, &M, u, t0, t0 + 20000);
-        CHECK(S.runs[0].fg == ht_rgb(0x6A2626) && text_run("api") && text_run("api")->fg == ht_rgb(0xFF8F8F) && text_run("Stuck: e2e failed 3 times"));
-        { int red = 0; for (int i = 0; i < S.count; i++) red += S.runs[i].pro_kind == K_RECT && S.runs[i].w == 588 && S.runs[i].fg == ht_rgb(0xFF5C5C); CHECK(red == 1); }
-        // a long name and Super Tab stay inside the card, the name keeping at least half the line
-        snprintf(M.agents[0].name, sizeof M.agents[0].name, "%s", "an-agent-name-that-is-far-too-long-for-the-toast-to-hold-on-one-line");
-        pod_model_question_tab(&M, "b", "Which?", "A Super Tab whose name is as long as it may be", POD_ATTN_DECISION);
-        fresh(); ph_toast(&F, &M, u, t0, t0 + 1000);
-        for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT) CHECK(S.runs[i].x + S.runs[i].w <= 640 + 40 - 26 + 2);
-        CHECK(text_prefix("an-agent") && text_prefix("\xc2\xb7 A Super") && text_prefix("\xc2\xb7 A Super")->x - text_prefix("an-agent")->x >= (640 - 2 * 26 - 56 - 18) / 2);
-        // the question answered (or a plain question): back to the timed toast with its default edge
-        pod_model_question_tab(&M, "b", "Which?", NULL, POD_ATTN_STUCK);
-        fresh(); ph_toast(&F, &M, u, t0, t0 + 2500);
-        CHECK(S.runs[0].fg == ht_rgb(PH_TOAST_EDGE) && !text_prefix("\xc2\xb7"));
-        { int half = 0; for (int i = 0; i < S.count; i++) half += S.runs[i].pro_kind == K_RECT && S.runs[i].fg == ht_rgb(PH_TOAST_BAR) && S.runs[i].w == 294; CHECK(half == 1); }
-        pod_model_question_close(&M, "b");
-        CHECK(pod_model_attention(&M, pod_model_find(&M, "b")) == POD_ATTN_NONE && !pod_model_find(&M, "b")->super_tab[0]);
     }
 
     // ---- Agent, Recap, Talk, Inbox, Toast, Update (Task 10) ----
@@ -1019,50 +1045,6 @@ int main(void) {
             CHECK(hits_of(POD_A_FOLLOW) == 0 && hits_of(POD_A_OPEN_NOTIF) == 3 && ph_runs(&F) <= HT_RUNS);
             N.stack[1].scroll = 0;
         }
-        // Notices: a Super Tab's asking rows (decision, stuck) above a plain entry: "name · Super Tab", "needs you" / "stuck", the edge, the badge
-        {
-            pod_model_unread_clear(&M);
-            pod_model_question_tab(&M, "q", "Staging first, or straight to prod?", "Launch v2", POD_ATTN_DECISION);
-            pod_model_question_tab(&M, "d", "e2e failed 3 times, no write access to staging", "Launch v2", POD_ATTN_STUCK);
-            pod_model_unread_add(&M, "f", "api-retry", "Picked the blue hero image.", 40, now - 300000u);
-            pod_model_clock(&M, now);
-            pod_nav_init(&N);
-            N.depth = 2; N.stack[0].view = POD_V_TABS; N.stack[1].view = POD_V_INBOX;
-            fresh();
-            ph_view_inbox(&F, &N, &M, now);
-            const ht_run_t *nd = text_run("needs you"), *ns = text_run("stuck"), *rq = text_prefix("Staging first"), *rd = text_prefix("e2e failed"), *rf = text_prefix("Picked the blue");
-            CHECK(nd && ns && rq && rd && rf && rq->y < rd->y && rd->y < rf->y && !text_run("asks") && text_run("5m"));
-            CHECK(nd->y < rq->y && ns->y < rd->y && ns->y > rq->y);
-            int tags = 0, badges = 0, rings = 0, amber = 0, red = 0, letters = 0;
-            for (int i = 0; i < S.count; i++) {
-                const ht_run_t *r = &S.runs[i];
-                if (r->pro_kind == K_TEXT && !strcmp(r->text, "\xc2\xb7 Launch v2")) { tags++; CHECK(r->fg == ht_rgb(0x6B4FA3) && r->pro_font == &ph_sb_22); }
-                badges += r->pro_kind == K_RECT_AA && r->w == 34 && r->fg == ht_rgb(0x3B2E55) && r->x == 60 + 110 + 8 - 40 + 3;
-                rings += r->pro_kind == K_RECT_AA && r->w == 40 && r->fg == ht_rgb(PH_ROOM_BG);
-                amber += r->pro_kind == K_RECT_AA && r->w == 470 && r->x == 190 && r->fg == ht_rgb(0xFFB340);
-                red += r->pro_kind == K_RECT_AA && r->w == 470 && r->x == 190 && r->fg == ht_rgb(0xFF5C5C);
-                letters += r->pro_kind == K_RECT_AA && r->fg == ht_rgb(PH_LETTER) && ((r->w == 464 && r->x == 196) || (r->w == 470 && r->x == 190));
-            }
-            CHECK(tags == 2 && badges == 2 && rings == 2 && amber == 1 && red == 1 && letters == 3 && ph_runs(&F) <= HT_RUNS);
-            {   // the tag follows the name on its line
-                const ht_run_t *nm = NULL;
-                for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && S.runs[i].y == nd->y && S.runs[i].x == 216) nm = &S.runs[i];
-                CHECK(nm && nm->fg == ht_rgb(PH_LETTER_WHO));
-                int beside = 0;
-                for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(0x6B4FA3) && S.runs[i].y == nd->y) beside += S.runs[i].x > nm->x + nm->w - 2;
-                CHECK(beside == 1);
-            }
-            CHECK(hits_of(POD_A_FOLLOW) == 2 && hits_of(POD_A_OPEN_NOTIF) == 1);
-            // closed: a plain row again
-            pod_model_question_close(&M, "q");
-            pod_model_question_close(&M, "d");
-            pod_model_question(&M, "q", "Delete 14 old files?");
-            fresh();
-            ph_view_inbox(&F, &N, &M, now);
-            CHECK(text_run("asks") && !text_run("needs you") && !text_prefix("\xc2\xb7"));
-            pod_model_question_close(&M, "q");
-            pod_model_unread_clear(&M);
-        }
         // Notices wakes only when a visible age text turns over ("now", minutes, hours, days), not on a beat: a quiet list is neither redrawn nor rebuilt
         {
             pod_model_unread_clear(&M);
@@ -1375,442 +1357,254 @@ int main(void) {
         CHECK(!text_run("w2") && hits_of(POD_A_FOLLOW) == 0 && ph_home_moves(&N, &M));
         for (int i = 0; i < 5; i++) pod_model_turn(&M, id[i], "done", NULL, 0, 200000);   // nobody works: no Working page, scroll -1 is tab 0
         N.stack[0].scroll = POD_HOME_WORKING;
-        CHECK(pod_home_working(&M) == 0 && !pod_home_has(&M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
+        CHECK(pod_home_working(&M) == 0 && !has_page(&N, &M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
     }
-    {   // Home's Swarm card (the owner's mockup swarm-card.html): a desk tab linked to a Swarm draws it, the Leads as pets three to a page, the capsule under the name
+
+    // ---- Home's Tabs | Apps pill: drawn under every Home page while another app has agents, its filled cell on the list Home shows ----
+    {
         static pod_model_t M;
         static pod_nav_t N;
-        static cable_swarm_t sw[1];
-        static const char *const w0[] = {"w1"}, *const *lists[1] = {w0};
-        static uint8_t counts[1] = {1};
-        static const char ids[2][ID_MAX] = {"sw1", "sw2"};
-        static pod_swarm_t S1;
-        struct { const char *id, *project, *engine, *owner, *local; pod_lead_state_t st; unsigned since; } L[4] = {
-            {"l1", "mobile", "muse", "", "h1", POD_LEAD_ASK, 0}, {"l2", "harness", "claude", "", "h2", POD_LEAD_WORK, 134},
-            {"l3", "website", "codex", "", "h3", POD_LEAD_WORK, 48}, {"l4", "backend", "codex", "", "h4", POD_LEAD_DONE, 0}};
+        const uint32_t now = 100000u;
         pod_model_reset(&M);
         pod_model_agents_begin(&M);
-        pod_model_agent(&M, "w1", "w1", "claude", "Mac");
+        static const char *const aid[3] = {"p1", "p2", "p3"};
+        for (int i = 0; i < 3; i++) pod_model_agent(&M, aid[i], aid[i], "claude", "Mac");
         pod_model_agents_end(&M);
-        snprintf(sw[0].id, SWARM_ID_MAX, "desk1"); snprintf(sw[0].name, CABLE_NAME_MAX, "Desk"); sw[0].panes = sw[0].agents = 1;
-        pod_model_swarms(&M, sw, lists, counts, 1, "desk1", NULL, 0);
+        cable_swarm_t sw[2];
+        memset(sw, 0, sizeof sw);
+        static const char *const l0[] = {"p1", "p2"}, *const l1[] = {"p3"};
+        const char *const *ls[2] = {l0, l1};
+        uint8_t cn[2] = {2, 1};
+        for (int i = 0; i < 2; i++) { snprintf(sw[i].id, SWARM_ID_MAX, "s%d", i); snprintf(sw[i].name, CABLE_NAME_MAX, "Tab%d", i); sw[i].panes = sw[i].agents = cn[i]; }
+        pod_model_swarms(&M, sw, ls, cn, 2, "s0", NULL, 0);
         pod_model_link(&M, true);
-        pod_model_supertab_ids(&M, ids, 1);   // sw1 only: linked to the desk tab
-        memset(&S1, 0, sizeof S1);
-        snprintf(S1.id, ID_MAX, "sw1"); snprintf(S1.tab, ID_MAX, "desk1"); snprintf(S1.name, sizeof S1.name, "openharness");
-        S1.count = 4; S1.lead_n = 4;
-        for (int i = 0; i < 4; i++) {
-            pod_lead_t *l = &S1.leads[i];
-            snprintf(l->id, ID_MAX, "%s", L[i].id); snprintf(l->project, sizeof l->project, "%s", L[i].project); snprintf(l->engine, sizeof l->engine, "%s", L[i].engine);
-            snprintf(l->owner, sizeof l->owner, "%s", L[i].owner); snprintf(l->local, ID_MAX, "%s", L[i].local); l->state = L[i].st; l->since_s = L[i].since;
-        }
-        pod_model_supertab(&M, &S1, 1000);
+        pod_model_clock(&M, now);
+        pod_model_apps_switch(&M, true);
+        static const pod_app_t harness_only[1] = {{"harness", "Harness", 4, 1, 1}};
+        static const pod_app_t apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
         pod_nav_init(&N);
-        CHECK(M.swarm_n == 1 && pod_home_pages(&M, NULL, 0) == 1 && pod_home_swarm(&M, 0) == &M.swarms[0]);   // the desk tab's page IS the Swarm's
-        N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
-        CHECK(text_run("openharness") && text_run("4") && !text_run("workspaces") && !text_run("workspace") && !text_run("Desk"));   // the capsule's disc, no big number
-        CHECK(text_run("1 needs you") && text_run("1 needs you")->fg == ht_rgb(0xFFC796) && text_run("2 working") && text_run("2 working")->fg == ht_rgb(0x9DFFC0) && !text_prefix("1 done"));
-        CHECK(text_run("openharness")->x == 90 + 44);   // the title where a tab's name is
-        CHECK(text_run("mobile") && text_run("harness") && text_run("website") && !text_run("backend"));
-        CHECK(text_run("needs you") && text_run("needs you")->fg == ht_rgb(0xFFC796));
-        CHECK(text_run("2:14") && text_run("2:14")->fg == ht_rgb(0x9DFFC0) && text_run("0:48") && !text_prefix("working \xc2\xb7"));   // a working Lead: only its clock
-        CHECK(hits_of(POD_A_LEAD) == 3 && F.hit_count == 3 && hits_of(POD_A_ENTER_TAB) == 0);
-        for (int k = 0; k < 3; k++) {   // centred exactly like the Working card: 165 px apart about the card's middle
-            const pod_hit_t *h = nth_hit(POD_A_LEAD, k);
-            CHECK(h->arg == k && !strcmp(h->id, "sw1") && h->x == 90 + 270 + (k - 1) * 165 - 75 && h->w == 150);
+        // The same model with apps.switch off: what Home draws without the pill.
+        int base, base_hits;
+#define BASE() do { pod_model_apps_switch(&M, false); fresh(); ph_view_home(&F, &N, &M, now); base = S.count; base_hits = F.hit_count; pod_model_apps_switch(&M, true); } while (0)
+
+        // only Harness has agents: no other app, no pill
+        pod_model_apps(&M, harness_only, 1, "harness");
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.count == base && F.hit_count == base_hits);
+        check_no_pill();
+
+        // another app, on tab 0: the pill, Tabs filled
+        pod_model_apps(&M, apps, 3, "harness");
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.count == base + 5 && F.hit_count == base_hits + 2 && text_run("Tab0"));
+        check_pill(false);
+
+        // Apps chosen: the filled cell moves under "Apps"
+        pod_nav_act(&N, &M, POD_A_HOME_APPS, 0, now);
+        CHECK(N.home_apps);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_pill(true);
+        pod_nav_act(&N, &M, POD_A_HOME_TABS, 0, now);
+        CHECK(!N.home_apps);
+
+        // the Notices card (p3 asks) and the Working card (p1 works) carry it too
+        pod_model_turn(&M, "p1", "started", NULL, 0, now);
+        pod_model_question(&M, "p3", "ok?");
+        const int pages[2] = {POD_HOME_NOTICES, POD_HOME_WORKING};
+        for (int k = 0; k < 2; k++) {
+            N.stack[0].scroll = pages[k];
+            BASE();
+            fresh(); ph_view_home(&F, &N, &M, now);
+            CHECK(S.count == base + 5 && F.hit_count == base_hits + 2);
+            CHECK(text_run(k ? "Working" : "Notices"));
+            check_pill(false);
         }
-        {   // the capsule's pulsing dot (11 px) is there while a Lead needs you or is stuck, and gone once none does
-            int dots = 0;
-            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
-            CHECK(dots == 1);
-            M.swarms[0].leads[0].state = POD_LEAD_STUCK;
-            fresh(); ph_view_home(&F, &N, &M, 1000);
-            dots = 0;
-            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
-            CHECK(dots == 1 && text_run("stuck") && text_run("stuck")->fg == ht_rgb(0xFFB0B0) && text_run("1 stuck") && text_run("1 stuck")->fg == ht_rgb(0xFFB0B0));   // stuck is red, in the capsule and under the pet, and pulses too
-            fresh(); ph_view_home(&F, &N, &M, 1000);
-            M.swarms[0].leads[0].state = POD_LEAD_DONE;   // nothing needs you: no dot
-            fresh(); ph_view_home(&F, &N, &M, 1000);
-            dots = 0;
-            for (int i = 0; i < S.count; i++) dots += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 11 && S.runs[i].pro_height == 11;
-            CHECK(dots == 0 && !text_prefix("1 needs") && !text_prefix("1 stuck"));
-            M.swarms[0].leads[0].state = POD_LEAD_ASK;
-        }
-        fresh(); ph_view_home(&F, &N, &M, 8000);   // the clock runs: 7 s later
-        CHECK(text_run("2:21") && text_run("0:55") && ph_home_moves(&N, &M));
-        N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);   // the 4th Lead alone, in the middle
-        CHECK(text_run("backend") && text_run("done") && text_run("done")->fg != ht_rgb(0xFFFFFF) && text_run("done")->fg != ht_rgb(0xFFC796) && !text_run("mobile"));
-        CHECK(hits_of(POD_A_LEAD) == 1 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 0)->x == 90 + 270 - 75);
-        N.swarm_page = 9; fresh(); ph_view_home(&F, &N, &M, 1000);   // past the last page: the last
-        CHECK(text_run("backend") && hits_of(POD_A_LEAD) == 1);
-        {   // the neighbouring page's Lead peeks in at the card's edge (a veil clips and fades it): the next page's first at the right, the previous page's last at the left
-            #define VEILS(n_) do { n_ = 0; for (int i_ = 0; i_ < S.count; i_++) n_ += S.runs[i_].pro_kind == POD_VEIL; } while (0)
-            int v;
-            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
-            CHECK(v == 1);   // page 0 of 2: a next page, no previous
-            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_VEIL) CHECK(S.runs[i].x + S.runs[i].w > 90 + 540 && S.runs[i].x > 90 + 300);   // at the right edge
-            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
-            CHECK(v == 1);   // the last page: a previous page, no next
-            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == POD_VEIL) CHECK(S.runs[i].x < 90 && S.runs[i].x + S.runs[i].w < 90 + 300);   // at the left edge
-            M.swarms[0].lead_n = 7;
-            for (int k = 4; k < 7; k++) M.swarms[0].leads[k] = M.swarms[0].leads[k - 4];
-            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
-            CHECK(v == 2 && hits_of(POD_A_LEAD) == 3);   // a middle page: both neighbours
-            M.swarms[0].lead_n = 3;
-            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000); VEILS(v);
-            CHECK(v == 0 && hits_of(POD_A_LEAD) == 3);   // one page: nothing peeks
-            M.swarms[0].lead_n = 4;
-            #undef VEILS
-        }
-        {   // the gradient is the Swarm's purple, #6B4FA3 -> #231A3B
-            unsigned g1 = 0, g2 = 0;
-            for (int i = 0; i < S.count; i++)
-                if (S.runs[i].pro_kind == POD_GRAD && S.runs[i].w == 540) { uint16_t g[2]; memcpy(g, S.runs[i].text, sizeof g); g1 = g[0]; g2 = g[1]; }
-            CHECK(g1 == ht_rgb(0x6B4FA3) && g2 == ht_rgb(0x231A3B));
-        }
-        // A remote Lead shows its owner (smaller, muted) under the status; a remote Lead at work has no clock; a Swarm with no desk tab is a page of its own.
-        snprintf(S1.id, ID_MAX, "sw2"); S1.tab[0] = 0; snprintf(S1.name, sizeof S1.name, "Solo swarm"); S1.count = 1; S1.lead_n = 1;
-        snprintf(S1.leads[0].id, ID_MAX, "r1"); snprintf(S1.leads[0].project, sizeof S1.leads[0].project, "ops"); snprintf(S1.leads[0].engine, sizeof S1.leads[0].engine, "claude");
-        snprintf(S1.leads[0].owner, sizeof S1.leads[0].owner, "Linh Tran"); S1.leads[0].local[0] = 0; S1.leads[0].state = POD_LEAD_WORK; S1.leads[0].since_s = 0;
-        pod_model_supertab_ids(&M, ids, 2);
-        pod_model_supertab(&M, &S1, 1000);
-        CHECK(M.swarm_n == 2 && pod_home_pages(&M, NULL, 0) == 2 && pod_home_has(&M, 1) && !pod_home_has(&M, 2));   // page 1 = tab_count + the Swarm's index among the unlinked
-        CHECK(pod_home_swarm(&M, 1) == &M.swarms[1] && pod_tabs_pages_of(&N, &M) == 2);
-        N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
-        CHECK(text_run("Solo swarm") && text_run("1 working") && text_run("ops") && text_run("working") && !text_prefix("working \xc2\xb7") && text_run("Linh Tran"));
-        CHECK(text_run("Linh Tran")->fg != ht_rgb(0xFFFFFF) && hits_of(POD_A_LEAD) == 1 && !strcmp(nth_hit(POD_A_LEAD, 0)->id, "sw2"));
-        CHECK(text_run("Linh Tran")->y > text_run("working")->y);
-        N.stack[0].scroll = 0; fresh(); ph_view_home(&F, &N, &M, 1000);   // the next page peeks at the right: its gradient and title only
-        CHECK(text_run("Solo swarm") && !text_run("ops") && hits_of(POD_A_LEAD) == 3);
-        {   // the working line's clock needs a turn's start: a local Lead working only from open assignments (no since) says "working", with no 0:00 counting on
-            pod_lead_t l;
-            memset(&l, 0, sizeof l);
-            char line[64];
-            snprintf(l.local, ID_MAX, "h1"); l.state = POD_LEAD_WORK;
-            ph_lead_status(&l, 5000, line, sizeof line, 0);
-            CHECK(!strcmp(line, "working"));
-            l.since_s = 134; l.since_at_ms = 1000;
-            ph_lead_status(&l, 3500, line, sizeof line, 0);
-            CHECK(!strcmp(line, "working \xc2\xb7 2:16"));
-        }
-        // Leads: the pet's scene is work (WORK), ask (ASK, STUCK) or rest (DONE)
-        CHECK(ph_lead_scene(POD_LEAD_WORK) == POD_SCENE_WORK && ph_lead_scene(POD_LEAD_ASK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_STUCK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_DONE) == POD_SCENE_REST);
-        {   // the capsule's counts in the fixed order; the Leads in the Swarm's order whatever their state (the daemon's `order`); "All done", the long forms
-            static const pod_lead_state_t st[6] = {POD_LEAD_DONE, POD_LEAD_WORK, POD_LEAD_ASK, POD_LEAD_STUCK, POD_LEAD_WORK, POD_LEAD_ASK};
-            snprintf(S1.name, sizeof S1.name, "Order");
-            S1.count = S1.lead_n = 6;
-            for (int i = 0; i < 6; i++) {
-                pod_lead_t *l = &S1.leads[i];
-                memset(l, 0, sizeof *l);
-                snprintf(l->id, ID_MAX, "o%d", i); snprintf(l->project, sizeof l->project, "p%d", i); snprintf(l->engine, sizeof l->engine, "codex");
-                snprintf(l->local, ID_MAX, "h%d", i); l->state = st[i]; l->since_s = (unsigned)(10 * (i + 1));
-            }
-            pod_model_supertab(&M, &S1, 1000);
-            N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
-            CHECK(text_run("6") && text_run("1 stuck \xc2\xb7 2 need you") && text_run("1 stuck \xc2\xb7 2 need you")->fg == ht_rgb(0xFFB0B0) && text_run("2") && !text_run("2 working") && !text_prefix("1 done"));   // too wide with "working": the bars and the number
-            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 0 && nth_hit(POD_A_LEAD, 1)->arg == 1 && nth_hit(POD_A_LEAD, 2)->arg == 2);   // done, working, needs you: as listed
-            CHECK(text_run("p0") && text_run("p1") && text_run("p2") && text_run("done") && text_run("needs you") && !text_run("p3"));
-            CHECK(text_run("p0")->x < text_run("p1")->x && text_run("p1")->x < text_run("p2")->x);
-            N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);
-            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 1)->arg == 4 && nth_hit(POD_A_LEAD, 2)->arg == 5);   // stuck, working, needs you
-            CHECK(text_run("stuck") && text_run("0:50") && text_run("needs you") && !text_run("done") && text_run("1 stuck \xc2\xb7 2 need you"));   // the capsule counts the whole Swarm
-            for (int i = 0; i < 6; i++) S1.leads[i].state = POD_LEAD_DONE;
-            pod_model_supertab(&M, &S1, 1000);
-            N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
-            CHECK(text_run("All done") && text_run("6") && !text_prefix("0 ") && !text_prefix("1 ") && !ph_home_moves(&N, &M));
-            // ten projects, 12 in all, a long name: the name is cut with an ellipsis, the disc widens, "working" shrinks to its bars and the number
-            snprintf(S1.name, sizeof S1.name, "openharness-launch-october");
-            S1.count = S1.lead_n = 12;
-            for (int i = 6; i < 12; i++) { S1.leads[i] = S1.leads[i - 6]; snprintf(S1.leads[i].id, ID_MAX, "o%d", i); }
-            for (int i = 0; i < 12; i++) { S1.leads[i].state = i < 3 ? POD_LEAD_STUCK : i < 6 ? POD_LEAD_ASK : POD_LEAD_WORK; S1.leads[i].since_s = 5; }
-            pod_model_supertab(&M, &S1, 1000);
-            fresh(); ph_view_home(&F, &N, &M, 1000);
-            CHECK(text_prefix("openharness-") && !text_run("openharness-launch-october") && text_run("12") && text_run("3 stuck \xc2\xb7 3 need you") && !text_run("6 working") && text_run("6"));
-        }
+        pod_model_question_close(&M, "p3");
+        pod_model_turn(&M, "p3", "done", NULL, 0, now);
+        pod_model_turn(&M, "p1", "done", NULL, 0, now);
+
+        // over the wordmark: nobody works or asks and the window's one tab holds no agent (no tab kept, still a window)
+        cable_swarm_t empty[1];
+        memset(empty, 0, sizeof empty);
+        snprintf(empty[0].id, SWARM_ID_MAX, "e");
+        uint8_t zero[1] = {0};
+        pod_model_swarms(&M, empty, NULL, zero, 1, "e", NULL, 0);
+        pod_model_apps(&M, apps + 1, 1, "harness");   // codex alone
+        CHECK(M.tab_count == 0 && M.has_window && pod_home_switch(&M));
+        N.stack[0].scroll = 0;
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.background == ht_rgb(0x0E1B2C) && S.count == base + 5 && F.hit_count == base_hits + 2);
+        check_pill(false);
+
+        // no window: Home lists the apps itself, no pill
+        pod_model_apps(&M, apps, 3, "harness");
+        pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+        pod_model_view(&M, true, false);
+        CHECK(!M.has_window);
+        pod_nav_sync(&N, &M);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_no_pill();
+#undef BASE
     }
-    {   // The Lead view (the owner's mockup B1-B3): the Swarm and the project on top, the Lead's last message in a bubble, the pet signing it with "Lead" and its status
+    // ---- App cards: the tab card's body from an apps row, in the app's own colours with its icon; marks only for the app shown ----
+    {
         static pod_model_t M;
         static pod_nav_t N;
-        static const char ids[1][ID_MAX] = {"sw1"};
-        static pod_swarm_t S1;
+        const uint32_t now = 100000u;
         pod_model_reset(&M);
+        pod_model_agents_begin(&M);
+        static const char *const aid[11] = {"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11"};
+        for (int i = 0; i < 11; i++) pod_model_agent(&M, aid[i], aid[i], i < 4 ? "claude" : "codex", "Mac");
+        pod_model_agents_end(&M);
+        cable_swarm_t sw[2];
+        memset(sw, 0, sizeof sw);
+        static const char *const l0[] = {"a1", "a2"}, *const l1[] = {"a3", "a4"};
+        const char *const *ls[2] = {l0, l1};
+        uint8_t cn[2] = {2, 2};
+        for (int i = 0; i < 2; i++) { snprintf(sw[i].id, SWARM_ID_MAX, "s%d", i); snprintf(sw[i].name, CABLE_NAME_MAX, "Tab%d", i); sw[i].panes = sw[i].agents = cn[i]; }
+        pod_model_swarms(&M, sw, ls, cn, 2, "s0", NULL, 0);
         pod_model_link(&M, true);
-        pod_model_supertab_ids(&M, ids, 1);
-        memset(&S1, 0, sizeof S1);
-        snprintf(S1.id, ID_MAX, "sw1"); snprintf(S1.name, sizeof S1.name, "openharness"); S1.count = 3; S1.lead_n = 3;
-        snprintf(S1.leads[0].id, ID_MAX, "l0"); snprintf(S1.leads[0].project, sizeof S1.leads[0].project, "mobile"); snprintf(S1.leads[0].engine, sizeof S1.leads[0].engine, "muse");
-        S1.leads[0].state = POD_LEAD_ASK;
-        snprintf(S1.leads[1].id, ID_MAX, "l1"); snprintf(S1.leads[1].project, sizeof S1.leads[1].project, "autonomous-harness"); snprintf(S1.leads[1].engine, sizeof S1.leads[1].engine, "claude");
-        snprintf(S1.leads[1].local, ID_MAX, "h1"); S1.leads[1].state = POD_LEAD_WORK; S1.leads[1].since_s = 134;
-        snprintf(S1.leads[2].id, ID_MAX, "l2"); snprintf(S1.leads[2].project, sizeof S1.leads[2].project, "ops"); snprintf(S1.leads[2].engine, sizeof S1.leads[2].engine, "codex");
-        snprintf(S1.leads[2].owner, sizeof S1.leads[2].owner, "Linh Tran"); S1.leads[2].state = POD_LEAD_DONE;
-        pod_model_supertab(&M, &S1, 1000);
+        pod_model_clock(&M, now);
+        pod_model_apps_switch(&M, true);
+        pod_model_agent_app(&M, "a5", "codex", POD_CAPS_ALL);
+        pod_model_agent_app(&M, "a6", "codex", POD_CAPS_ALL);
+        pod_model_turn(&M, "a5", "started", NULL, 0, now);   // a5 works, a6 is idle
+        static const pod_app_t apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 1}};
+        pod_model_apps(&M, apps, 3, "codex");
         pod_nav_init(&N);
-        CHECK(pod_nav_open_lead(&N, &M, "sw1", 0) && N.depth == 2 && N.stack[1].view == POD_V_LEAD && !strcmp(N.stack[1].swarm, "sw1") && !strcmp(N.stack[1].lead_id, "l0") && N.stack[1].lead == 0);
-        // B2: needs you, LOADED. The Swarm's name (small, purple) over the project, the bubble with the text, the orange inner edge, the pet, "Lead" and "needs you".
-        asked_recap(&M, "sw1", "l0", "Build 1.0.9 is done. TestFlight now, or wait for the Android banner fix?", 1792560000u, false);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(S.background == ht_rgb(PH_ROOM_BG) && F.hit_count == 0 && dot_runs() == 0);
-        CHECK(centred_run(text_run("openharness")) && text_run("openharness")->fg == ht_rgb(0xB79CFF) && centred_run(text_run("mobile")) && text_run("mobile")->fg == ht_rgb(PH_ROOM_INK));
-        CHECK(text_run("openharness")->y < text_run("mobile")->y && text_run("mobile")->y < 150);
-        CHECK(text_prefix("Build 1.0.9 is done.") && text_prefix("Build 1.0.9 is done.")->fg == ht_rgb(PH_LETTER_INK) && text_prefix("Build 1.0.9 is done.")->x == 60 + 34);
-        CHECK(text_run("Lead") && text_run("Lead")->x == 160 && text_run("needs you") && text_run("needs you")->x == 160 && text_run("needs you")->fg == ht_rgb(0xFFC796));
-        CHECK(text_run("Lead")->y < text_run("needs you")->y && !text_run("No message yet") && !text_run("\xe2\x80\xa6"));
-        {   // the edge: an orange block at the bubble's left, the paper 8 px in; the paper is 600 wide without an edge
-            int edge = 0, paper = 0, wide = 0;
+        pod_nav_act(&N, &M, POD_A_HOME_APPS, 0, now);
+        CHECK(N.home_apps && N.stack[0].scroll == POD_HOME_APP0);
+        const pod_app_style_t *cx = pod_app_style("codex");
+        CHECK(cx && cx->icon72);
+
+        // the codex card: its colours, its icon at the top right, the name left of it, the row's numbers, a5 and a6 as marks, one pick
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(card_grad(cx->card_top, cx->card_bottom));
+        {
+            int at = 0;
             for (int i = 0; i < S.count; i++) {
                 const ht_run_t *r = &S.runs[i];
-                edge += r->pro_kind == K_RECT_AA && r->x == 60 && r->w == 120 && r->fg == ht_rgb(0xFF9A52);
-                paper += r->pro_kind == K_RECT_AA && r->x == 68 && r->w == 592 && r->fg == ht_rgb(PH_LETTER);
-                wide += r->pro_kind == K_RECT_AA && r->w == 600 && r->fg == ht_rgb(PH_LETTER);
+                if (r->pro_kind == K_IMAGE && r->x == 514 && r->y == 96) {
+                    at++;
+                    CHECK(r->w == 72 && r->pro_height == 72 && r->bitmap.pixels == cx->icon72->rgb565);
+                }
             }
-            CHECK(edge == 1 && paper == 1 && wide == 0);
+            CHECK(at == 1);
         }
-        N.stack[1].lead = 0; M.swarms[0].leads[0].state = POD_LEAD_STUCK;   // stuck: the edge is red, the line says so
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        { int red = 0; for (int i = 0; i < S.count; i++) red += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].x == 60 && S.runs[i].w == 120 && S.runs[i].fg == ht_rgb(0xE5484D);
-          CHECK(red == 1 && text_run("stuck") && text_run("stuck")->fg == ht_rgb(0xFFB0B0)); }
-        M.swarms[0].leads[0].state = POD_LEAD_ASK;
-        // B1: working, no edge; the status clock runs
-        N.stack[1].view = POD_V_LEAD; snprintf(N.stack[1].lead_id, ID_MAX, "l1"); N.stack[1].lead = 1;
-        asked_recap(&M, "sw1", "l1", "PR #1492 is merged and the backend is on production. Next: your turn on the device.", 1792560000u, false);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(centred_run(text_run("autonomous-harness")) && text_run("working \xc2\xb7 2:14") && text_run("working \xc2\xb7 2:14")->fg == ht_rgb(0x3EE05B));
-        { int edge = 0; for (int i = 0; i < S.count; i++) edge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 120; CHECK(edge == 0); }
-        fresh(); ph_view_lead(&F, &N, &M, 8000);
-        CHECK(text_run("working \xc2\xb7 2:21") && ph_lead_next_ms(&N, &M, 8000) <= 1000);
-        // LOADING draws "..." in a bubble of its own; a Lead never asked for looks the same
-        pod_model_supertab_close(&M, "sw1", "l1");
-        pod_model_supertab_loading(&M, "sw1", "l1");
-        CHECK(M.swarms[0].leads[1].recap == POD_RECAP_LOADING && M.swarms[0].leads[1].text == NULL);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(text_run("\xe2\x80\xa6") && text_run("\xe2\x80\xa6")->fg == ht_rgb(PH_LETTER_INK) && !text_run("No message yet") && !text_prefix("PR #"));
-        // EMPTY: no bubble, "No message yet" muted in the middle, the pet rests
-        asked_recap(&M, "sw1", "l1", NULL, 0, true);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(centred_run(text_run("No message yet")) && text_run("No message yet")->fg == ht_rgb(PH_ROOM_MUTED) && !text_run("\xe2\x80\xa6") && text_run("Lead"));
-        { int paper = 0; for (int i = 0; i < S.count; i++) paper += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].fg == ht_rgb(PH_LETTER); CHECK(paper == 0); }
-        CHECK(ph_lead_max_row(&N, &M) == 0);
-        // A remote Lead: its owner under the status (smaller, muted), a Lead that is done says so in grey
-        N.stack[1].view = POD_V_LEAD; snprintf(N.stack[1].lead_id, ID_MAX, "l2"); N.stack[1].lead = 2;
-        asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(text_run("ops") && text_run("done") && text_run("done")->fg != ht_rgb(0xFFFFFF) && text_run("Linh Tran") && text_run("Linh Tran")->fg == ht_rgb(PH_ROOM_MUTED));
-        CHECK(text_run("done")->y < text_run("Linh Tran")->y && text_run("Lead")->y < text_run("done")->y);
-        // A long message: 7 rows at a time, scrolled by rows, the last visible row lighter while more follows
-        asked_recap(&M, "sw1", "l2", "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty "
-                                 "twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two thirty-three "
-                                 "thirty-four thirty-five thirty-six thirty-seven thirty-eight thirty-nine forty forty-one forty-two forty-three forty-four forty-five forty-six", 1, false);
-        CHECK(pod_scroll_pitch(&N) == 46 && pod_scroll_max(&N, &M) > 0 && pod_scroll_max(&N, &M) == ph_lead_max_row(&N, &M));
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        { int ink = 0, more = 0; for (int i = 0; i < S.count; i++) { ink += S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(PH_LETTER_INK); more += S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(PH_LETTER_MORE); }
-          CHECK(ink == 6 && more == 1 && text_prefix("one two")); }
-        N.stack[1].scroll = (int16_t)pod_scroll_max(&N, &M);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        { int more = 0; for (int i = 0; i < S.count; i++) more += S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(PH_LETTER_MORE); CHECK(more == 0 && !text_prefix("one two") && text_prefix("forty")); }
-        N.stack[1].scroll = 9999;   // past the end: the view clamps
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(text_prefix("forty") || text_run("Lead"));
-        {   // lead_view_group_shows_chat_name / lead_view_lead_chat_unchanged / lead_view_chat_name_capped: the chat the desktop has open is named under the project (PM and group chats only)
-            pod_lead_t *cl = &M.swarms[0].leads[2];
-            asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
-            cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            static ht_run_t base[HT_RUNS]; const int nbase = S.count; memcpy(base, S.runs, sizeof(ht_run_t) * (size_t)nbase);
-            cl->chat = POD_CHAT_LEAD; snprintf(cl->chat_name, sizeof cl->chat_name, "ignored");   // lead_view_lead_chat_unchanged: even with a name, a Lead chat draws today's view
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(S.count == nbase && !memcmp(base, S.runs, sizeof(ht_run_t) * (size_t)nbase) && !text_run("ignored"));
-            cl->chat = POD_CHAT_BUDDY;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(S.count == nbase && !text_run("ignored"));
-            cl->chat = POD_CHAT_GROUP; snprintf(cl->chat_name, sizeof cl->chat_name, "review-cable-fit");   // lead_view_group_shows_chat_name
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *cn = text_run("review-cable-fit");
-            CHECK(cn && cn->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(cn) && cn->y + ph_sb_22.height * 15 / 32 >= 118 && cn->y + ph_sb_22.height * 15 / 32 <= 122 && S.count == nbase + 1);
-            cl->chat = POD_CHAT_PM; snprintf(cl->chat_name, sizeof cl->chat_name, "PM");
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(text_run("PM") && text_run("PM")->fg == ht_rgb(PH_ROOM_MUTED));
-            cl->chat = POD_CHAT_GROUP; cl->chat_name[0] = 0;   // no name: nothing extra
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(S.count == nbase);
-            memset(cl->chat_name, 'W', 48); cl->chat_name[48] = 0;   // lead_view_chat_name_capped
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *cap = text_prefix("WWW");
-            CHECK(cap && cap->w <= 640 + 2 && strstr(cap->text, "\xe2\x80\xa6") && strlen(cap->text) < 48);
-            cl->chat = POD_CHAT_NONE; cl->chat_name[0] = 0;
-        }
-        {   // PM | Buddy (mockup pro-swarm-parity 2A, 2A', 3A-3D): the pill, header A, the Buddy screen, no Buddy yet, the dot
-            pod_swarm_t *sw = &M.swarms[0];
-            pod_lead_t *bl = &sw->leads[2];
-            N.stack[1].view = POD_V_LEAD; snprintf(N.stack[1].lead_id, ID_MAX, "l2"); N.stack[1].lead = 2;
-            asked_recap(&M, "sw1", "l2", "Deployed.", 1792560000u, false);
-            bl->chat = POD_CHAT_NONE; bl->chat_name[0] = 0; bl->buddies = false; bl->has_buddy = false; bl->buddy_unread = false; sw->side = POD_SIDE_NONE; M.side_press = POD_SIDE_NONE;
-            // pill_absent_without_buddies: phase 1's view (the header on two lines, at cy 42 and 84), no pill, no hit
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            static ht_run_t plain[HT_RUNS]; const int nplain = S.count; memcpy(plain, S.runs, sizeof(ht_run_t) * (size_t)nplain);
-            CHECK(!text_run("PM") && !text_run("Buddy") && hits_of(POD_A_SIDE) == 0 && F.hit_count == 0);
-            CHECK(text_run("openharness") && abs(text_run("openharness")->y + ph_sb_22.height * 15 / 32 - 42) <= 2 && abs(text_run("ops")->y + ph_sb_34.height * 15 / 32 - 84) <= 2);
-            CHECK(!text_run("No Buddy here yet") && !rect_at(210, 16, 300, 44));
-            // Buddies on, the PM side: the pill at (210, 16), the PM segment filled ink with dark text, Buddy muted
-            bl->buddies = true; sw->side = POD_SIDE_PM;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const int npm = S.count;   // the run count of this state: constant whichever side is selected (a dot adds its two)
-            const ht_run_t *trk = rect_at(210, 16, 300, 44);
-            CHECK(trk && trk->radius == 22 && trk->fg == ht_rgb(0x34302C));   // pill_pm_selected
-            const ht_run_t *pmf = rect_at(210, 16, 150, 44);
-            CHECK(pmf && pmf->radius == 22 && pmf->fg == ht_rgb(PH_ROOM_INK) && !rect_at(360, 16, 150, 44));
-            CHECK(text_run("PM") && text_run("PM")->fg == ht_rgb(PH_ROOM_BG) && centred_at(text_run("PM"), 285) && text_run("Buddy") && text_run("Buddy")->fg == ht_rgb(PH_ROOM_MUTED) && centred_at(text_run("Buddy"), 435));
-            CHECK(abs(text_run("PM")->y + ph_sb_22.height * 15 / 32 - 38) <= 2);
-            CHECK(hits_of(POD_A_SIDE) == 2 && nth_hit(POD_A_SIDE, 0)->x == 210 && nth_hit(POD_A_SIDE, 0)->w == 150 && nth_hit(POD_A_SIDE, 0)->arg == POD_SIDE_PM && !strcmp(nth_hit(POD_A_SIDE, 0)->id, "sw1") &&
-                  nth_hit(POD_A_SIDE, 1)->x == 360 && nth_hit(POD_A_SIDE, 1)->w == 150 && nth_hit(POD_A_SIDE, 1)->arg == POD_SIDE_BUDDY && !strcmp(nth_hit(POD_A_SIDE, 1)->id, "sw1") && nth_hit(POD_A_SIDE, 0)->y + nth_hit(POD_A_SIDE, 0)->h <= 72);
-            // header_a_one_line: the Swarm name (ph_sb_26, purple), " · " (muted) and the project (ph_sb_34) on one line at cy 94, centred together; nothing at cy 42
-            const ht_run_t *hp = text_run("ops"), *hs = text_run("openharness"), *hd = text_run(" \xc2\xb7 ");
-            CHECK(hp && abs(hp->y + ph_sb_34.height * 15 / 32 - 94) <= 2 && hp->fg == ht_rgb(PH_ROOM_INK));
-            CHECK(hs && abs(hs->y + ph_sb_26.height * 15 / 32 - 94) <= 2 && hs->fg == ht_rgb(0xB79CFF) && hd && hd->fg == ht_rgb(PH_ROOM_MUTED));
-            CHECK(hs->x + hs->w <= hd->x + 2 && hd->x + hd->w <= hp->x + 2 && abs((hs->x + hp->x + hp->w) / 2 - 360) <= 3);
-            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT) { const int c = S.runs[i].y + ph_sb_22.height * 15 / 32; CHECK(!(c >= 40 && c <= 44 && strcmp(S.runs[i].text, "PM") && strcmp(S.runs[i].text, "Buddy"))); }
-            CHECK(!text_run("PM")->text[2] && S.count == npm);
-            // the Buddy side selected: the segment moves and turns lilac
-            sw->side = POD_SIDE_BUDDY; bl->has_buddy = true;
-            snprintf(bl->buddy.name, sizeof bl->buddy.name, "Mira"); snprintf(bl->buddy.engine, sizeof bl->buddy.engine, "claude"); bl->buddy.cells = 0x1234; bl->buddy.color = 0xC49BFF; bl->buddy.live = true;
-            bl->chat = POD_CHAT_BUDDY; snprintf(bl->chat_name, sizeof bl->chat_name, "Mira");
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *bf = rect_at(360, 16, 150, 44);   // pill_buddy_selected
-            CHECK(bf && bf->fg == ht_rgb(0xC49BFF) && !rect_at(210, 16, 150, 44) && text_run("Buddy")->fg == ht_rgb(PH_ROOM_BG) && text_run("PM")->fg == ht_rgb(PH_ROOM_MUTED));
-            // buddy_screen_name_lilac: the name in place of "Lead" (lilac, ph_sb_34 at the status column), the avatar d 120 in the pet's 150 px box instead of the pet, no chat name line at 130
-            const ht_run_t *bn = text_run("Mira");
-            CHECK(bn && bn->fg == ht_rgb(0xC49BFF) && bn->x == 160 && !text_run("Lead") && !text_run("offline"));
-            { int disc = 0; for (int i = 0; i < S.count; i++) disc += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 120 && S.runs[i].pro_height == 120 && S.runs[i].x == 31; CHECK(disc == 1); }
-            { int pets = 0; for (int i = 0; i < S.count; i++) pets += S.runs[i].pro_kind == POD_CELL; CHECK(pets == 0); }
-            CHECK(text_run("Deployed.") && abs(text_run("Deployed.")->y - 150) < 80);   // the bubble stays (the recap)
-            // buddy_offline_line: "offline" under the name, muted, ph_sb_22, only while the Buddy is not live
-            bl->buddy.live = false;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *off = text_run("offline");
-            CHECK(off && off->fg == ht_rgb(PH_ROOM_MUTED) && off->x == 160 && off->y > text_run("Mira")->y);
-            bl->buddy.live = true;
-            // chat_name_at_130_under_pill: a PM or group name moves to cy 130 (the bubble stays at 150), with the pill
-            bl->chat = POD_CHAT_GROUP; snprintf(bl->chat_name, sizeof bl->chat_name, "review-cable-fit"); sw->side = POD_SIDE_PM;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *c130 = text_run("review-cable-fit");
-            CHECK(c130 && c130->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(c130) && abs(c130->y + ph_sb_22.height * 15 / 32 - 130) <= 2 && S.count == npm + 1);
-            bl->chat = POD_CHAT_NONE; bl->chat_name[0] = 0;
-            // header_a cut: a long Swarm name is shortened first, the project last; the whole line fits 640 px
-            snprintf(sw->name, sizeof sw->name, "an-extremely-long-swarm-name-for-the-header-line");
-            snprintf(bl->project, sizeof bl->project, "ops");
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            { const ht_run_t *a = text_prefix("an-extremely"), *pj = text_run("ops"), *dd = text_run(" \xc2\xb7 ");
-              CHECK(a && strstr(a->text, "\xe2\x80\xa6") && pj && dd && a->x >= 360 - 320 - 2 && pj->x + pj->w <= 360 + 320 + 2); }
-            snprintf(sw->name, sizeof sw->name, "openharness");
-            // nobuddy_copy: the Buddy side with no Buddy: no bubble and no who row; a dashed circle with "+", then the two lines
-            bl->has_buddy = false; bl->chat = POD_CHAT_NONE; sw->side = POD_SIDE_BUDDY;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *nb1 = text_run("No Buddy here yet"), *nb2 = text_run("Add one in the Harness app.");
-            CHECK(nb1 && nb1->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(nb1) && abs(nb1->y + ph_sb_34.height * 15 / 32 - 364) <= 2);
-            CHECK(nb2 && nb2->fg == ht_rgb(PH_ROOM_MUTED) && centred_run(nb2) && abs(nb2->y + ph_rg_28.height * 15 / 32 - 412) <= 2 && text_run("+"));
-            CHECK(!text_run("Deployed.") && !text_run("Lead") && !text_run("done") && !rect_at(60, 150, 600, 0) && rect_at(360, 16, 150, 44));
-            { int bub = 0; for (int i = 0; i < S.count; i++) bub += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 600 && S.runs[i].fg == ht_rgb(PH_LETTER); CHECK(bub == 0); }
-            { int arcs = 0; for (int i = 0; i < S.count; i++) arcs += S.runs[i].pro_kind == POD_ARC; CHECK(arcs >= 8); }
-            // the same screen with pending side: the pressed segment wins over the Swarm's side
-            sw->side = POD_SIDE_PM; M.side_press = POD_SIDE_BUDDY; snprintf(M.side_press_swarm, ID_MAX, "sw1");
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(rect_at(360, 16, 150, 44) && !rect_at(210, 16, 150, 44) && text_run("No Buddy here yet"));
-            M.side_press = POD_SIDE_NONE; M.side_press_swarm[0] = 0;
-            // buddy_dot_drawn: Buddy spoke while the PM side shows: a 12 px lilac disc with a 3 px track-coloured ring at the Buddy segment's top right; not on the Buddy side
-            bl->has_buddy = true; bl->buddy_unread = true; sw->side = POD_SIDE_PM;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            const ht_run_t *dot = rect_at(480, 18, 12, 12), *ring = rect_at(477, 15, 18, 18);
-            CHECK(dot && dot->fg == ht_rgb(0xC49BFF) && ring && ring->fg == ht_rgb(0x34302C) && S.count == npm + 2);
-            sw->side = POD_SIDE_BUDDY;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(!rect_at(480, 18, 12, 12));
-            bl->buddy_unread = false; bl->chat = POD_CHAT_NONE; bl->buddies = false; bl->has_buddy = false; sw->side = POD_SIDE_NONE;
-            fresh(); ph_view_lead(&F, &N, &M, 1000);
-            CHECK(S.count == nplain && !memcmp(plain, S.runs, sizeof(ht_run_t) * (size_t)nplain));   // Buddies off again: byte for byte phase 1's view
-        }
-        // The model does not hold the Lead (a dropped link): nothing is drawn, nothing breaks
-        pod_model_link(&M, false);
-        fresh(); ph_view_lead(&F, &N, &M, 1000);
-        CHECK(S.count == 0 && pod_nav_lead(&N, &M, NULL) == NULL && ph_lead_next_ms(&N, &M, 1000) > 0 && ph_lead_max_row(&N, &M) == 0);
-    }
-    {   // A Swarm chat's notice (mockup pro-swarm-parity 1D / 1E): "<project> · <Swarm>", the Lead's pet, no ask marks; the toast keeps its running timer
-        static pod_model_t M;
-        static pod_nav_t N;
-        static pod_swarm_t S1;
-        static const char ids[1][ID_MAX] = {"sw1"};
-        pod_model_reset(&M);
-        pod_model_link(&M, true);
-        pod_model_supertab_ids(&M, ids, 1);
-        memset(&S1, 0, sizeof S1);
-        snprintf(S1.id, ID_MAX, "sw1"); snprintf(S1.name, sizeof S1.name, "openharness");
-        S1.count = 1; S1.lead_n = 1;
-        snprintf(S1.leads[0].id, ID_MAX, "l1"); snprintf(S1.leads[0].project, sizeof S1.leads[0].project, "harness"); snprintf(S1.leads[0].engine, sizeof S1.leads[0].engine, "claude");
-        pod_model_supertab(&M, &S1, 1000);
-        pod_model_swarm_notice(&M, "sw1", "l1", "c1", "Cable fit now counts JSON tokens for the Pro. More.", 2000);
-        pod_model_clock(&M, 2000);
-        const pod_unread_t *u = pod_model_unread_find(&M, "l1");
-        CHECK(u && !strcmp(u->tab, "sw1"));
+        const ht_run_t *nm = app_name();
+        CHECK(nm && !strcmp(nm->text, "ChatGPT") && nm->x + nm->w <= 498);
+        CHECK(text_run("2") && text_run("agents") && text_run("1 working") && no_text_has("asking") && !text_prefix("\xe2\x9c\x93"));
+        CHECK(images_in(480, 600) == 2 && dots_in(480, 600) == 2);   // a5 (working) and a6 (done)
+        CHECK(pick_hit(1, "codex") && F.hit_count == 3);   // the pick and the pill's two
+        CHECK(ph_home_moves(&N, &M));
+        // its neighbours: the Working card left, vscode's gradient and name right (ph_sb_34), no icon outside the main card
+        CHECK(text_run("VS Code") && text_run("VS Code")->pro_font == &ph_sb_34 && text_run("VS Code")->x >= 628);
+        for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_IMAGE) CHECK(S.runs[i].x >= 90 && S.runs[i].x < 630);
+        CHECK(!text_run("Harness"));   // the pill shows: Harness is the Tabs list, not a card
+        CHECK(ph_runs(&F) <= HT_RUNS);
 
-        // inbox_swarm_row_name_line
-        pod_nav_init(&N);
-        N.depth = 2; N.stack[0].view = POD_V_TABS; N.stack[1].view = POD_V_INBOX;
-        fresh();
-        ph_view_inbox(&F, &N, &M, 2000);
-        const ht_run_t *nm = text_run("harness"), *tag = text_run("\xc2\xb7 openharness"), *msg = text_prefix("Cable fit now counts");
-        CHECK(nm && tag && msg && nm->fg == ht_rgb(PH_LETTER_WHO) && tag->fg == ht_rgb(0x6B4FA3) && tag->pro_font == &ph_sb_22 && tag->y == nm->y && tag->x > nm->x + ht_pro_width(&ph_sb_22, "harness") - 2);
-        CHECK(text_run("now") && !text_run("asks") && !text_run("needs you") && !text_run("stuck"));
-        { int edge = 0, badge = 0; for (int i = 0; i < S.count; i++) { edge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 470 && S.runs[i].x == 190 && S.runs[i].fg != ht_rgb(PH_LETTER); badge += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].fg == ht_rgb(0x3B2E55); } CHECK(!edge && !badge); }
-        CHECK(hits_of(POD_A_OPEN_NOTIF) == 1 && !strcmp(nth_hit(POD_A_OPEN_NOTIF, 0)->id, "l1"));
+        // the vscode card (not the app shown): its numbers, no "All done", no marks
+        N.stack[0].scroll = POD_HOME_APP0 + 1;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        const pod_app_style_t *vs = pod_app_style("vscode");
+        CHECK(vs && card_grad(vs->card_top, vs->card_bottom));
+        CHECK(text_run("1 working") && text_run("1 asking") && no_text_has("All done") && text_run("3"));
+        CHECK(images_in(480, 600) == 0 && dots_in(480, 600) == 0);
+        CHECK(pick_hit(2, "vscode") && !text_run("Harness"));
 
-        // toast_swarm_name_line
-        const uint32_t t0 = 5000;
-        fresh();
-        ph_toast(&F, &M, u, t0, t0 + 1000);
-        nm = text_run("harness"); tag = text_run("\xc2\xb7 openharness");
-        CHECK(nm && tag && nm->fg == ht_rgb(PH_TOAST_NAME) && tag->fg == ht_rgb(0x8EA3BD) && tag->pro_font == &ph_sb_22 && tag->x == nm->x + ht_pro_width(&ph_sb_26, "harness") + 7);
-        CHECK(text_prefix("Cable fit now counts") && S.runs[0].fg == ht_rgb(PH_TOAST_EDGE));   // the plain card, not the question's edge
-        { int bars = 0, full = 0; for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT && S.runs[i].pro_height == 7) { bars++; full += S.runs[i].w == 588 && S.runs[i].fg == ht_rgb(PH_TOAST_BAR); } CHECK(bars == 2 && full == 0); }   // a track and a shrunk fill
-        CHECK(hits_of(POD_A_BANNER) == 1 && !strcmp(nth_hit(POD_A_BANNER, 0)->id, "l1"));
+        // an app with no style: the Pro's own dark, no icon, the name at the full width
+        static const pod_app_t plain[3] = {{"harness", "Harness", 4, 1, 1}, {"rex", "Rex mmmmmmmmmmmmmmmmmmm", 1, 0, 0}, {"vscode", "VS Code", 3, 1, 0}};
+        CHECK(!pod_app_style("rex"));
+        pod_model_apps(&M, plain, 3, "codex");
+        N.stack[0].scroll = POD_HOME_APP0;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && images_in(0, 720) == 0);
+        nm = app_name();
+        CHECK(nm && !strncmp(nm->text, "Rex m", 5) && ht_pro_width(nm->pro_font, nm->text) > 364 && nm->w <= 452 && pick_hit(1, "rex"));   // past where an icon would start
+        CHECK(!text_prefix("\xe2\x9c\x93"));   // 0 working, 0 asking, and still no "All done" on an app card
+        CHECK(!ph_home_moves(&N, &M));   // 0 working, 0 asking: still
+        N.stack[0].scroll = POD_HOME_APP0 + 1;
+        CHECK(ph_home_moves(&N, &M));    // vscode: only asking
+        N.stack[0].scroll = POD_HOME_APP0;
 
-        // inbox_swarm_row_goes_with_its_swarm: no project name, tag or text is left to draw once access is lost
-        pod_model_supertab_ids(&M, ids, 0);
-        CHECK(!pod_model_unread_find(&M, "l1"));
-        fresh();
-        ph_view_inbox(&F, &N, &M, 2000);
-        CHECK(!text_run("harness") && !text_prefix("\xc2\xb7") && !text_prefix("Cable fit now counts") && hits_of(POD_A_OPEN_NOTIF) == 0);
-    }
+        // an older daemon sends no `working`: the row says 0/0 while a5, a ring agent of the app shown, works, so its mark moves
+        static const pod_app_t stale[2] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 0}};
+        pod_model_apps(&M, stale, 2, "codex");
+        CHECK(ph_home_moves(&N, &M));
 
-    {   // The Buddy's avatar (ph_avatar.c): the desktop's 15-bit agent pattern, mirrored, on a disc.
-        const int X = 100, Y = 200, D = 120, CELL = 13, OX = X + (D - 5 * CELL) / 2, OY = Y + (D - 5 * CELL) / 2;
-        const uint32_t col = 0xB79CFF;
-        uint16_t sets[4] = { 1, 1 << 8, 25513, 1 << 7 };
-        for (int k = 0; k < 4; k++) {
-            fresh();
-            ph_buddy_avatar(&S, X, Y, D, sets[k], col, PH_GROUND);
-            bool lit[5][5] = { { false } };
-            int n = 0;
-            for (int i = 0; i < S.count; i++) {
-                const ht_run_t *r = &S.runs[i];
-                if (r->pro_kind != K_RECT_AA || r->w != CELL) continue;
-                CHECK(r->fg == ht_rgb(col) && r->pro_height == CELL);
-                int c = (r->x - OX) / CELL, rw = (r->y - OY) / CELL;
-                CHECK(c >= 0 && c < 5 && rw >= 0 && rw < 5 && r->x == OX + c * CELL && r->y == OY + rw * CELL);
-                lit[rw][c] = true; n++;
+        // a long name and a Vietnamese one beside the icon: cut between letters with an ellipsis, never under the icon; 34 px for letters 48 lacks
+        static pod_app_t named[2] = {{"harness", "Harness", 4, 1, 1}, {"codex", "", 2, 0, 1}};
+        memset(named[1].name, 'm', sizeof named[1].name - 1);   // the row's longest: 23 letters
+        pod_model_apps(&M, named, 2, "codex");
+        fresh(); ph_view_home(&F, &N, &M, now);
+        nm = app_name();
+        CHECK(nm && !strcmp(nm->text + strlen(nm->text) - 3, "\xe2\x80\xa6") && nm->x + nm->w <= 498 && ht_pro_width(nm->pro_font, nm->text) <= 364);
+        snprintf(named[1].name, sizeof named[1].name, "\xe1\xbb\xa8ng d\xe1\xbb\xa5ng");
+        pod_model_apps(&M, named, 2, "codex");
+        fresh(); ph_view_home(&F, &N, &M, now);
+        nm = app_name();
+        CHECK(nm && !strcmp(nm->text, "\xe1\xbb\xa8ng d\xe1\xbb\xa5ng") && nm->pro_font == &ph_sb_34 && nm->x + nm->w <= 498);
+
+        // budget, worst case: the codex card with its icon and seven agents (4 marks and "+3"), the Notices card left, vscode right,
+        // the pill, and the glue's 2-run notice pill on top
+        for (int i = 6; i < 11; i++) pod_model_agent_app(&M, aid[i], "codex", POD_CAPS_ALL);
+        pod_model_turn(&M, "a5", "done", NULL, 0, now);
+        pod_model_question(&M, "a7", "ok?");   // a notice: the Notices card, and nobody works (no Working card)
+        static const pod_app_t worst[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 7, 1, 1}, {"vscode", "VS Code", 3, 1, 1}};
+        pod_model_apps(&M, worst, 3, "codex");
+        pod_nav_sync(&N, &M);
+        N.stack[0].scroll = POD_HOME_APP0;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(text_run("+3") && text_run("7") && text_run("1 working") && text_run("1 asking") && text_run("VS Code"));
+        CHECK(aa_at(-372, 96, 464, 481, 41, ph_mix(PH_LETTER, PH_HOME_BG, 45)) == 1);   // the Notices letter peeks left (its name is off the glass)
+        CHECK(images_in(480, 600) == 4 && dots_in(480, 600) == 4 && pick_hit(1, "codex"));
+        CHECK(ph_runs(&F) + 2 <= HT_RUNS && F.hit_count <= 32);
+        printf("runs home-app-worst %d\n", ph_runs(&F));
+
+        // the 16th card of sixteen apps, the same worst case
+        {
+            static const char *const ids[16] = {"orca", "herdr", "zellij", "tmux", "kitty", "wezterm", "iterm", "terminal-app", "ghostty", "cmux",
+                                                "vscode", "cursor", "warp", "claude", "opencode", "codex"};
+            static pod_app_t many[16];
+            for (int i = 0; i < 16; i++) {
+                memset(&many[i], 0, sizeof many[i]);
+                snprintf(many[i].id, sizeof many[i].id, "%s", ids[i]);
+                snprintf(many[i].name, sizeof many[i].name, "App %d", i);
+                many[i].count = 1;
             }
-            if (k == 0) CHECK(n == 2 && lit[0][0] && lit[0][4]);   // avatar_cells_mirror
-            if (k == 3) CHECK(n == 2 && lit[2][1] && lit[2][3]);   // avatar_bit7: row 2 index 1 mirrors to columns 1 and 3 (the desktop's half[row * 3 + column])
-            if (k == 1) CHECK(n == 1 && lit[2][2] && abs(OX + 2 * CELL + CELL / 2 - (X + D / 2)) <= 1);   // within a pixel of the disc centre   // avatar_bit7_centre (bit 8: row 2, index 2, the middle column)
-            if (k == 2) {   // avatar_parity_with_desktop
-                const char *g[5] = { "#...#", "#.#.#", ".###.", "#...#", ".###." };
-                CHECK(n == 13);   // the plan says 17; the grid it lists has 13 lit cells
-                for (int rw = 0; rw < 5; rw++) for (int c = 0; c < 5; c++) CHECK(lit[rw][c] == (g[rw][c] == '#'));
-            }
+            many[15].count = 7; many[15].waiting = 1; many[15].working = 1;
+            pod_model_apps(&M, many, 16, "codex");
+            pod_nav_sync(&N, &M);
+            N.stack[0].scroll = POD_HOME_APP0 + 15;
+            CHECK(pod_tabs_pages_of(&N, &M) == 17);
+            fresh(); ph_view_home(&F, &N, &M, now);
+            CHECK(text_run("App 15") && text_run("+3") && pick_hit(15, "codex"));
+            CHECK(ph_runs(&F) + 2 <= HT_RUNS && F.hit_count <= 32);
+            printf("runs home-app-16th %d\n", ph_runs(&F));
         }
-        fresh();
-        ph_buddy_avatar(&S, X, Y, D, 0x7FFF, col, PH_GROUND);
-        CHECK(S.count <= 27);   // avatar_run_count
+
+        // no window: no pill, Harness is a card too, on the Pro's own dark
+        pod_model_question_close(&M, "a7");
+        pod_model_turn(&M, "a7", "done", NULL, 0, now);
+        pod_model_apps(&M, apps, 3, "codex");
+        pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+        pod_model_view(&M, true, false);
+        CHECK(!M.has_window);
+        pod_nav_sync(&N, &M);
+        N.stack[0].scroll = POD_HOME_APP0;
+        CHECK(pod_tabs_pages_of(&N, &M) == 3);   // harness, codex, vscode
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_no_pill();
+        CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && app_name() && !strcmp(app_name()->text, "Harness") && pick_hit(0, "harness"));
+        CHECK(text_run("ChatGPT") && text_run("ChatGPT")->pro_font == &ph_sb_34 && text_run("ChatGPT")->x >= 628);   // codex peeks right
+        N.stack[0].scroll = POD_HOME_APP0 + 2;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(pick_hit(2, "vscode") && text_run("VS Code"));
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;

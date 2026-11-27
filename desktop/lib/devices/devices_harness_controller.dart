@@ -24,8 +24,8 @@ class DevicesHarnessController extends ChangeNotifier {
   Future<void> open({String? swarmId}) {
     final workspaceId =
         swarmId ?? app.swarms.where((tab) => tab.isDevices).firstOrNull?.id;
-    // Swarm's Your devices is a dashboard only. Even a stale retry from its
-    // former chat pane must not probe, create, resume or attach an agent.
+    // Only the Devices tab opens its agent: a stale retry from anywhere else
+    // must not probe, create, resume or attach one.
     if (!app.swarms.any((tab) => tab.id == workspaceId && tab.isDevices)) {
       return Future.value();
     }

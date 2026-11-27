@@ -26,6 +26,8 @@ import { isViewerPackage } from './manifest.js'
 import { resolveDshCommand } from './materialize.js'
 import { isShellNoise, killProcessGroup, spawnDshCommand } from './shell.js'
 import type { ViewerLedger } from './viewerLedger.js'
+import { errorKind } from '../lib/log.js'
+import { pathToWatch } from '../lib/pathToWatch.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 /** The viewer that will actually run for a harness: its own, or the package it points at. */
@@ -42,21 +44,21 @@ export interface ResolvedViewer {
  * A harness's own viewer resolves to itself. `viewer.use` resolves through the installed index to
  * a viewer package (spec 1.1): the command and directory are the package's; the URL and the
  * extensions are the harness's when it narrows them, else the package's. Missing or wrong-kind
- * packages are named, not guessed.
+ * packages are refused by a code, not guessed: what a manifest names is someone else's words.
  */
 export function resolveViewer(
   dsh: InstalledDsh,
   lookup: (id: string) => InstalledDsh | undefined = installedDsh,
-): { ok: true; viewer: ResolvedViewer } | { ok: false; error: string } {
+): { ok: true; viewer: ResolvedViewer } | { ok: false; code: 'NO_VIEWER' | 'VIEWER_NOT_INSTALLED' | 'NOT_A_VIEWER_PACKAGE' } {
   const viewer = dsh.manifest.viewer
-  if (!viewer) return { ok: false, error: `${dsh.id} has no viewer` }
+  if (!viewer) return { ok: false, code: 'NO_VIEWER' }
   if ('command' in viewer) {
     return { ok: true, viewer: { id: dsh.id, dir: dsh.realDir, command: viewer.command, url: viewer.url, artifactExtensions: viewer.artifactExtensions ?? [] } }
   }
   const pkg = lookup(viewer.use)
-  if (!pkg) return { ok: false, error: `${dsh.id} uses viewer ${viewer.use}, which is not installed on this machine` }
+  if (!pkg) return { ok: false, code: 'VIEWER_NOT_INSTALLED' }
   if (!isViewerPackage(pkg.manifest) || !pkg.manifest.viewer || !('command' in pkg.manifest.viewer)) {
-    return { ok: false, error: `${dsh.id} uses ${viewer.use}, which is not a viewer package` }
+    return { ok: false, code: 'NOT_A_VIEWER_PACKAGE' }
   }
   return {
     ok: true,
@@ -203,7 +205,7 @@ export class DshViewerManager {
     if (!dsh.manifest.viewer) return
     const resolved = resolveViewer(dsh, this.deps.lookup)
     if (!resolved.ok) {
-      this.log(`[dsh] ${resolved.error} · agent ${agentId.slice(0, 8)} has no viewer pane`)
+      this.log(`[dsh] ${resolved.code} · agent ${agentId.slice(0, 8)} has no viewer pane`)
       return
     }
     const viewer = resolved.viewer
@@ -213,7 +215,8 @@ export class DshViewerManager {
     const current = this.states.get(agentId)
     if (current && viewerKey(current.dsh, current.viewer, current.workspace) === key) return
     // A restart keeps what the verdict last said; only stop() forgets it.
-    if (current) await this.halt(current)
+    // halt removes the old child and URL synchronously; its watch cleanup must not queue a stale start.
+    if (current) void this.halt(current)
     const state: ViewerState = {
       agentId, dsh, viewer, workspace, port: null, child: null, url: null,
       verdictArtifact: this.verdictArtifacts.get(agentId) ?? null, scannedArtifact: null, watcher: null, rescanTimer: null,
@@ -248,8 +251,9 @@ export class DshViewerManager {
   private followPreview(state: ViewerState, preview: string | null): void {
     if (state.preview === preview) return
     const target = viewerTarget(preview)
+    // A page is said by its port: its address can carry a path naming the person's folders.
     if (preview && (!target || (this.deps.reservedPorts?.() ?? []).includes(Number(target.port)))) {
-      this.log(`[dsh] ${state.dsh.id} preview ${preview} refused · a loopback page of the agent's own, not this daemon`)
+      this.log(`[dsh] ${state.dsh.id} preview${target ? ` on port ${target.port}` : ''} refused · a loopback page of the agent's own, not this daemon`)
       preview = null
     }
     state.preview = preview
@@ -260,11 +264,11 @@ export class DshViewerManager {
     void (this.deps.waitForPort ?? waitForLoopbackPort)(Number(target.port), PREVIEW_WAIT_MS, host).then((up) => {
       if (state.stopping || this.states.get(state.agentId) !== state || state.preview !== preview) return
       if (!up) {
-        this.log(`[dsh] ${state.dsh.id} preview ${preview} did not listen within ${PREVIEW_WAIT_MS / 60_000} min · the package's viewer stays`)
+        this.log(`[dsh] ${state.dsh.id} preview on port ${target.port} did not listen within ${PREVIEW_WAIT_MS / 60_000} min · the package's viewer stays`)
         return
       }
       state.previewUp = true
-      this.log(`[dsh] ${state.dsh.id} viewer shows the agent's preview ${preview}`)
+      this.log(`[dsh] ${state.dsh.id} viewer shows the agent's preview on port ${target.port}`)
       this.publish(state)
     })
   }
@@ -274,6 +278,7 @@ export class DshViewerManager {
   }
 
   private publish(state: ViewerState): void {
+    if (state.stopping || this.states.get(state.agentId) !== state) return
     const url = state.port === null || !state.child ? null
       : state.preview && state.previewUp ? state.preview
         : buildViewerUrl(state.viewer.url, state.port, this.effectiveArtifact(state))
@@ -283,28 +288,38 @@ export class DshViewerManager {
   }
 
   private watchArtifacts(state: ViewerState, extensions: readonly string[]): void {
-    const watcher = chokidar.watch(state.workspace, {
+    // On Windows by its long name: by a short one, as an agent's folder can be, its first change would abort the process
+    // (lib/pathToWatch.ts). chokidar names each change under it, so each is judged against it.
+    const root = pathToWatch(state.workspace)
+    if (root === undefined) return
+    const watcher = chokidar.watch(root, {
       ignoreInitial: true,
       persistent: true,
       depth: 6,
-      ignored: (path: string) => path !== state.workspace
-        && path.slice(state.workspace.length).split(/[\\/]/).some((segment) => segment && (isArtifactDirIgnored(segment) || segment.startsWith('.'))),
+      ignored: (path: string) => path !== root
+        && path.slice(root.length).split(/[\\/]/).some((segment) => segment && (isArtifactDirIgnored(segment) || segment.startsWith('.'))),
     })
+    const rescan = (): void => {
+      const next = newestArtifact(state.workspace, extensions)?.path ?? null
+      if (next === state.scannedArtifact) return
+      state.scannedArtifact = next
+      this.publish(state)
+    }
     const bump = (path: string): void => {
+      if (state.stopping) return
       // Judged inside the workspace: a workspace under a `build/` or `inputs/` folder is not ignored.
-      if (!isCandidateArtifact(relative(state.workspace, path), extensions)) return
+      if (!isCandidateArtifact(relative(root, path), extensions)) return
       if (state.rescanTimer) clearTimeout(state.rescanTimer)
       state.rescanTimer = setTimeout(() => {
         state.rescanTimer = null
-        const next = newestArtifact(state.workspace, extensions)?.path ?? null
-        if (next === state.scannedArtifact) return
-        state.scannedArtifact = next
-        this.publish(state)
+        rescan()
       }, RESCAN_DEBOUNCE_MS)
       state.rescanTimer.unref?.()
     }
     watcher.on('add', bump).on('change', bump).on('unlink', bump)
-      .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${error instanceof Error ? error.message : error}`))
+      // chokidar's first read of the workspace counts a file written since start()'s scan as already there, unannounced.
+      .on('ready', rescan)
+      .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${errorKind(error)}`))
     state.watcher = watcher
   }
 
@@ -314,7 +329,7 @@ export class DshViewerManager {
     try {
       port = await (this.deps.freePort ?? freeLoopbackPort)()
     } catch (error) {
-      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${error instanceof Error ? error.message : error}`)
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${errorKind(error)}`)
       return
     }
     if (state.stopping) return
@@ -337,8 +352,8 @@ export class DshViewerManager {
         purpose: 'viewer',
       })
     } catch (error) {
-      // Windows without Git Bash (shell.ts says what to install), or an argument spawn refuses.
-      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${error instanceof Error ? error.message : error}`)
+      // Windows without Git Bash, SHELL_UNAVAILABLE (shell.ts says what to install), or an argument spawn refuses.
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`)
       return
     }
     state.child = child
@@ -347,13 +362,14 @@ export class DshViewerManager {
     const onData = (chunk: Buffer): void => {
       for (const line of chunk.toString('utf8').split('\n')) {
         if (!line.trim() || isShellNoise(line)) continue
-        if (logged++ < LOG_LINE_LIMIT) this.log(`[dsh] ${state.dsh.id} viewer · ${line}`)
+        // Its size only: a viewer reads the person's workspace, and what it prints can quote their work.
+        if (logged++ < LOG_LINE_LIMIT) this.log(`[dsh] ${state.dsh.id} viewer printed a line of ${line.length} chars`)
       }
     }
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
     child.on('error', (error) => {
-      const line = `[dsh] ${state.dsh.id} viewer could not start · ${error.message}`
+      const line = `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`
       if (state.child === child) void this.fail(state, line)
       else this.log(line)
     })
@@ -385,7 +401,8 @@ export class DshViewerManager {
     // Only now is there a URL to hand the pane. A pane sent to a port nobody serves yet shows a
     // connection error and never recovers, so nothing — a verdict, a new artifact — publishes before.
     state.port = port
-    this.log(`[dsh] ${state.dsh.id} viewer up on 127.0.0.1:${port} for ${state.workspace}`)
+    // Not the workspace: its folder names the person's home.
+    this.log(`[dsh] ${state.dsh.id} viewer up on 127.0.0.1:${port}`)
     this.publish(state)
   }
 
@@ -412,7 +429,6 @@ export class DshViewerManager {
     state.stopping = true
     this.states.delete(agentId)
     if (state.rescanTimer) clearTimeout(state.rescanTimer)
-    if (state.watcher) await state.watcher.close().catch(() => undefined)
     const child = state.child
     state.child = null
     state.port = null
@@ -420,6 +436,17 @@ export class DshViewerManager {
     if (state.url !== null) {
       state.url = null
       this.deps.onUrl(agentId, null)
+    }
+    // Invalidate the old child and URL before awaiting a watch: a same-id resume may start meanwhile.
+    if (state.watcher) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([state.watcher.close(), new Promise<void>(resolve => {
+          timer = setTimeout(() => { this.log('[viewers] VIEWER_WATCH_CLOSE_TIMEOUT'); resolve() }, 10_000)
+          timer.unref?.()
+        })])
+      } catch (error) { this.log(`[viewers] VIEWER_WATCH_CLOSE_FAILED · ${errorKind(error)}`) }
+      finally { clearTimeout(timer) }
     }
   }
 

@@ -61,7 +61,7 @@ describe('restartAgent', () => {
       { ...d, log: (message) => logs.push(message), prepareFork: async () => { throw new Error('grid is down') } })
     expect(outcome.ok).toBe(true)
     expect(seen.at(-1)).toEqual({ bypassPermission: false, forkSessionId: 's1' })
-    expect(logs.join()).toContain('grid is down')
+    expect(logs).toEqual(['[restart] codex could not prepare the move, continuing in a plain fork: Error'])
   })
 
   it('never prepares history while the old writer may still be alive', async () => {
@@ -139,6 +139,14 @@ describe('restartAgent', () => {
     const fresh = { ...deps(), launchRefusal: (opts: unknown) => { asked.push(opts); return null } }
     expect(await restartAgent({ engine: 'codex', sessionId: '' }, false, fresh)).toMatchObject({ ok: true })
     expect(asked.at(-1)).toEqual({ bypassPermission: false })
+  })
+
+  it('logs a refused respawn by its reason\'s length, never its words', async () => {
+    const logs: string[] = []
+    const d = deps({ respawn: async () => ({ ok: false, reason: "can't find pane /Users/sentinel/x" }) })
+    await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, log: (message) => logs.push(message) })
+    expect(logs.join('\n')).not.toContain('sentinel')
+    expect(logs).toContain('[restart] codex respawn-pane failed: text(33)')
   })
 
   it('never respawns when holdOpen fails to re-arm the pane', async () => {
@@ -259,6 +267,67 @@ describe('restartAgent', () => {
     expect(outcome).toEqual({ ok: false, detail: 'codex did not come back up after restart' })
     // Nothing runs in a new conversation, so the row still holds the one it was in: nothing to keep.
     expect(d.calls).not.toContain('keepAbandoned')
+  })
+
+  // The guard held the swap's launch: a respawn over its held shell runs on the same stale evidence and is held again.
+  it('never respawns over its own launch\'s held shell: a resume the guard held answers held, with no fresh fallback', async () => {
+    const logs: string[] = []
+    const heldShell = vi.fn(async () => true)
+    const d = deps({ waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, heldShell, log: (message) => logs.push(message) })
+    expect(outcome).toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+    expect(heldShell).toHaveBeenCalledOnce()
+    expect(logs.join('\n')).not.toContain('retrying fresh')
+    expect(d.calls).not.toContain('keepAbandoned')
+  })
+
+  it.each([false, 'unknown'] as const)('falls back fresh as today when its pane is not its held shell (%s)', async (answer) => {
+    const d = deps({ waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, heldShell: async () => answer })
+    expect(outcome).toEqual({ ok: false, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(2)
+  })
+
+  it('a fresh fallback the guard held answers held too', async () => {
+    let asked = 0
+    const d = deps({ waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, heldShell: async () => ++asked === 2 })
+    expect(outcome).toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(2)
+  })
+
+  // The guard holds a launch whose executable changed as its new shell started: the evidence going stale after the
+  // respawn is the hold's cause, not a change of the swap's owner (e2e/heldLaunchRecovery.e2e.ts, 2026-11-25).
+  it('a launch the guard held on evidence gone stale after its respawn answers held while the swap is still its own', async () => {
+    let evidence = true
+    const d = deps({ respawn: async () => { evidence = false; return { ok: true } }, waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false,
+      { ...d, isCurrent: () => evidence, isOwned: () => true, heldShell: async () => true })
+    expect(outcome).toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+  })
+
+  it('a held shell is not its own once the swap changed owner: it answers changed', async () => {
+    let evidence = true, owned = true
+    const d = deps({ respawn: async () => { evidence = false; return { ok: true } }, waitForProcess: async () => { owned = false; return null } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false,
+      { ...d, isCurrent: () => evidence && owned, isOwned: () => owned, heldShell: async () => true })
+    expect(outcome).toEqual({ ok: false, detail: 'the harness changed or stopped during restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+  })
+
+  it('asks nothing when the engine came back up', async () => {
+    const heldShell = vi.fn(async () => true)
+    expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...deps(), heldShell })).toMatchObject({ ok: true, resumed: true })
+    expect(heldShell).not.toHaveBeenCalled()
+  })
+
+  it('a fresh start the guard held answers held, once', async () => {
+    const d = deps({ waitForProcess: async () => null })
+    expect(await restartAgent({ engine: 'codex', sessionId: '' }, false, { ...d, heldShell: async () => true }))
+      .toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
   })
 
   it('never retries a resume fallback for an engine with no session to resume in the first place', async () => {
@@ -403,16 +472,5 @@ describe('bypassPermissionFor', () => {
     expect(live).not.toHaveBeenCalled()
     await expect(bypassPermissionFor({}, live)).resolves.toBe(true)
     expect(live).toHaveBeenCalledTimes(1)
-  })
-
-  // Swarm v3 (task #4215): a Swarm agent's mode is its person's choice, or none. One Harness started in full mode, cleared
-  // since, still runs with that flag: read back, its restart or retarget came back in Auto, which nobody chose.
-  it('never asks a Swarm agent\'s live process: with no mode it relaunches approving nothing', async () => {
-    const live = probe()
-    const swarmSkill = { role: 'coordinator' as const, key: 'swarm-lead' }
-    await expect(bypassPermissionFor({ swarmSkill }, live)).resolves.toBe(false)
-    expect(live).not.toHaveBeenCalled()
-    // The mode its person chose still counts.
-    await expect(bypassPermissionFor({ swarmSkill, permissionMode: 'full' }, live)).resolves.toBe(true)
   })
 })

@@ -3,7 +3,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
-import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -106,18 +105,5 @@ void main() {
     app.announceWindowForeground();
     app.announceWindowForeground();
     expect(conn.sent, isEmpty);
-  });
-
-  test('a super tab whose terminal canvas is not shown lists nothing', () {
-    final superTab = Swarm(id: 'st', name: 'Super', kind: 'superTab')
-      ..superTabId = 'st-remote'
-      ..panes.add(tile(5, 's1'));
-    app.swarms.add(superTab);
-    app.selectSwarm('st');
-    expect(lastList(), isEmpty);
-    app.setSuperTabTerminalsShown('st', true);
-    expect(lastList(), ['s1']);
-    app.setSuperTabTerminalsShown('st', false);
-    expect(lastList(), isEmpty);
   });
 }

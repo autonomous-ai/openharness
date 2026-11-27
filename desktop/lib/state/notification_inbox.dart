@@ -78,17 +78,14 @@ InboxNotification? _notification(
   );
 }
 
-/// Opens [row]'s harness where it is, a Swarm agent's terminal beside the chat
-/// it waits in (#2792), and acknowledges the notification it opened. True when
-/// something opened.
+/// Opens [row]'s harness where it is and acknowledges the notification it
+/// opened. True when something opened.
 Future<bool> openInboxNotification(
   AppNotifier app,
   InboxNotification row,
 ) async {
   final readToken = app.agentUnread.readTokenFor(row.machineId, row.agentId);
   final questionId = app.questionFor(row.machineId, row.agentId)?.requestId;
-  // A Swarm agent is also one of this machine's harnesses, but opened as one
-  // it lands in a tab whose Swarm view closes it: it opens in its Swarm.
   final destination = swarmDestinations(app)
       .where(
         (item) =>
@@ -96,13 +93,12 @@ Future<bool> openInboxNotification(
       )
       .firstOrNull;
   final opened =
-      app.openSwarmAgentTerminal(row.machineId, row.agentId) ||
-      (destination != null &&
-          await activateSwarmDestination(
-            app,
-            destination,
-            destinationSwarmId: app.activeSwarmId,
-          ));
+      destination != null &&
+      await activateSwarmDestination(
+        app,
+        destination,
+        destinationSwarmId: app.activeSwarmId,
+      );
   // Opening acknowledges this notification. Its question stays pending
   // until the daemon confirms an answer, independently of unread state.
   if (opened &&

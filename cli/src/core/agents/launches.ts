@@ -8,18 +8,18 @@
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md), with the
  * receipts the socket used to hold.
  */
-import { readdir, rmdir } from 'node:fs/promises'
+import { readdir, rmdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute } from 'node:path'
+import { dirname, isAbsolute, join, sep } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { Asker, SwarmLaunch } from '../api.js'
+import { WORKSPACES_OFF, type Asker, type WorkspacesPort } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
-import { OPENCLAW_KEY } from '../../engines/openclaw/contract.js'
+import { OPENCLAW_KEY, OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
@@ -31,14 +31,14 @@ import {
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseLaunchModel } from '../../lib/launchModel.js'
+import { errorKind } from '../../lib/log.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, RepositoryAccessError, type ProjectFolder } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareNewFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
 import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
-import { roleFromWire, wireRole } from '../../lib/savedSkill.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
-import { createPendingLaunches } from './pendingLaunches.js'
+import { createPendingLaunches, type PreparedCreation } from './pendingLaunches.js'
 import type { GuestCreate } from './guestCreate.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
@@ -64,7 +64,7 @@ export interface LaunchRequestDeps {
   receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
-  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
+  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean; creationId?: string }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
   /** The engine itself made ready, installed first when it is missing (engines/prepareNativeLaunch.ts): what a new
    *  project waits for before its folder is made. */
   prepareEngine?: (engine: CreateInput['engine'], source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
@@ -82,16 +82,40 @@ export interface LaunchRequestDeps {
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
   guestCreate?: () => GuestCreate | null
-  /** Which Swarm roles a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
-  swarmLaunch?: Pick<SwarmLaunch, 'role'>
   /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeListed); absent, any is. */
   claudeHomeListed?: (claudeHome: string) => boolean
+  /** Workspaces, which make the folder a create asks git for (a clone, a worktree, the folder itself on another branch):
+   *  the core runs no git. Null while they are off. */
+  workspaces: () => WorkspacesPort | null
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeListed }: LaunchRequestDeps) {
+/** What a create says while workspaces cannot make its folder: held, as a launch waiting for a model is, and continued
+ *  once they can. A restart of the edge host takes a few seconds; a create asked then waits for it rather than failing. */
+const WORKSPACES_HOLD = { service: 'workspaces', detail: 'Waiting for Harness\'s workspaces service to make the project folder. This request is saved and will continue when it is available.' }
+/** How long a create waits for workspaces: a restart takes seconds, and one that never comes (parked, switched off, a
+ *  build from before that never says it makes folders) must not keep a create to start hours later, when nobody waits. */
+export const WORKSPACES_WAIT_MS = 10 * 60_000
+const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
+  detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
+
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
+  /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
+   *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
+  const waitingSince = new Map<string, number>()
+  /** A create's folder: asked for now (`go`), held while workspaces cannot make it, or refused once they were not there
+   *  for WORKSPACES_WAIT_MS. Decided before the create's effect is claimed, so one held for them is never a failed launch. */
+  const waitForFolder = (authority: Pick<CreationAuthority, 'id' | 'hold'>, projectFolder: ProjectFolder | null): 'go' | PreparedCreation => {
+    const { id } = authority
+    if (!projectFolder || projectFolder.source === 'new' || workspaces()?.ready()) { waitingSince.delete(id); return 'go' }
+    const since = waitingSince.get(id)
+    if (since !== undefined && Date.now() - since >= WORKSPACES_WAIT_MS) { waitingSince.delete(id); return async () => WORKSPACES_GONE }
+    if (since === undefined) waitingSince.set(id, Date.now())
+    authority.hold(WORKSPACES_HOLD)
+    return null
+  }
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -118,51 +142,42 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     let scmLaunchRecord: ScmLaunchRecord | null = null
     /** The SSH alias a clone got in through, which the apps tell the person: it is the account later pushes go as. */
     let clonedVia: { alias: string } | undefined
-    if (projectFolder) {
-      try {
-        preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
-          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord },
-          // The person's own start may try every way this computer reaches GitHub. A Swarm agent's repository was cloned
-          // by its start (superTabs/projectFolder.ts), which keeps to one address per transport and never an alias.
-          ...(projectFolder.source === 'remote' ? { cloneFallback: !input.swarmRole,
-            onCloned: (clone: { alias?: string }) => { if (clone.alias) clonedVia = { alias: clone.alias } } } : {}) })
-        if (projectFolder.source === 'new') made = preparedFolder
-      }
+    if (projectFolder?.source === 'new') {
+      try { made = preparedFolder = await prepareNewFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
           detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
           // The folder a typed name found already there: the apps offer to start in it, and `harness new` names it.
-          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}),
-          // GitHub refused every way in: the apps say "No access" in their own words rather than git's.
-          ...(error instanceof RepositoryAccessError ? { access: 'denied' as const } : {}) }
+          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}) }
       }
+    } else if (projectFolder) {
+      // Git's work, in the edge host (services/workspaces.ts). The person's own start may try every way this computer
+      // reaches GitHub.
+      const prepared = await (workspaces() ?? WORKSPACES_OFF).prepareFolder(projectFolder, { cloneFallback: true })
+      if (!prepared.ok) {
+        return { state: 'failed', error: prepared.error, detail: prepared.detail,
+          // GitHub refused every way in: the apps say "No access" in their own words rather than git's.
+          ...(prepared.access ? { access: prepared.access } : {}) }
+      }
+      preparedFolder = prepared.cwd
+      scmLaunchRecord = prepared.scmLaunchRecord ?? null
+      if (prepared.clonedVia) clonedVia = prepared.clonedVia
+    }
+    if (projectFolder && preparedFolder) {
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
-      // the answer its source repo already has. `branch` IS the source folder: nothing to record.
-      //
-      // One consented exception: a Swarm agent, in any mode (task #4215), in the checkout a remote project resolved
-      // to (cloned now, or one already there that holds that very repository). The person chose this repository
-      // for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
-      // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
-      // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
-      // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
-      // main repository), which made the source look trusted before the worktree started.
-      // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
-      //
-      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent, in any mode (#4215):
-      // 2026-10-30, a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of it, and
-      // the PM sat at Claude Code's trust question, which no Swarm view shows; it read Idle and every message to it was
-      // withheld. Only from a local frame: a relayed request could name any repository on this machine.
-      const swarmAgent = input.engine === 'claude' && !!input.swarmRole
-      const swarmCheckout = swarmAgent && (projectFolder.source === 'remote' || (projectFolder.source === 'worktree' && local))
+      // the answer its source repo already has, and only where Harness makes worktrees: the folder is workspaces'
+      // word, and a trust recorded above anything else would cover every repository under it. `branch` IS the
+      // source folder: nothing to record.
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)
-        if (engineTrust && (projectFolder.source === 'new' || swarmCheckout
-          || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
+        if (engineTrust && (projectFolder.source === 'new'
+          || (projectFolder.source === 'worktree' && preparedFolder.startsWith(join(projectsRoot(), 'worktrees') + sep)
+            && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
-      } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${input.engine} · ${errorKind(error)}`) }
     } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
       // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
       // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
@@ -181,7 +196,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       try {
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
         if (empty) folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)?.record(input.cwd)
-      } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${input.engine} · ${errorKind(error)}`) }
     }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
     if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }
@@ -206,6 +221,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
         || (projectFolder !== null && typeof projectFolder.source !== 'string')) return null
       const { local, label } = saved
+      // The intent's id goes on the row, where a launch the guard held reads its first task back from this receipt.
+      const creationId = authority.id
       if (saved.selection) {
         authority.hold(modelHold)
         const target = await modelTarget(saved.selection as NewAgentModel)
@@ -232,13 +249,15 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           if (engine.refusal) return refused({ error: engine.refusal, detail: engine.detail })
           held(engine); return null
         }
+        const folder = waitForFolder(authority, projectFolder)
+        if (folder !== 'go') return folder
         const invoke: CreateAgent = async (prepared) => {
-          const ready = await prepareCreate(prepared, { ...authority, label }, { local })
+          const ready = await prepareCreate(prepared, { ...authority, label }, { local, creationId })
           return ready.ok ? ready.dispatch() : { ok: false, error: ready.error, ...(ready.detail ? { detail: ready.detail } : {}) }
         }
         return () => executeCreate(input, projectFolder, local, invoke)
       }
-      const ready = await prepareCreate(input, { ...authority, label }, { local })
+      const ready = await prepareCreate(input, { ...authority, label }, { local, creationId })
       if (!authority.current()) return null
       if (!ready.ok) {
         if (ready.unavailable) { held(ready); return null }
@@ -268,7 +287,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const target = await modelTarget(selection)
     if (!target) return null
     input.grid = target
-    return () => executeCreate(input, (saved.projectFolder ?? null) as ProjectFolder | null, saved.local as boolean, invoke)
+    const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
+    const folder = waitForFolder(authority, projectFolder)
+    if (folder !== 'go') return folder
+    return () => executeCreate(input, projectFolder, saved.local as boolean, invoke)
   } })
 
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
@@ -309,7 +331,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const launchModel = status.state === 'created' ? receipts.createdLaunchModel(creationId) : null
       reply({ creationId, ...await creationStatusPayload(status), ...(launchModel ? { launchModel } : {}) })
     } catch (error) {
-      // The reason travels with the code, so the host can tell the Swarm why the start waits (task #3861).
+      // The reason travels with the code, so the asker can say why the start waits (task #3861).
       reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL', ...error instanceof AgentCreationReceiptError && error.detail ? { detail: error.detail } : {} })
     }
   }
@@ -417,6 +439,18 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
       return
     }
+    // OpenClaw's own state folder for this run (`harness new --local`). Refused, never dropped as a bad codexHome is: a run
+    // dropped onto the shared state folder would look like it worked.
+    let openclawLocal: string | null = null
+    if (payload.openclawLocal !== undefined && payload.openclawLocal !== null) {
+      const raw = payload.openclawLocal
+      if (engine !== 'openclaw') { reply({ error: 'INVALID_LOCAL_FOLDER', detail: OPENCLAW_LOCAL.notOpenclaw }); return }
+      if (typeof raw !== 'string' || !homeIsAbsolute(raw) || raw.length > 4096 || /[\x00-\x1f\x7f]/.test(raw)
+        || !await stat(raw).then(info => info.isDirectory(), () => false)) {
+        reply({ error: 'INVALID_LOCAL_FOLDER', detail: OPENCLAW_LOCAL.notFolder(String(raw)) }); return
+      }
+      openclawLocal = raw
+    }
     // A DSH is refused, never approximated: an agent created as its plain base engine would look
     // like it worked and have none of the skills the user picked the tile for.
     let dsh: string | null = null
@@ -446,19 +480,6 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       }
       prompt = trimmed || null
     }
-    const swarmRole = payload.swarmRole
-    if (!swarmLaunch && swarmRole !== undefined && swarmRole !== null) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
-    }
-    // Project instructions, phase 4 (decision 1): a coordinator or an agent. An older Harness sends lead, dev or review
-    // (a Reviewer, which keeps its Reviewer kind); the next release may send the kinds, so this one takes both.
-    const swarm = swarmRole === undefined || swarmRole === null ? null : roleFromWire(swarmRole)
-    if (swarmRole !== undefined && swarmRole !== null &&
-      (!swarm || !swarmLaunch?.role(swarm.role) || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
-    }
-    // `swarmSkillMode` is read as nothing: the skill modes are gone (PM, 2026-11-11), and Desktop's Personal Swarm still
-    // sends one. Delete this note on or after 2026-12-11, once no Desktop of the last 30 days sends it.
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -492,7 +513,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (typeof sessionId !== 'string' || !(/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(sessionId) || engine === 'openclaw' && OPENCLAW_KEY.test(sessionId))) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
-      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || swarmRole) {
+      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent || openclawLocal) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
       resumeSessionId = sessionId
@@ -528,34 +549,28 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
       takeOver,
       // Only when set: a person's create keeps the fingerprint its receipt was recorded with before the field.
       ...(claudeHome ? { claudeHome } : {}),
+      ...(openclawLocal ? { openclawLocal } : {}),
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
+      // A Desktop from before Browser left New agent still sends its checkbox (`browser: true`): its Browser is on, and
+      // the browser starts once the agent runs. Delete on or after 2026-12-18.
       ...(payload.browser === true ? { browser: true } : {}),
     }
-    // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
-    // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
-    const { swarmFallback: _fallback, ...stable } = input
-    // A start asked with the Harness GitHub App before this machine's update named it, and its worktree offline, in its receipt:
-    // asked again, it finds that receipt (and launches on this machine's own login). Delete on or after 2026-12-10.
-    const app = swarm && payload.swarmGitHub === true
-    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm), ...(app ? { swarmGitHub: true } : {}) } : input
-    const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
+    const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
       // New agent action carries a new one. Detach so a status check can pass a slow create
       // on this connection, just as engines_probe is detached above.
       const create = onCreateAgent
       try {
-        const fingerprint = creationFingerprint(projectFolder
-          ? { ...fingerprintInput, projectFolder: app && projectFolder.source === 'worktree' ? { ...projectFolder, offline: true } : projectFolder } : fingerprintInput)
+        const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than
@@ -679,15 +694,16 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (creationId !== undefined) {
       if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
       // Forking starts a new process too. Reserve the same durable intent used
-      // by agent_create so a lost receipt can be checked without another fork.
+      // by agent_create so a lost receipt can be checked without another fork. The receipt keeps the first task, and
+      // the fork's row names the receipt, so a launch the guard held can read its task back.
       const fork = onForkAgent
       try {
         void receipts.run(creationId, creationFingerprint({ operation: 'fork', agentId: target, name, prompt }), async () => {
-          const result = await fork({ agentId: target, name, prompt })
+          const result = await fork({ agentId: target, name, prompt, creationId })
           if (result.ok) return { state: 'created', agentId: result.session.agentId, level: result.level }
           if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
           return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
-        }).then(async (status) => {
+        }, undefined, prompt ?? undefined).then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))
       } catch (error) {
@@ -708,6 +724,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     try {
       // A guest cancels nothing of another's, and leaves no cancelled mark for an id that is not its own.
       if (hiddenFrom(asker, payload.creationId)) { reply({ creationId: payload.creationId, state: 'missing' }); return }
+      waitingSince.delete(payload.creationId)
       reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) })
     }
     catch (error) { reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }) }

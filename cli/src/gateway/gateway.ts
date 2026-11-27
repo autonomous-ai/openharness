@@ -14,20 +14,22 @@
  * E2EE_REQUIRED. backendSocket.spec.ts and gateway/gateway.spec.ts hold each of them.
  */
 import { env } from '../config/env.js'
-import type { BrowserRoute, GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
+import type { BrowserRoute, GatewayEvents, GatewayPort, RemoteRole, RemoteTransport, UsageEvent } from '../core/api.js'
+import { countUsage } from './usageEvents.js'
 import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
 import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import type { AuthSessionManager } from '../lib/authRefresh.js'
 import { shouldReplayCommander } from '../lib/commanderReplay.js'
 import { DEVICE_RECENT_SAFE_FRAME_BYTES, fitRecentReplyPayloadForDevice } from '../lib/deviceRecentTrim.js'
 import { encryptRpcResult, rpcResultType } from '../lib/e2ee/applicationFrames.js'
 import { b64d, fingerprint, isWrapped, type WrappedPayload } from '../lib/e2ee/core.js'
 import { E2eeManager, type LinkedPeer, type PairResult } from '../lib/e2ee/manager.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
-import { logFrame, sid } from '../lib/log.js'
+import { errorKind, logFrame, sid } from '../lib/log.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType } from '../lib/relayFrames.js'
+import { createHarnessWatches } from './harnessWatch.js'
 import { encodeTerminalHop, TerminalBinaryKind, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import {
   TerminalP2pResponderPool,
@@ -61,8 +63,7 @@ export const TUI_ONLY_EVENTS: ReadonlySet<string> = new Set(['tool_end', 'subage
 /** The longest the backend's word that a terminal app is open is taken for (backend bus.ts TUI_OPEN_FOR_MS). */
 export const TUI_OPEN_MAX_MS = 180_000
 /** A machine's live events: what an app viewing it shows as it happens, and none of it read by the backend. While the
- *  backend counts no app on the machine they stay off the relay, a publish that reached no one
- *  (docs/superpowers/specs/2026-11-02-swarm-cache-delta-design.md, Part 4). `turn_started`, `agent_synced` and
+ *  backend counts no app on the machine they stay off the relay, a publish that reached no one (2026-11-02). `turn_started`, `agent_synced` and
  *  `agent_deleted` are not here: the backend counts turns and keeps the machine's agents from them. An app that connects
  *  lists the sessions itself, so what was held leaves nothing missing. */
 export const UI_GATED_EVENTS: ReadonlySet<string> = new Set([
@@ -81,7 +82,8 @@ export class RelayGateway implements GatewayPort {
   productUsage?: {
     launch?(signal: ProductUsageLaunchSignal): void
     counter?(metric: ProductUsageMetric): void
-    presence(active: boolean): void
+    /** [active]: a window is connected; [desktop]: a Desktop window is. */
+    presence(active: boolean, desktop: boolean): void
     opened(surface: WindowSurface): void
     observe(type: 'turn_started' | 'turn_ended' | 'text_delta' | 'error', agent: string, replay: boolean, interrupted?: boolean): void
     /** An agent's launch state as its `agent_synced` frame says it, the failure's code a listed name only. */
@@ -124,6 +126,8 @@ export class RelayGateway implements GatewayPort {
    * A stream keeps its route until it closes; when the route goes, the stream ends.
    */
   private readonly browserStreams = new Map<string, Map<string, BrowserRoute>>()
+  /** Another of the owner's machines following harnesses here (harnessWatch.ts): each change sealed to its connection. */
+  private readonly harnessWatches = createHarnessWatches({ send: (connId, payload) => this.target(connId, 'harness_event', payload) })
   /** Cross-instance commander (device) client count, from backend `__clients` frames. */
   private commanderCount = 0
   /** Until when a terminal app of the account counts as open, from the backend's `__tui_open`; null until it has said
@@ -262,6 +266,7 @@ export class RelayGateway implements GatewayPort {
     this.core.linkDown()
     this.setCommanderCount(0, null) // active count is unknown until the next __clients snapshot
     void this.terminalP2p.stop()
+    this.harnessWatches.clear()
     this.p2pPendingOpens.clear()
     this.p2pStreams.clear()
     this.liveStreams.clear()
@@ -304,6 +309,18 @@ export class RelayGateway implements GatewayPort {
     try { this.productUsage?.launch?.(signal) } catch { /* Optional measurement. */ }
   }
 
+  /** What the core tells of a request it measured, counted here under the report's names (gateway/usageEvents.ts). A
+   *  failure costs that event's counts and nothing else, said at most once a minute: work never waits for reporting. */
+  usage(event: UsageEvent): void {
+    try { countUsage(event, (metric) => this.usageCounter(metric), (signal) => this.usageLaunch(signal)) } catch (error) {
+      const at = Date.now()
+      if (at - this.usageFailureSaidAt < 60_000) return
+      this.usageFailureSaidAt = at
+      console.warn(`[usage] a measured request could not be counted: ${errorKind(error)}`)
+    }
+  }
+  private usageFailureSaidAt = -Infinity
+
   usageCounter(metric: ProductUsageMetric): void {
     try { this.productUsage?.counter?.(metric) } catch { /* Work never waits for reporting. */ }
   }
@@ -315,7 +332,7 @@ export class RelayGateway implements GatewayPort {
 
   localClients(windows: LocalWindows): void {
     this.localWindows = windows
-    try { this.productUsage?.presence(windows.desktop + windows.tui > 0) } catch { /* Reporting is optional. */ }
+    try { this.productUsage?.presence(windows.desktop + windows.tui > 0, windows.desktop > 0) } catch { /* Reporting is optional. */ }
     for (const surface of WINDOW_SURFACES) if (windows[surface] === 0) this.link.noLocalClients(surface)
   }
 
@@ -326,6 +343,8 @@ export class RelayGateway implements GatewayPort {
    *  never reaches a guest (manager.ts `groupKeyFor`, backend/src/lib/hub.ts), so its sessions are sent
    *  the frame sealed for each of them. */
   broadcast(frame: Frame, guest?: string): void {
+    // Before the viewer gate below: a machine following a harness here is told its changes while no app views it.
+    this.harnessWatches.observe(frame)
     if ((frame.type === 'turn_started' || frame.type === 'turn_ended' || frame.type === 'text_delta' || frame.type === 'error') && typeof frame.agentId === 'string') {
       const interrupted = frame.type === 'turn_ended' && (frame.payload as { aborted?: unknown } | undefined)?.aborted === true
       try { this.productUsage?.observe(frame.type, frame.agentId, frame.replay === true, interrupted) } catch { /* Work continues without metrics. */ }
@@ -530,7 +549,7 @@ export class RelayGateway implements GatewayPort {
       .then(() => this.requestGate)
       .then(() => this.dispatchDown(frame, connId, transport))
       .catch((err) => {
-        console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
+        console.error('[backend] down-frame dispatch failed:', errorKind(err))
       })
       .finally(() => {
         if (chains.get(key) === next) chains.delete(key)
@@ -557,10 +576,10 @@ export class RelayGateway implements GatewayPort {
         console.log(`[typing] in conn=${sid(connId)} stream=${sid(clear.streamId)} ${clear.kind === TerminalBinaryKind.paste ? 'paste' : `seq=${clear.seq}`} ${clear.bytes.length}B via=${via}`)
       }
       void Promise.resolve(this.core.binary(connId, clear)).catch((err) => {
-        console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+        console.error('[backend] binary terminal dispatch failed:', errorKind(err))
       })
     } catch (err) {
-      console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+      console.error('[backend] binary terminal dispatch failed:', errorKind(err))
     }
   }
 
@@ -600,7 +619,9 @@ export class RelayGateway implements GatewayPort {
     // An app that connects sends its E2EE hello first, before the backend's next `__clients` counts it: live events flow
     // again from that frame on, so it misses nothing it could open. The backend's own frames (connId '' or `__`) and a
     // device's are no app viewing. A reconnecting device's hello, before it is known as one, opens it for a minute.
-    if (connId && !type.startsWith('__') && !this.isDeviceConn(connId)) this.lastRemoteFrameAt = Date.now()
+    // A machine renewing its harness_watch is no app viewing: opening the gate for it would send the very transcript the
+    // watch exists to keep off the relay (harnessWatch.ts).
+    if (connId && !type.startsWith('__') && type !== 'harness_watch' && !this.isDeviceConn(connId)) this.lastRemoteFrameAt = Date.now()
     // E2EE control frames (pairing/handshake) are handled by the manager, never as node RPCs.
     if (type.startsWith('e2e_')) {
       const deviceBefore = deviceDump.enabled && (this.isDeviceConn(connId) || (type === 'e2e_pair_intent' && (frame.payload as { role?: unknown } | undefined)?.role === 'device'))
@@ -676,6 +697,14 @@ export class RelayGateway implements GatewayPort {
       await this.manage(connId, type, payload)
       return
     }
+    // Another of the owner's machines (or an app of the owner's) following harnesses here; never a device or a guest,
+    // which may not see this machine's harnesses (harnessWatch.ts).
+    if (type === 'harness_watch') {
+      this.logRequest(connId, opened)
+      const allowed = role === 'web' && this.guestOf(connId) === undefined
+      this.reply(connId, type, payload.requestId, allowed ? this.harnessWatches.watch(connId, payload) : { error: 'NOT_ALLOWED' })
+      return
+    }
     // `unwrapDown` opened it, so its envelope counter is a number.
     if (type.startsWith('terminal_')) this.noteTerminalInputRoute(connId, type, payload, transport, (frame.payload as WrappedPayload).__e2e.n)
     else if (type === 'agent_browser_open') this.noteBrowserOpen(connId, payload, transport)
@@ -728,20 +757,8 @@ export class RelayGateway implements GatewayPort {
       this.liveStreams.delete(connId)
       this.forgetRoutes(connId)
       this.forgetBrowserStreams(connId)
+      this.harnessWatches.closed(connId)
       await this.core.disconnected(connId)
-      return
-    }
-    // A Lead's terminal request waits for an agent of this machine (spec 2026-11-02-poll-cost Part 4.2): the Swarm host picks
-    // it up now. A `__` frame, so a daemon from before it drops it below; one naming no agent is no request.
-    if (type === '__terminal_waiting') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      if (typeof p.tabId === 'string' && typeof p.agentId === 'string') this.core.notice({ type, tabId: p.tabId, agentId: p.agentId })
-      return
-    }
-    // The server renews the Swarm host's delivery push lease (task #2800, review of #2977): nothing to read, the host only
-    // keeps reading idle workers' lists when told. A `__` frame, so a daemon from before it drops it below.
-    if (type === '__deliveries_lease') {
-      this.core.notice({ type })
       return
     }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.
@@ -788,34 +805,6 @@ export class RelayGateway implements GatewayPort {
     if (type === 'connectors_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
       this.core.notice({ type, revision: typeof revision === 'number' ? revision : 0 })
-      return
-    }
-
-    // Work waits for an agent of this machine's (backend lib/adapterWs.ts): the Swarm host reads its deliveries now. Naming
-    // none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
-    if (type === 'super_tab_deliveries') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      this.core.notice(typeof p.tabId === 'string' && typeof p.agentId === 'string'
-        ? { type, tabId: p.tabId, agentId: p.agentId } : { type })
-      return
-    }
-
-    // A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now.
-    // Naming none, the server says it pushes them. Backend-only like desk_changed: a client could only make the host read early.
-    if (type === 'swarm_host_changed') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number'
-        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt } : { type })
-      return
-    }
-
-    // A Swarm the account is in changed (backend lib/swarmClientPushes.ts): the windows read it again. Naming none, the server
-    // says it pushes. Backend-only like desk_changed: a client could only make a window read early.
-    if (type === 'swarm_changed') {
-      const p = (typeof frame.payload === 'object' && frame.payload !== null ? frame.payload : {}) as Record<string, unknown>
-      const parts = Array.isArray(p.parts) && p.parts.length && p.parts.every(part => part === 'main' || part === 'machine') ? p.parts as Array<'main' | 'machine'> : null
-      this.core.notice(typeof p.tabId === 'string' && typeof p.lastChangedAt === 'number' && parts
-        ? { type, tabId: p.tabId, lastChangedAt: p.lastChangedAt, parts } : { type })
       return
     }
 
@@ -905,7 +894,7 @@ export class RelayGateway implements GatewayPort {
           return
       }
     } catch (err) {
-      console.error(`[backend] dispatch ${type} failed:`, err)
+      console.error(`[backend] dispatch ${type} failed:`, errorKind(err))
       if (payload.requestId !== undefined) this.reply(connId, type, payload.requestId, { error: 'INTERNAL' })
     }
   }
@@ -1181,6 +1170,16 @@ export class RelayGateway implements GatewayPort {
   deviceClient(connId: string, identity: string | null): void {
     if (identity) this.deviceClients.set(connId, identity)
     else this.deviceClients.delete(connId)
+  }
+
+  /** The Wi-Fi device sessions on a direct link whose app said hello, each still its identity's device's session:
+   *  what `harness autonomous-device status` counts. */
+  directDeviceSessions(): number {
+    let count = 0
+    for (const [connId, identity] of this.deviceClients) {
+      if (this.directDeviceSinks.has(connId) && this.e2ee.sessionRole(connId) === 'device' && this.e2ee.sessionIdentity(connId) === identity) count++
+    }
+    return count
   }
 
   /**

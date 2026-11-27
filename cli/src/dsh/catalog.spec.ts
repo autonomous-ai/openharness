@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
@@ -9,6 +9,32 @@ import { dshCommand } from './command.js'
 import { resolveInstallSource } from './install.js'
 import { installedDsh, invalidateInstalledDsh } from './installed.js'
 import type { DshRegistryEntry } from './registry.js'
+
+// Pass-through, recording which paths are opened for writing and renamed onto, until a test fills the disk: a write
+// then stops part way, as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, writes: [] as string[], renames: [] as [string, string][] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writing = (flags: unknown) => typeof flags === 'number'
+    ? (flags & (actual.constants.O_WRONLY | actual.constants.O_RDWR)) !== 0
+    : typeof flags === 'string' && /[wa+]/.test(flags)
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (typeof args[0] === 'string' && writing(args[1])) disk.writes.push(args[0])
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] === 'string') disk.writes.push(args[0])
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      disk.renames.push([String(args[0]), String(args[1])])
+      return actual.renameSync(...args)
+    },
+  }
+})
 
 const first: DshRegistryEntry = { id: 'acme/new-game', name: 'New Game', engine: 'claude', repo: 'https://example.test/game', viewerUse: 'acme/new-viewer' }
 const viewer: DshRegistryEntry = { id: 'acme/new-viewer', kind: 'viewer', name: 'New Viewer', repo: 'https://example.test/viewer' }
@@ -169,6 +195,29 @@ describe('live Store catalog', () => {
     fetcher.mockResolvedValueOnce(response(entries))
     expect(await make().refresh()).toHaveLength(5000)
     expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    const file = join(root, 'catalog.json')
+    disk.writes = []
+    disk.renames = []
+    fetcher.mockResolvedValueOnce(response())
+    await make().refresh()
+    expect(disk.writes).not.toContain(file)
+    expect(disk.renames.filter(([, to]) => to === file)).toEqual([[expect.stringMatching(/\.tmp$/), file]])
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary one', async () => {
+    const file = join(root, 'catalog.json')
+    fetcher.mockResolvedValueOnce(response()).mockResolvedValueOnce(response([viewer]))
+    await make().refresh()
+    const before = readFileSync(file, 'utf8')
+    disk.full = true
+    try {
+      expect((await make().refresh(true)).map(e => e.id)).toEqual([viewer.id])
+    } finally { disk.full = false }
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(readdirSync(root)).toEqual(['catalog.json'])
   })
 })
 

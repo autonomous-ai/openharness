@@ -6,7 +6,8 @@ What the window does, pane by pane. The keys are in [keyboard.md](keyboard.md).
 
 A harness is one session: one engine process, the agent, in one tmux pane on one machine. A tab
 holds any number of panes, from any mix of machines; the app remembers tabs, pane placement, sizes,
-pinned slots, focus and zoom across restarts, in `~/.harness/desktop-app-v2/state.json`.
+pinned slots, focus and zoom across restarts, in `~/.harness/desktop-app-v2/state.json` (on Linux in the data root,
+[where Harness keeps its files](cli.md#where-harness-keeps-its-files)).
 
 **New Harness (⌘N)** asks for four things: the machine, the working folder, the engine, and,
 under Advanced, two settings most people never touch. The folder picker is the native panel on this

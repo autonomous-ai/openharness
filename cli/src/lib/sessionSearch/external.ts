@@ -9,9 +9,10 @@
  * the machine's processes, and one way to stop a terminal's process.
  */
 
-import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo } from './externals/support.js'
+import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo, type ScanMemo } from './externals/support.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
 import { externalReadFailed } from './evidence.js'
+import { errorKind } from '../log.js'
 
 export type { ExternalEngine, ExternalOrigin, ExternalProvider, ExternalSession } from './externals/types.js'
 export { processAlive } from './externals/support.js'
@@ -65,7 +66,7 @@ export class ExternalSessions {
       } catch (error) {
         externalReadFailed(error, 'session store')
         // One engine's store failing (locked, mid-migration) keeps what it said last time.
-        this.opts.log?.(`[search] ${provider.engine} sessions not read: ${error instanceof Error ? error.message : error}`)
+        this.opts.log?.(`[search] ${provider.engine} sessions not read: ${errorKind(error)}`)
         all.push(...this.lastGood.get(provider.engine) ?? [])
       }
     }
@@ -74,6 +75,43 @@ export class ExternalSessions {
     this.found = catalog.found
     this.byId = catalog.byId
     return this.found
+  }
+}
+
+/**
+ * A few sessions' rows, each looked for in its own engine's store alone: the dial's look at the sessions open now, each
+ * minute (cable/hosts/observed.ts). A store with none of them open is never read (a database among them), and each
+ * engine keeps a memo of its own, so a later look reads only the files that changed.
+ */
+export class SessionRows {
+  private readonly memos = new Map<ExternalEngine, ScanMemo>()
+
+  constructor(private readonly opts: ExternalSessionsOptions) {}
+
+  /** The rows found of [wanted], sessions by id with the engine that has each open. */
+  async find(wanted: ReadonlyMap<string, ExternalEngine>): Promise<Map<string, ExternalSession>> {
+    const found = new Map<string, ExternalSession>()
+    for (const engine of new Set(wanted.values())) {
+      const provider = this.opts.providers.find((candidate) => candidate.engine === engine)
+      if (!provider) continue
+      const memo = this.memos.get(engine) ?? scanMemo({ excluded: this.opts.excluded ?? [] })
+      this.memos.set(engine, memo)
+      let rows: ExternalSession[]
+      try {
+        rows = await provider.scan(memo.context())
+      } catch (error) {
+        externalReadFailed(error, 'session store')
+        this.opts.log?.(`[search] ${engine} sessions not read: ${errorKind(error)}`)
+        continue
+      }
+      memo.prune()
+      const { byId } = externalSessionCatalog(rows)
+      for (const [sessionId, of] of wanted) {
+        const row = byId.get(sessionId)
+        if (of === engine && row) found.set(sessionId, row)
+      }
+    }
+    return found
   }
 }
 
@@ -119,7 +157,7 @@ type OpenAnswer = { at: number; owners: Map<string, SessionOwner>; open: Map<str
 /**
  * Which sessions are open in a running process right now, so Cmd-P does not open one a second time
  * beside a terminal that still has it: both would write the same conversation. One open in a
- * terminal can be taken over instead (`owner`, `stopSessionOwner`).
+ * terminal can be taken over instead (`owner`, core/agents/externalOwner.ts).
  *
  * Only exact evidence counts: a process's own record, a lock it holds, a file it has open, the id in
  * its arguments. A guess from a folder is never enough to stop a process.
@@ -140,6 +178,11 @@ export class OpenSessions {
   /** An answer at most `maxAgeMs` old. */
   async fresh(): Promise<ReadonlyMap<string, OpenIn>> {
     return (await this.current()).open
+  }
+
+  /** Who has each session open, from an answer at most `maxAgeMs` old. */
+  async owners(): Promise<ReadonlyMap<string, SessionOwner>> {
+    return (await this.current()).owners
   }
 
   /** The process that has [sessionId] open, looked at now rather than taken from a recent answer. */
@@ -186,7 +229,7 @@ export class OpenSessions {
       try {
         for (const claim of await provider.owners(view)) claims.push({ ...claim, engine: provider.engine })
       } catch (error) {
-        this.opts.log?.(`[search] ${provider.engine} owners not read: ${error instanceof Error ? error.message : error}`)
+        this.opts.log?.(`[search] ${provider.engine} owners not read: ${errorKind(error)}`)
       }
     }
     const owners = new Map<string, SessionOwner>()
@@ -210,5 +253,3 @@ export class OpenSessions {
     return owners
   }
 }
-
-export { foregroundJob, stopSessionOwner, writeTty, TERMINAL_RESTORE, type StopOptions } from '../externalOwnerControl.js'

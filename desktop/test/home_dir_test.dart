@@ -139,6 +139,8 @@ void main() {
             'skipped when Platform.isWindows',
         'lib/community/fork_project.dart': 'skipped when Platform.isWindows',
         'lib/update/desktop_updater.dart': 'the AppImage, Linux only',
+        'lib/devices/device_app_installer.dart':
+            "Harness Device's AppImage, Linux only",
         'lib/bootstrap/environment_provisioner.dart':
             'the Linux Terminal setup script only',
       };

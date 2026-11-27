@@ -42,7 +42,7 @@ This is tracked work, not a claim that account-free startup is already available
 ```bash
 # cli
 cd cli && npm install && npm run typecheck && npm test
-make install-cli          # bundle this tree into ~/.harness/cli and restart the daemon on it
+make install-cli          # bundle this tree into Harness's cli folder and restart the daemon on it
 
 # desktop (Flutter ≥ 3.47 / Dart ≥ 3.13; SPM on for macOS)
 cd desktop && flutter pub get && flutter analyze && flutter test
@@ -57,6 +57,9 @@ cd provider/e2e && npm install && npm test
 # device
 make device-test
 ```
+
+Harness's `cli` folder is `~/.harness/cli`; on Linux it is in the data root
+([where Harness keeps its files](cli.md#where-harness-keeps-its-files)).
 
 Harness package updates have a dedicated coverage gate and a desktop-to-daemon integration test:
 
@@ -87,8 +90,8 @@ brings up a second machine in Docker so the remote path can be exercised from on
 
 A dev CLI uses the production backend and existing machine identity unless explicitly configured
 otherwise. Running it from a repository does not load that repository's `.env`. For an intentional
-local/staging daemon, export the settings or set `HARNESS_ENV_FILE` to an absolute config path
-(see [CLI configuration](../cli/README.md)). Keep its
+local/staging daemon, export the settings or set `HARNESS_ENV_FILE` to a config path, absolute,
+or relative to your home (see [CLI configuration](../cli/README.md)). Keep its
 `ADAPTER_DATA_DIR`, `HARNESS_AUTH_DIR`, `ADAPTER_COMPUTER_ID_FILE` and port separate from the
 everyday daemon. `harness status` reports the running daemon's backend and account environment.
 

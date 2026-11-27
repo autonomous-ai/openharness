@@ -3,15 +3,16 @@
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
+import { harnessPath } from '../src/config/harnessHome.js'
 
 const live = process.env.HARNESS_ORCHESTRATOR_LIVE === '1'
 if (!live && process.env.HARNESS_ORCHESTRATOR_E2E !== '1') throw new Error('Opt in with HARNESS_ORCHESTRATOR_E2E=1, or explicitly authorize model usage with HARNESS_ORCHESTRATOR_LIVE=1')
-const installedRoot = process.env.DSH_DIR ?? join(homedir(), '.harness', 'dsh')
+const installedRoot = process.env.DSH_DIR ?? harnessPath('dsh')
 const exec = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), 'orchestrator-e2e-'))
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -57,7 +58,6 @@ const local = attachLocalWsServer(server, { machineId, backend })
 await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
 const port = (server.address() as { port: number }).port
 backend.orchestratorCommand = `${[process.execPath, '--import', loader, join(cliRoot, 'src/cli.ts')].map(shellQuote).join(' ')} orchestrator --port ${port} --machine ${machineId}`
-if (!live) backend.engineProbeProvider = async (engines = ['claude']) => engines.map(engine => ({ engine, installed: true, command: process.execPath, installable: false }))
 backend.dshFrameProvider = agent => ({ id: agent.dsh ?? null, name: agent.dsh ?? null, viewerUrl: urls.get(agent.agentId) ?? null, viewerName: 'Fixture viewer', verdict: null })
 if (live) {
   // Read-only links to ALREADY installed harnesses; never change the real index.
@@ -94,7 +94,7 @@ backend.onCreateAgent = async input => {
     registry, engine: input.engine, cwd: input.cwd, dsh: input.dsh, defaultName: input.name,
     ...(dsh ? { env: dshLaunch(dsh, input.cwd).env } : {}),
     sessionLabel: `harness-fixture-${++created}`,
-    argv: live
+    argv: () => live
       ? [process.execPath, '--import', loader, join(cliRoot, 'scripts/orchestrator-live-engine.ts'), input.cwd, input.engine, String(port), input.prompt]
       : [process.execPath, '--import', loader, join(cliRoot, 'scripts/orchestrator-fixture-engine.ts'), input.cwd, dsh ? 'worker' : 'director', String(port), machineId, join(cliRoot, 'src/cli.ts'), loader],
   })

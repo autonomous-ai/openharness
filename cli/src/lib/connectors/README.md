@@ -40,6 +40,13 @@ involved. Renewal goes straight to the service's token endpoint. 78 of Grid's 86
 every one Grid marks `dcr`, plus Linear, Notion, Amplitude and monday.com, which Grid signs in through
 its gateway but whose MCP servers also allow self-registration.
 
+A token is renewed when a request needs it, and also unasked: the daemon renews every `dcr` connection
+that has gone a day (plus up to 12 hours drawn once per start, so the account's computers do not renew
+one token at the same moment) without a renewal (`renew.ts` `keepAlive`), because a service drops a refresh
+token left unused (Canva, Miro and Notion did after four weeks). The renewed token reaches the account's
+other computers, whose own wait starts again from it. A refused renewal is logged with the service's own
+reason and the token's age, never the token, before the connection is marked "Reconnect".
+
 **`app`: through the Harness connector gateway** (`gateway.ts`; backend `routes/connectors.ts`, the same
 requests as Grid's). These services let no computer register itself, so the OAuth app Autonomous
 registered with them is used: `POST /api/connectors/start`, the browser signs in, then
@@ -56,6 +63,16 @@ template) with `transport: rest`, and the bridge is their MCP server: `tools/lis
 percent-encoded, an optional parameter left out is left out, Gmail's message is RFC 2822 (UTF-8, no header
 injection) in base64url, a Drive upload is `multipart/related`, and a failed call is a result the model
 reads (`isError`), in words a person can act on.
+
+**Through Claude Code or Codex instead** (`elsewhere.ts`). Gmail, Google Calendar and Google Drive can also be
+connected in an agent's own account, where Harness holds no token: claude.ai's connector, which Claude Code
+picks up from the account it signed in with (Claude's Gmail reads and searches mail, Harness's grant only
+sends), or the ChatGPT plugin Codex installs. The computer offers only the engines it has (`claude`, `codex`
+on the login shell's PATH), reads their state from `claude mcp list` and `codex plugin list --json`
+(Codex's Google grant is asked for on first use, so "installed" is all it can know), installs or removes the
+Codex plugin, and answers the page to open in that engine's account. The same three requests serve the
+desktop (`connectors` `elsewhere`, `connect_via`, `disconnect_via`), the phone and this page
+(`/api/elsewhere`, `/api/connect_via`, `/api/disconnect_via`). Only the agent of that engine gets it.
 
 **Add custom** takes any remote MCP server URL: one that asks for sign-in uses the `dcr` path, one with
 static headers (a personal token) is saved as given.
@@ -98,8 +115,9 @@ through its link. The daemon writes the entries again as it starts, so an agent 
 service was connected gets it too. An agent reads its MCP servers when it starts: one already running
 sees a new connection after it is restarted.
 
-An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as a switched PM, reads that
-folder's `.claude.json` or `config.toml`, not the default's. Launching it writes the same entries there (`syncProfileHome`) and
+An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as one switched to another login, reads that
+folder's `.claude.json` or `config.toml`, not the default's. Launching it has the connectors service write the same entries there
+(`syncProfileHome`, the core's `ConnectorsPort`, waited on for 5 s at most: one not written in time leaves the config as it was) and
 records the folder in `projections.json` as `claude:<folder>` / `codex:<folder>`; every later sync keeps it current, and a folder
 that is gone is forgotten. Only a Codex folder this machine lists as a profile is written, never through a link that leaves the folder,
 and a home that cannot be written is logged without stopping the others.

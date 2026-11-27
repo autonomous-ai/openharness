@@ -35,6 +35,10 @@ export interface ClientConn {
   // sent the machine's broadcasts — the owner's events — only the frames addressed to its own connection,
   // which the machine seals for it (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
   guest?: boolean
+  // A daemon's background relay (`machine_select { relayIsolation: true }`): a tool or pane poller on the person's other
+  // machine that reads only its own replies. Like a guest it hears only the frames addressed to it, and it is no app, so
+  // it never opens the machine's viewer gate (`ui`) and live events stay off the relay (Hachi, docs/design/2026-11-12-hachi.md).
+  relayIsolated?: boolean
 }
 
 export interface QueuedCommanderFrame {
@@ -134,7 +138,7 @@ export function clientCounts(machineId: string): { ui: number; commander: number
   let commanderActive = 0
   if (m) for (const c of m.values()) {
     if (c.kind === 'commander') { commander++; if (c.active) commanderActive++ }
-    else ui++
+    else if (!c.relayIsolated) ui++
   }
   return { ui, commander, commanderActive }
 }

@@ -1,0 +1,12 @@
+{
+  "name": "logstat",
+  "version": "2.1.0",
+  "description": "Counts the lines of a log file by level.",
+  "type": "module",
+  "bin": {
+    "logstat": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

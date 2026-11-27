@@ -10,6 +10,7 @@ import {
   QuestionWatcher,
   questionRequestId,
   shapeQuestions,
+  type PaneView,
   type QuestionView,
   type ReviewView,
 } from './askQuestion.js'
@@ -1084,11 +1085,14 @@ describe('two different commands are still two requestIds', () => {
 
 describe('the review\'s simulation: a real QuestionWatcher and AskQuestionController over one pane', () => {
   // What the dial saw: the question re-announced on every poll, then its answer refused as STALE_QUESTION.
-  function world(engine: string, first: string) {
+  // `read`, when given, reads the screen in place of the engine's parser, for both halves.
+  function world(engine: string, first: string, read?: (screen: string) => PaneView) {
     let screen = first
     const session = { agentId: 'a1', sessionId: 's1', engine, active: true, tmuxPane: '%1' } as unknown as RegisteredSession
     const announced: string[] = []
+    const reader = read && { readQuestion: (_s: RegisteredSession, capture: string) => read(capture) }
     const watcher = new QuestionWatcher({
+      ...reader,
       getSession: () => session,
       capture: async () => screen,
       hasDevice: () => true,
@@ -1097,16 +1101,20 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     })
     const keys: string[] = []
     const controller = new AskQuestionController({
+      ...reader,
       getSession: () => session,
       capture: async () => screen,
       sendText: async () => true,
       // The keystroke answers the dialog: it leaves the pane.
       sendKey: async (_t, key) => { keys.push(key); screen = '❯ '; return true },
       wait: async () => {},
+      // As the core wires it: the answer's check reaches the id the watcher holds.
+      heldRequestId: (s, v) => watcher.heldRequestId(s, v),
     })
     return {
       announced,
       keys,
+      watcher,
       show: (pane: string) => { screen = pane },
       poll: () => (watcher as unknown as { tick: (s: string) => Promise<void> }).tick('s1'),
       controller,
@@ -1154,6 +1162,86 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
     expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
     expect(w.keys).toEqual([])
+  })
+
+  // Hermes and Copilot box an approval's command with no `$ ` line, and a long one pushes the title isApprovalDialog
+  // reads out of the dialog: it must still never keep its id once its command changes under the same words. Hermes
+  // titles it by the URL line, not the command above it; Copilot folds the boxed value into the question cut at 120
+  // characters, so a long one's tail is in the dialog alone.
+  const longSubject = (tail: string): string => `│ │ https://example.com/${'a'.repeat(110)}/${tail} `
+  it.each([
+    ['permission-hermes.txt', 'hermes', '│ curl -s ', '│ curl -s ', '│ rm -rf  ', 'Allow once'],
+    ['permission-copilot.txt', 'copilot', '│ │ https://example.com ', longSubject('push'), longSubject('wipe'), 'Yes'],
+  ])('%s: an approval whose command changes under the same words is a new ask, and the old answer is refused', async (file, engine, from, first, then, answer) => {
+    const pane = paneOf(file)
+    expect(pane).toContain(from)
+    const a = pane.replace(from, first), b = pane.replace(from, then)
+    expect(wordsOf(viewIn(file, a))).toBe(wordsOf(viewIn(file, b)))
+    const w = world(engine, a)
+    await w.poll()
+    w.show(b); await w.poll()
+    expect(w.announced).toEqual([idIn(file, a), idIn(file, b)])
+    expect(w.watcher.heldRequestId('s1', viewIn(file, b))).toBeUndefined()
+
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: answer } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(w.keys).toEqual([])
+  })
+
+  // A dialog the test paints: its first line the question, its numbered lines the rows, the whole of it the dialog.
+  const painted = (permission: boolean) => (screen: string): PaneView => {
+    const lines = screen.split('\n')
+    const rows = lines.flatMap((line) => {
+      const row = /^(\d+)\. (.+)$/.exec(line)
+      return row ? [{ number: row[1], label: row[2], checked: false }] : []
+    })
+    return rows.length ? { kind: 'question', question: lines[0], rows, multi: false, typeRow: null, dialog: screen, ...(permission ? { permission } : {}) } : null
+  }
+  // `row <n>` is a line no rule of the signature strips: the stand-in for whatever moved the customer's dialog.
+  const drink = (n: number, question = 'Which drink?'): string => `${question}\nrow ${n}\n1. Tea\n2. Coffee`
+  const command = (n: number): string => `Run this command?\n$ npm test ${n}\n1. Yes\n2. No`
+  const idOfPainted = (screen: string, permission = false): string => questionRequestId('s1', asQuestion(painted(permission)(screen)))
+
+  it('a question whose signature moves each poll while its words and options do not is announced once, and its answer is typed', async () => {
+    const w = world('claude', drink(1), painted(false))
+    for (let n = 1; n <= 6; n++) { w.show(drink(n)); await w.poll() }
+    expect(w.announced).toEqual([idOfPainted(drink(1))])
+
+    w.show(drink(9))
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Coffee' } })
+    expect(r).toEqual({ ok: true })
+    expect(w.keys).toEqual(['2'])
+  })
+
+  it('a permission dialog whose body moves is a new ask each time: announced anew, and the old answer refused', async () => {
+    const w = world('claude', command(1), painted(true))
+    for (let n = 1; n <= 3; n++) { w.show(command(n)); await w.poll() }
+    expect(w.announced).toEqual([1, 2, 3].map((n) => idOfPainted(command(n), true)))
+    expect(new Set(w.announced).size).toBe(3)
+
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Yes' } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(w.keys).toEqual([])
+    expect(w.watcher.heldRequestId('s1', asQuestion(painted(true)(command(3))))).toBeUndefined()
+  })
+
+  it('a question whose words change is a new question, under its own id', async () => {
+    const w = world('claude', drink(1), painted(false))
+    await w.poll()
+    w.show(drink(1, 'Which snack?')); await w.poll()
+    expect(w.announced).toEqual([idOfPainted(drink(1)), idOfPainted(drink(1, 'Which snack?'))])
+
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: 'Tea' } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(w.keys).toEqual([])
+  })
+
+  it('a question that leaves for two polls and comes back is announced again, under the id its words give', async () => {
+    const w = world('claude', drink(1), painted(false))
+    await w.poll()
+    w.show(''); await w.poll(); await w.poll()
+    w.show(drink(4)); await w.poll()
+    expect(w.announced).toEqual([idOfPainted(drink(1)), `gone:${idOfPainted(drink(1))}`, idOfPainted(drink(4))])
   })
 })
 

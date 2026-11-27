@@ -4,12 +4,18 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './lib/registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './lib/registryPersistence.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the hook admission golden') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  // The simulated platform cannot probe the host's process generation.
+  const execFile = (file: string, args: string[], _options: unknown, callback: (error: Error | null, stdout: string) => void) => {
+    if (file !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) return forbidden()
+    queueMicrotask(() => callback(null, 'fixture-start'))
+  }
+  return { exec: forbidden, execSync: forbidden, execFile, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -18,6 +24,13 @@ vi.mock('./lib/bootId.js', async original => ({ ...await original<object>(), cur
 vi.mock('./lib/processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
+
+const deadline = await vi.hoisted(() => import('./testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// The hook server answers a commit still in flight after 250 ms, and the registry expires a write at its deadline. No
+// case here means either to fire, so both are held: how fast this machine writes the registry never changes the golden.
+beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [250] }) })
+afterEach(() => { vi.restoreAllMocks() })
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/hook-admission.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_HOOK_ADMISSION_GOLDEN === '1'
@@ -68,15 +81,14 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     const { readHookCredential } = await import('./lib/hookAuth.js')
     const agents = new Map<string, RegisteredSession>()
     for (const [index, engine] of (['claude', 'codex'] as const).entries()) {
-      const { entry } = registry.openProcessAgent({ engine, tmuxPane: `%${index + 1}`, cwd: root,
-        processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } })!
+      const { entry } = (await registry.openProcessAgent({ engine, tmuxPane: `%${index + 1}`, cwd: root,
+        processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } }))!
       agents.set(engine, entry); labels.set(entry.agentId, engine)
     }
-    const registered: unknown[] = [], prompts: unknown[] = [], promptHooks: unknown[] = [], turns: unknown[] = [], ends: unknown[] = []
+    const registered: unknown[] = [], promptHooks: unknown[] = [], turns: unknown[] = [], ends: unknown[] = []
     const started = await startHookServer(0, {
       resolveHookAgent: async input => registry.byAgent(agents.get(input.engine)?.agentId ?? '') ?? null,
       onRegistered: (entry, meta) => { registered.push({ row: shape(entry), ...meta }) },
-      onPromptSubmitted: (agentId, prompt) => { prompts.push({ agent: labels.get(agentId), prompt }) },
       onPromptHook: (sessionId, firedAt) => { promptHooks.push({ sessionId, firedAt }) },
       onTurnStart: value => { turns.push({ start: value }) },
       onTurnStop: value => { turns.push({ stop: value }) },
@@ -105,7 +117,7 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     check('bound-controls', [await send('turn-start', codexBody), await send('tool-start', { ...codexBody, toolUseId: 'tool-1', toolName: 'Read', input: { file: '<file>' } }),
       await send('turn-stop', { ...codexBody, status: 'completed' }), await send('session-end', { ...codexBody, reason: 'exit' })])
     check('unbound-control', await send('turn-stop', { ...codexBody, sessionId: CHILD }))
-    check('callbacks', { registered, prompts, promptHooks, turns, ends })
+    check('callbacks', { registered, promptHooks, turns, ends })
     check('bindings', registry.list().map(shape).sort((a, b) => a!.agent!.localeCompare(b!.agent!)))
   } finally {
     if (server) await new Promise<void>(resolve => server!.close(() => resolve()))

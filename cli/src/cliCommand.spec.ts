@@ -21,9 +21,9 @@ const servers: Server[] = []
  * at its deadline (testing/spawnedRuns.ts). Twelve `cli.ts start` runs of this file that never exited
  * were found nine hours later, one spinning a core: tsx runs the CLI in a child of its own, a dev-mode
  * start becomes the daemon, and nothing killed either when a test timed out. The daemon a run's pid
- * file names counts as the run's when it is this checkout's CLI.
+ * file names counts as the run's while that pid started in the run's time.
  */
-const runs = new SpawnedRuns((command) => command.includes(CLI_SOURCE))
+const runs = new SpawnedRuns()
 // A worker that exits with a run still going (a cancelled run) takes the run's group with it.
 process.once('exit', () => runs.killAllSync())
 
@@ -52,6 +52,11 @@ function freshRoot(): string {
 }
 
 function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  // A dev run narrows its own environment, which takes the test runner's mark that keeps the real `gh` from running
+  // (lib/github.ts); the env file puts it back, as the product says such a variable goes
+  // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+  const envFile = join(root, 'test.env')
+  writeFileSync(envFile, 'VITEST=true\n')
   return {
     ...process.env,
     HOME: root,
@@ -72,6 +77,7 @@ function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv 
     // (re)start goes next, which must never be the production one.
     PORT: '1',
     BACKEND_WS_URL: 'http://127.0.0.1:1',
+    HARNESS_ENV_FILE: envFile,
     ...extra,
   }
 }
@@ -199,6 +205,16 @@ describe('CLI login/start command contract', () => {
     expect(JSON.parse(json.stdout)).toEqual({ version: plain.stdout.trim(), ptyProtocol: PTY_PROTOCOL })
   }, ONE_RUN_TEST_MS)
 
+  // The daemon's log names this command for the Hermes entries a person adds by hand (kit/nativeHookYaml.ts), so the
+  // help lists it.
+  it('help lists harness hooks hermes in one line', async () => {
+    const result = await run('help')
+
+    expect(result.status).toBe(0)
+    expect(result.stdout.split('\n').filter((line) => line.includes('harness hooks')))
+      .toEqual(['  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml that has its own `hooks:`'])
+  }, ONE_RUN_TEST_MS)
+
   it('returns a nonzero status for an unknown command', async () => {
     const result = await run('not-a-command')
 
@@ -213,19 +229,19 @@ describe('the processes this spec starts', () => {
   const idle = `['-e', 'setInterval(() => {}, 1000)']`
 
   it('a run that exits leaving processes behind is caught, and teardown ends every one', async () => {
-    const guard = new SpawnedRuns((command) => command.includes('--guard-daemon'))
+    const guard = new SpawnedRuns()
     const root = freshRoot()
     mkdirSync(join(root, 'data'), { recursive: true })
-    // Three ways a run leaves a process: a child in its group, a child in a session of its own that
-    // names the root, and a daemon in a session of its own that only the pid file names.
+    // Two ways a run leaves a process: a child in its group, and a daemon in a session of its own that
+    // only the pid file names. A child in a session of its own whose parent has gone is launchd's, and
+    // nothing but its pid, parent and group is read of a process outside the run's tree (spawnedRuns.ts).
     const script = `
       const { spawn } = require('node:child_process')
       const kept = spawn(process.execPath, ${idle}, { stdio: 'ignore' })
-      const orphan = spawn(process.execPath, [...${idle}, ${JSON.stringify(root)}], { stdio: 'ignore', detached: true })
-      const daemon = spawn(process.execPath, [...${idle}, '--', '--guard-daemon'], { stdio: 'ignore', detached: true })
+      const daemon = spawn(process.execPath, ${idle}, { stdio: 'ignore', detached: true })
       require('node:fs').writeFileSync(${JSON.stringify(join(root, 'data', 'adapter.pid'))}, daemon.pid + '\\n')
-      console.log(JSON.stringify([kept.pid, orphan.pid, daemon.pid]))
-      for (const child of [kept, orphan, daemon]) child.unref()
+      console.log(JSON.stringify([kept.pid, daemon.pid]))
+      for (const child of [kept, daemon]) child.unref()
     `
     const result = await guard.complete(root, ['-e', script], { label: 'leaky' })
     expect(result.status, result.stderr).toBe(0)
@@ -234,7 +250,7 @@ describe('the processes this spec starts', () => {
     expect(guard.belonging(result.run).map((row) => row.pid).sort()).toEqual([...pids].sort())
 
     const { leftBehind, survivors } = await guard.endAll()
-    expect(leftBehind).toHaveLength(3)
+    expect(leftBehind).toHaveLength(2)
     expect(survivors).toEqual([])
     expect(pids.filter(alive)).toEqual([])
   }, 30_000)
@@ -426,6 +442,7 @@ describe('start beside a daemon that serves another account', () => {
     expect(result.stderr).not.toContain('fetch failed')
     expect(result.stdout + result.stderr).not.toContain('resolve-computer')
     expect(result.stdout).toContain('dev mode — running in the foreground')
+    expect(result.stdout).toMatch(/\[env\] started with \d+ variables; \d+ left out/)
   }, ONE_RUN_TEST_MS)
 
   it('starts without the backend even when the session has no machine id yet, on the computer id', async () => {
@@ -439,7 +456,8 @@ describe('start beside a daemon that serves another account', () => {
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 
-    expect(result.stdout).toContain('machine id not resolved yet')
+    expect(result.stdout).toMatch(/machine id not resolved yet — [A-Za-z_ ]+; starting on the computer id/)
+    expect(result.stdout).not.toContain('fetch failed')
     expect(result.stdout).toContain('dev mode — running in the foreground')
   }, ONE_RUN_TEST_MS)
 
@@ -456,6 +474,24 @@ describe('start beside a daemon that serves another account', () => {
     expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(true)
     await expect(Promise.race([daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('alive'), 300))]))
       .resolves.toBe('alive')
+  }, ONE_RUN_TEST_MS)
+})
+
+describe('start -f with no master, when its core cannot start', () => {
+  // Harness OS's unit runs the core alone in this process: what it prints is the daemon's log, which Export logs sends.
+  it('says only the failure\'s kind, never its words or its stack, and exits 1', async () => {
+    const root = freshRoot()
+    seedSession(root)
+    // Another daemon serves this data folder: the core refuses to start beside it.
+    const port = await daemonStatusServer(root, 'm_seeded')
+
+    const result = await runAsync(root, ['start', '-f'], { PORT: String(port), HARNESS_NO_MASTER: '1' })
+
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toMatch(/Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder$/m)
+    expect(result.stdout + result.stderr).not.toContain('already serving')
+    expect(result.stdout + result.stderr).not.toMatch(/^\s+at /m)
   }, ONE_RUN_TEST_MS)
 })
 

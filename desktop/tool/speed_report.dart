@@ -1,17 +1,15 @@
 // ignore_for_file: avoid_print
-// Prints the speed table from the app log (task #3176): the time from opening
-// Desktop to a painted chat, a large chat's first page and scroll-up pages,
-// and each picture's time and bytes, with the three slowest steps of launch
-// and of message load named.
+// Prints the speed table from the app log (task #3176): each step of opening
+// Desktop and the time it took, with the three slowest named.
 //
 //   dart run tool/speed_report.dart [app-log-file ...]
 //
 // Without arguments it reads today's and yesterday's `~/.harness/logs/app-*.log`.
-// Open the app, open the big chat, scroll up through its history, scroll an
-// image-heavy chat, then run this. It reads `speed` lines only: counts,
-// milliseconds and bytes, never a name, path or message.
+// Open the app, then run this. It reads `speed` lines only: step names and
+// milliseconds, never a name, path or message.
 import 'dart:io';
 
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/measurement/speed_report.dart';
 
 void main(List<String> args) {
@@ -28,7 +26,7 @@ void main(List<String> args) {
     if (file.existsSync()) lines.addAll(file.readAsLinesSync());
   }
   final report = SpeedReport.parse(lines);
-  if (report.launch.isEmpty && report.reads.isEmpty && report.images.isEmpty) {
+  if (report.launch.isEmpty) {
     print('No speed lines in ${files.length} log file(s).');
     exitCode = 1;
     return;
@@ -37,7 +35,9 @@ void main(List<String> args) {
 }
 
 List<File> _recentLogs(String home) {
-  final dir = Directory('$home/.harness/logs');
+  final dir = Directory(
+    HarnessHome.of(home, join: separatorJoin('/')).path(HarnessEntry.logs),
+  );
   if (!dir.existsSync()) return const [];
   final logs =
       dir

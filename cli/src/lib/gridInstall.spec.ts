@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ensureGridInstalled, GRID_INSTALL_PS1_URL, GRID_INSTALL_URL, installerCommand, installGrid, windowsInstallScript, type GridInstallDeps } from './gridInstall.js'
+import { powershellPath } from './windows/powershell.js'
 
 function deps(overrides: Partial<GridInstallDeps> = {}): GridInstallDeps & { runs: string[] } {
   const runs: string[] = []
@@ -134,14 +135,18 @@ describe('installGrid', () => {
 })
 
 describe('installerCommand', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
   it('runs the installer script with bash off Windows', () => {
     expect(installerCommand('darwin', 'S')).toEqual({ file: 'bash', args: ['-c', 'S'] })
     expect(installerCommand('linux', 'S')).toEqual({ file: 'bash', args: ['-c', 'S'] })
   })
 
   it("runs it with Windows PowerShell by absolute path on Windows — a bare name is searched in the current folder", () => {
-    expect(installerCommand('win32', 'S', { SystemRoot: 'C:\\Windows' })).toEqual({
-      file: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    // Windows' own folder, as the file system names it: a SystemRoot variable is whoever runs the command's.
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    expect(installerCommand('win32', 'S')).toEqual({
+      file: powershellPath(),
       args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'S'],
     })
   })

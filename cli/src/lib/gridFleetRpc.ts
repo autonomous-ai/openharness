@@ -1,8 +1,8 @@
 /** Grid's complete argv API, carried over the existing paired-machine connection. No shell. */
-import { spawn } from 'node:child_process'
 import { gridCallStarted } from './gridCalls.js'
 import { gridBinaryPath, gridChildEnv, gridCommand } from './gridExec.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from './gridFleetProtocol.js'
+import { spawnTied } from './tied.js'
 
 // The handshake's own module, which the socket answers it from (gridFleetProtocol.ts).
 export { GRID_FLEET_MAX_TIMEOUT_MS, GRID_FLEET_PROTOCOL } from './gridFleetProtocol.js'
@@ -70,9 +70,10 @@ export class GridFleetRpc {
           resolve({ ok: code === 0 && !error, code, stdout: output.stdout.text, stderr: output.stderr.text, error })
         }
         const command = gridCommand(gridBinaryPath(this.processEnv), request.args)
-        let child: ReturnType<typeof spawn>
+        let child: ReturnType<typeof spawnTied>
         try {
-          child = spawn(command.file, command.args, {
+          // Tied: each crash of the service left its grid command (a `join --serve` among them) running.
+          child = spawnTied(command.file, command.args, {
             env: { ...gridChildEnv(this.processEnv), ...(request.thinking === undefined ? {} : {
               LLAMA_ARG_CHAT_TEMPLATE_KWARGS: JSON.stringify({ enable_thinking: request.thinking }),
             }) }, stdio: ['ignore', 'pipe', 'pipe'],

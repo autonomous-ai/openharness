@@ -89,6 +89,25 @@ describe('campaign catalog cache isolation', () => {
     }))
   })
 
+  it('gives Free 30 minutes of voice a day, as Pro, whether or not the catalog answers', async () => {
+    planDb.findMany.mockResolvedValue([])
+    for (const catalog of [[], FULL_CATALOG]) {
+      planDb.upsert.mockClear()
+      fetchPlans.mockResolvedValue(catalog)
+
+      await ensurePlansForEnvironment('prod')
+
+      for (const name of ['Free', 'Pro']) {
+        const upserts = planDb.upsert.mock.calls.map(([arg]) => arg).filter((arg) => arg.where.autonomousEnv_name.name === name)
+        expect(upserts.length).toBeGreaterThan(0)
+        for (const { update, create } of upserts) {
+          expect(update.dailyVoiceLimitSeconds).toBe(1800)
+          if (create) expect(create.dailyVoiceLimitSeconds).toBe(1800)
+        }
+      }
+    }
+  })
+
   it('refuses the WHOLE catalog when one tier price disagrees with upstream', async () => {
     // The trap this guards: `completeCatalog` validates every tier's price, so a local price that
     // drifts from upstream does not disable one plan — it silently takes Free/Pro/Max/Remote down

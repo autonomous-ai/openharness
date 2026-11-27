@@ -12,11 +12,17 @@
  *   - the lane signs in with the core's token, with one forced refresh after a 401;
  *   - the lane's sessions end at the gateway when the lane does.
  */
+import { readFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { LaneOpened, LaneSeal, LaneSealed } from '../core/api.js'
+import { FAKE_COMPUTER_NAME } from '../__fixtures__/computerNameFake.js'
 import { DeviceLink, type DeviceFrame } from './deviceLink.js'
+import { VERSION } from '../version.js'
+
+// A computer's name that is not its hostname, so the device-ws label shows which one it sends.
+vi.mock('../lib/computerName.js', () => import('../__fixtures__/computerNameFake.js'))
 
 const LINKED = 'linked-machine'
 const LINKED_2 = 'second-linked-machine'
@@ -27,6 +33,7 @@ type Frame = Record<string, unknown>
 async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, nth: number) => number } = {}) {
   const received: Frame[] = []
   const tokens: string[] = []
+  const urls: string[] = []
   let socket: WebSocket | null = null
   const wss = new WebSocketServer({
     port: 0, host: '127.0.0.1',
@@ -34,6 +41,7 @@ async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, 
     verifyClient: (info: { req: IncomingMessage }, done: (ok: boolean, code?: number) => void) => {
       const token = String(info.req.headers['sec-websocket-protocol'] ?? '')
       tokens.push(token)
+      urls.push(info.req.url ?? '')
       done(token !== opts.refuseToken, 401)
     },
   })
@@ -58,6 +66,8 @@ async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, 
     url: `ws://127.0.0.1:${port}`,
     received,
     tokens,
+    /** Each upgrade's path and query, as the lane dialed it. */
+    urls,
     /** Frames for machines, as the lane sent them: its own control frames left out. */
     forMachines: () => received.filter((frame) => frame.type !== 'device_hello' && frame.type !== 'machines_watch' && frame.type !== 'ping'),
     send: (frame: Frame) => socket?.send(JSON.stringify(frame)),
@@ -139,6 +149,26 @@ const until = async (what: string, check: () => boolean, ms = 4_000): Promise<vo
 }
 
 describe('the fleet\'s lane, sealed by the gateway', () => {
+  // The backend's tests read this file as the new CLI's hello (backend/src/lib/deviceHello.test.ts,
+  // backend/integration/oldDeviceHello.test.ts): a hello that changes here must change there too.
+  const CLI_HELLO = JSON.parse(readFileSync(new URL('../../../tests/fixtures/cli-device-hello.json', import.meta.url), 'utf8')) as Frame
+
+  it('says hello with its version as cliVersion, never as firmware', async () => {
+    const { server, link } = await lane()
+    await link.online()
+    await until('the hello', () => server.received.some((frame) => frame.type === 'device_hello'))
+    const hello = server.received.find((frame) => frame.type === 'device_hello')!
+    expect(hello).toEqual({ ...CLI_HELLO, payload: { ...(CLI_HELLO.payload as Frame), cliVersion: VERSION } })
+    expect(hello.payload).not.toHaveProperty('firmwareVersion')
+  })
+
+  it('says which backend it dials in fixed words, never its URL', async () => {
+    const { link, lines } = await lane()
+    await link.online()
+    expect(lines.filter((line) => line.startsWith('device: connecting'))).toEqual(['device: connecting → another backend'])
+    expect(lines.join('\n')).not.toContain('127.0.0.1')
+  })
+
   it('sends a linked machine nothing in the clear: what the gateway cannot seal goes nowhere, and a session starts again', async () => {
     const { server, seal, link, lines } = await lane()
     await link.online()
@@ -167,7 +197,7 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     await link.online()
     seal.hello.mockRejectedValueOnce(new Error('the gateway could not start an E2EE session: it is not running'))
     await link.sendSealed({ type: 'message', machineId: LINKED, payload: { content: 'never in the clear' } })
-    expect(lines.some((line) => line.includes('dropped message for linked-machine') && line.includes('not running'))).toBe(true)
+    expect(lines).toContain('device: dropped message for linked-machine — Error')
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(server.forMachines()).toEqual([])
   })
@@ -241,6 +271,24 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     expect(await answer).toEqual({ requestId: asked.payload.requestId, agents: ['on B'] })
   })
 
+  it('a device\'s error is logged by its code or length', async () => {
+    const { server, seal, link, lines } = await lane()
+    await link.online()
+    const words = 'peer said /Users/sentinel/x'
+    for (const [nth, error] of [[0, words], [1, 'NOT_FOUND']] as const) {
+      const answer = link.rpc('agents_list', { scope: 'all' }, LINKED)
+      await until('the request', () => seal.seal.mock.calls.filter(([, frame]) => frame.type === 'agents_list').length > nth)
+      seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: askedId(seal, LINKED, 'agents_list', nth), error } } })
+      server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: nth + 1 } } })
+      // The caller still reads the device's own words; only the log line drops them.
+      await expect(answer).rejects.toThrow(error)
+    }
+    const logged = lines.join('\n')
+    expect(logged).not.toContain('sentinel')
+    expect(logged).toContain(`device: agents_list_result error=text(${words.length})`)
+    expect(logged).toContain('device: agents_list_result error=NOT_FOUND')
+  })
+
   it('a machine that refuses this one\'s key fails its session, and it ends at the gateway', async () => {
     const { server, seal, link } = await lane({ handshakeMs: 300 })
     await link.online()
@@ -274,6 +322,13 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     expect(auth.accessToken).toHaveBeenNthCalledWith(1)
     expect(auth.accessToken).toHaveBeenNthCalledWith(2, { force: true, failedToken: 'token-1' })
     expect(server.tokens).toEqual(['token-1', 'token-2'])
+  })
+
+  // The backend names a new device binding with this label once and never renames it.
+  it('labels its socket with the computer\'s name, not its hostname', async () => {
+    const { server, link } = await lane()
+    await link.online()
+    expect(new URL(server.urls[0]!, 'ws://backend').searchParams.get('label')).toBe(FAKE_COMPUTER_NAME)
   })
 })
 
@@ -1105,7 +1160,7 @@ describe('overlapping machine selects', () => {
   })
 
   /**
-   * Diego's Buddy, 11-02: a select is answered, then the machine's handshake may take its whole 15 s. A newer pick in those
+   * Diego, 11-02: a select is answered, then the machine's handshake may take its whole 15 s. A newer pick in those
    * seconds found nothing to replace (the select had settled), so the older attach still resolved and the dial was told it
    * had landed on a machine the person had already left.
    */

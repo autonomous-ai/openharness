@@ -192,11 +192,6 @@ function parsePaneMeta(bytes: Uint8Array): PaneMeta | null {
   }
 }
 
-/** Decode the octal escaping used by tmux control-mode `%output` notifications. */
-export function decodeTmuxControlData(encoded: string): Uint8Array {
-  return decodeTmuxControlBytes(Buffer.from(encoded, 'utf8'))
-}
-
 function octalEscapeAt(input: Uint8Array, offset: number): boolean {
   return input[offset] === 0x5c && offset + 3 < input.length
     && input[offset + 1] >= 0x30 && input[offset + 1] <= 0x37
@@ -260,46 +255,6 @@ function mouseModes(meta: PaneMeta): string {
   if (meta.mouseUtf8) out += '\u001b[?1005h'
   if (meta.mouseSgr) out += '\u001b[?1006h'
   return out
-}
-
-/** `capture-pane -p` separates screen rows with a bare LF. A VT terminal's
- * LF moves down without returning to column zero, so replaying the capture as
- * received makes every row staircase to the right. tmux also encodes each
- * captured row independently: it may leave a background SGR active at EOL
- * while emitting the following default-style blank row as an empty string.
- * Reset SGR at every row boundary so styled trailing cells remain on their row
- * instead of bleeding into the next one when the snapshot is replayed. */
-export function normalizeTmuxCaptureLines(capture: Uint8Array): Uint8Array {
-  const raw = Buffer.from(capture)
-  // `capture-pane -p` prints a line terminator after its final screen row.
-  // Replaying that terminator in a terminal already containing paneHeight rows
-  // scrolls the snapshot by one, while cursor metadata stays in tmux's original
-  // coordinate space. Drop only this command-output delimiter; separators
-  // between captured rows are still normalized below.
-  let end = raw.length
-  if (end > 0 && raw[end - 1] === 0x0a) {
-    end--
-    if (end > 0 && raw[end - 1] === 0x0d) end--
-  }
-  const input = raw.subarray(0, end)
-  let loneLf = 0
-  for (let index = 0; index < input.length; index++) {
-    if (input[index] === 0x0a && (index === 0 || input[index - 1] !== 0x0d)) loneLf++
-  }
-  const sgrReset = Buffer.from('\u001b[0m')
-  const output = Buffer.allocUnsafe(input.length + loneLf * (1 + sgrReset.length) + sgrReset.length)
-  let write = 0
-  for (let index = 0; index < input.length; index++) {
-    if (input[index] === 0x0a && (index === 0 || input[index - 1] !== 0x0d)) {
-      sgrReset.copy(output, write)
-      write += sgrReset.length
-      output[write++] = 0x0d
-    }
-    output[write++] = input[index]
-  }
-  sgrReset.copy(output, write)
-  write += sgrReset.length
-  return output.subarray(0, write)
 }
 
 export function normalizeTmuxHistoryLines(capture: Uint8Array): Uint8Array {

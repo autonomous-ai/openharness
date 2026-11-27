@@ -1,8 +1,9 @@
-// Test-only preload. QA needed the core's CPU, not its master's or its children's.
+// Test-only preload. QA needed the core's CPU, not its master's or its children's; the dial eval needs the devices process's.
 // Nothing is loaded into production; only the opt-in E2E supplies these settings.
 if ((process.argv.includes('__run') || (process.env.HARNESS_E2E_PERF_GATEWAY === '1'
   && process.argv.includes('__service') && process.env.HARNESSD_SERVICE === 'gateway') || (process.env.HARNESS_E2E_PERF_READERS === '1'
-  && process.argv.includes('__service') && /^engine-(claude|codex)$/.test(process.env.HARNESSD_SERVICE || ''))) && process.env.HARNESS_E2E_PERF_DIR && process.env.HARNESS_E2E_PERF_TOKEN) {
+  && process.argv.includes('__service') && /^engine-(claude|codex)$/.test(process.env.HARNESSD_SERVICE || '')) || (process.env.HARNESS_E2E_PERF_DEVICES === '1'
+  && process.argv.includes('__service') && process.env.HARNESSD_SERVICE === 'devices')) && process.env.HARNESS_E2E_PERF_DIR && process.env.HARNESS_E2E_PERF_TOKEN) {
   const { createServer } = require('node:http')
   const { writeFileSync, renameSync } = require('node:fs')
   const { join } = require('node:path')

@@ -11,7 +11,7 @@ export interface PullRequestRow {
   url: string; status: 'found' | 'no_access' | 'unavailable'
   title?: string; state?: 'Draft' | 'Open' | 'Merged' | 'Closed'
   mergedAt?: string; closedAt?: string; updatedAt?: string
-  additions?: number; deletions?: number; ci?: ReturnType<typeof ciOf>; checks?: CiCounts
+  additions?: number; deletions?: number; changedFiles?: number; ci?: ReturnType<typeof ciOf>; checks?: CiCounts
   reviewDecision?: string; mergeStateStatus?: string; autoMerge?: boolean
   error?: string
 }
@@ -19,7 +19,7 @@ export interface PullRequestRow {
  *  answers before taking this one's. Opaque: a hash under this reader's own random salt, never the token. */
 interface PullRequestsResult extends Record<string, unknown> { rows: PullRequestRow[]; checkedAt: string; account?: string; error?: string; detail?: string }
 
-const FIELDS = 'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deletions,statusCheckRollup,reviewDecision,mergeStateStatus,autoMergeRequest'
+const FIELDS = 'title,state,isDraft,mergedAt,closedAt,updatedAt,additions,deletions,changedFiles,statusCheckRollup,reviewDecision,mergeStateStatus,autoMergeRequest'
 const text = (value: unknown, max = 40): string => cleanText(value, max)
 const lines = (value: unknown): number => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0
 
@@ -55,7 +55,7 @@ export function createPullRequestsStatusReader(run: Run = ghRun, now: () => numb
       return { url, status: 'found', title: text(view.title, 512),
         state: view.mergedAt || view.state === 'MERGED' ? 'Merged' : view.state === 'CLOSED' ? 'Closed' : view.isDraft === true ? 'Draft' : 'Open',
         mergedAt: text(view.mergedAt), closedAt: text(view.closedAt), updatedAt: text(view.updatedAt),
-        additions: lines(view.additions), deletions: lines(view.deletions), ci: ciOf(view.statusCheckRollup), checks: ciCounts(view.statusCheckRollup),
+        additions: lines(view.additions), deletions: lines(view.deletions), changedFiles: lines(view.changedFiles), ci: ciOf(view.statusCheckRollup), checks: ciCounts(view.statusCheckRollup),
         reviewDecision: ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'].includes(view.reviewDecision) ? view.reviewDecision : '',
         mergeStateStatus: MERGE_STATES.includes(view.mergeStateStatus) ? view.mergeStateStatus : 'UNKNOWN',
         autoMerge: !!view.autoMergeRequest && typeof view.autoMergeRequest === 'object' }

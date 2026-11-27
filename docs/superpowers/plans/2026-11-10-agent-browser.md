@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A Swarm agent created with the **Browser** checkbox gets a sandboxed Chrome container under Podman, which
+**Goal:** An agent created with the **Browser** checkbox gets a sandboxed Chrome container under Podman, which
 Harness installs when it is missing. The agent drives the browser through Harness's own tools on `playwright-core`.
 Its person opens the browser's screen with noVNC from Desktop, over the terminal's end-to-end encrypted transport.
 
@@ -52,7 +52,7 @@ Read it before starting any task. This plan does not repeat its reasons.
     buttons **Cancel**, **Install**.
   - Setup progress lines: "Podman installed", "Starting Podman…", "Building browser", "Starting browser". Restart
     step: "Restart Windows to finish", with **Later** and **Restart**.
-  - Header button: `swarm-browser-button`, `AppIcons.globe`, tooltip "Browser". Panel buttons: **Paste**, **Retry**,
+  - Header button: `AppIcons.globe`, tooltip "Browser". Panel buttons: **Paste**, **Retry**,
     **Install**.
   - Settings: page title "Browser settings"; rows "Proxy", "Time zone", "Language", "Screen", "Human input",
     "Advanced", "Device"; buttons **Remove**, **Test**, **Save**; test results "Proxy works · <address> · <zone>" and
@@ -222,7 +222,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - [ ] **Step 5: The engines.**
   - Record each engine's default limits for a stdio MCP tool call (done in the macOS run: Codex 300 s; Claude Code
     moves a call to the background at 120 s and aborts a silent one at 30 minutes).
-  - Record whether each prompts for a `mcp__browser__…` call in a Swarm agent's default mode (Claude Code
+  - Record whether each prompts for a `mcp__browser__…` call in an agent's default mode (Claude Code
     `--permission-mode auto`; Codex `--approve-for-me`, `engines/codex/launch.ts:3-7`), and for Codex the per-server
     key that allows it.
 - [ ] **Step 6: Write the report** with a table for each step, and these decisions, each with its number: the
@@ -234,8 +234,8 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - no credit window keeps echo p95 within 50 ms while the screen stays usable (then browser bytes need their own
     channel);
 
-  Also report what one viewer costs the relay per open minute at the chosen budget. That number is agreed with the
-  project's PM before Phase 3 starts, because backend cost per Swarm must fall as Swarms grow.
+  Also report what one viewer costs the relay per open minute at the chosen budget. That number is agreed before
+  Phase 3 starts.
 
   Otherwise copy the four numbers into this plan's Global Constraints, replacing the "taken from Task 0's report"
   line.
@@ -1237,16 +1237,15 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
 
 **Files:**
 - Modify: `desktop/lib/state/harness_launch_integration.dart:24-120` (`final bool offersBrowser`),
-  `desktop/lib/super_tabs/new_agent.dart:20` (`offersBrowser: true`), `desktop/lib/state/new_harness.dart`
+  `desktop/lib/state/new_harness.dart`
   (`bool get browser`, `toggleBrowser()`, `browserAvailability`, loaded when `machineId` changes), and
   `desktop/lib/widgets/new_harness_form.dart:2457-2481` (the pill and its line, only when
   `integration.offersBrowser`).
 - Create: `desktop/lib/browser/browser_setup_dialog.dart`
 - Modify: `docs/naming-system.md` (one line under Browser, as spec § Naming says), and
-  `desktop/design/desktop-design-system.md` plus `desktop/test/swarm_elements_gallery_test.dart` and its goldens (the
-  pill with its line, and the dialog).
-- Test: `desktop/test/new_harness_form_test.dart`, `desktop/test/super_tab_new_agent_launch_test.dart`,
-  `desktop/test/browser/browser_setup_dialog_test.dart`
+  `desktop/design/desktop-design-system.md` plus the gallery test and its goldens (the pill with its line, and the
+  dialog).
+- Test: `desktop/test/new_harness_form_test.dart`, `desktop/test/browser/browser_setup_dialog_test.dart`
 
 **Interfaces:**
 - Consumes: `agentBrowserAvailable`, `agentBrowserSetup` (Task 16).
@@ -1254,7 +1253,7 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
   **Install**), and `bool browserOffered({required bool web, required bool offersBrowser})`.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `the pill shows only in Swarm New agent`;
+  - `the pill shows only where the launch offers a browser`;
   - `the pill is not offered on the web`: `browserOffered({required bool web, required bool offersBrowser})` is false
     when `web` is true. The form passes `kIsWeb`, so the test needs no browser platform;
   - `ready, stopped, podman_old and podman_memory: the pill works and shows no line`;
@@ -1265,12 +1264,12 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
   - `Start with needs_setup opens the dialog; Cancel creates nothing; Install calls agentBrowserSetup and creates the
     agent with browser:true`;
   - `the dialog shows "Windows restarts once." only when restart is true`.
-- [ ] **Step 2: Run** `cd desktop && flutter test test/new_harness_form_test.dart test/super_tab_new_agent_launch_test.dart test/browser/browser_setup_dialog_test.dart`.
+- [ ] **Step 2: Run** `cd desktop && flutter test test/new_harness_form_test.dart test/browser/browser_setup_dialog_test.dart`.
   Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the same tests, then `flutter test test/swarm_elements_gallery_test.dart --update-goldens`,
-  review the golden diff, and run it again without the flag. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(desktop): Browser checkbox and setup dialog in Swarm New agent`.
+- [ ] **Step 4: Run** the same tests, then the gallery test with `--update-goldens`, review the golden diff, and run
+  it again without the flag. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(desktop): Browser checkbox and setup dialog in New agent`.
 
 ### Task 18: The Browser button and side panel
 
@@ -1278,19 +1277,19 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
 - Create: `desktop/lib/browser/browser_panel.dart` (the states and the header),
   `desktop/lib/browser/browser_bridge.dart` (the page ⇄ `BrowserStream` bridge),
   `desktop/lib/browser/browser_view.dart` (webview with `loadHtmlString` and the `HarnessBrowser` JavaScript channel)
-- Modify: `desktop/lib/super_tabs/view.dart`: `_agentHeader` (`:3896-3955`), adding the button after Terminal, and a `_browserOpen` flag that closes Instructions and Terminal and is closed by them; the right-pane
-  choice (`:6319-6380`), adding the browser branch.
+- Modify: the agent's header, adding the button after Terminal, and a `_browserOpen` flag that closes Instructions and
+  Terminal and is closed by them; the right-pane choice, adding the browser branch.
 - Modify: `desktop/lib/measurement/product_measurement.dart`: report `agent_browser_opened` when a stream opens.
 - Modify: `desktop/test/asset_paths_test.dart`: take `assets/browser/browser_viewer.html` off the pinned list of
   bundled-but-not-drawn assets, now that `browser_view.dart` loads it. Task 15 put it there.
 - Modify: `desktop/design/desktop-design-system.md:427-433` (Top bar: Browser icon) and the gallery test and goldens
   (the header button, the setup progress, a failed state).
 - Test: `desktop/test/browser/browser_panel_test.dart`, `desktop/test/browser/browser_bridge_test.dart`, and a
-  click-through case in `desktop/test/swarm_v4_journey_test.dart`
+  click-through journey test
 
 **Interfaces:**
-- Consumes: `BrowserStream` and the requests (Task 16), the page (Task 15), `Agent.browser`, looked up from
-  `SuperTabAgent.machineId`/`harnessId` in `app.stateOf(machineId).agents`, and `showBrowserSetupDialog` (Task 17).
+- Consumes: `BrowserStream` and the requests (Task 16), the page (Task 15), `Agent.browser`, looked up in
+  `app.stateOf(machineId).agents`, and `showBrowserSetupDialog` (Task 17).
 - Produces:
   - `class BrowserView { void post(Map<String, Object?> message); Stream<Map<String, Object?>> get messages; Widget build(BuildContext context); }`
   - `class BrowserBridge { BrowserBridge(BrowserView view, BrowserStream stream, {required bool mac}); Future<void> start(); void paste(String text); Stream<String> get copied; Future<void> close(); }`
@@ -1298,7 +1297,7 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
     Copy follows Global Constraints.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `only browser agents on the person's own machines show swarm-browser-button; an agent on a machine shared with
+  - `only browser agents on the person's own machines show the Browser button; an agent on a machine shared with
     them (Machine.isSharedMachine, models.dart:184) does not`;
   - `the button is not offered on the web`, through the same `browserOffered` function (Task 17);
   - `Browser, Terminal and Instructions close each other`;
@@ -1325,7 +1324,7 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
     `page data reaches stream.write and stream bytes reach the page`, `Paste posts the clipboard's text`,
     `copy from the page reaches the clipboard`.
   - Journey test, as a person: tick Browser, Start, Install, see progress, see the button, open the panel, close it.
-- [ ] **Step 2: Run** `cd desktop && flutter test test/browser test/swarm_v4_journey_test.dart`. Expected: FAIL.
+- [ ] **Step 2: Run** `cd desktop && flutter test test/browser` and the journey test. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the same tests plus the gallery (update the goldens, review, run again). Expected: PASS.
 - [ ] **Step 5: Commit** `feat(desktop): agent browser panel`.
@@ -1336,7 +1335,7 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
 - Create: `desktop/lib/browser/browser_settings_page.dart`
 - Modify: `desktop/lib/browser/browser_panel.dart` (the gear opens the page inside the panel)
 - Modify: `desktop/design/desktop-design-system.md` and the gallery test and goldens (the settings page)
-- Test: `desktop/test/browser/browser_settings_page_test.dart`, and a case in `desktop/test/swarm_v4_journey_test.dart`
+- Test: `desktop/test/browser/browser_settings_page_test.dart`, and a journey case
 
 **Interfaces:**
 - Consumes: `BrowserSettings` and the settings requests (Task 16).
@@ -1353,7 +1352,7 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
   - `Device is under Advanced and off by default`;
   - `an invalid port disables Save`;
   - Journey, as a person: open Browser, open settings, set a proxy, Test, Save, see the browser restart and come back.
-- [ ] **Step 2: Run** `cd desktop && flutter test test/browser/browser_settings_page_test.dart test/swarm_v4_journey_test.dart`.
+- [ ] **Step 2: Run** `cd desktop && flutter test test/browser/browser_settings_page_test.dart` and the journey test.
   Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the same tests plus the gallery (update the goldens, review, run again). Expected: PASS.

@@ -1,5 +1,36 @@
-import { describe, expect, it } from 'vitest'
-import { APP_CONTEXT, appContext, appEngineOps, cacheName, llamaServerArgs, lmsKey, scanAppModels } from './appModels.js'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fakeAppEngine, type FakeAppEngine, type FakeEngineStart } from './__fixtures__/fakeAppEngine.js'
+import { APP_CONTEXT, appContext, appEngineOps, AppStartError, cacheName, llamaServerArgs, lmsKey, readAppRecords, scanAppModels,
+  writeAppRecords, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
+import { processExists } from './processLiveness.js'
+import { setProcessTableSource, type ProcessRow } from './processTable.js'
+
+// Pass-through, recording what replaced a file and what was opened by name through fs/promises; `sync`: each rename's
+// target and each path opened through node:fs's synchronous calls, which a save that must not block its event loop never
+// makes.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[], sync: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.sync.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.sync.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+  }
+})
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    rename: (...args: Parameters<typeof actual.rename>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.rename(...args)
+    },
+    open: (...args: Parameters<typeof actual.open>) => { disk.opened.push(String(args[0])); return actual.open(...args) },
+  }
+})
+/** The synchronous writes of [file]: onto it, or of its temporary file. */
+const syncWrites = (file: string): string[] => disk.sync.filter(event => event === `rename ${file}` || event.startsWith(`open ${file}.`))
 
 const GiB = 1024 ** 3
 const grid = { kind: 'llama.cpp', path: '/home/me/.grid/bin/llama-server', version: 'version: 10369', note: "Grid's own engine" }
@@ -150,6 +181,32 @@ describe('models other apps downloaded', () => {
     expect(seen).toEqual([['unload', 'm'], ['server', 'stop'], ['unload', 'm'], ['server', 'stop']])
   })
 
+  it("tells its own engine by the pid's command line in the process table, on Windows too", async () => {
+    // This process stands in for the engine: its pid is running, and the table says what it runs.
+    const record: AppEngineRecord = { spec: 1, modelId: 'app:llama.cpp:m.gguf', grid: 'g', engine: 'llama.cpp', name: 'm',
+      served: 'm', alias: 'm', port: 41001, binary: '/opt/homebrew/bin/llama-server', pid: process.pid }
+    const running = (args: string): ProcessRow => ({ pid: process.pid, parentPid: 1, executable: 'llama-server', startMarker: 'w:1', args })
+    const run = vi.fn(async () => ({ ok: true, stdout: '/opt/homebrew/bin/llama-server', stderr: '' }))
+    const ops = appEngineOps({}, fetch, run)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      setProcessTableSource(async () => [running('/opt/homebrew/bin/llama-server -m /m/m.gguf --port 0')])
+      expect(await ops.alive(record)).toBe(true)
+      // The pid was reused by another program, or the table holds no row for it, or could not be read.
+      setProcessTableSource(async () => [running('/usr/local/bin/ollama serve')])
+      expect(await ops.alive(record)).toBe(false)
+      setProcessTableSource(async () => [])
+      expect(await ops.alive(record)).toBe(false)
+      setProcessTableSource(async () => null)
+      expect(await ops.alive(record)).toBe(false)
+      expect(run).not.toHaveBeenCalled()
+    } finally {
+      setProcessTableSource(null)
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
   it('is no models, never an error, without the Model Manager or with a scan that fails', async () => {
     expect(await scanAppModels({ node: '/node', packageDir: null, env: {} })).toEqual([])
     const failing = async () => ({ ok: false, stdout: '', stderr: 'boom' })
@@ -178,5 +235,144 @@ describe('llama-server for a model', () => {
     const args = llamaServerArgs({ ref: '/m/gemma-4-E2B-it-Q4_K_M.gguf', name: 'gemma-4-E2B-it-Q4_K_M' }, 131072, 41001)
     expect(args).toEqual(['-m', '/m/gemma-4-E2B-it-Q4_K_M.gguf', '--alias', 'gemma-4-E2B-it-Q4_K_M', '--ctx-size', '131072', '--parallel', '1',
       '-ngl', '999', '--host', '127.0.0.1', '--port', '41001'])
+  })
+})
+
+// A port picked here and freed for the engine could be taken by any process before the engine bound it. The engine
+// picks its own (port 0) and says which in its log; these run a fake that does what Ollama 0.32.6 and llama.cpp 9550 do.
+describe.skipIf(process.platform === 'win32')('an engine started on a port it picks itself', () => {
+  const ops = appEngineOps({ PATH: process.env.PATH })
+  const ollama = (binary: string): AppModel =>
+    ({ id: 'app:ollama:qwen3:8b', name: 'qwen3:8b', app: 'ollama', engine: 'ollama', ref: 'qwen3:8b', binary, sizeBytes: GiB })
+  const llama = (binary: string): AppModel =>
+    ({ id: 'app:llama.cpp:tiny Q4.gguf', name: 'tiny Q4', app: 'llama.cpp', engine: 'llama.cpp', ref: '/m/tiny Q4.gguf', binary, sizeBytes: GiB })
+  const record = (model: AppModel, started: Awaited<ReturnType<AppEngineOps['start']>>): AppEngineRecord =>
+    ({ spec: 1, modelId: model.id, grid: 'g', name: model.name, ...started })
+  const fakes: FakeAppEngine[] = []
+  const fake = (...args: Parameters<typeof fakeAppEngine>) => { const made = fakeAppEngine(...args); fakes.push(made); return made }
+  let logs: string
+  beforeEach(() => { logs = mkdtempSync(join(tmpdir(), 'app-logs-')) })
+  afterEach(() => { for (const made of fakes.splice(0)) made.dispose(); rmSync(logs, { recursive: true, force: true }) })
+
+  it.each([
+    ['ollama', ollama, 'ollama-qwen3%3A8b.log', (start: FakeEngineStart) => start.host, '127.0.0.1:0'],
+    ['llama.cpp', llama, 'llama-tiny%20Q4.log', (start: FakeEngineStart) => start.argv.slice(-2).join(' '), '--port 0'],
+  ] as const)('starts %s on port 0 and records the port the engine says it bound', async (kind, model, log, asked, zero) => {
+    const engine = fake(kind), mine = model(engine.binary)
+    const started = await ops.start(mine, 65536, logs)
+    const [seen] = engine.starts()
+    expect(asked(seen)).toBe(zero)
+    expect(seen.port).toBeGreaterThan(0)
+    expect(started).toMatchObject({ engine: kind, port: seen.port, pid: seen.pid })
+    expect(readdirSync(logs)).toEqual([log])
+    expect(await ops.alive(record(mine, started))).toBe(true)
+    await ops.stop(record(mine, started))
+    expect(processExists(seen.pid)).toBe(false)
+  })
+
+  it("makes a model's log new at each start, so the port read is this run's", async () => {
+    const engine = fake('ollama'), mine = ollama(engine.binary)
+    await ops.stop(record(mine, await ops.start(mine, 65536, logs)))
+    const again = await ops.start(mine, 65536, logs)
+    expect(again.port).toBe(engine.starts()[1].port)
+    expect(readFileSync(join(logs, 'ollama-qwen3%3A8b.log'), 'utf8').match(/Listening on/g)).toHaveLength(1)
+    await ops.stop(record(mine, again))
+  })
+
+  // An engine from an earlier start can still run (the model on another grid, an Ollama whose start failed). Given the
+  // same file emptied, it wrote on at its own offset, into the lines a later start reads its port from.
+  it('starts each run on a log of its own, which an engine still running from an earlier start never writes into', async () => {
+    const engine = fake('ollama'), mine = ollama(engine.binary)
+    const earlier = await ops.start(mine, 65536, logs)
+    const again = await ops.start(mine, 65536, logs)
+    expect(again.port).toBe(engine.starts()[1].port)
+    expect((await fetch(`http://127.0.0.1:${earlier.port}/from-the-earlier-engine`)).status).toBe(200)
+    expect(readFileSync(join(logs, 'ollama-qwen3%3A8b.log'), 'utf8')).not.toContain('from-the-earlier-engine')
+    await ops.stop(record(mine, earlier))
+    await ops.stop(record(mine, again))
+  })
+
+  it.each([
+    ['ollama', ollama, 'Ollama could not start. Try again.'],
+    ['llama.cpp', llama, 'llama.cpp could not load the model. Try again.'],
+  ] as const)('says %s could not start, at once, when it exits before naming a port', async (kind, model, message) => {
+    const began = Date.now()
+    const error = await ops.start(model(fake(kind, 'exits').binary), 65536, logs).catch((thrown: unknown) => thrown)
+    expect(error).toBeInstanceOf(AppStartError)
+    expect((error as Error).message).toBe(message)
+    expect(Date.now() - began).toBeLessThan(10_000)
+  })
+
+  it('stops a llama.cpp too old to say its port, and says to update it', async () => {
+    const engine = fake('llama.cpp', 'port-zero')
+    const error = await ops.start(llama(engine.binary), 65536, logs).catch((thrown: unknown) => thrown)
+    expect(error).toBeInstanceOf(AppStartError)
+    expect((error as Error).message).toBe('Update llama.cpp to build 4240 or newer, then try again.')
+    await vi.waitFor(() => expect(processExists(engine.starts()[0].pid)).toBe(false))
+  })
+
+  it('reads the whole port from a line that arrives in two writes', async () => {
+    const engine = fake('ollama', 'split-line'), mine = ollama(engine.binary)
+    const started = await ops.start(mine, 65536, logs)
+    expect(started.port).toBe(engine.starts()[0].port)
+    await ops.stop(record(mine, started))
+  })
+
+  it('does not take the line llama.cpp printed before loading for its port', async () => {
+    const engine = fake('llama.cpp', 'early-line'), mine = llama(engine.binary)
+    const started = await ops.start(mine, 65536, logs)
+    expect(started.port).toBe(engine.starts()[0].port)
+    await ops.stop(record(mine, started))
+  })
+})
+
+describe('the engines this daemon started, on disk', () => {
+  let dir: string, file: string
+  const started: AppEngineRecord = { spec: 1, modelId: 'app:ollama:llama3.2:3b', grid: 'home', engine: 'ollama', name: 'llama3.2:3b',
+    served: 'llama3.2:3b', alias: 'llama3.2-3b', port: 11434, binary: '/usr/local/bin/ollama' }
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'app-engines-'))
+    file = join(dir, 'app-engines.json')
+    disk.renamed = []; disk.opened = []; disk.sync = []
+  })
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+
+  it('the save goes through a temporary file renamed onto the target, and never blocks the event loop', async () => {
+    await writeAppRecords(file, [started])
+    expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+    expect(disk.renamed[0]![0].startsWith(`${file}.`)).toBe(true)
+    expect(disk.opened).not.toContain(file)
+    expect(syncWrites(file)).toEqual([])
+    expect(await readAppRecords(file)).toEqual([started])
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    const now = Date.parse('2026-11-19T10:00:00Z')
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const old = `${file}.${process.pid}.${now}.tmp`
+    writeFileSync(old, 'another writer')
+    await writeAppRecords(file, [started])
+    expect(readFileSync(old, 'utf8')).toBe('another writer')
+  })
+
+  it('a torn app-engines.json is set aside, not written over', async () => {
+    writeFileSync(file, '[{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await readAppRecords(file)).toEqual([])
+    await writeAppRecords(file, [started])
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('[{"')
+    expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([started]))
+    expect(warn).toHaveBeenCalledWith(
+      '[state] app-engines.json could not be read (not valid JSON); kept as app-engines.json.unreadable, starting empty.')
+  })
+
+  // Read as none, a start's or a stop's write would forget every engine this daemon started.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an app-engines.json this account cannot read is refused, not read as none', async () => {
+    await writeAppRecords(file, [started])
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    await expect(readAppRecords(file)).rejects.toThrow('app-engines.json could not be read (EACCES)')
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([started]))
   })
 })

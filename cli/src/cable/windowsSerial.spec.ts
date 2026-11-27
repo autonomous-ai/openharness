@@ -144,7 +144,7 @@ describe('the daemon\'s watch', () => {
     const { watch, log } = watchWith([line({ console: true, ports: [{ path: 'COM3' }] })], {}, { command, now: () => clock })
     expect(await watch.ports()).toEqual([])
     expect(watch.console()).toBe(false)
-    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledExactlyOnceWith('cable: harness-serial watch could not start: ENOENT')
     missing = false
     clock = 5_000
     expect((await watch.ports())[0]?.path).toBe('COM3')
@@ -155,7 +155,7 @@ describe('the daemon\'s watch', () => {
     const { watch, log } = watchWith([], {}, { command: args => ({ file: '\0', args }) })
     expect(watch.console()).toBe(false)
     expect(await watch.ports()).toEqual([])
-    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledExactlyOnceWith('cable: harness-serial watch could not start: TypeError ERR_INVALID_ARG_VALUE')
   })
 
   it('waits for the first line, then serves the dials and whether this user is at the screen', async () => {
@@ -179,12 +179,26 @@ describe('the daemon\'s watch', () => {
     expect(await eventually(() => watch.ports(), (ports) => ports.length === 0)).toEqual([])
   })
 
+  it('tells its listeners when a line changes the state, not for a line that repeats it, until they unsubscribe', async () => {
+    const one = line({ console: true, ports: [{ path: 'COM3' }] })
+    const { watch } = watchWith([one, one, line({ console: true, ports: [{ path: 'COM3' }, { path: 'COM4' }] })])
+    const changed = vi.fn()
+    const gone = vi.fn()
+    watch.onChange(changed)
+    watch.onChange(gone)()
+    await eventually(() => watch.ports(), (ports) => ports.length === 2)
+    expect(changed).toHaveBeenCalledTimes(2)
+    expect(gone).not.toHaveBeenCalled()
+  })
+
   it('forgets the dials when the watch ends, says why once, and starts it again no sooner than 5 s', async () => {
     let clock = 0
     const command = vi.fn(fake)
     const { watch, log } = watchWith([line({ console: true, ports: [{ path: 'COM3' }] })], { FAKE_SERIAL_EXIT: '2' }, { command, now: () => clock })
     expect((await watch.ports()).map((port) => port.path)).toEqual(['COM3'])
-    await until(() => log.mock.calls.some(([text]) => String(text).includes('error: enumeration failed')))
+    // Why, by how it ended and how much it wrote to stderr: never its words, which can name the person's devices.
+    await until(() => log.mock.calls.some(([text]) => text === 'cable: harness-serial watch ended (exit 2 · stderr 26 B) — it is started again on a later scan'))
+    expect(log.mock.calls.join('\n')).not.toContain('enumeration failed')
     expect(await watch.ports()).toEqual([])
     expect(watch.console()).toBe(false)
     expect(command).toHaveBeenCalledTimes(1)
@@ -352,7 +366,7 @@ describe('the link to one dial', () => {
     // Both listeners first: 'close' follows 'error' at once.
     const closed = new Promise((resolve) => stream.once('close', resolve))
     const error = await new Promise<NodeJS.ErrnoException>((resolve) => stream.once('error', resolve))
-    expect(error.code).toBe('closed: The device is not connected.')
+    expect(error).toMatchObject({ code: 'PORT_CLOSED', message: 'closed: The device is not connected.' })
     await closed
     expect(events[0]).toBe('error')
   })

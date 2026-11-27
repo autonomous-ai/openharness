@@ -5,12 +5,14 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
+import { errorKind } from '../lib/log.js'
 import { permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../lib/engineInstall.js'
 import { patientDeadline } from '../lib/patientExec.js'
 import { windowsEngineArgv } from '../lib/windows/launch.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
+import { HookPreparationHeld } from './kit/hookHeld.js'
 import { captureLaunchExecutable, LAUNCH_LOCATION_VARIABLES } from './kit/launchExecutable.js'
 import { homeIsNetworkOrDevice, networkHomeSentence } from './kit/homeAdoption.js'
 import { startupOwnedFlag } from './kit/launchStartup.js'
@@ -18,17 +20,23 @@ import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
 import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
 import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
-import { OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
+import { OPENCLAW_LAUNCH, OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from './openclaw/contract.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
 import { type AgentEngine, isTerminalEngine } from './types.js'
 
 export interface NativeLaunchSource extends PermissionLaunchChoice {
   codexHome?: string | null
   hermesHome?: string | null
+  /** `hermesHome` is one Harness worked out, never exported (registry.ts RegisteredSession.hermesHomeDerived). */
+  hermesHomeDerived?: true
   claudeHome?: string | null
+  /** An OpenClaw run's own `--local` state folder, an absolute path; ignored by every other engine. */
+  openclawLocal?: string | null
 }
 export interface NativeLaunch {
   token?: string
+  /** The `--local` folder this OpenClaw launch runs on: its argv gets `--local`, its pane this folder as its state. */
+  readonly openclawLocal?: string
   executable?: NativeExecutableSnapshot
   opencodeMajor: number | null
   /** Set again after the pane's rc files, before the exact prepared executable. */
@@ -65,7 +73,7 @@ const noNative: NativeLaunch = {
 }
 
 let probes = 0
-/** What a probe's child said, once it exited by itself. A deadline, a signal, an output limit or a
+/** What a probe's child said, once it exited by itself. A kill at its deadline, a signal, an output limit or a
  *  child that never started is no answer at all: null. */
 interface ProbeOutput { code: number; stdout: string; stderr: string }
 /** Slots follow actual subprocess settlement, including deadline and output-limit kills. */
@@ -73,7 +81,7 @@ async function read(executable: string, args: readonly string[], environment: Re
   if (probes >= 8) return null
   probes++
   return new Promise(done => {
-    let settled = false, expired = false, answered = false
+    let settled = false, answered = false
     let cancelDeadline = () => {}
     let drain: ReturnType<typeof setTimeout> | undefined
     const answer = (output: ProbeOutput | null) => { if (!answered) { answered = true; done(output) } }
@@ -89,13 +97,13 @@ async function read(executable: string, args: readonly string[], environment: Re
       }, (error, stdout, stderr) => {
         settled = true; probes--; cancelDeadline(); clearTimeout(drain)
         // A numeric code is the child's own exit status. A spawn failure, a signal or the output
-        // limit leaves a string or null there, and says nothing about the executable itself.
+        // limit leaves a string or null there, and says nothing about the executable itself. A child that
+        // exited by itself as its deadline passed answered all the same: only a live one is killed below.
         const code = !error ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
-        answer(expired || code === null ? null : { code, stdout: stdout ?? '', stderr: stderr ?? '' })
+        answer(code === null ? null : { code, stdout: stdout ?? '', stderr: stderr ?? '' })
       })
     } catch { probes--; answer(null); return }
     if (!settled) cancelDeadline = patientDeadline(5_000, () => {
-      expired = true
       // An exited wrapper may leave a descendant holding its pipes. Signal
       // only our still-live child, then close our pipe ends after a short drain.
       try { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') } catch { /* The reply still holds. */ }
@@ -111,9 +119,9 @@ async function read(executable: string, args: readonly string[], environment: Re
 
 /** Each engine executable's help, by the file's identity (its path, inode, size and times: kit/nativeVersion.ts) and the
  *  PATH it runs under. Its help, and that it runs at all, are facts about the installed file, not one launch: launches that
- *  ask together share one probe, and a held pass of many agents (a restore, a Swarm's agents) never meets the probes' cap,
- *  nor does a relaunch or fork ask twice. Not keyed on the homes: help does not read them, and a Swarm agent's own home
- *  would bring the cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
+ *  ask together share one probe, and a held pass of many agents (a restore) never meets the probes' cap, nor does a
+ *  relaunch or fork ask twice. Not keyed on the homes: help does not read them, and an agent's own home would bring the
+ *  cap back. Only help the engine printed is kept, for a minute: an engine can break around its unchanged
  *  file (its Node uninstalled), and a launch after that is refused with its reason again. No answer or a failure is asked
  *  again. A new install, an upgrade or a finished download is a new identity, asked afresh. */
 const helps = new Map<string, { help: Promise<ProbeOutput | null>; at: number }>()
@@ -153,7 +161,7 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
   agy: ['AGY_HOME', 'AGY_CONFIG_DIR'],
   devin: ['DEVIN_HOME', 'DEVIN_CONFIG_PATH'],
   amp: ['AMP_PLUGIN_DIR'],
-  openclaw: ['OPENCLAW_STATE_DIR'],
+  openclaw: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'],
 }
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
@@ -169,7 +177,9 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   const selected: Record<string, string> = Object.fromEntries(Object.entries(captured.environment).filter((entry): entry is [string, string] => entry[1] !== undefined))
   if (source.codexHome) selected.CODEX_HOME = source.codexHome
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
-  if (source.hermesHome) selected.HERMES_HOME = source.hermesHome
+  if (source.hermesHome && !source.hermesHomeDerived) selected.HERMES_HOME = source.hermesHome
+  const openclawLocal = engine === 'openclaw' && source.openclawLocal ? source.openclawLocal : undefined
+  if (openclawLocal) selected.OPENCLAW_STATE_DIR = openclawLocal
   // Windows: a network or device path is no engine home. A creation is refused with the sentence naming the setting.
   // Only the variables this engine's homes come from count: another engine's setting is no reason to refuse this one.
   for (const [key, path] of Object.entries(selected)) {
@@ -235,13 +245,18 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   let failed: string | null = null
   const launch: NativeLaunch = {
     token: randomUUID(), executable, opencodeMajor, current, ready: () => prepared && current(), ...(startupArgs ? { startupArgs } : {}),
+    ...(openclawLocal ? { openclawLocal } : {}),
     get environment() { return selectedEnvironment },
     get proofs() { return [...dependencies, ...proofs] },
     retain(proof) {
       if (!current() || dependencies.length >= 16 || !proof.current()) return false
       dependencies.push(proof); return true
     },
-    get clearEnvironment() { return LAUNCH_LOCATION_VARIABLES.filter(key => !(key in selectedEnvironment)) },
+    get clearEnvironment() {
+      const unset: string[] = LAUNCH_LOCATION_VARIABLES.filter(key => !(key in selectedEnvironment))
+      // A local run's config, login and sessions all come from its folder, never from the owner's own OpenClaw paths.
+      return openclawLocal ? [...unset, ...OPENCLAW_LAUNCH.localClear] : unset
+    },
     async prepareHooks(port, owner, overrides = {}, clear = []) {
       if (preparing || !executable.current() || !owner() || !dependenciesCurrent()) return false
       preparing = true; valid = false; const attemptRevision = ++revision
@@ -249,6 +264,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         const chosen = { ...selectedEnvironment }
         for (const key of clear) if (LAUNCH_LOCATION_VARIABLES.includes(key as typeof LAUNCH_LOCATION_VARIABLES[number])) delete chosen[key]
         for (const key of LAUNCH_LOCATION_VARIABLES) if (overrides[key] !== undefined) chosen[key] = overrides[key]
+        // A local run is on its folder whatever a launch adds or clears: unset or replaced, it would run on the shared one.
+        if (openclawLocal) chosen.OPENCLAW_STATE_DIR = openclawLocal
         if (Object.entries(chosen).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) return false
         const homes = nativeHookLocations(chosen)
         const confirmed: HookPreparationProof[] = []
@@ -257,7 +274,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
           confirmed: proof => confirmed.push(proof) }
         const home = engine === 'codex' ? homes.CODEX_HOME : engine === 'claude' ? homes.CLAUDE_HOME : homes.HERMES_HOME
         const installed = port === 0 ? true : engine === 'claude' || engine === 'codex' ? await engineHooks[engine].installIn(port, home, options)
-          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, options)
+          : engine === 'hermes' ? await hooks.installHermesHooks(port, home, { ...options, executable })
           : engine === 'opencode' ? await hooks.installOpencodePlugin(port, { ...executable, major: opencodeMajor! }, options)
           : await installers[engine]?.(port, options) ?? true
         if (!installed || !executable.current() || !owner() || [...dependencies, ...confirmed].some(proof => !proof.current())) return false
@@ -275,7 +292,8 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         valid = true; prepared = true
         return true
       } catch (error) {
-        console.warn(`[launch] native hook preparation held · ${error instanceof Error ? error.message : error}`)
+        const held = error instanceof HookPreparationHeld ? error.hold : errorKind(error)
+        console.warn(`[launch] native hook preparation held · ${held}`)
         return false
       } finally { preparing = false }
     },

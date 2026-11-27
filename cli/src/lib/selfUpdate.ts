@@ -18,8 +18,10 @@ import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writ
 import { execFile } from 'child_process'
 import { dirname, join, sep } from 'path'
 import { env } from '../config/env.js'
-import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
+import { SpawnLockBusyError, describeSpawnLockOwner } from './daemonSpawnLock.js'
+import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
+import { atomicWriteFile, jsonArray, readState, requireState } from './secureState.js'
 import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
@@ -53,20 +55,9 @@ function readJson(file: string): unknown {
   try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return null }
 }
 
-/** Written whole and renamed into place; a write cut short (a full disk) leaves nothing behind. */
+/** Written whole; a write cut short (a full disk) leaves nothing behind. */
 function writeJson(file: string, value: unknown): void {
-  writeWhole(file, `${JSON.stringify(value)}\n`)
-}
-
-function writeWhole(file: string, bytes: string | Buffer, mode?: number): void {
-  const tmp = `${file}.tmp`
-  try {
-    writeFileSync(tmp, bytes, mode === undefined ? undefined : { mode })
-    renameSync(tmp, file)
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* not a file this call wrote */ }
-    throw error
-  }
+  atomicWriteFile(file, `${JSON.stringify(value)}\n`, 'cache')
 }
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -114,9 +105,17 @@ export function unjudgedUpdate(dir: string, fingerprint: string | null): string 
 
 /** The versions this machine rolled back, oldest first. */
 export function rejectedVersions(dir: string): string[] {
-  const rejected = readJson(join(dir, REJECTED))
-  return Array.isArray(rejected) ? rejected.filter((version): version is string => typeof version === 'string') : []
+  const rejected = readState(join(dir, REJECTED), 'cache', jsonArray)
+  return versionsIn(rejected.state === 'ok' ? rejected.value : [])
 }
+
+/** The list a new rejection is added to. One that cannot be read now throws (StateFileUnreadable): read as none, the
+ *  write would forget every version rolled back before, and the updater would offer them again. */
+function rejectedToChange(dir: string): string[] {
+  return versionsIn(requireState(join(dir, REJECTED), jsonArray, 'cache') ?? [])
+}
+
+const versionsIn = (list: unknown[]): string[] => list.filter((version): version is string => typeof version === 'string')
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
  *  malformed manifest or the `0.0.0-dev` dev sentinel never triggers a downgrade/oscillation.
@@ -188,8 +187,10 @@ export const MANIFEST_LIMITS: TransferLimits = { idleMs: 30_000, deadlineMs: 60_
  */
 export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadlineMs: Number.POSITIVE_INFINITY }
 
-/** The transfer went quiet for too long, or took too long in all. */
-export class TransferStalledError extends Error {}
+/** The transfer went quiet for too long, or took too long in all: the code says which, as the log names it by its code. */
+export class TransferStalledError extends Error {
+  constructor(message: string, readonly code: 'TRANSFER_STALLED' | 'TRANSFER_DEADLINE') { super(message) }
+}
 
 /** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
 export async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
@@ -198,30 +199,30 @@ export async function fetchWithin(url: string, limits: TransferLimits, expectedB
   const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
   gaveUp.catch(() => {})
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
-  const giveUp = (why: string): void => {
-    stalled(new TransferStalledError(`${url} ${why}`))
+  const giveUp = (why: string, code: TransferStalledError['code']): void => {
+    stalled(new TransferStalledError(`${url} ${why}`, code))
     controller.abort()
     void reader?.cancel().catch(() => {})
   }
-  const timer = (ms: number, why: string): NodeJS.Timeout => {
-    const handle = setTimeout(() => giveUp(why), ms)
+  const timer = (ms: number, why: string, code: TransferStalledError['code']): NodeJS.Timeout => {
+    const handle = setTimeout(() => giveUp(why, code), ms)
     handle.unref?.()
     return handle
   }
   // No deadline at all for an infinite one: a timer given Infinity fires at once.
   const startedAt = performance.now()
-  let deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
+  let deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`, 'TRANSFER_DEADLINE') : undefined
   /** Once the size is known: the deadline the floor rate needs, when that is the longer. */
   const scaleDeadline = (bytes: number): void => {
     if (!deadline || !limits.floorBytesPerSecond || !(bytes > 0)) return
     const needed = Math.ceil(bytes / limits.floorBytesPerSecond * 1000)
     if (needed <= limits.deadlineMs) return
     clearTimeout(deadline)
-    deadline = timer(Math.max(0, needed - (performance.now() - startedAt)), `took longer than ${needed} ms in all (${bytes} bytes at ${limits.floorBytesPerSecond} B/s)`)
+    deadline = timer(Math.max(0, needed - (performance.now() - startedAt)), `took longer than ${needed} ms in all (${bytes} bytes at ${limits.floorBytesPerSecond} B/s)`, 'TRANSFER_DEADLINE')
   }
   if (expectedBytes !== undefined) scaleDeadline(expectedBytes)
-  let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`)
-  const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`) }
+  let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`, 'TRANSFER_STALLED')
+  const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`, 'TRANSFER_STALLED') }
   try {
     const res = await Promise.race([fetch(url, { signal: controller.signal }), gaveUp])
     heard()
@@ -280,8 +281,10 @@ export async function downloadVerified(ref: FileRef, limits: TransferLimits = DO
  * which says nothing about the build; `failed`: the build ran and failed; `wrong-version`: it ran and
  * said it is another version than the manifest names. A build that ran says which terminal host protocol it
  * needs (`ptyProtocol`, its `PTY_PROTOCOL`): the updater's protocol rule (`installedPtyProtocol`).
+ * `ended` says how, for the updater's log: an error's kind, an exit code or signal, never an error's message, which
+ * names the install folder and the interpreter under the person's home.
  */
-export type CanaryResult = { ok: true; ptyProtocol: number } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
+export type CanaryResult = { ok: true; ptyProtocol: number } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; ended: string }
 
 /** The protocol a build that prints only its version speaks: every build from before `version --json`. */
 const PLAIN_VERSION_PTY_PROTOCOL = 2
@@ -298,6 +301,9 @@ function readVersionAnswer(line: string): { version: string; ptyProtocol: number
   } catch { /* plain output */ }
   return { version: line, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
 }
+
+/** What a version a canary says looks like, to be said in the log as it is. */
+const VERSION_SHAPE = /^\d+\.\d+\.\d+[\w.+-]*$/
 
 /** How long the canary may take to answer. */
 export const CANARY_TIMEOUT_MS = 15_000
@@ -324,10 +330,11 @@ export async function runCanary(
   try {
     try {
       mkdirSync(tmpDir, { recursive: true })
+      // not a state file: the canary's own folder, run once and removed
       writeFileSync(join(tmpDir, PACKAGE), RUNTIME_PACKAGE)
-      writeFileSync(tmpCli, cliBuf)
+      writeFileSync(tmpCli, cliBuf) // not a state file: the canary's own folder
     } catch (error) {
-      return { ok: false, problem: 'unwritable', detail: error instanceof Error ? error.message : String(error) }
+      return { ok: false, problem: 'unwritable', ended: errorKind(error) }
     }
     // The interpreter the NEXT daemon will run on — managedNodePath(), or the Node an update moves it to
     // (`startSelfUpdater`'s `node`). Canarying on this process's interpreter would assert about a Node the
@@ -350,7 +357,7 @@ export async function runCanary(
           failure: timedOut ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
             : typeof failed.code === 'number' ? `exit ${failed.code}`
             : failed.signal ? `signal ${failed.signal}`
-            : failed.message,
+            : errorKind(failed),
           stdout: '',
         })
       })
@@ -360,10 +367,14 @@ export async function runCanary(
         grace = setTimeout(() => child.kill('SIGKILL'), CANARY_KILL_GRACE_MS)
       })
     })
-    if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }
+    if (r.failure !== null) return { ok: false, problem: 'failed', ended: r.failure }
     const lines = r.stdout.trim().split('\n')
     const said = readVersionAnswer(lines[lines.length - 1].trim())
-    if (version !== undefined && said.version !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said.version || 'nothing'}` }
+    if (version !== undefined && said.version !== version) {
+      // Not JSON, the version is the build's whole last line of output, which can name the person's folders.
+      const shown = !said.version ? 'nothing' : VERSION_SHAPE.test(said.version) ? said.version : `text(${said.version.length})`
+      return { ok: false, problem: 'wrong-version', ended: `it says it is ${shown}` }
+    }
     return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
     try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
@@ -403,6 +414,7 @@ export function stage(
   const written: string[] = []
   const write = (file: string, bytes: string | Buffer): void => {
     written.push(file)
+    // not a state file: the bundle staged beside the old one, checked and swapped in as a whole
     writeFileSync(file, bytes)
   }
   const unjudged = (): boolean => {
@@ -473,7 +485,7 @@ function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: s
   } catch (error) {
     try {
       if (before === null) rmSync(note, { force: true })
-      else writeWhole(note, before)
+      else atomicWriteFile(note, before, 'cache')
     } catch { /* the pointer did not move: the build in use is unchanged either way */ }
     throw error
   }
@@ -510,7 +522,7 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
   }
   const failed = pendingVersion(dir)
   try {
-    if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
+    if (failed) writeJson(join(dir, REJECTED), [...rejectedToChange(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
     // A pointer that did not move back leaves the failed build in use: its note stays, so the next master to start
     // judges it again (`unjudgedUpdate`) and rolls it back once more.
     if (movedBack) rmSync(join(dir, PENDING), { force: true })
@@ -519,9 +531,9 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
 }
 
 /** `current-node` on [node], as runtimeInstall writes it: the path and the platform's line end, readable by this
- *  account alone, whole or not at all. Throws when it cannot be written. */
+ *  account alone, whole or not at all, and flushed. Throws when it cannot be written. */
 function nameNode(node: string, platform: NodeJS.Platform): void {
-  writeWhole(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 0o600)
+  atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 'cache', { durable: true })
 }
 
 /**
@@ -539,10 +551,11 @@ export function putNodeBack(dir: string, previous: string | null, reason: NodeMi
   try {
     nameNode(previous, platform)
   } catch (error) {
-    console.error(`[harnessd] could not put current-node back on ${previous} (${error instanceof Error ? error.message : String(error)}) — the daemon stays on the Node it names`)
+    console.error(`[harnessd] could not put current-node back on the Node before (${errorKind(error)}) — the daemon stays on the Node it names`)
     return null
   }
-  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? failedNode(dir) : moved)
+  // 'cannot-switch' keeps the Node recorded before (left out, recordNodeMigration reads it).
+  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? undefined : moved)
   return previous
 }
 
@@ -570,7 +583,7 @@ export function settleRolledBack(dir: string, platform: NodeJS.Platform = proces
   const pending = readPending(dir)
   if (!pending?.sha256 || pending.sha256 === liveSha256(dir, platform)) return null
   try {
-    const listed = rejectedVersions(dir)
+    const listed = rejectedToChange(dir)
     if (!listed.includes(pending.version)) writeJson(join(dir, REJECTED), [...listed, pending.version].slice(-REJECTED_KEPT))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* still no room: the note stays, and still names it */ }
@@ -584,7 +597,9 @@ export function confirm(dir: string): void {
   }
   const kept = pendingVersion(dir)
   try {
-    if (kept && rejectedVersions(dir).includes(kept)) writeJson(join(dir, REJECTED), rejectedVersions(dir).filter((version) => version !== kept))
+    // Read once: a second read that failed would be written back as no version rolled back at all.
+    const listed = kept ? rejectedVersions(dir) : []
+    if (kept && listed.includes(kept)) writeJson(join(dir, REJECTED), listed.filter((version) => version !== kept))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* the new build runs either way */ }
 }
@@ -813,7 +828,7 @@ export function startSelfUpdater(opts: {
           notifyBuf = await downloadVerified(entry.notify, download)
         } catch (error) {
           if (!(error instanceof DigestMismatchError)) throw error
-          refuse(`does not match its manifest (${error.message})`)
+          refuse(`does not match its manifest (${errorKind(error)})`)
           return
         }
         verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL, node: null }
@@ -829,17 +844,17 @@ export function startSelfUpdater(opts: {
           const without = await runCanary(verified.cliBuf, opts.dir, entry.version)
           if (halted) return
           if (without.ok) {
-            console.error(`[update] ${entry.version} does not run on ${next} (${result.detail}) — it goes in on the Node the daemon runs on`)
+            console.error(`[update] ${entry.version} does not run on the new Node (${result.ended}) — it goes in on the Node the daemon runs on`)
             recordNodeMigration(opts.dir, 'does-not-run', next)
             next = null
             result = without
           }
         }
         if (!result.ok && result.problem === 'unwritable') {
-          console.error(`[update] could not write the canary for ${entry.version} (${result.detail}) — trying again next check`)
+          console.error(`[update] could not write the canary for ${entry.version} (${result.ended}) — trying again next check`)
           return
         }
-        if (!result.ok) { refuse(`failed its canary (${result.detail})`); return }
+        if (!result.ok) { refuse(`failed its canary (${result.ended})`); return }
         verified.canaried = true
         verified.ptyProtocol = result.ptyProtocol
         verified.node = next
@@ -879,7 +894,7 @@ export function startSelfUpdater(opts: {
         // Named only now, on the probation the stage began: a rollback puts it back.
         if (ready.node) {
           try { nameNode(ready.node, platform) } catch (error) {
-            console.error(`[update] could not name ${ready.node} in current-node (${error instanceof Error ? error.message : String(error)}) — ${ready.version} comes up on the Node the daemon runs on`)
+            console.error(`[update] could not name the new Node in current-node (${errorKind(error)}) — ${ready.version} comes up on the Node the daemon runs on`)
             recordNodeMigration(opts.dir, 'cannot-switch')
           }
         }
@@ -889,12 +904,13 @@ export function startSelfUpdater(opts: {
         await opts.onStaged(ready.version, ptyVersion)
       }).catch((err: unknown) => {
         // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
-        // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.
+        // the swap again. Say so, or a minute of "check failed" reads as the updater being broken. A lock this CLI did
+        // not make is said in fixed words: its `reason` quotes the lock's path and an error's message.
         if (!(err instanceof SpawnLockBusyError)) throw err
-        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${describeSpawnLockFailure(err)} — trying again next check`)
+        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${err.owner ? `held (${describeSpawnLockOwner(err.owner)})` : err.reason ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`)
       })
     } catch (err) {
-      console.error('[update] check failed (will retry):', err instanceof Error ? err.message : err)
+      console.error('[update] check failed (will retry):', errorKind(err))
     } finally {
       checking = false
     }

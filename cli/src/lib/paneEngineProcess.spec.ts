@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkSessionRuntime, lookupPaneEngineProcess } from './paneEngineProcess.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { checkSessionRuntime, EngineRenamed, lookupPaneEngineProcess, publishEngine, renamedEngine } from './paneEngineProcess.js'
 import { setProcessTableSource } from './processTable.js'
-import { registry, type RegisteredSession } from './registry.js'
+import { registry, RegistryOwnershipChanged, type LaunchPublication, type ProcessIdentity, type RegisteredSession } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS, RegistryPersistenceUnavailable } from './registryPersistence.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TmuxRuntimeRef } from './terminalTypes.js'
 
@@ -38,6 +40,21 @@ describe('lookupPaneEngineProcess', () => {
     try {
       const found = await lookupPaneEngineProcess(backendWithRoot(10), runtime, 'claude')
       expect(found).toMatchObject({ ok: true, identity: { pid: 11, startMarker: 'm11' } })
+    } finally { setProcessTableSource(null) }
+  })
+})
+
+describe('lookupPaneEngineProcess, a pane with no engine in it', () => {
+  it('names the processes in the pane, and none outside it', async () => {
+    setProcessTableSource(async () => [
+      { pid: 10, parentPid: 1, executable: 'zsh', startMarker: 'm10', args: '-zsh' },
+      { pid: 11, parentPid: 10, executable: 'unshare', startMarker: 'm11', args: 'unshare --fork hermes-ns' },
+      { pid: 30, parentPid: 1, executable: 'unshare', startMarker: 'm30', args: 'unshare' },
+    ])
+    try {
+      const found = await lookupPaneEngineProcess(backendWithRoot(10), runtime, 'hermes')
+      expect(found).toMatchObject({ ok: false, unknown: false, reason: 'no hermes process under tmux:%1' })
+      expect(found.ok ? null : found.paneProcesses?.map((process) => [process.pid, process.startMarker])).toEqual([[10, 'm10'], [11, 'm11']])
     } finally { setProcessTableSource(null) }
   })
 })
@@ -95,5 +112,124 @@ describe('checkSessionRuntime', () => {
     const found = await withEngine(() => checkSessionRuntime(backendWithRoot(10), session({ processIdentity: null }), runtime))
     expect(found).toEqual({ state: 'alive' })
     expect(update).toHaveBeenCalledWith('sess-1', expect.objectContaining({ pid: 11, startMarker: LSTART }))
+  })
+})
+
+describe('renamedEngine', () => {
+  const at = (executable: string, over: Partial<ProcessIdentity> = {}): ProcessIdentity => ({ pid: 11, startMarker: 'm11', executable, ...over })
+  it.each([
+    ['node', 'claude'], ['nodejs', 'codex'], ['/usr/bin/node', 'claude'], ['node.exe', 'claude.exe'],
+    ['C:\\Program Files\\nodejs\\NODE.EXE', 'C:\\tools\\claude.exe'],
+  ])('reads %s, now %s, as the recorded engine renamed', (recorded, observed) => {
+    expect(renamedEngine(at(recorded), at(observed))).toBe(true)
+  })
+  it.each([
+    ['the same name', at('claude'), at('claude')],
+    ['a Node runtime still', at('node'), at('node')],
+    ['one Node runtime for another', at('node'), at('nodejs')],
+    ['a different pid', at('node'), at('claude', { pid: 12 })],
+    ['a different start', at('node'), at('claude', { startMarker: 'm12' })],
+    ['a rename from another program', at('/bin/claude'), at('other')],
+    ['a rename to a Node runtime', at('claude'), at('node')],
+  ])('refuses %s', (_case, recorded, observed) => {
+    expect(renamedEngine(recorded, observed)).toBe(false)
+  })
+  // Linux: the start is the ticks; the marker moves when the wall clock is stepped (terminalTypes.ts `startTicks`).
+  it('compares the start as sameProcessIdentity does: the ticks, over a marker the clock moved', () => {
+    expect(renamedEngine(at('node', { startTicks: 500, startMarker: 'before the step' }),
+      at('claude', { startTicks: 500, startMarker: 'after the step' }))).toBe(true)
+    expect(renamedEngine(at('node', { startTicks: 500 }), at('claude', { startTicks: 501 }))).toBe(false)
+  })
+})
+
+describe('publishEngine', () => {
+  const node: ProcessIdentity = { pid: 11, startMarker: 'm11', executable: 'node' }
+  const claude: ProcessIdentity = { ...node, executable: 'claude' }
+  const reasons = { gone: 'the engine is gone', changed: 'the engine changed' }
+  const held = (reason: string) => new IdentityReadUnavailable(reason).message
+  /** Stands in for `registry.confirmLaunch`: runs the refresh, then confirms the identity it was handed. */
+  const registryWrite = () => vi.fn(async (identity: ProcessIdentity, refresh: () => Promise<void>, _expires: number): Promise<LaunchPublication> => {
+    await refresh()
+    return { state: 'confirmed', entry: { processIdentity: identity } as RegisteredSession }
+  })
+
+  it('publishes once when the look still sees the recorded process', async () => {
+    const publish = registryWrite()
+    expect(await publishEngine(node, async () => ({ ...node }), reasons, publish)).toEqual({ state: 'confirmed', entry: { processIdentity: node } })
+    expect(publish).toHaveBeenCalledExactlyOnceWith(node, expect.any(Function), expect.any(Number))
+  })
+
+  it('writes once more, the observed identity under the same expires, when the engine named itself before the refresh', async () => {
+    const publish = registryWrite(), look = vi.fn(async () => claude)
+    const before = performance.now()
+    expect(await publishEngine(node, look, reasons, publish)).toEqual({ state: 'confirmed', entry: { processIdentity: claude } })
+    expect(publish.mock.calls.map(([identity]) => identity)).toEqual([node, claude])
+    const [first, second] = publish.mock.calls.map(call => call[2])
+    expect(second).toBe(first)   // computed once, before the first write: never renewed
+    expect(first).toBeGreaterThanOrEqual(before + REGISTRY_WRITE_DEADLINE_MS)
+    expect(first).toBeLessThanOrEqual(performance.now() + REGISTRY_WRITE_DEADLINE_MS)
+    expect(look).toHaveBeenCalledTimes(2)   // each write's refresh looks; nothing waits between them
+  })
+
+  it('takes the caller\'s expires in place of its own, for both writes', async () => {
+    const publish = registryWrite()
+    await publishEngine(node, async () => claude, reasons, publish, 42)
+    expect(publish.mock.calls.map(call => call[2])).toEqual([42, 42])
+  })
+
+  it('refuses a second rename on the re-write, in the changed words', async () => {
+    const publish = registryWrite()
+    const look = vi.fn<() => Promise<ProcessIdentity | null>>().mockResolvedValueOnce(claude).mockResolvedValue({ ...node, executable: 'codex' })
+    const refused = await publishEngine(node, look, reasons, publish).catch(error => error)
+    expect(refused).toBeInstanceOf(IdentityReadUnavailable)
+    expect(refused).not.toBeInstanceOf(EngineRenamed)
+    expect(refused.message).toBe(held(reasons.changed))
+    expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['no process', node, null, reasons.gone],
+    ['a different pid', node, { ...claude, pid: 12 }, reasons.changed],
+    ['a different start', node, { ...claude, startMarker: 'm12' }, reasons.changed],
+    ['a rename from another program', { ...node, executable: '/bin/claude' }, { ...node, executable: 'other' }, reasons.changed],
+  ])('refuses %s as today, with one write', async (_case, recorded, observed, reason) => {
+    const publish = registryWrite()
+    const refused = await publishEngine(recorded, async () => observed, reasons, publish).catch(error => error)
+    expect(refused).toBeInstanceOf(IdentityReadUnavailable)
+    expect(refused).not.toBeInstanceOf(EngineRenamed)
+    expect(refused).toMatchObject({ code: 'IDENTITY_UNAVAILABLE', message: held(reason) })
+    expect(publish).toHaveBeenCalledOnce()
+  })
+
+  it('throws, from the refresh, an EngineRenamed that carries the observed identity and reads as the changed hold', async () => {
+    let seen: unknown
+    await publishEngine(node, async () => claude, reasons, async (identity, refresh) => {
+      seen = await refresh().catch(error => error)
+      return { state: 'confirmed', entry: { processIdentity: identity } as RegisteredSession }
+    })
+    expect(seen).toBeInstanceOf(EngineRenamed)
+    expect(seen).toMatchObject({ observed: claude, code: 'IDENTITY_UNAVAILABLE', message: held(reasons.changed) })
+  })
+
+  it('lets a re-write that ran out of the budget through as the registry\'s own error: not a hold, no third write', async () => {
+    // The registry's words for a write past `expires` (registryPersistence.ts). The same object must come out.
+    const expired = new RegistryPersistenceUnavailable('write deadline exceeded')
+    const publish = registryWrite()
+    publish.mockImplementationOnce(publish.getMockImplementation()!).mockRejectedValueOnce(expired)
+    await expect(publishEngine(node, async () => claude, reasons, publish)).rejects.toBe(expired)
+    expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries nothing but a rename: another failure, a look that throws, a write that published nothing', async () => {
+    const owner = new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+    const failing = vi.fn(async (): Promise<LaunchPublication> => { throw owner })
+    await expect(publishEngine(node, async () => node, reasons, failing)).rejects.toBe(owner)
+    expect(failing).toHaveBeenCalledOnce()
+    const probe = new Error('no terminal backend restores tmux:%1'), publish = registryWrite()
+    await expect(publishEngine(node, async () => { throw probe }, reasons, publish)).rejects.toBe(probe)
+    expect(publish).toHaveBeenCalledOnce()
+    const unpublished = vi.fn(async (): Promise<LaunchPublication> => ({ state: 'not-published' }))
+    expect(await publishEngine(node, async () => node, reasons, unpublished)).toEqual({ state: 'not-published' })
+    expect(unpublished).toHaveBeenCalledOnce()
   })
 })

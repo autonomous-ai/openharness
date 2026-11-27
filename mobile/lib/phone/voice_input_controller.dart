@@ -97,22 +97,6 @@ class VoiceInputController extends ChangeNotifier {
   /// mid-take is the one that take is heard in.
   final ValueListenable<String> _language;
 
-  /// What a take that reaches [maxTake] does instead of ending there: null ends it and transcribes
-  /// it ([stopListening]), its words kept for the next send — the terminal's way.
-  ///
-  /// The Swarm composer takes it over: it puts the words in the message box, and while a system
-  /// prompt covers the app it holds the take open, since nothing may be sent to be transcribed that
-  /// the person cannot see.
-  Future<void> Function()? onTakeLimit;
-
-  /// Asked once a take's recording is in hand, right before it goes to [transcriber]: until it
-  /// answers the take waits, and false drops it. Null sends every take — the terminal's way.
-  ///
-  /// The Swarm composer holds a take here while a system prompt covers the app: the microphone
-  /// takes a moment to close, a prompt can come up in it, and nothing may be sent to be transcribed
-  /// that the person cannot see.
-  Future<bool> Function()? mayTranscribe;
-
   VoiceInputStatus _status = VoiceInputStatus.idle;
   String _heard = '';
   String? _notice;
@@ -231,8 +215,8 @@ class VoiceInputController extends ChangeNotifier {
     _setStatus(VoiceInputStatus.listening);
   }
 
-  /// [maxTake] has passed: the take ends, unless [onTakeLimit] takes it over.
-  void _reachLimit() => unawaited((onTakeLimit ?? stopListening)());
+  /// [maxTake] has passed: the take ends and is transcribed, its words kept for the next send.
+  void _reachLimit() => unawaited(stopListening());
 
   /// Ends the take and transcribes it.
   Future<void> stopListening() async {
@@ -439,14 +423,6 @@ class VoiceInputController extends ChangeNotifier {
       if (recording == null || recording.peak < silencePeak) {
         _setStatus(VoiceInputStatus.idle, notice: VoiceNotice.noSound);
         return _Take.failed;
-      }
-      if (mayTranscribe case final mayTranscribe?) {
-        final go = await mayTranscribe();
-        if (take != _take) return _Take.failed;
-        if (!go) {
-          _setStatus(VoiceInputStatus.idle);
-          return _Take.failed;
-        }
       }
       final language = _language.value;
       final words = await transcriber(recording.wav, language);

@@ -9,12 +9,14 @@
  */
 import { randomUUID } from 'node:crypto'
 import { lstatSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { homedir } from 'node:os'
+import { dirname, sep } from 'node:path'
 import { CONTROL_TOOLS } from './control.js'
 import { harnessPaneEnv } from '../shared/approval.js'
 import { presentedToken } from './token.js'
 import { HARNESS_SESSION_PREFIX } from '../../../cli/src/lib/harnessSessionLabel.js'
 import { conditionsSchema } from '../memory/api.js'
+import { harnessRoots } from '../shared/harnessRoots.js'
 
 export interface PairSocket {
   send(data: string): void
@@ -107,6 +109,12 @@ export function pairVerb(word: string | undefined): string | null {
   return PAIR_CLI_VERBS.has(verb) ? verb : null
 }
 
+/** The lessons folder as the help names it: from `~` when under the home, with `/` on every platform. */
+const LESSONS_FOLDER = (() => {
+  const home = homedir(), data = harnessRoots(home).data
+  return `${data.startsWith(home + sep) ? `~${data.slice(home.length).replaceAll(sep, '/')}` : data}/lessons`
+})()
+
 export const PAIR_USAGE = [
   'Usage: harness pair <verb> [arguments] [--json]',
   '',
@@ -135,7 +143,7 @@ export const PAIR_USAGE = [
   '',
   '  (talk to your daemon from a window: a talk is a model turn, and only a window is you)',
   '',
-  '  Lessons (daemons/LEARNING.md; the lessons folder, ~/.harness/lessons):',
+  `  Lessons (daemons/LEARNING.md; the lessons folder, ${LESSONS_FOLDER}):`,
   '    lessons [list]                         every lesson: pending, approved, reverted, skipped',
   '    lessons show <id>                      its SKILL.md or note, with where it came from',
   '    lessons review-recent [--hours 24]    propose lessons from the last 1–24 hours on this computer',

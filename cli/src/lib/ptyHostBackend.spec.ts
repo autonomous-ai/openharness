@@ -8,6 +8,7 @@ import type { PtyEvent, PtyOp } from './ptyHost/protocol.js'
 import type { PtyHostClient } from './ptyHost/client.js'
 import type { EnsurePtyHostResult, PtyHostTarget } from './ptyHost/launch.js'
 import type { PtyRuntimeRef } from './terminalTypes.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // validate's branches, not the process table: the same narrow mock tmuxBackendValidate.spec.ts uses.
 const lookupPaneEngineProcess = vi.hoisted(() => vi.fn())
@@ -81,6 +82,37 @@ async function ready(replies: Record<string, Reply> = {}, options: BackendOption
 const PANE: PtyRuntimeRef = { backend: 'ptyhost', instance: 'p1', paneId: '%1' }
 const UUID = /^[a-f0-9-]{36}$/
 
+describe('durable pane dispatch', () => {
+  it.each(['create', 'respawn'] as const)('%s waits for its journal and rechecks cancellation', async operation => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%2' } } })
+    let release!: () => void
+    const journal = new Promise<void>(resolve => { release = resolve })
+    let current = true
+    const control = { command: ['sh'], current: () => current, onDispatch: () => journal }
+    const dispatched = operation === 'create' ? backend.create(control) : backend.respawn(PANE, control)
+    const before = calls.filter(call => call.op === operation)
+    current = false
+    release()
+    const result = await dispatched
+    expect(before).toEqual([])
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls.filter(call => call.op === operation)).toEqual([])
+    backend.dispose()
+  })
+
+  it.each(['create', 'respawn'] as const)('%s refuses a host lost while its journal settles', async operation => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%2' } } })
+    let release!: () => void
+    const journal = new Promise<void>(resolve => { release = resolve })
+    const control = { command: ['sh'], onDispatch: () => journal }
+    const dispatched = operation === 'create' ? backend.create(control) : backend.respawn(PANE, control)
+    backend.dispose()
+    release()
+    expect(await dispatched).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls.filter(call => call.op === operation)).toEqual([])
+  })
+})
+
 afterEach(() => {
   vi.useRealTimers()
   lookupPaneEngineProcess.mockReset()
@@ -108,6 +140,37 @@ describe('PtyHostBackend prepare', () => {
     const backend = new PtyHostBackend({ home: '/tmp/h', launch })
     expect(await backend.prepare({ ownedPanes: new Map() }))
       .toEqual({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'incompatible: wrong token' })
+  })
+  // Why a host was not reached goes back whole to whoever asks; the log keeps its code (AGENTS.md rule 7).
+  it('names an unreached host by its code, never by its words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const reason = 'could not start /Users/sentinel/harness-pty: EACCES'
+      const unreached = new PtyHostBackend({ home: '/tmp/h', launch: async () => ({ unavailable: reason, code: 'PTY_HOST_UNAVAILABLE' }) })
+      expect(await unreached.prepare({ ownedPanes: new Map() })).toEqual({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason })
+      const refused = new PtyHostBackend({ home: '/tmp/h', launch: async () => ({ incompatible: 'refused: /Users/sentinel' }) })
+      expect(await refused.prepare({ ownedPanes: new Map() })).toMatchObject({ reason: 'refused: /Users/sentinel' })
+      expect(error.mock.calls).toEqual([['[terminal] ptyhost: unavailable (PTY_HOST_UNAVAILABLE)'], ['[terminal] ptyhost: unavailable (incompatible)']])
+    } finally { error.mockRestore() }
+  })
+
+  it('names a drain host that has gone, or does not answer, without its reason\'s words', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const reason = 'there is no /Users/sentinel/run/p1.json'
+      const gone = new PtyHostBackend({ home: '/tmp/h', instance: 'p1', launch: async () => ({ unavailable: reason, code: 'PTY_HOST_UNAVAILABLE', pid: null, missing: true }) })
+      expect(await gone.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+      expect(gone.hostGone).toBe(reason)
+      const silent = new PtyHostBackend({
+        home: '/tmp/h', instance: 'p1', hostProcess: { alive: () => true, rows: async () => null },
+        launch: async () => ({ unavailable: 'nothing answers at /Users/sentinel', code: 'PTY_HOST_UNAVAILABLE', pid: 5, missing: false }),
+      })
+      expect(await silent.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+      silent.dispose()
+      expect(log.mock.calls).toEqual([[`[terminal] ptyhost: draining p1 has gone (text(${reason.length}))`]])
+      expect(error.mock.calls).toEqual([['[terminal] ptyhost: draining p1 unavailable (PTY_HOST_UNAVAILABLE); reconnecting']])
+    } finally { log.mockRestore(); error.mockRestore() }
   })
 })
 
@@ -406,6 +469,12 @@ describe('PtyHostBackend input', () => {
     expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'a\nb', bracketed: true }])
   })
 
+  it('refuses a revoked key before writing to the PTY host', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.sendKey(PANE, 'enter', () => false)).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls).toEqual([])
+  })
+
   it('sendKey sends the tmux name of the key', async () => {
     const { backend, calls } = await ready()
     await backend.sendKey(PANE, 'backtab')
@@ -458,6 +527,17 @@ describe('PtyHostBackend input', () => {
     const { backend, calls } = await ready({ paste: { state: 'failed', dispatch: 'rejected', code: 'bad_request', reason: 'pane %1 has exited' } })
     expect(await backend.submitText(PANE, 'hi')).toEqual({ state: 'failed', dispatch: 'rejected', reason: 'pane %1 has exited' })
     expect(calls.map((c) => c.op)).toEqual(['paste'])
+  })
+
+  it('submitText says a paste whose Enter the host refused may have been typed, so nothing types it again', async () => {
+    for (const key of [
+      { state: 'failed' as const, dispatch: 'rejected' as const, code: 'bad_request', reason: 'pane %1 refused the key' },
+      { state: 'failed' as const, dispatch: 'not_started' as const, code: 'no_pane', reason: 'no pane %1' },
+    ]) {
+      const { backend, calls } = await ready({ key })
+      expect(await backend.submitText(PANE, 'hi')).toEqual({ state: 'unknown', dispatch: 'possibly_executed', reason: key.reason })
+      expect(calls.map((c) => c.op)).toEqual(['paste', 'key'])
+    }
   })
 
   it('setTitle sets it on the host; notify needs nothing', async () => {
@@ -631,6 +711,40 @@ describe('PtyHostBackend validate', () => {
   })
 })
 
+describe('PtyHostBackend validate, a pane that holds only the recorded process (#4259)', () => {
+  const BOUND = { pid: 11, executable: 'hermes', startMarker: 'Fri Nov 13 14:22:00 2026' }
+  const SHELL = { pid: 10, executable: 'zsh', startMarker: 'Fri Nov 13 14:00:00 2026' }
+  const UNSHARE = { ...BOUND, executable: 'unshare' }
+  const noEngine = (...paneProcesses: object[]) => ({ ok: false, unknown: false, reason: 'no hermes process under ptyhost:p1:%1', paneProcesses })
+  const GONE = { state: 'gone', reason: 'no hermes process under ptyhost:p1:%1' }
+
+  it('is alive while the recorded process runs in the pane under another name', async () => {
+    const { backend } = await ready()
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, UNSHARE))
+    expect(await backend.validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual({ state: 'alive' })
+  })
+
+  it('is gone when that process left the pane, its pid was reused, or none was recorded', async () => {
+    const { backend } = await ready()
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL))
+    expect(await backend.validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual(GONE)
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, { ...UNSHARE, startMarker: 'Fri Nov 13 15:00:00 2026' }))
+    expect(await backend.validate(PANE, { engine: 'hermes', processIdentity: BOUND })).toEqual(GONE)
+    lookupPaneEngineProcess.mockResolvedValue(noEngine(SHELL, UNSHARE))
+    expect(await backend.validate(PANE, { engine: 'hermes' })).toEqual(GONE)
+  })
+
+  it('on Windows holds that process to the pane\'s Job, as it does an engine', async () => {
+    const bound = { pid: 11, executable: 'hermes.exe', startMarker: 'w:5' }
+    lookupPaneEngineProcess.mockResolvedValue(noEngine({ pid: 10, executable: 'pwsh', startMarker: 'w:1' }, bound))
+    const inJob = await ready({ jobPids: { state: 'ok', value: { pids: [10, 11] } } })
+    expect(await inJob.backend.validateOn('win32', PANE, { engine: 'hermes', processIdentity: bound })).toEqual({ state: 'alive' })
+    const outside = await ready({ jobPids: { state: 'ok', value: { pids: [10] } } })
+    expect(await outside.backend.validateOn('win32', PANE, { engine: 'hermes', processIdentity: bound }))
+      .toEqual({ state: 'gone', reason: 'process is not in the pane job' })
+  })
+})
+
 describe('PtyHostBackend validate on Windows', () => {
   const ENGINE = { pid: 11, executable: 'claude.exe', startMarker: 'w:5' }
   afterEach(() => setProcessTableSource(null))
@@ -783,7 +897,7 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     }) as typeof process.kill)
     signalAgentProcess(900, 'SIGKILL')
     await vi.waitFor(() => expect(killed).toEqual([901, 902, 900]))
-    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: kill EPERM']])
+    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: EPERM']])
   })
 
   it('says when it could not end the process', async () => {
@@ -799,12 +913,12 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     const { backend } = await ready({}, { platform: 'win32', endTree })
     backend.dispose()
     backend.signalProcess(77, 'SIGTERM')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: spawn failed'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: Error'))
     const odd = vi.fn(async () => { throw 'odd' })
     const other = (await ready({}, { platform: 'win32', endTree: odd })).backend
     other.dispose()
     other.signalProcess(78, 'SIGKILL')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: odd'))
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: string'))
   })
 })
 
@@ -926,6 +1040,22 @@ describe('PtyHostBackend host connection', () => {
     expect(launch).toHaveBeenCalledTimes(10)
     await vi.advanceTimersByTimeAsync(1)
     expect(launch).toHaveBeenCalledTimes(11)
+  })
+
+  it('names a failed reconnect by its code, never by the error\'s words', async () => {
+    vi.useFakeTimers()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const first = hostClient(10)
+    const { backend } = reconnecting([first, new Error('spawn /Users/sentinel/harness-pty EACCES')])
+    await backend.prepare({ ownedPanes: new Map() })
+    first.lose()
+    await vi.advanceTimersByTimeAsync(1_000)
+    backend.dispose()
+    expect(error.mock.calls).toEqual([
+      ['[terminal] ptyhost: lost the connection to the host; reconnecting'],
+      ['[terminal] ptyhost: reconnect failed (PTY_HOST_UNAVAILABLE)'],
+    ])
   })
 
   it('a host that dies within 30 s of the connection keeps the growing delay', async () => {
@@ -1200,7 +1330,7 @@ describe('PtyHostBackend hosts by instance', () => {
     const binary = path.join(home, 'harness-pty-stub')
     // `serve --home <home>`: says how it was started, then serves as [instance] (hello, `ok` to every op) and
     // publishes its discovery file. It ends itself after 30 s if nothing kills it.
-    writeFileSync(binary, `#!${process.execPath}
+    writeExecutable(binary, `#!${process.execPath}
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
 const net = require('node:net')
@@ -1233,7 +1363,7 @@ server.listen(endpoint, () => {
   fs.writeFileSync(path.join(home, 'run', ${JSON.stringify(discoveryFileName(instance))}), JSON.stringify({ protocol: ${P}, instance: ${JSON.stringify(instance)}, endpoint, pid: process.pid, version: '0.2.0', token }))
 })
 setTimeout(() => process.exit(0), 30000)
-`, { mode: 0o755 })
+`)
     vi.stubEnv('HARNESS_PTY_BIN', binary)
     const own = await hostIn(home, instance, '0.2.0', GONE_PID)
     const other = await hostIn(home, `p${P}-0.3.0`, '0.3.0')

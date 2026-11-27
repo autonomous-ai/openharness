@@ -13,6 +13,7 @@ const CODEX_CONTROL_MIN_VERSION: [number, number, number] = [0, 144, 0]
 interface CodexCacheModel {
   slug?: unknown
   display_name?: unknown
+  description?: unknown
   visibility?: unknown
   supported_reasoning_levels?: Array<{ effort?: unknown }>
 }
@@ -39,7 +40,7 @@ function decode(raw: Record<string, unknown>): RuntimeRecord | null {
   if (!source && !version) return null
   // A turn's context is the whole of what it runs: one naming a model and no effort runs that model at its own default, which
   // Codex writes as `reasoning_effort: null` (0.164 and 0.165, 2026-10-30). Read as auto, as the screen's "default" is, so
-  // the agent's model is known from its first turn: without an effort it was never reported, and its Swarm attempts were
+  // the agent's model is known from its first turn: without an effort it was never reported, and its turns were
   // recorded with no model (Scholes, 2026-10-30). A settings change names only what it changed, so it keeps the effort.
   const effort = text(source?.reasoning_effort) || text(source?.effort)
   const ownDefault = raw.type === 'turn_context' && !!text(source?.model) && !effort
@@ -105,10 +106,12 @@ async function models(session: RuntimeSession, state: RuntimeState | undefined):
     const model = text(item.slug)
     if (!model || item.visibility === 'hide') continue
     const label = text(item.display_name) || runtimeModelLabel(model)
-    addOption(output, seen, session, model, 'auto', label)
+    // Codex's own line under the model in its picker ("Fast and affordable agentic coding model."), cut to what a row shows.
+    const description = text(item.description).slice(0, 256) || undefined
+    addOption(output, seen, session, model, 'auto', label, description)
     const listed = catalog.find((entry) => entry.slug === model)?.efforts ?? []
     for (const effort of listed) {
-      if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label)
+      if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label, description)
     }
   }
   if (state?.model) {

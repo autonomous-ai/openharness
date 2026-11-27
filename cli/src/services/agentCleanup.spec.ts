@@ -1,13 +1,30 @@
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createAgentLife } from '../core/agentLife.js'
 import { emptyPorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from '../superTabs/retention.js'
-import { ASK_AGAIN_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
+import { Ledger, ledgerPath, type Told } from '../agentClient/ledger.js'
+import { GONE_MS } from './hachiHandOver.js'
+import { ASK_AGAIN_MS, BACKGROUND_CLOSE_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, FORGET_LOCK_WAIT_MS, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
+import { processLockIdentity } from '../lib/processLiveness.js'
+
+// Pass-through, recording each call that opens, writes or renames a file by its name.
+const disk = vi.hoisted(() => ({ events: [] as string[][] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(['open', String(args[0])]); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(['write', String(args[0])]); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(['rename', String(args[0]), String(args[1])]); return actual.renameSync(...args) },
+  }
+})
+/** The calls that named [file] itself; a fresh temporary name beside it (`<file>.<pid>.<uuid>.tmp`) shown as `<tmp>`. */
+const touching = (file: string) => disk.events.filter((event) => event.includes(file)).map((event) => event.map((name) =>
+  name.startsWith(`${file}.${process.pid}.`) && /^[0-9a-f-]{36}\.tmp$/.test(name.slice(`${file}.${process.pid}.`.length)) ? '<tmp>' : name))
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
 const MIN = 60_000
@@ -24,7 +41,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }); vi.useRealTimer
 /** The cleanup on a fake core: [sessions] are the live agents, [quietFor] how long ago each last moved. */
 function setup(sessions: RegisteredSession[], quietFor: Record<string, number | null> = {}, over: AgentCleanupDeps & { refuse?: Record<string, AgentCloseResult> } = {}) {
   let clock = NOW
-  const closeStarted = vi.fn(async (agentId: string, _mode: 'idle' | 'now'): Promise<AgentCloseResult> => {
+  const closeStarted = vi.fn(async (agentId: string, _mode: 'idle' | 'now', _pastCeiling?: boolean): Promise<AgentCloseResult> => {
     const refused = over.refuse?.[agentId]
     if (refused) return refused
     sessions.splice(sessions.findIndex((s) => s.agentId === agentId), 1)
@@ -34,9 +51,12 @@ function setup(sessions: RegisteredSession[], quietFor: Record<string, number | 
     const quiet = quietFor[agentId]
     return quiet === null ? null : clock - (quiet ?? 0)
   })
+  // What happens to agents, as the core tells whoever follows them (core/agentLife.ts): a stop, once it is done.
+  const hub = createAgentLife({ live: () => [], notify: () => true, hears: {} })
   const core = fakeCore({
     dataDir: dir,
     agents: {
+      follow: hub.follow,
       live: vi.fn(() => [...sessions]),
       resolve: vi.fn((id: string) => sessions.find((s) => s.agentId === id || s.sessionId === id)),
       closeStarted, lastActivity,
@@ -45,178 +65,76 @@ function setup(sessions: RegisteredSession[], quietFor: Record<string, number | 
   const log = vi.fn()
   let tick: (() => void) | null = null
   const waited: number[] = []
-  // The Swarm on, as by default (`HARNESS_SWARM`): its members are kept. A test of it off leaves `retained` out.
   const cleanup = createAgentCleanup(core, { now: () => clock, log, every: (_ms, run) => { tick = run; return () => { tick = null } },
-    wait: async (ms) => { waited.push(ms) }, retained: (dataDir) => retainedHarnesses(dataDir), ...over })
-  return { cleanup, core, closeStarted, lastActivity, log, waited, advance: (ms: number) => { clock += ms }, tick: () => tick }
+    wait: async (ms) => { waited.push(ms) }, ...over })
+  return { cleanup, core, closeStarted, lastActivity, log, waited, hub, stopped: hub.stopped, advance: (ms: number) => { clock += ms }, tick: () => tick }
 }
 
 /** Lets the closes a notice started finish. */
 const settle = () => new Promise((done) => setTimeout(done, 0))
 
-it('keeps idle Super Tab members through host restarts and starter closure, until their contribution is removed', async () => {
-  const sessions = [kid('member'), kid('ordinary')]
-  const t = setup(sessions, { member: 2 * IDLE_CLOSE_MS, ordinary: 2 * IDLE_CLOSE_MS })
-  retainContributions(dir, 'machine-1', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine-1' } }])
-  await t.cleanup.look()
-  t.advance(IDLE_CLOSE_MS)
-  await t.cleanup.look()
-  expect(t.closeStarted.mock.calls).toEqual([['ordinary', 'idle']])
-  await t.cleanup.closeStartedBy('lead')
-  expect(sessions.map(s => s.agentId)).toEqual(['member'])
-  t.cleanup.port.stop()
-  const restarted = setup(sessions, { member: 2 * IDLE_CLOSE_MS })
-  await restarted.cleanup.look()
-  restarted.advance(IDLE_CLOSE_MS)
-  await restarted.cleanup.look()
-  expect(restarted.closeStarted).not.toHaveBeenCalled()
-  retainContributions(dir, 'machine-1', [])
-  await restarted.cleanup.look()
-  expect(restarted.closeStarted.mock.calls).toEqual([['member', 'idle']])
-  restarted.cleanup.port.stop()
-})
-
-// The owner, 2026-10-23: the Lead of an active project is never stopped in any case, nor when no roster has confirmed it
-// for a week (a machine signed out), which lapses every other member to cleanup.
-it('never closes a Swarm Lead, idle or orphaned, even once its roster has lapsed', async () => {
-  const sessions = [kid('pm'), kid('member')]
-  const t = setup(sessions, { pm: 2 * IDLE_CLOSE_MS, member: 2 * IDLE_CLOSE_MS })
-  retainContributions(dir, 'machine-1', [{ tabId: 'tab', lead: true, agent: { harnessId: 'pm', machineId: 'machine-1' } },
-    { tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine-1' } }])
-  const lapsed = new Date(Date.now() - RETENTION_LAPSE_MS - MIN)
-  utimesSync(retentionFile(dir), lapsed, lapsed)
-  await t.cleanup.look()
-  t.advance(IDLE_CLOSE_MS)
-  await t.cleanup.look()
-  await t.cleanup.closeStartedBy('lead')
-  expect(t.closeStarted.mock.calls).toEqual([['member', 'idle']])
-  expect(sessions.map(s => s.agentId)).toEqual(['pm'])
-  t.cleanup.port.stop()
-})
-
-// HARNESS_SWARM=off: the Swarm hands in no members, its saved roster is not read, and a harness it kept is an ordinary
-// one another agent started: closed with its starter, closed once idle, and closable by the core. The review of #1765
-// found it kept, where the same harness on a computer without the Swarm is closed.
-it('with the Swarm off, cleans up a harness its saved roster names, as any other', async () => {
-  retainContributions(dir, 'machine-1', [{ tabId: 'tab', lead: true, agent: { harnessId: 'pm', machineId: 'machine-1' } },
-    { tabId: 'tab', agent: { harnessId: 'orphan', machineId: 'machine-1' } }, { tabId: 'tab', agent: { harnessId: 'idle', machineId: 'machine-1' } }])
-  expect(retainedHarnesses(dir)).toEqual(new Set(['pm', 'orphan', 'idle']))
-  const sessions = [kid('orphan'), kid('idle', { parentAgentId: 'alive' }), kid('pm', { parentAgentId: 'alive' }), row('alive')]
-  const t = setup(sessions, { idle: 2 * IDLE_CLOSE_MS, pm: 2 * IDLE_CLOSE_MS }, { retained: undefined })
-  await t.cleanup.closeStartedBy('lead')
-  expect(t.closeStarted.mock.calls).toEqual([['orphan', 'now']])
-  await t.cleanup.look()
-  t.advance(IDLE_CLOSE_MS)
-  await t.cleanup.look()
-  expect(t.closeStarted.mock.calls).toEqual([['orphan', 'now'], ['idle', 'idle'], ['pm', 'idle']])
-  expect(sessions.map(s => s.agentId)).toEqual(['alive'])
-  t.cleanup.port.stop()
-  // In the core's process too (services/inline.ts): started without the Swarm it keeps no one and tells no one, and with it,
-  // keeps its members and tells it what it closed.
-  const told: string[] = []
-  const swarm = { retained: (dataDir: string) => retainedHarnesses(dataDir), closed: (_dataDir: string, agentId: string) => { told.push(agentId); return true } }
-  for (const [given, closed] of [[undefined, ['orphan']], [swarm, []], [{ closed: swarm.closed }, ['orphan']]] as const) {
-    const ports = emptyPorts(), live = [kid('orphan')]
-    const closeStarted = vi.fn(async (agentId: string) => { live.splice(live.findIndex(s => s.agentId === agentId), 1); return { closed: true as const } })
-    startAgentCleanup(fakeCore({ dataDir: dir, agents: { live: vi.fn(() => [...live]), resolve: vi.fn(() => undefined), closeStarted } }), ports, given)
-    ports.agentCleanup!.closed('lead')
-    await vi.waitFor(() => expect(live.map(s => s.agentId)).toEqual(closed.length ? [] : ['orphan']))
-    await settle()
-    expect(closeStarted.mock.calls.map(([id]) => id)).toEqual(closed)
-    ports.agentCleanup!.stop()
-  }
-  expect(told).toEqual(['orphan'])
-})
-
-it('rechecks retention after waiting on activity or another orphan close', async () => {
-  const t = setup([kid('member')], { member: 2 * IDLE_CLOSE_MS })
-  await t.cleanup.look()
-  t.advance(IDLE_CLOSE_MS)
-  t.lastActivity.mockImplementationOnce(async () => {
-    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine' } }])
-    return NOW - IDLE_CLOSE_MS
-  })
-  await t.cleanup.look()
-  expect(t.closeStarted).not.toHaveBeenCalled()
-  expect(t.log).not.toHaveBeenCalled()
-  retainContributions(dir, 'machine', [])
-  const cascade = setup([kid('first'), kid('member')])
-  cascade.closeStarted.mockImplementationOnce(async () => {
-    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine' } }])
-    return { closed: true }
-  })
-  await cascade.cleanup.closeStartedBy('lead')
-  expect(cascade.closeStarted.mock.calls).toEqual([['first', 'now']])
-  t.cleanup.port.stop()
-  cascade.cleanup.port.stop()
-})
-
-// 11-04 on the Mac Studio (task #2744): Tern's last group was archived, so no membership kept it. A task its host receives
-// while the cleanup waits on its activity keeps it; another just as idle with no task still closes.
-it('keeps an agent whose assignment arrives inside the close window, and still closes one idle with no task', async () => {
-  const t = setup([kid('tern'), kid('heron')], { tern: 2 * IDLE_CLOSE_MS, heron: 2 * IDLE_CLOSE_MS })
-  const roster = [{ tabId: 'tab', active: false, agent: { harnessId: 'tern', machineId: 'machine' } }, { tabId: 'tab', active: false, agent: { harnessId: 'heron', machineId: 'machine' } }]
-  retainContributions(dir, 'machine', roster)
-  await t.cleanup.look()
-  t.advance(IDLE_CLOSE_MS)
-  t.lastActivity.mockImplementationOnce(async () => {
-    retainContributions(dir, 'machine', roster, Date.now(), [{ tabId: 'tab', assignmentId: 'work', harnessId: 'tern' }])
-    return NOW - IDLE_CLOSE_MS
-  })
-  await t.cleanup.look()
-  expect(t.closeStarted.mock.calls).toEqual([['heron', 'idle']])
-  t.cleanup.port.stop()
-})
-
-// The review of #2953: the Swarm refuses new work only for a session the cleanup closed, never one stopped for Change agent.
-it('tells the Swarm each harness it closed, idle or orphaned, and none it could not close', async () => {
-  const told: string[] = []
-  const t = setup([kid('idle'), kid('working'), kid('orphan', { parentAgentId: 'gone' })], { idle: 2 * IDLE_CLOSE_MS, working: 2 * IDLE_CLOSE_MS },
-    { closed: (dataDir, agentId) => { expect(dataDir).toBe(dir); told.push(agentId); return agentId !== 'orphan' }, refuse: { working: { error: 'SESSION_NOT_IDLE' } } })
-  await t.cleanup.look()
-  t.advance(IDLE_CLOSE_MS)
-  await t.cleanup.look()
-  await t.cleanup.closeStartedBy('gone')
-  expect(told).toEqual(['idle', 'orphan'])
-  // One the Swarm could not record is said: it is then only listed stopped, and may still be assigned.
-  expect(t.log.mock.calls.filter(([line]) => String(line).includes('could not tell the Swarm'))).toEqual([
-    ['[agent-cleanup] could not tell the Swarm it closed orphan (orphan): a task given to it now is lost.']])
-  t.cleanup.port.stop()
-})
-
 describe('closing the harnesses a closed harness started', () => {
+  it('hears only a stop: a purge, a pane taken or a run closes nothing, nor a stop once it is stopped', async () => {
+    const { cleanup, closeStarted, hub } = setup([kid('a')])
+    hub.purged('lead', ['s-lead'])
+    hub.taken('lead', row('next'))
+    hub.running(row('lead'))
+    await settle()
+    expect(closeStarted).not.toHaveBeenCalled()
+    cleanup.port.stop()
+    hub.stopped('lead')
+    await settle()
+    expect(closeStarted).not.toHaveBeenCalled()
+    // A core that lends no following: nothing to hear, nothing to stop hearing.
+    expect(() => createAgentCleanup(fakeCore({ dataDir: dir }), { every: () => () => {} }).port.stop()).not.toThrow()
+  })
+
   it('closes them now, working or not, with one line each, and only those another agent started there', async () => {
-    // Lead itself is gone: it was closed.
+    // The starter itself is gone: it was closed.
     const sessions = [kid('a'), kid('b'), kid('other', { parentAgentId: 'someone' }), row('mine', { parentAgentId: 'lead' })]
-    const { cleanup, closeStarted, log } = setup(sessions)
-    cleanup.port.closed('lead')
+    const { cleanup, stopped, closeStarted, log } = setup(sessions)
+    stopped('lead')
     await settle()
     expect(closeStarted.mock.calls).toEqual([['a', 'now'], ['b', 'now']])
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[agent-cleanup] closed a (a): the harness that started it was closed. Its conversation is kept.',
-      '[agent-cleanup] closed b (b): the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] closed a: the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] closed b: the harness that started it was closed. Its conversation is kept.',
     ])
     expect(sessions.map((s) => s.agentId)).toEqual(['other', 'mine'])
+  })
+
+  // The core says when the record a close saved holds no conversation (lib/closeAgentService.ts `withoutConversation`):
+  // the line said "Its conversation is kept." of a Codex that never bound one (docs/plans/2026-11-16-codex-help-race-design.md).
+  it('says none was kept of one that had not started a conversation, and that it is kept of any other', async () => {
+    const sessions = [kid('unbound'), kid('bound')]
+    const { cleanup, closeStarted, log } = setup(sessions)
+    closeStarted.mockImplementationOnce(async () => { sessions.splice(0, 1); return { closed: true, withoutConversation: true } })
+    await cleanup.closeStartedBy('lead')
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      '[agent-cleanup] closed unbound: the harness that started it was closed. It had not started a conversation, so none was kept.',
+      '[agent-cleanup] closed bound: the harness that started it was closed. Its conversation is kept.',
+    ])
+    expect(sessions).toEqual([])
   })
 
   it('closes nothing once its starter is back, and once for two notices of one stop', async () => {
     // Its starter resumed while the notice was held for a process that was down: its harnesses are its again.
     const back = setup([row('lead'), kid('a')])
-    back.cleanup.port.closed('lead')
+    back.stopped('lead')
     await settle()
     expect(back.closeStarted).not.toHaveBeenCalled()
     // Two stops of one harness tell this twice.
     const twice = setup([kid('a')])
-    twice.cleanup.port.closed('lead')
-    twice.cleanup.port.closed('lead')
+    twice.stopped('lead')
+    twice.stopped('lead')
     await settle()
     expect(twice.closeStarted.mock.calls).toEqual([['a', 'now']])
   })
 
   it('leaves one the person typed into: it is theirs now', async () => {
-    const { cleanup, closeStarted } = setup([kid('joined'), kid('left')])
+    const { cleanup, stopped, closeStarted } = setup([kid('joined'), kid('left')])
     cleanup.port.typed('s-joined')
-    cleanup.port.closed('lead')
+    stopped('lead')
     await settle()
     expect(closeStarted.mock.calls).toEqual([['left', 'now']])
   })
@@ -224,18 +142,19 @@ describe('closing the harnesses a closed harness started', () => {
   it('tries one that would not close again, a moment later, and says it once the tries are spent', async () => {
     const refuse: Record<string, AgentCloseResult> = { stuck: { error: 'CLOSE_FAILED', detail: 'Could not save its screen.' }, odd: { error: 'AGENT_CHANGED' },
       blip: { error: 'IDENTITY_UNAVAILABLE' } }
-    const { cleanup, closeStarted, log, waited } = setup([kid('stuck', { defaultName: undefined, title: 'Fix the login test' }), kid('odd', { defaultName: undefined }), kid('blip')], {},
+    const { cleanup, stopped, closeStarted, log, waited } = setup([kid('stuck', { defaultName: undefined, title: 'SECRET-TITLE-MARKER' }), kid('odd', { defaultName: undefined }), kid('blip')], {},
       { refuse, wait: async (ms) => { waited.push(ms); delete refuse.blip } })
-    cleanup.port.closed('lead')
+    stopped('lead')
     await settle()
     // Its identity between two writes for a moment: closed on the second try.
     expect(closeStarted.mock.calls.filter(([id]) => id === 'blip')).toHaveLength(2)
     expect(closeStarted.mock.calls.filter(([id]) => id === 'stuck')).toHaveLength(CASCADE_TRIES)
     expect(waited).toEqual(Array(CASCADE_TRIES - 1).fill(CASCADE_RETRY_MS))
+    // A harness's name or title holds the person's words: the log says it by its id.
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[agent-cleanup] closed blip (blip): the harness that started it was closed. Its conversation is kept.',
-      '[agent-cleanup] could not close Fix the login test (stuck) (the harness that started it was closed): Could not save its screen.',
-      '[agent-cleanup] could not close a harness (odd) (the harness that started it was closed): AGENT_CHANGED',
+      '[agent-cleanup] closed blip: the harness that started it was closed. Its conversation is kept.',
+      '[agent-cleanup] could not close stuck (the harness that started it was closed): CLOSE_FAILED',
+      '[agent-cleanup] could not close odd (the harness that started it was closed): AGENT_CHANGED',
     ])
     // Stopped meanwhile: not tried again.
     const halted = setup([kid('stuck')], {}, { refuse: { stuck: { error: 'CLOSE_FAILED' } } })
@@ -243,9 +162,9 @@ describe('closing the harnesses a closed harness started', () => {
     await halted.cleanup.closeStartedBy('lead')
     expect(halted.closeStarted).toHaveBeenCalledTimes(1)
     const failing = setup([], {}, { refresh: async () => { throw new Error('the core is gone') } })
-    failing.cleanup.port.closed('lead-agent-id')
+    failing.stopped('lead-agent-id')
     await settle()
-    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: the core is gone')
+    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: Error')
     // The real wait: a timer that holds nothing open.
     vi.useFakeTimers()
     const timed = setup([kid('stuck')], {}, { refuse: { stuck: { error: 'CLOSE_FAILED' } }, wait: undefined })
@@ -253,6 +172,88 @@ describe('closing the harnesses a closed harness started', () => {
     await vi.advanceTimersByTimeAsync((CASCADE_TRIES - 1) * CASCADE_RETRY_MS)
     await tries
     expect(timed.closeStarted).toHaveBeenCalledTimes(CASCADE_TRIES)
+  })
+})
+
+describe('handing what Hachi started to the person, however Hachi closes', () => {
+  // docs/design/2026-11-12-hachi.md: closing Hachi would end the person's builders and reviewers.
+  const HACHI = { machineId: 'machine-1', agentId: 'hachi', name: 'Hachi', engine: 'claude', hachi: true as const }
+  const startedByHachi = (agentId: string, machineId = 'machine-1', at = NOW - MIN) =>
+    new Ledger(ledgerPath(dir)).append({ at, depth: 1, by: HACHI, child: { machineId, agentId, name: agentId } })
+  const hachiKid = (agentId: string) => kid(agentId, { parentAgentId: 'hachi', active: true })
+
+  it('hands them over when Hachi stops, here and on its other machines, instead of closing them', async () => {
+    const sessions = [hachiKid('api'), hachiKid('rev'), kid('lead-kid', { active: true })]
+    startedByHachi('api')
+    startedByHachi('rev')
+    startedByHachi('far', 'machine-2')
+    const tell = vi.fn(async () => ({ handed: true }))
+    const count = vi.fn()
+    const t = setup(sessions, {}, { tell })
+    ;(t.core as { count?: unknown }).count = count
+    t.stopped('hachi')
+    await settle()
+    expect(t.closeStarted).not.toHaveBeenCalled()
+    expect(tell.mock.calls).toEqual([['machine-2', { action: 'handed', row: { at: NOW, from: { machineId: 'machine-1', agentId: 'hachi' }, handed: { machineId: 'machine-2', agentId: 'far' } } }]])
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' })).toEqual([])
+    expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
+    expect(count.mock.calls).toEqual([['hachi_handed_to_person'], ['hachi_handed_to_person'], ['hachi_handed_to_person']])
+    // Never closed later for sitting idle: they are the person's.
+    t.advance(2 * IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    t.advance(2 * IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    expect(t.closeStarted).not.toHaveBeenCalled()
+    // Another agent's harnesses still close with their starter.
+    t.stopped('lead')
+    await settle()
+    expect(t.closeStarted.mock.calls).toEqual([['lead-kid', 'now']])
+  })
+
+  it('asks another machine over this daemon\'s own socket by default, and says it when no daemon answers', async () => {
+    startedByHachi('far', 'machine-2')
+    const t = setup([], {})
+    t.stopped('hachi')
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringMatching(/^\[hachi\] could not hand far to the person on its machine yet: .*Asked again at the next look\.$/)))
+    t.cleanup.port.stop()
+  })
+
+  it('hands them over once Hachi has been gone a while without a stop (its process died, a reboot), never at a blip', async () => {
+    const sessions = [row('hachi', { active: true, dsh: 'autonomous/hachi' }), hachiKid('api')]
+    startedByHachi('api')
+    startedByHachi('far', 'machine-2')
+    let reachable = false
+    const tell = vi.fn(async () => { if (!reachable) throw new Error('asleep'); return { handed: true } })
+    const t = setup(sessions, { api: 0 }, { tell })
+    await t.cleanup.look()
+    // Gone: its process died. A core starting again marks it inactive for a moment, which is no hand-over.
+    sessions[0] = { ...sessions[0], active: false }
+    await t.cleanup.look()
+    t.advance(GONE_MS - 1)
+    await t.cleanup.look()
+    sessions[0] = { ...sessions[0], active: true }
+    t.advance(GONE_MS)
+    await t.cleanup.look()
+    expect(tell).not.toHaveBeenCalled()
+    sessions.splice(0, 1)
+    await t.cleanup.look()
+    t.advance(GONE_MS)
+    await t.cleanup.look()
+    const ledger = new Ledger(ledgerPath(dir))
+    expect(ledger.parentOf({ machineId: 'machine-1', agentId: 'api' })).toBeNull()
+    // The other machine was asleep: still Hachi's there and here, asked again at the next look.
+    expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' }).map((r) => r.child.agentId)).toEqual(['far'])
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far to the person on its machine yet: Error. Asked again at the next look.')
+    reachable = true
+    t.advance(LOOK_EVERY_MS)
+    await t.cleanup.look()
+    expect(ledger.childrenOf({ machineId: 'machine-1', agentId: 'hachi' })).toEqual([])
+    expect(tell).toHaveBeenCalledTimes(2)
+    // Nothing left to hand over: no more asking.
+    t.advance(LOOK_EVERY_MS)
+    await t.cleanup.look()
+    expect(tell).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -268,7 +269,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     await cleanup.look()
     // The person's own harness is never asked about, and one whose last move is not known is left alone.
     expect(closeStarted.mock.calls).toEqual([['done', 'idle']])
-    expect(log.mock.calls).toEqual([['[agent-cleanup] closed done (done): another agent started it, and it has sat idle 30 minutes. Its conversation is kept.']])
+    expect(log.mock.calls).toEqual([['[agent-cleanup] closed done: another agent started it, and it has sat idle 30 minutes. Its conversation is kept.']])
   })
 
   it('counts a harness starting again (resumed, restored) as moving: the person resumed it to read it', async () => {
@@ -327,7 +328,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     delete refuse.busy
     await cleanup.look()
     expect(closeStarted).toHaveBeenCalledTimes(2)
-    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] closed busy \(busy\): .* idle 3\d minutes/)])
+    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] closed busy: .* idle 3\d minutes/)])
     // Refused, then gone: nothing is kept for it, and back it is a new run, seen from then.
     const gone = setup([kid('x')], { x: IDLE_CLOSE_MS }, { refuse: { x: { error: 'SESSION_NOT_IDLE' } } })
     await gone.cleanup.look()
@@ -343,6 +344,54 @@ describe('closing a harness another agent started once it has sat idle', () => {
     expect(gone.closeStarted).toHaveBeenCalledTimes(2)
   })
 
+  it('leaves one that still runs background commands open, says so once, and closes it once it has sat two hours', async () => {
+    expect(BACKGROUND_CLOSE_MS).toBe(2 * 60 * 60_000)
+    const sessions = [kid('kid')]
+    const refuse: Record<string, AgentCloseResult> = { kid: { error: 'SESSION_NOT_IDLE', activity: 'idle', backgroundCommands: 2 } }
+    // How long ago its last answer was, at each look.
+    const quiet: Record<string, number | null> = { kid: IDLE_CLOSE_MS }
+    const t = setup(sessions, quiet, { refuse })
+    await t.cleanup.look()
+    t.advance(IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    t.advance(ASK_AGAIN_MS)
+    await t.cleanup.look()
+    expect(t.closeStarted.mock.calls).toEqual([['kid', 'idle'], ['kid', 'idle']])
+    expect(t.log.mock.calls).toEqual([['[agent-cleanup] left kid open: 2 background commands running']])
+    // Two hours after its last answer: closed whatever runs, one line with the count.
+    delete refuse.kid
+    quiet.kid = BACKGROUND_CLOSE_MS
+    t.closeStarted.mockImplementationOnce(async () => { sessions.splice(0, 1); return { closed: true, backgroundCommands: 2 } })
+    t.advance(BACKGROUND_CLOSE_MS)
+    await t.cleanup.look()
+    expect(t.closeStarted).toHaveBeenLastCalledWith('kid', 'idle', true)
+    expect(t.log).toHaveBeenLastCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed kid: another agent started it, and it has sat idle \d+ minutes, with 2 background commands running\. Its conversation is kept\.$/))
+    // Gone, it is forgotten: back and refused again, it is said again.
+    await t.cleanup.look()
+    sessions.push(kid('kid'))
+    refuse.kid = { error: 'SESSION_NOT_IDLE', activity: 'idle', backgroundCommands: 1 }
+    quiet.kid = IDLE_CLOSE_MS
+    await t.cleanup.look()
+    t.advance(IDLE_CLOSE_MS)
+    await t.cleanup.look()
+    expect(t.log).toHaveBeenLastCalledWith('[agent-cleanup] left kid open: 1 background command running')
+    expect(t.log).toHaveBeenCalledTimes(3)
+  })
+
+  it('past two hours closes one that answers no count with the usual line, and a starter\'s close never says the ceiling', async () => {
+    const sessions = [kid('old'), kid('orphan', { parentAgentId: 'gone' })]
+    const t = setup(sessions, { old: BACKGROUND_CLOSE_MS })
+    await t.cleanup.look()
+    t.advance(BACKGROUND_CLOSE_MS)
+    await t.cleanup.look()
+    await t.cleanup.closeStartedBy('gone')
+    expect(t.closeStarted.mock.calls).toEqual([['old', 'idle', true], ['orphan', 'now']])
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual([
+      '[agent-cleanup] closed old: another agent started it, and it has sat idle 120 minutes. Its conversation is kept.',
+      '[agent-cleanup] closed orphan: the harness that started it was closed. Its conversation is kept.',
+    ])
+  })
+
   it('says once a close that failed for more than its state, and again only once it has come back', async () => {
     const sessions = [kid('broken')]
     const { cleanup, closeStarted, log, advance, core } = setup(sessions, { broken: IDLE_CLOSE_MS }, { refuse: { broken: { error: 'CLOSE_FAILED', detail: 'Could not save its screen.' } } })
@@ -352,7 +401,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     advance(ASK_AGAIN_MS)
     await cleanup.look()
     expect(closeStarted).toHaveBeenCalledTimes(2)
-    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] could not close broken \(broken\) \(another agent started it, .*\): Could not save its screen\.$/)])
+    expect(log.mock.calls.map(([line]) => line)).toEqual([expect.stringMatching(/^\[agent-cleanup\] could not close broken \(another agent started it, .*\): CLOSE_FAILED$/)])
     ;(core.agents.live as ReturnType<typeof vi.fn>).mockReturnValueOnce([])
     await cleanup.look()
     await cleanup.look()
@@ -386,7 +435,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     const { tick, log } = setup([], {}, { refresh: async () => { throw 'no core' } })
     tick()!()
     await settle()
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: no core')
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: string')
     vi.useFakeTimers()
     const core = fakeCore({ dataDir: dir, agents: { live: vi.fn(() => []) } })
     const timed = createAgentCleanup(core, { log: vi.fn() })
@@ -398,12 +447,57 @@ describe('closing a harness another agent started once it has sat idle', () => {
   })
 })
 
+// A delete erases the opening words of what the harness was told (`harness tell`). The core asked the ledger itself
+// until the audit of 2026-11-12: its lock could hold the core's loop for two seconds.
+describe('erasing what a deleted harness was told', () => {
+  const told = (agentId: string, probe: string): Told =>
+    ({ at: NOW, by: { machineId: 'machine-1', agentId: 'lead' }, told: { machineId: 'machine-1', agentId }, probe })
+
+  it('drops its told lines from the agent ledger, keeps every other line, and says it did', async () => {
+    const ledger = new Ledger(ledgerPath(dir))
+    ledger.append(told('kid', 'fix the login'))
+    ledger.append(told('other', 'write the tests'))
+    const { cleanup, log } = setup([])
+    expect(await cleanup.port.forgetTold('kid')).toBe(true)
+    const kept = readFileSync(ledgerPath(dir), 'utf8')
+    expect(kept).not.toContain('fix the login')
+    expect(kept).toContain('write the tests')
+    // A harness nobody told anything has nothing to erase: done all the same, as every delete asks.
+    expect(await cleanup.port.forgetTold('nobody')).toBe(true)
+    expect(readFileSync(ledgerPath(dir), 'utf8')).toBe(kept)
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  // The wait blocks the edge host's process, which other services share: a quarter of a second, not the ledger's two.
+  it('gives up on a ledger another writer holds within a quarter of a second, and says so', async () => {
+    expect(FORGET_LOCK_WAIT_MS).toBe(250)
+    const ledger = new Ledger(ledgerPath(dir))
+    ledger.append(told('kid', 'fix the login'))
+    // A live writer's lock: this process's own, which is alive.
+    writeFileSync(`${ledgerPath(dir)}.lock`, JSON.stringify({ pid: process.pid, ...processLockIdentity(process.pid) }))
+    const { cleanup, log } = setup([], {}, { forgetLockWaitMs: 30 })
+    const began = Date.now()
+    expect(await cleanup.port.forgetTold('kid')).toBe(false)
+    expect(Date.now() - began).toBeLessThan(1_500)
+    expect(readFileSync(ledgerPath(dir), 'utf8')).toContain('fix the login')
+    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: LedgerBusyError']])
+  })
+
+  it('says it did not, and why in the log, when the ledger could not be rewritten', async () => {
+    // A file where the ledger's folder goes: nothing under it can be locked or written.
+    writeFileSync(join(dir, 'agent-client'), '')
+    const { cleanup, log } = setup([])
+    expect(await cleanup.port.forgetTold('kid-0123456789')).toBe(false)
+    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: E[A-Z]+$/)]])
+  })
+})
+
 describe('what the cleanup keeps and how it runs', () => {
   it('remembers the newest thousand the person joined, and reads a damaged file as none', async () => {
     const full = Object.fromEntries([['old', 1], ['bad', 'x'], ...Array.from({ length: JOINED_MAX - 1 }, (_, i) => [`k${i}`, 2 + i])])
     writeFileSync(joinedPath(dir), JSON.stringify({ version: 1, joined: full }))
-    const { cleanup, closeStarted } = setup([kid('old', { parentAgentId: 'p' }), kid('bad', { parentAgentId: 'p' })])
-    cleanup.port.closed('p')
+    const { cleanup, stopped, closeStarted } = setup([kid('old', { parentAgentId: 'p' }), kid('bad', { parentAgentId: 'p' })])
+    stopped('p')
     await settle()
     expect(closeStarted.mock.calls).toEqual([['bad', 'now']])
     cleanup.port.typed('newest')
@@ -411,10 +505,11 @@ describe('what the cleanup keeps and how it runs', () => {
     expect(Object.keys(kept)).toHaveLength(JOINED_MAX)
     expect(kept.old).toBeUndefined()
     expect(kept.newest).toBe(NOW)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const damaged of ['{ not json', '{}']) {
       writeFileSync(joinedPath(dir), damaged)
       const fresh = setup([kid('k0', { parentAgentId: 'p' })])
-      fresh.cleanup.port.closed('p')
+      fresh.stopped('p')
       await settle()
       expect(fresh.closeStarted).toHaveBeenCalledWith('k0', 'now')
     }
@@ -424,9 +519,43 @@ describe('what the cleanup keeps and how it runs', () => {
     const blocked = join(dir, 'blocked')
     writeFileSync(blocked, '')
     const core = fakeCore({ dataDir: join(blocked, 'data') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const log = vi.fn()
     createAgentCleanup(core, { log, every: () => () => {} }).port.typed('kid')
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: /))
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: E[A-Z]+$/))
+  })
+
+  it('a torn agent-cleanup.json is set aside, not written over', () => {
+    writeFileSync(joinedPath(dir), '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setup([]).cleanup.port.typed('kid')
+    expect(readFileSync(`${joinedPath(dir)}.unreadable`, 'utf8')).toBe('{"')
+    expect(JSON.parse(readFileSync(joinedPath(dir), 'utf8'))).toEqual({ version: 1, joined: { kid: NOW } })
+    expect(warn).toHaveBeenCalledWith('[state] agent-cleanup.json could not be read (not valid JSON); kept as agent-cleanup.json.unreadable, starting empty.')
+  })
+
+  // Read as none, the next join would forget every harness the person joined before, and cleanup could close them.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an agent-cleanup.json this account cannot read is not written over', () => {
+    setup([]).cleanup.port.typed('kid')
+    const before = readFileSync(joinedPath(dir), 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(joinedPath(dir), 0o000)
+    try { setup([]).cleanup.port.typed('other') } finally { chmodSync(joinedPath(dir), 0o600) }
+    expect(readFileSync(joinedPath(dir), 'utf8')).toBe(before)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const { cleanup } = setup([])
+    disk.events = []
+    cleanup.port.typed('kid')
+    expect(touching(joinedPath(dir))).toEqual([['rename', '<tmp>', joinedPath(dir)]])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const old = `${joinedPath(dir)}.tmp`
+    writeFileSync(old, 'not ours')
+    setup([]).cleanup.port.typed('kid')
+    expect(readFileSync(old, 'utf8')).toBe('not ours')
   })
 
   it('closes nothing, and knows no time, on a core that offers neither', async () => {
@@ -440,14 +569,24 @@ describe('what the cleanup keeps and how it runs', () => {
     await cleanup.look()
     expect(core.agents.live).toHaveBeenCalledTimes(2)
     await cleanup.closeStartedBy('lead')
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] could not close a (a) (the harness that started it was closed): UNSUPPORTED')
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] could not close a (the harness that started it was closed): UNSUPPORTED')
   })
 
   it('starts as the agent cleanup\'s port', () => {
     vi.useFakeTimers()
     const ports = emptyPorts()
     startAgentCleanup(fakeCore({ dataDir: dir }), ports)
-    expect(ports.agentCleanup).toMatchObject({ closed: expect.any(Function), typed: expect.any(Function), stop: expect.any(Function) })
+    expect(ports.agentCleanup).toMatchObject({ typed: expect.any(Function), forgetTold: expect.any(Function), stop: expect.any(Function) })
+    ports.agentCleanup!.stop()
+  })
+
+  // The Swarm was deleted on 2026-11-14 (services/swarmLeftovers.ts): what it left goes as the edge host starts.
+  it('deletes what the Swarm left in the data folder as it starts', async () => {
+    mkdirSync(join(dir, 'super-tabs'))
+    writeFileSync(join(dir, 'super-tabs', 'retained.json'), '{}')
+    const ports = emptyPorts()
+    startAgentCleanup(fakeCore({ dataDir: dir }), ports)
+    await vi.waitFor(() => expect(existsSync(join(dir, 'super-tabs'))).toBe(false))
     ports.agentCleanup!.stop()
   })
 })

@@ -1,10 +1,17 @@
 import chokidar, { type FSWatcher } from 'chokidar'
+import { pathToWatch } from '../../lib/pathToWatch.js'
 import type { Watcher } from '../../watcher/watcher.js'
 import { createLiveSessions, type LiveSessionDeps } from './liveSessions.js'
+import type { OtherStreams } from './otherStreams.js'
 
-/** The core watches file names and asks workers to read. Only legacy engines use the local tailer. */
-export function createLiveWatcher(local: Watcher, deps: Omit<LiveSessionDeps, 'watch' | 'unwatch'>) {
-  const paths = new Set<string>()
+/** The core watches file names and asks workers to read. Only legacy engines use the local tailer. The other engines'
+ *  transcripts are their worker's to tail: a drain of one of their sessions asks it to read (core/engines/otherStreams.ts). */
+export function createLiveWatcher(local: Watcher, deps: Omit<LiveSessionDeps, 'watch' | 'unwatch'>, others: Pick<OtherStreams, 'drain' | 'drainAll'>) {
+  /** Each followed transcript by the path chokidar was given, which names its changes: on Windows its long name, as by a
+   *  short one the folder chokidar watches for a transcript not there yet would abort the core at its first change
+   *  (lib/pathToWatch.ts). One that cannot be watched is read by the reconciliation alone. */
+  const paths = new Map<string, string>()
+  const followed = (watchedAs: string): string => paths.get(watchedAs) ?? watchedAs
   const followUps = new Map<string, ReturnType<typeof setTimeout>>()
   let signals: FSWatcher | null = null
   const change = (path: string): void => {
@@ -19,20 +26,29 @@ export function createLiveWatcher(local: Watcher, deps: Omit<LiveSessionDeps, 'w
     }, 60))
   }
   const live = createLiveSessions({ ...deps,
-    watch(path) { paths.add(path); signals?.add(path) },
+    watch(path) {
+      const watchedAs = pathToWatch(path)
+      if (watchedAs === undefined) return
+      paths.set(watchedAs, path)
+      signals?.add(watchedAs)
+    },
     unwatch(path) {
-      paths.delete(path)
+      for (const [watchedAs, given] of paths) {
+        if (given !== path) continue
+        paths.delete(watchedAs)
+        void signals?.unwatch(watchedAs)
+      }
       clearTimeout(followUps.get(path))
       followUps.delete(path)
-      void signals?.unwatch(path)
     },
   })
   const watcher: Pick<Watcher, 'on' | 'start' | 'stop' | 'addSession' | 'removeSession' | 'hold' | 'tails' | 'setTail' | 'pollSession' | 'pollAll'> = {
     on: local.on.bind(local),
     start() {
       local.start()
-      signals ??= chokidar.watch([...paths], { ignoreInitial: true })
-        .on('add', path => live.changed(path)).on('change', change).on('unlink', path => live.changed(path))
+      signals ??= chokidar.watch([...paths.keys()], { ignoreInitial: true })
+        .on('add', path => live.changed(followed(path))).on('change', path => change(followed(path)))
+        .on('unlink', path => live.changed(followed(path)))
     },
     async stop() {
       for (const timer of followUps.values()) clearTimeout(timer)
@@ -50,8 +66,8 @@ export function createLiveWatcher(local: Watcher, deps: Omit<LiveSessionDeps, 'w
     hold: (id, path, timeout) => live.tails(id, path) ? live.hold(id, path, timeout) : local.hold(id, path, timeout),
     tails: (id, path) => live.tails(id, path) || local.tails(id, path),
     setTail(id, offset) { local.setTail(id, offset); live.setTail(id, offset) },
-    async pollSession(id) { await Promise.all([local.pollSession(id), live.pollSession(id)]) },
-    async pollAll() { await Promise.all([local.pollAll(), live.pollAll()]) },
+    async pollSession(id) { await Promise.all([local.pollSession(id), live.pollSession(id), others.drain(id)]) },
+    async pollAll() { await Promise.all([local.pollAll(), live.pollAll(), others.drainAll()]) },
   }
   return { live, watcher }
 }

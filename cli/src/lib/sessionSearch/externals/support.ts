@@ -10,8 +10,11 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
+import { lstartMs } from '../../lstart.js'
+import { startMarkerMs } from '../../processProof.js'
 import { processRows } from '../../processTable.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
+import { windowsStartTime } from '../../windows/treeKill.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 import { externalReadFailed } from '../evidence.js'
 
@@ -100,9 +103,15 @@ export function record(value: unknown): Record<string, unknown> | null {
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** An absolute folder, as a session records it. */
-export function absoluteFolder(value: unknown): string | null {
-  return typeof value === 'string' && value.startsWith('/') ? value : null
+/**
+ * An absolute folder, as a session records it. On Windows a drive folder (`C:\`, `C:/`): Claude Code writes its cwd
+ * so there, and a `/`-only rule dropped every Windows session (Ken's VM, 2026-11-26). Never a share or a device path
+ * (`\\server`, `\\?\`, `\\.\`, `//server`): the folder is later resolved and walked, and opening a share can reach
+ * another machine.
+ */
+export function absoluteFolder(value: unknown, platform: NodeJS.Platform = process.platform): string | null {
+  if (typeof value !== 'string') return null
+  return (platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(value) : value.startsWith('/')) ? value : null
 }
 
 /** Epoch ms from seconds, milliseconds, microseconds or an ISO string; null for anything else. */
@@ -214,16 +223,23 @@ export function parseTtys(stdout: string): Map<number, string | null> {
 }
 
 /** The machine's processes, as the daemon's own process scan reads them (it repairs rewritten rows);
- *  none when `ps` could not be read. */
-export async function listProcesses(read: typeof processRows = processRows): Promise<RunningProcess[]> {
+ *  none when `ps` could not be read. `startMarker` is the Windows `w:<FILETIME>` start, kept so a parent walk
+ *  ends at a reused pid. */
+export async function listProcesses(
+  read: typeof processRows = processRows,
+): Promise<Array<RunningProcess & { startMarker?: string }>> {
   const rows = await read()
   if (!rows) externalReadFailed(new Error('process table unavailable'), 'process table')
   return (rows ?? []).map((row) => {
-    const started = Date.parse(row.startMarker)
+    // A Windows start is a FILETIME (processProof.ts); any other is ps's lstart, read in its C form alone, as a tab's
+    // proof reads it (lstart.ts).
+    const started = windowsStartTime(row.startMarker) !== null ? startMarkerMs(row.startMarker) ?? undefined : lstartMs(row.startMarker)
+    const generation = row.startTicks !== undefined ? `linux:${row.startTicks}` : started !== undefined ? `ps:${started}` : undefined
     return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
-      ...(Number.isFinite(started) ? { started } : {}),
-      ...(row.startTicks !== undefined ? { generation: `linux:${row.startTicks}` }
-        : Number.isFinite(started) ? { generation: `ps:${started}` } : {}) }
+      ...(row.commandPath !== undefined ? { commandPath: row.commandPath } : {}),
+      ...(started !== undefined ? { started } : {}),
+      ...(windowsStartTime(row.startMarker) !== null ? { startMarker: row.startMarker } : {}),
+      ...(generation !== undefined ? { generation } : {}) }
   })
 }
 
@@ -231,6 +247,7 @@ export async function listProcesses(read: typeof processRows = processRows): Pro
  * Each of [pids]' working folder. Linux says it in /proc; macOS only through lsof, asked once for every pid
  * (`-a -d cwd`: that one descriptor) under the same timeout and output bound as its open files. A pid whose
  * folder cannot be read (gone, another user's) is left out: unknown, which admission reads as "may hold any".
+ * Windows has neither, so every folder there is unknown, without spawning.
  */
 export async function processCwds(
   pids: readonly number[],
@@ -239,7 +256,7 @@ export async function processCwds(
   link: (path: string) => Promise<string> = readlink,
 ): Promise<Map<number, string>> {
   const cwds = new Map<number, string>()
-  if (!pids.length) return cwds
+  if (!pids.length || os === 'win32') return cwds
   if (os === 'linux') {
     await Promise.all(pids.map(async (pid) => {
       const cwd = await link(`/proc/${pid}/cwd`).catch(() => null)
@@ -301,20 +318,23 @@ export async function sameProject(a: string, b: string, stop?: string): Promise<
   return left !== null && left === right
 }
 
-/** The machine's processes, looked at once per view: the list is read on first use and kept. */
+/** The machine's processes, looked at once per view: the list is read on first use and kept. Open files are
+ *  read through lsof, which Windows has not: there they are unknown, as when lsof fails, without spawning. */
 export function processView(
   exec: Run = run,
   alive: (pid: number) => boolean = processAlive,
   list: () => Promise<RunningProcess[]> = listProcesses,
-  cwds: (pids: readonly number[]) => Promise<Map<number, string>> = (pids) => processCwds(pids, exec),
+  cwds: (pids: readonly number[]) => Promise<Map<number, string>> = (pids) => processCwds(pids, exec, platform),
+  platform: NodeJS.Platform = process.platform,
 ): ProcessView {
   let listed: Promise<RunningProcess[]> | null = null
+  const lsof = platform !== 'win32'
   return {
     list: () => (listed ??= list()),
-    openFiles: async (pids) => pids.length
+    openFiles: async (pids) => pids.length && lsof
       ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', '-a', '-p', pids.join(',')], 3_000) ?? '')
       : new Map(),
-    openFilesOf: async (commands) => commands.length
+    openFilesOf: async (commands) => commands.length && lsof
       ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
       : new Map(),
     cwds,
@@ -322,9 +342,14 @@ export function processView(
   }
 }
 
-/** Each of [pids]' terminal, or null for a process with none (an app, a server). */
-export async function processTtys(pids: readonly number[], exec: Run = run): Promise<Map<number, string | null>> {
-  if (!pids.length) return new Map()
+/** Each of [pids]' terminal, or null for a process with none (an app, a server). Windows has no tty column, and
+ *  a `ps` on its PATH (Git's) reads another table: none is known there, as when ps fails, without spawning. */
+export async function processTtys(
+  pids: readonly number[],
+  exec: Run = run,
+  platform: NodeJS.Platform = process.platform,
+): Promise<Map<number, string | null>> {
+  if (!pids.length || platform === 'win32') return new Map()
   return parseTtys(await exec('ps', ['-o', 'pid=,tty=', '-p', pids.join(',')], 3_000) ?? '')
 }
 

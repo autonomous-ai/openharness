@@ -96,7 +96,7 @@ realDescribe.sequential('real macOS executable identity', () => {
   it('discovers an exec replacement in a real private pane without caching its old image', async () => {
     const root = await fixture()
     const native = await nativeSleeper(root, 'unrecognizable image')
-    server = await isolatedTmux({ ...process.env, ZDOTDIR: root, CODEX_HOME: join(root, 'codex') })
+    server = await isolatedTmux({ ZDOTDIR: root, CODEX_HOME: join(root, 'codex') })
     vi.stubEnv('TMUX_TMPDIR', server.root)
     vi.stubEnv('TMUX', undefined)
     vi.stubEnv('TMUX_PANE', undefined)

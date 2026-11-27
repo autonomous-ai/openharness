@@ -32,6 +32,8 @@ const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'git_pull_requests_status', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
   // A held launch's cancellation and its receipt contain the client's private request identity.
   'agent_create_cancel', 'agent_handoff_complete',
+  // Change agent moving a conversation between engines (services/sessionMigrate.ts): its answer names the folder.
+  'agent_session_migrate',
   // Memories (services/memory.ts): what this machine's agents remember, and About You and its on/off choice.
   'memory_snapshot', 'memory_about_put', 'memory_deliver',
   // Cloud agents (services/cloud.ts): a cloud harness's conversation, the person's words for it, which are connected.
@@ -43,20 +45,25 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with, and where
   // a guest may start a harness (the owner's folders).
   'shared_machines', 'guest_folders',
-  'super_tabs',
-  // An agent's instructions file (services/projects.ts), read and saved from the owner's other computers: what the person
-  // wrote there is theirs, so the relay sees none of it, in either direction.
-  'agent_instructions_read', 'agent_instructions_write',
   // An agent's browser from the owner's other computers (services/agentBrowser.ts): its settings carry the proxy and its
-  // password, a proxy test's answer the proxy's exit address.
+  // password, a proxy test's answer the proxy's exit address; Start, Stop and its window's size name the agent. The
+  // agent's own commands (`agent_browser_run`) are answered to a local asker only, so they are on no list here.
   'agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
+  'agent_browser_start', 'agent_browser_stop', 'agent_browser_window',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
-  'browser_callback', ...ROUTE_COMMAND_TYPES])
+  'browser_callback',
+  // An engine's sign-in from Chat UI (services/engineProbe.ts, lib/engineSignIn.ts): its page, its redirect and its code.
+  'engine_sign_in',
+  // Another of the owner's machines following harnesses here (gateway/harnessWatch.ts): their ids and what they do.
+  'harness_watch', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))
 /** The pair brain, machine to machine (daemons/BRAIN.md). A watch carries question text and recaps; the
  * writes (answer, send, stop, start, pause, resume) act on a harness through the owning machine's floor
  * (pair/owner.ts). Sealed both ways, always: the relay sees the outer type only. */
 export const PAIR_RESULTS = new Set([...PAIR_REQUESTS].map(type => `${type}_result`))
+/** What a `harness_watch` is told (gateway/harnessWatch.ts): sealed to the watching connection alone, so a frame of
+ * this type that is not pairwise sealed was made up by the relay and is dropped (lib/remoteRelay.ts). */
+export const HARNESS_EVENT = 'harness_event'
 /** Pushed to one watcher with the daemon's `wrapTarget` (pairwise, that connection only), never broadcast. */
 export const PAIR_PUSHES = new Set(['pair_event'])
 /** The loopback-only `pair` request's reply. Listed so a relayed `pair` (refused LOCAL_ONLY) is answered

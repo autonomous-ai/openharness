@@ -14,6 +14,7 @@ import path from 'node:path'
 import { Duplex } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { env } from '../config/env.js'
+import { errorKind } from '../lib/log.js'
 import { currentPtyVersion } from '../lib/ptyHost/launch.js'
 // serial.ts imports this file too. The two ids are read inside functions only, never while the modules load.
 import { DIAL_PRODUCT_ID, DIAL_VENDOR_ID, type DialPort } from './serial.js'
@@ -31,6 +32,8 @@ export const CLOSE_WAIT_MS = 2_000
 export const PROBE_TIMEOUT_MS = 3_000
 
 const COM_NAME = /^COM[1-9]\d{0,2}$/
+/** harness-serial's exit when an open port fails under it (serial/src/model.rs `EXIT_CLOSED`). */
+const EXIT_CLOSED = 5
 
 export interface SerialCommand { file: string; args: string[] }
 export type CommandFor = (args: string[]) => SerialCommand | null
@@ -101,6 +104,8 @@ export interface WindowsDialWatch {
   ports(): Promise<DialPort[]>
   /** Whether this user is at the screen. Starts discovery; unknown (no valid line yet) reads as false. */
   console(): boolean
+  /** Called when a line changes the state (a COM port arrived or left, the console moved); returns the unsubscribe. */
+  onChange(listener: () => void): () => void
   stop(): void
 }
 
@@ -124,6 +129,7 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
   let firstRead: Promise<void> | null = null
   let finishFirstRead: (() => void) | null = null
   let stopped = false
+  const listeners = new Set<() => void>()
   // The same trouble every scan is said once; a state in between lets it be said again.
   const say = (line: string): void => { if (line !== said) { said = line; log(line) } }
   const wake = (): void => { finishFirstRead?.(); finishFirstRead = null }
@@ -135,14 +141,15 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
     if (!command) { say('cable: harness-serial is not installed — no USB dial can be found'); return }
     let proc: ChildProcessWithoutNullStreams
     try { proc = run(command.file, command.args, { stdio: 'pipe', windowsHide: true }) }
-    catch (error) { say(`cable: harness-serial watch could not start: ${String(error)}`); return }
+    catch (error) { say(`cable: harness-serial watch could not start: ${errorKind(error)}`); return }
     child = proc
     firstRead = new Promise<void>((resolve) => {
       const timer = setTimeout(wake, firstLineMs)
       timer.unref()
       finishFirstRead = () => { clearTimeout(timer); resolve() }
     })
-    let pending = '', stderr = ''
+    // The bridge's stderr can name the person's devices and folders: the watch logs only how much it wrote.
+    let pending = '', stderrBytes = 0
     proc.stdout.setEncoding('utf8')
     proc.stdout.on('data', (chunk: string) => {
       if (child !== proc) return
@@ -150,22 +157,26 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
       for (let end = pending.indexOf('\n'); end >= 0; end = pending.indexOf('\n')) {
         const next = parseSerialState(pending.slice(0, end).trim())
         pending = pending.slice(end + 1)
-        if (next) { state = next; said = null; wake() }
+        if (!next) continue
+        const changed = JSON.stringify(next) !== JSON.stringify(state)
+        state = next; said = null; wake()
+        if (changed) for (const listener of listeners) listener()
       }
     })
     proc.stderr.setEncoding('utf8')
-    proc.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-500) })
+    proc.stderr.on('data', (chunk: string) => { stderrBytes += Buffer.byteLength(chunk) })
     proc.stdin.on('error', () => { /* the child is gone; 'close' says so */ })
     proc.on('error', (error) => {
       if (child !== proc) return
-      say(`cable: harness-serial watch could not start: ${error.message}`)
+      say(`cable: harness-serial watch could not start: ${errorKind(error)}`)
       if (child === proc && proc.pid === undefined) { child = null; wake() }
     })
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (child !== proc) return
       child = null
       state = null
-      say(`cable: harness-serial watch ended (${lastLine(stderr) ?? `exit ${code}`}) — it is started again on a later scan`)
+      const ended = code === null ? `signal ${signal}` : `exit ${code}`
+      say(`cable: harness-serial watch ended (${ended}${stderrBytes ? ` · stderr ${stderrBytes} B` : ''}) — it is started again on a later scan`)
       wake()
     })
     // The daemon's exit is what ends the watch, never the other way round: nothing here may keep it alive.
@@ -183,6 +194,10 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
     console() {
       start()
       return state?.console ?? false
+    },
+    onChange(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
     },
     stop() {
       stopped = true
@@ -216,8 +231,8 @@ function openError(code: number | null, stderr: string): NodeJS.ErrnoException {
  * `harness-serial open <COMn>` as a duplex stream: what is written goes to its stdin, what it prints is the dial's.
  * Resolves once it says `open` on stderr (stdout carries only the dial's bytes, so the signal cannot ride there).
  * Destroying the stream ends the child's stdin and waits for it to exit, killing it after CLOSE_WAIT_MS; a child that
- * ends by itself (an unplug) destroys the stream with its last stderr line as the error's code, which SerialLink
- * hands to the session as the reason.
+ * ends by itself (an unplug) destroys the stream with its last stderr line as the error's message and a fixed code,
+ * which SerialLink hands to the session as the reason.
  */
 export function openWindowsPort(command: SerialCommand, deps: PortStreamDeps = {}): Promise<Duplex> {
   const run = deps.spawn ?? spawn
@@ -297,8 +312,10 @@ function childStream(proc: ChildProcessWithoutNullStreams, stderr: () => string,
     // A pipe's EOF can precede the child's failure status. SerialLink treats EOF as a reason itself,
     // so classify the exit first or an unplug's useful stderr reason is replaced by "end of stream".
     if (eof && code === 0) { stream.push(null); return }
+    // The code is fixed, as SerialLink logs it: exit 5 is the port failing while open (an unplug); stderr's
+    // words stay in the message.
     const why = lastLine(stderr()) ?? `harness-serial exited ${code}`
-    stream.destroy(Object.assign(new Error(why), { code: why }))
+    stream.destroy(Object.assign(new Error(why), { code: code === EXIT_CLOSED ? 'PORT_CLOSED' : 'EIO' }))
   })
   proc.on('error', (error) => stream.destroy(Object.assign(new Error(error.message), { code: 'EIO' })))
   return stream

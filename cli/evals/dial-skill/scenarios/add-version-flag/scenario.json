@@ -1,0 +1,8 @@
+{
+  "need": "no-need",
+  "kind": "feature",
+  "prompt": "Add a `--version` flag to the CLI.",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "node src/cli.js --version | grep -F 1.4.2", "expect": "unknown option --version" }
+}

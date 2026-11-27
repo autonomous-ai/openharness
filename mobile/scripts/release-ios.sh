@@ -71,7 +71,7 @@ if [[ -z "$TEAM_ID" ]]; then
   exit 1
 fi
 
-# What the app asks for (push, the setup hotspot), read from the project too. Empty: none.
+# What the app asks for (the setup hotspot), read from the project too. Empty: none.
 ENTITLEMENTS="$(sed -n 's/.*CODE_SIGN_ENTITLEMENTS = \(.*\);.*/\1/p' ios/Runner.xcodeproj/project.pbxproj | head -1)"
 ENTITLEMENTS="${ENTITLEMENTS:+ios/$ENTITLEMENTS}"
 
@@ -154,14 +154,14 @@ sign_archive_entitlements() {
   [[ -n "$ENTITLEMENTS" ]] || return 0
   echo "==> entitlements onto the archived app (ad-hoc signature)"
   carry_entitlements "$ARCHIVE/Products/Applications/Runner.app" "$ENTITLEMENTS"
-  check_entitlements "$ARCHIVE/Products/Applications/Runner.app" "the archived app" any "$ENTITLEMENTS"
+  check_entitlements "$ARCHIVE/Products/Applications/Runner.app" "the archived app" "$ENTITLEMENTS"
 }
 
 # The app inside the exported ipa, unpacked so its signature can be read, before anything goes up.
 check_ipa_entitlements() {   # $1 = .ipa
   [[ -n "$ENTITLEMENTS" ]] || return 0
   rm -rf "$WORK/ipa" && mkdir -p "$WORK/ipa" && unzip -q "$1" -d "$WORK/ipa"
-  check_entitlements "$(ls -d "$WORK"/ipa/Payload/*.app | head -1)" "the exported app" production \
+  check_entitlements "$(ls -d "$WORK"/ipa/Payload/*.app | head -1)" "the exported app" \
     "$ENTITLEMENTS"
 }
 

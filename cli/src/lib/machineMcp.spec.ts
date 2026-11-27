@@ -4,6 +4,17 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { machineMcpArgs, machineMcpFor, machineMcpLaunchArgs, parseMachineMcp, readMachineMcp, writeMachineMcp, type MachineMcpServers } from './machineMcp.js'
 
+// Pass-through, recording what reaches each file: opened, written, or renamed onto.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.events.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { disk.events.push(`write ${String(args[0])}`); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+
 const lamp = (over: Partial<MachineMcpServers[string]> = {}): MachineMcpServers[string] =>
   ({ command: 'lamp-mcp', args: ['--lamp', 'lamp-75c9'], engines: [], projects: [], ...over })
 
@@ -26,9 +37,9 @@ describe('machine MCP servers (#1872)', () => {
   it('adds nothing for an engine with no path yet, and says which servers it skipped', () => {
     expect(machineMcpArgs('hermes', { lamp: lamp() })).toEqual([])
     expect(machineMcpArgs('claude', {})).toEqual([])
-    expect(machineMcpFor({ lamp: lamp({ engines: ['claude', 'hermes'] }) }, 'hermes', '/x', '/home/p')).toEqual({ servers: {}, noPath: ['lamp'] })
+    expect(machineMcpFor({ lamp: lamp({ engines: ['claude', 'hermes'] }) }, 'hermes', '/x', '/home/p')).toEqual({ servers: {}, unsupported: ['lamp'] })
     // An entry for every engine means every engine with a path: nothing to say at a Hermes launch.
-    expect(machineMcpFor({ lamp: lamp() }, 'hermes', '/x', '/home/p')).toEqual({ servers: {}, noPath: [] })
+    expect(machineMcpFor({ lamp: lamp() }, 'hermes', '/x', '/home/p')).toEqual({ servers: {}, unsupported: [] })
   })
 
   it('chooses by engine and by Harness project folder', () => {
@@ -76,5 +87,52 @@ describe('machine MCP servers (#1872)', () => {
     expect(machineMcpLaunchArgs('codex', '/x', dir)).toEqual([])
     expect(warn.mock.calls.at(-1)?.[0]).toMatch(/^\[agent\] machine MCP servers not added · /)
     warn.mockRestore()
+  })
+})
+
+describe('a file that is not read, in the log', () => {
+  it('says why by its length, never the file\'s folder or JSON\'s words', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sentinel-'))
+    writeFileSync(join(dir, 'mcp-servers.json'), '{"servers": /Users/sentinel/x', { mode: 0o600 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(machineMcpLaunchArgs('codex', '/x', dir)).toEqual([])
+      expect(readMachineMcp(dir).why).toContain('sentinel')
+      const lines = warn.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toMatch(/^\[agent\] machine MCP servers not added · text\(\d+\)$/)
+    } finally { warn.mockRestore() }
+  })
+})
+
+describe('an engine with no machine MCP path, in the log', () => {
+  it('counts the servers not added, never names them: the person chose their names', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'machine-mcp-'))
+    writeMachineMcp({ sentinel_lamp: lamp({ engines: ['copilot'] }) }, dir)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(machineMcpLaunchArgs('copilot', '/x', dir)).toEqual([])
+      const lines = warn.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).toBe('[agent] machine MCP servers not added · copilot has no machine MCP path in this Harness yet · servers 1')
+    } finally { warn.mockRestore() }
+  })
+})
+
+describe('mcp-servers.json on disk', () => {
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'machine-mcp-'))
+    const file = join(dir, 'mcp-servers.json')
+    disk.events = []
+    writeMachineMcp({ lamp: lamp() }, dir)
+    expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'machine-mcp-'))
+    const planted = `${join(dir, 'mcp-servers.json')}.${process.pid}.tmp`
+    writeFileSync(planted, 'planted')
+    writeMachineMcp({ lamp: lamp() }, dir)
+    expect(readFileSync(planted, 'utf8')).toBe('planted')
   })
 })

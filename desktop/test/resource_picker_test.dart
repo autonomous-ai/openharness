@@ -194,7 +194,6 @@ class _ModelSelectionApp extends _ReportedModelApp {
     String machineId,
     String modelId, {
     required bool start,
-    String? grid,
   }) async {
     final answer = await super.controlLocalModel(
       machineId,

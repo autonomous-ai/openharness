@@ -2,9 +2,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../logging/app_log.dart';
 
-/// Where Desktop's speed is read (task #3176): how long opening the app takes
-/// to reach a painted chat, how long a large chat takes to load and page
-/// back, and what each picture costs. One line per mark goes to the app log
+/// Where Desktop's speed is read (task #3176): how long opening the app takes,
+/// step by step. One line per mark goes to the app log
 /// (`~/.harness/logs/app-YYYYMMDD.log`, category `speed`) and `speed_report.dart`
 /// turns those lines into a table.
 ///
@@ -65,30 +64,6 @@ class SpeedMarks {
     if (!_steps.add(name)) return;
     _write('launch step=$name ms=${_now()}');
   }
-
-  /// False once the first chat has been marked, so a row's build can skip
-  /// asking for another frame callback.
-  bool get awaitingFirstChat => !_steps.contains('first_chat_painted');
-
-  /// The first chat row built on screen. Once per launch.
-  void firstChat() => launch('first chat painted');
-
-  /// A page of messages read: [kind] is `latest` (a chat opening) or `older`
-  /// (scrolling back); [requestMs] is the wait for the page, [totalMs] the
-  /// read through merging its rows.
-  void messages({
-    required String kind,
-    required int rows,
-    required int requestMs,
-    required int totalMs,
-  }) => _write(
-    'messages kind=${_clean(kind)} rows=$rows '
-    'request_ms=$requestMs total_ms=$totalMs',
-  );
-
-  /// A picture fetched: [bytes] is what arrived; null bytes is a failure.
-  void image({required int ms, int? bytes}) =>
-      _write('image ok=${bytes == null ? 0 : 1} bytes=${bytes ?? 0} ms=$ms');
 
   int _now() => (_injected?.call() ?? _watch.elapsed).inMilliseconds;
 

@@ -7,4 +7,4 @@ export { PiNormalizer, lastPiTurnText, piMessagesToEvents, windowPiLines } from 
 export { PI_EFFORTS, PI_THINKING_LEVELS, parsePiFooterProfile, parsePiModelsOutput, parsePiThinkingSelection, piThinkingSteps } from './runtimeProfile.js'
 export { piProvider, piSessionFolder, readPiHead } from '../../lib/sessionSearch/externals/pi.js'
 
-export { createRuntimeProfileReader } from './profileReader.js'
+export { createRuntimeProfileReader, transcriptEvidence } from './profileReader.js'

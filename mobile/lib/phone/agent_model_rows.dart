@@ -13,7 +13,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
-import 'package:harness_mobile/widgets/engine_identity.dart';
 
 /// The side inset every row and heading in the sheet shares — the same 20 the
 /// rows of [showPhoneSheet] are laid out on, so the two read as one surface
@@ -46,21 +45,20 @@ class ModelSectionHeading extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.fromLTRB(
         kModelRowInset,
-        first ? 6 : 18,
+        first ? 8 : 22,
         kModelRowInset,
-        6,
+        8,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            caption.toUpperCase(),
+            caption,
             style: TextStyle(
-              color: AppPalette.textFaint,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.6,
+              color: AppPalette.textSecondary,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
             ),
           ),
           if (detail != null)
@@ -82,21 +80,58 @@ class ModelSectionHeading extends StatelessWidget {
   }
 }
 
+/// A section's rows on one rounded card, a hairline between each — the way a phone's own settings
+/// group their choices.
+class ModelCard extends StatelessWidget {
+  const ModelCard({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: kModelCardInset),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Material(
+          color: AppPalette.cardBg,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < children.length; i++) ...[
+                if (i > 0)
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    indent: kModelRowInset,
+                    color: AppPalette.divider,
+                  ),
+                children[i],
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// How far a [ModelCard] stands in from the sheet's edges.
+const double kModelCardInset = 16;
+
 /// One place the agent can run: a model on a grid, or the engine's own login.
 ///
-/// ⚠️ **The tick takes the leading slot, and the row wears the accent wash.**
-/// Both, because that is this app's own way of saying "this is the one" — see
-/// the desktop's `AppMenuItem`, where the tick replaces the row's glyph rather than sitting
-/// beside it so the column keeps one left edge. A fourth column for the tick
-/// would leave every unselected row with a gap the eye must cross to reach the
-/// name; the wash alone would be easy to miss at arm's length.
+/// ⚠️ **The tick stands at the row's end**, on the card its section shares, the way a phone's own
+/// settings mark the choice in force: the names keep one left edge, and the one picked is the row
+/// with the mark.
 class ModelRow extends StatelessWidget {
   const ModelRow({
     super.key,
     required this.title,
     required this.selected,
     required this.onTap,
-    this.engine,
     this.status,
     this.detail,
     this.warning,
@@ -108,10 +143,6 @@ class ModelRow extends StatelessWidget {
   final bool selected;
 
   final VoidCallback onTap;
-
-  /// Drawn as an engine mark where there is no tick — the Subscription row's
-  /// own vendor. Null leaves that space empty, which is what a grid model gets.
-  final String? engine;
 
   /// A quiet word at the end of the row: the machine serving the model, or what
   /// is left of a subscription.
@@ -135,64 +166,65 @@ class ModelRow extends StatelessWidget {
     final status = this.status;
     return InkWell(
       onTap: onTap,
-      // `Ink` rather than a coloured `Container`: a fill painted inside the
-      // InkWell would cover the ink the tap splashes onto the Material.
-      child: Ink(
-        color: selected ? AppSurface.accentWash : null,
-        child: Container(
-          // A row is read as a line of type, but it is pressed with a thumb —
-          // so the type sets the padding and [minTouchTarget] sets the floor
-          // under it, rather than a padding chosen to reach 44 that would leave
-          // the one-line rows looser than every other list on the phone.
-          constraints: const BoxConstraints(minHeight: minTouchTarget),
-          alignment: Alignment.centerLeft,
-          padding: const EdgeInsets.symmetric(
-            horizontal: kModelRowInset,
-            vertical: 10,
-          ),
-          child: Row(
-            children: [
-              SizedBox.square(dimension: 22, child: Center(child: _leading())),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.textPrimary,
-                        fontSize: 15.5,
-                        fontWeight: selected
-                            ? FontWeight.w600
-                            : FontWeight.w500,
-                      ),
-                    ),
-                    if (detail != null) _second(detail!, AppPalette.textFaint),
-                    if (warning != null) _second(warning!, AppPalette.warn),
-                  ],
-                ),
-              ),
-              if (status != null && status.isNotEmpty) ...[
-                const SizedBox(width: 12),
-                ConstrainedBox(
-                  // A long node name gives way to the model's own name, which
-                  // is what the row is for.
-                  constraints: const BoxConstraints(maxWidth: 132),
-                  child: Text(
-                    status,
+      child: Container(
+        // A row is read as a line of type, but it is pressed with a thumb —
+        // so the type sets the padding and [minTouchTarget] sets the floor
+        // under it, rather than a padding chosen to reach 44 that would leave
+        // the one-line rows looser than every other list on the phone.
+        constraints: const BoxConstraints(minHeight: minTouchTarget),
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(
+          horizontal: kModelRowInset,
+          vertical: 12,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
-                    style: TextStyle(color: AppPalette.textFaint, fontSize: 13),
+                    style: TextStyle(
+                      color: AppPalette.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
+                  if (detail != null)
+                    _second(detail!, AppPalette.textSecondary),
+                  if (warning != null) _second(warning!, AppPalette.warn),
+                ],
+              ),
+            ),
+            if (status != null && status.isNotEmpty) ...[
+              const SizedBox(width: 12),
+              ConstrainedBox(
+                // A long node name gives way to the model's own name, which
+                // is what the row is for.
+                constraints: const BoxConstraints(maxWidth: 132),
+                child: Text(
+                  status,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(color: AppPalette.textFaint, fontSize: 13),
                 ),
-              ],
+              ),
             ],
-          ),
+            if (selected) ...[
+              const SizedBox(width: 12),
+              Icon(
+                LucideIcons.check,
+                size: 20,
+                color: AppPalette.textPrimary,
+                semanticLabel: 'Selected',
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -200,27 +232,14 @@ class ModelRow extends StatelessWidget {
 
   /// One of the lines under [title]: a detail, or a warning.
   Widget _second(String text, Color color) => Padding(
-    padding: const EdgeInsets.only(top: 2),
+    padding: const EdgeInsets.only(top: 3),
     child: Text(
       text,
-      maxLines: 1,
+      maxLines: 2,
       overflow: TextOverflow.ellipsis,
-      style: TextStyle(color: color, fontSize: 12.5),
+      style: TextStyle(color: color, fontSize: 13.5),
     ),
   );
-
-  Widget _leading() {
-    if (selected) {
-      return Icon(
-        LucideIcons.check300,
-        size: 18,
-        color: AppPalette.accentOnSurface,
-      );
-    }
-    final engine = this.engine;
-    if (engine == null) return const SizedBox.shrink();
-    return EngineMark(engine: engine, size: 18);
-  }
 }
 
 /// What a section says instead of rows: it could not be asked, the machine has
@@ -243,37 +262,41 @@ class ModelSectionNote extends StatelessWidget {
   }
 }
 
-/// The sheet's own title: what is being chosen, and for whom.
+/// The sheet's own title: "Model", centred, and Done at its end to put the sheet away.
 class ModelSheetTitle extends StatelessWidget {
-  const ModelSheetTitle({super.key, required this.agentName});
+  const ModelSheetTitle({super.key, required this.onDone});
 
-  /// Null while the agent is still loading, or once it is gone.
-  final String? agentName;
+  final VoidCallback onDone;
 
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(kModelRowInset, 0, kModelRowInset, 4),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return SizedBox(
+      height: 48,
+      child: Stack(
+        alignment: Alignment.center,
         children: [
           Text(
             'Model',
             style: TextStyle(
               color: AppPalette.textPrimary,
-              fontSize: 15,
+              fontSize: 17,
               fontWeight: FontWeight.w600,
             ),
           ),
-          Text(
-            agentName == null
-                ? 'Where this harness runs'
-                : 'Where $agentName runs',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
+          Positioned(
+            right: kModelCardInset - 4,
+            child: TextButton(
+              onPressed: onDone,
+              style: TextButton.styleFrom(
+                foregroundColor: AppPalette.textPrimary,
+                textStyle: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              child: const Text('Done'),
+            ),
           ),
         ],
       ),

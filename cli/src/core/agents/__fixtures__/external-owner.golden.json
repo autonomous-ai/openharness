@@ -1,0 +1,222 @@
+{
+  "term": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "sent",
+        "SIGTERM"
+      ]
+    ],
+    "waited": 0
+  },
+  "kill": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "sent",
+        "SIGTERM"
+      ],
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGKILL"
+      ],
+      [
+        "signal",
+        7,
+        "SIGKILL"
+      ],
+      [
+        "sent",
+        "SIGKILL"
+      ]
+    ],
+    "waited": 5000
+  },
+  "stuck": {
+    "ok": false,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "sent",
+        "SIGTERM"
+      ],
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGKILL"
+      ],
+      [
+        "signal",
+        7,
+        "SIGKILL"
+      ],
+      [
+        "sent",
+        "SIGKILL"
+      ]
+    ],
+    "waited": 7000
+  },
+  "gone": {
+    "ok": true,
+    "effects": [],
+    "waited": 0
+  },
+  "group": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        -7,
+        "SIGTERM"
+      ],
+      [
+        "sent",
+        "SIGTERM"
+      ]
+    ],
+    "waited": 0
+  },
+  "job-failed": {
+    "ok": false,
+    "effects": [
+      [
+        "foreground",
+        7
+      ]
+    ],
+    "waited": 0
+  },
+  "signal-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ]
+    ],
+    "waited": 0
+  },
+  "no-tty": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ],
+      [
+        "intent",
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "sent",
+        "SIGTERM"
+      ]
+    ],
+    "waited": 0
+  },
+  "changed": {
+    "ok": false,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "same"
+      ]
+    ],
+    "waited": 0
+  }
+}

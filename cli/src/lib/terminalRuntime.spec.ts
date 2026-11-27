@@ -5,6 +5,7 @@ import {
   processIdentityKey,
   processIdentityOf,
   primaryRuntime,
+  processAmong,
   sameProcessIdentity,
   sessionForPaneId,
   terminalInstanceId,
@@ -82,6 +83,17 @@ describe('terminal runtime identity', () => {
     expect(processIdentityKey('codex', legacy)).not.toBe(processIdentityKey('codex', saved))
     expect(processIdentityOf({ ...stepped, parentPid: 1, args: 'codex' } as typeof stepped)).toEqual(stepped)
     expect(processIdentityOf(legacy)).toEqual(legacy)
+  })
+
+  it('finds a process among a pane\'s by its pid and start, whatever its name now', () => {
+    const bound = { pid: 11, executable: 'hermes', startMarker: 'Fri Nov 13 14:22:00 2026' }
+    const pane = [{ pid: 10, executable: 'zsh', startMarker: 'Fri Nov 13 14:00:00 2026' }, { ...bound, executable: 'unshare' }]
+    expect(processAmong(bound, pane)).toBe(true)
+    // The same pid started later is another process.
+    expect(processAmong({ ...bound, startMarker: 'Fri Nov 13 15:00:00 2026' }, pane)).toBe(false)
+    expect(processAmong(bound, [pane[0]])).toBe(false)
+    expect(processAmong(bound, undefined)).toBe(false)
+    expect(processAmong(null, pane)).toBe(false)
   })
 
   it('rejects separator injection into stable keys', () => {

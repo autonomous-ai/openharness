@@ -26,14 +26,14 @@ describe('the experiments on as the core starts', () => {
     expect(stateIsThere(dataDir, [])).toBe(false)
   })
 
-  it('finds a file by a prefix and a suffix, as the Swarm host journal is named', () => {
-    const journal = ['super-tabs/host-*.json']
+  it('finds a file by a prefix and a suffix', () => {
+    const journal = ['saved/host-*.json']
     expect(stateIsThere(dataDir, journal)).toBe(false)
-    mkdirSync(join(dataDir, 'super-tabs'))
-    // Its other files in the folder are not a host.
-    for (const name of ['native-m1.json', 'host-m1.txt', 'retained.json']) writeFileSync(join(dataDir, 'super-tabs', name), '{}')
+    mkdirSync(join(dataDir, 'saved'))
+    // The folder's other files are not the kind asked for.
+    for (const name of ['native-m1.json', 'host-m1.txt', 'retained.json']) writeFileSync(join(dataDir, 'saved', name), '{}')
     expect(stateIsThere(dataDir, journal)).toBe(false)
-    writeFileSync(join(dataDir, 'super-tabs', `host-${'a'.repeat(32)}.json`), '{}')
+    writeFileSync(join(dataDir, 'saved', `host-${'a'.repeat(32)}.json`), '{}')
     expect(stateIsThere(dataDir, journal)).toBe(true)
   })
 
@@ -79,8 +79,8 @@ describe('the experiments on as the core starts', () => {
     notices.notice({ type: 'desk_changed', revision: 4 })
     expect(heard.mock.calls).toEqual([[{ type: 'desk_changed', revision: 3 }]])
     expect(tell).toHaveBeenCalledTimes(2)
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('boom'))
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('odd'))
+    expect(log).toHaveBeenCalledWith("[experiments] a notice's listener failed · Error")
+    expect(log).toHaveBeenCalledWith("[experiments] a notice's listener failed · string")
   })
 
   it('logs to the console when given no log of its own', () => {
@@ -89,7 +89,7 @@ describe('the experiments on as the core starts', () => {
       const notices = createAccountNotices(() => {})
       notices.onNotice(() => { throw new Error('boom') })
       notices.notice({ type: 'desk_changed', revision: 1 })
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'))
+      expect(warn).toHaveBeenCalledWith("[experiments] a notice's listener failed · Error")
     } finally {
       warn.mockRestore()
     }
@@ -124,7 +124,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
   })
   afterEach(() => { vi.useRealTimers(); rmSync(dataDir, { recursive: true, force: true }) })
 
-  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
+  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false, hachi: false }
   /** The account's answer, as backend routes/experimentalSettings.ts gives it. */
   const account = (features: Record<string, boolean>, accountId = 'acct') =>
     ({ status: 200, body: { success: true, data: { accountId, revision: 1, features: { share_button: false, ...features }, available: {} } } })
@@ -187,6 +187,24 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(t.backend).toHaveBeenCalledTimes(3)
   })
 
+  it('asks for the Store when Hachi is turned on, so its package is in place for the first ⇧⌘H; not when it stays on or goes off', async () => {
+    vi.useFakeTimers()
+    const hachiOn = vi.fn()
+    let listener: ((notice: BackendNotice) => void) | null = null
+    const sync = createAgentSettingsSync({ dataDir, backend: async () => answers.shift()!('GET', undefined), session: () => session, messagesChanged: () => {},
+      hachiOn, onNotice: (l) => { listener = l; return () => {} } })
+    answer(account({}))
+    sync.start()
+    await vi.advanceTimersByTimeAsync(0)
+    for (const features of [{ hachi: true }, { hachi: true, agent_messages: true }, {}] as Array<Record<string, boolean>>) {
+      answer(account(features))
+      listener!({ type: 'desk_changed', revision: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(hachiOn).toHaveBeenCalledOnce()
+    sync.stop()
+  })
+
   // Spec 2026-11-02-poll-cost Part 4.5: every desk operation (a tab moved, renamed, opened) made every daemon read the
   // experiments again (prod 2026-11-02: 127 a minute). A change to them publishes revision 0 (backend
   // routes/experimentalSettings.ts); a desk operation publishes the desk's own revision.
@@ -246,7 +264,8 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     for (let i = 0; i < 4; i++) await t.sync.sync()
     expect(kept()).toEqual(OFF)
     expect(t.want).not.toHaveBeenCalled()
-    expect(log.mock.calls).toEqual([[expect.stringContaining('offline')], [expect.stringContaining('odd')]])
+    expect(log.mock.calls).toEqual([["[experiments] the account's experiments could not be read · Error"],
+      ["[experiments] the account's experiments could not be read · string"]])
   })
 
   it('says, rather than throws, when the copy cannot be kept', async () => {
@@ -254,10 +273,10 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     const t = setup({ log, dataDir: join(dataDir, 'missing') })
     answer(account({ agent_messages: true }))
     await t.sync.sync()
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("the agents' settings could not be kept"))
+    expect(log).toHaveBeenCalledWith("[experiments] the agents' settings could not be kept · ENOENT")
     answers.push(async () => { throw 'odd' })
     await t.sync.sync()
-    expect(log).toHaveBeenLastCalledWith(expect.stringContaining('odd'))
+    expect(log).toHaveBeenLastCalledWith("[experiments] the account's experiments could not be read · string")
     expect(t.want).not.toHaveBeenCalled()
   })
 
@@ -266,7 +285,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     try {
       const t = setup()
       await t.sync.sync()
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('nothing to answer'))
+      expect(warn).toHaveBeenCalledWith("[experiments] the account's experiments could not be read · Error")
     } finally {
       warn.mockRestore()
     }
@@ -340,24 +359,41 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(t.want).toHaveBeenCalledOnce()
   })
 
-  it('names in its log the agent that turned one on with the person\'s yes, which is only its word', async () => {
+  it('says in its log that an agent turned one on with the person\'s yes, which is only its word, and not the agent\'s name', async () => {
     const lines: string[] = []
     const t = setup({ log: (line) => lines.push(line) })
     answer(account({}))
     answers.push(async () => account({ agents_tell_agents: true }))
-    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'Claude Code' }))
+    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'SECRET-NAME-MARKER' }))
       .toEqual({ status: 200, body: { ...OFF, agentsTellAgents: true, signedIn: true } })
-    expect(lines).toEqual(['[settings] agentsTellAgents on by Claude Code, which says the person said yes'])
-    // The summary switch grants by turning off: the agent's word is named for it too.
+    expect(lines).toEqual(['[settings] agentsTellAgents on by an agent, which says the person said yes'])
+    // The summary switch grants by turning off: the agent's word is said for it too.
     answer(account({ agent_messages_hide_summary: true }))
     answers.push(async () => account({}))
     await t.sync.settingsWrite({ agentMessagesHideSummary: false, byAgent: 'Codex' })
-    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by Codex, which says the person said yes')
+    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by an agent, which says the person said yes')
     // Not for the person's own write, nor for a name that says nothing.
     answer(account({ agents_tell_agents: true }))
     answers.push(async () => account({}))
     await t.sync.settingsWrite({ agentsTellAgents: false, byAgent: ' ' })
     expect(lines).toHaveLength(2)
+  })
+
+  // docs/design/2026-11-12-hachi.md: the start and tell gates read `hachi` from this copy without the network, and the
+  // Settings ▸ Experimental switch is the only way in: it is the person's yes, so no agent turns it on for them.
+  it('keeps Hachi\'s switch for this computer\'s gates, and never takes it from `harness settings`', async () => {
+    const t = setup()
+    answer(account({ hachi: true }))
+    await t.sync.sync()
+    expect(kept()).toEqual({ ...OFF, hachi: true })
+    expect(t.want).not.toHaveBeenCalled()
+    for (const body of [{ hachi: true }, { hachi: false }, { hachi: true, byAgent: 'Claude Code' }]) {
+      expect(await t.sync.settingsWrite(body)).toMatchObject({ status: 400, body: { error: { code: 'BAD_REQUEST' } } })
+    }
+    expect(t.backend).toHaveBeenCalledOnce()
+    answer(account({}))
+    await t.sync.sync()
+    expect(kept()).toEqual(OFF)
   })
 
   it('refuses a write with nothing in it, signed out, or with the account out of reach, and says why', async () => {

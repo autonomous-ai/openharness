@@ -1,9 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Roster } from './roster.js'
 import { ConsentStore, consentKey } from './consentStore.js'
+
+// Pass-through, noting each open, write and rename by path, until a test fills the disk: a write then stops part way,
+// as ENOSPC leaves it.
+const disk = vi.hoisted(() => ({ full: false, touched: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.touched.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      disk.touched.push(`write ${String(args[0])}`)
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.touched.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
 
 const TAB = 'a1b2c3d4e5f6a1b2c3d4e5f6', OTHER = 'f'.repeat(24)
 const listing = (...agents: string[]) => ({ harnesses: agents.map((agentId) => ({ machineId: 'bob-mac', agentId })) }) as unknown as Roster
@@ -11,7 +28,12 @@ const listing = (...agents: string[]) => ({ harnesses: agents.map((agentId) => (
 describe('the consent store', () => {
   let dir: string, path: string
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'consent-')); path = join(dir, 'consent.json') })
-  afterEach(() => { try { chmodSync(path, 0o600) } catch { /* not there */ } rmSync(dir, { recursive: true, force: true }) })
+  afterEach(() => {
+    disk.full = false
+    disk.touched = []
+    try { chmodSync(path, 0o600) } catch { /* not there */ }
+    rmSync(dir, { recursive: true, force: true })
+  })
 
   it('keeps what this machine asked for across a restart, privately, and says it changed after each save', () => {
     let changes = 0
@@ -32,6 +54,24 @@ describe('the consent store', () => {
     store.forgetTab(OTHER)
     expect(ConsentStore.read(path)).toEqual(new Set())
     expect(changes).toBe(4)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const store = new ConsentStore(path)
+    store.grant(TAB, 'bob-mac', 'api', false)
+    disk.touched = []
+    store.grant(TAB, 'bob-mac', 'web', false)
+    expect(disk.touched.filter((t) => t.endsWith(` ${path}`))).toEqual([`rename ${path}`])
+  })
+
+  it('a save that fails part way leaves the old file, and no temporary file', () => {
+    const store = new ConsentStore(path)
+    store.grant(TAB, 'bob-mac', 'api', false)
+    disk.full = true
+    store.grant(TAB, 'bob-mac', 'web', false)
+    disk.full = false
+    expect(ConsentStore.read(path)).toEqual(new Set([consentKey(TAB, 'bob-mac', 'api')]))
+    expect(readdirSync(dir)).toEqual(['consent.json'])
   })
 
   it('follows the rosters: a harness listed and then taken out by the owner needs asking again', () => {

@@ -1,0 +1,23 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+		A10000000000000000000001 /* Pocket.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pocket.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000002 = {isa = PBXGroup; children = (A10000000000000000000003 /* Pocket */, A10000000000000000000004 /* Products */, ); sourceTree = "<group>"; };
+		A10000000000000000000003 /* Pocket */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Pocket; sourceTree = "<group>"; };
+		A10000000000000000000004 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000001 /* Pocket.app */, ); name = Products; sourceTree = "<group>"; };
+		A10000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000006 /* Pocket */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000009; buildPhases = (A10000000000000000000005 /* Sources */, ); dependencies = (); fileSystemSynchronizedGroups = (A10000000000000000000003 /* Pocket */, ); name = Pocket; productName = Pocket; productReference = A10000000000000000000001 /* Pocket.app */; productType = "com.apple.product-type.application"; };
+		A10000000000000000000007 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; }; buildConfigurationList = A1000000000000000000000C; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = A10000000000000000000002; productRefGroup = A10000000000000000000004 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000006 /* Pocket */, ); };
+		A1000000000000000000000A /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.pocket.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		A1000000000000000000000B /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = app.pocket.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		A1000000000000000000000D /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; }; name = Debug; };
+		A1000000000000000000000E /* Release */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; }; name = Release; };
+		A10000000000000000000009 /* Build configuration list for PBXNativeTarget "Pocket" */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000A /* Debug */, A1000000000000000000000B /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A1000000000000000000000C /* Build configuration list for PBXProject "Pocket" */ = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000D /* Debug */, A1000000000000000000000E /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+	};
+	rootObject = A10000000000000000000007 /* Project object */;
+}

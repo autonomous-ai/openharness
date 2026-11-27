@@ -1,10 +1,21 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { screenFor } from '../../engines/screens.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 import * as TAKEOVER from '../../lib/__fixtures__/takeoverScreens.js'
+import { builtinSqlite, closeSqliteHandles } from '../../lib/sqliteBuiltin.js'
+import { env } from '../../config/env.js'
+import { nativeOpenFiles } from '../../lib/nativeConversation.js'
+
+vi.mock('../../lib/nativeConversation.js', async (real) => ({
+  ...await real<typeof import('../../lib/nativeConversation.js')>(),
+  nativeOpenFiles: vi.fn(async () => []),
+}))
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -51,13 +62,10 @@ describe('closing agents no window shows', () => {
     expect(close.changed).toBe(deps.announceSession)
   })
 
-  it('hands the close service the Lead guards it was given', () => {
-    const leadProtected = (id: string) => id === 'lead'
-    const leadSwitching = (id: string) => id === 'lead', leadSwitchEnded = vi.fn()
-    const { close } = setup({ leadProtected, leadSwitching, leadSwitchEnded })
-    expect([close.leadProtected?.('lead'), close.leadProtected?.('other')]).toEqual([true, false])
-    expect(close.leadSwitching).toBe(leadSwitching)
-    expect(close.leadSwitchEnded).toBe(leadSwitchEnded)
+  it('hands the close service the count of background commands it was given, or none', () => {
+    const backgroundCommands = vi.fn(async () => 1)
+    expect(setup({ backgroundCommands }).close.backgroundCommands).toBe(backgroundCommands)
+    expect(setup().close.backgroundCommands).toBeUndefined()
   })
 
   it('reads from its pane whether it waits at a question its engine asks before any conversation', async () => {
@@ -74,21 +82,21 @@ describe('closing agents no window shows', () => {
     const stoppedAgents = { get: vi.fn((id: string) => (id === 'kept' || id === 'live' ? kept : null)), resumeReservedAt: vi.fn((_id: string): number | null => null) }
     const { close } = setup({ registry, stoppedAgents })
     const asked = (agentId: string, over: Record<string, string> = {}) => ({ agentId, sessionId: 's-kept', createdAt: new Date(5).toISOString(), mode: 'now' as const, ...over })
-    expect(close.closedAlready!(asked('kept'))).toBe(true)
+    expect(close.closedAlready!(asked('kept'))).toBe(kept)
     // Asked before its conversation was known: the creation alone.
-    expect(close.closedAlready!(asked('kept', { sessionId: '' }))).toBe(true)
-    expect(close.closedAlready!(asked('kept', { sessionId: 's-other' }))).toBe(false)
-    expect(close.closedAlready!(asked('kept', { createdAt: new Date(6).toISOString() }))).toBe(false)
-    expect(close.closedAlready!(asked('live'))).toBe(false)
-    expect(close.closedAlready!(asked('gone'))).toBe(false)
+    expect(close.closedAlready!(asked('kept', { sessionId: '' }))).toBe(kept)
+    expect(close.closedAlready!(asked('kept', { sessionId: 's-other' }))).toBeNull()
+    expect(close.closedAlready!(asked('kept', { createdAt: new Date(6).toISOString() }))).toBeNull()
+    expect(close.closedAlready!(asked('live'))).toBeNull()
+    expect(close.closedAlready!(asked('gone'))).toBeNull()
     // Being resumed: about to be live again, not closed.
     stoppedAgents.resumeReservedAt.mockReturnValueOnce(1)
-    expect(close.closedAlready!(asked('kept'))).toBe(false)
+    expect(close.closedAlready!(asked('kept'))).toBeNull()
     // A record that cannot be read says nothing.
     stoppedAgents.get.mockImplementationOnce(() => { throw new Error('unreadable') })
-    expect(close.closedAlready!(asked('kept'))).toBe(false)
+    expect(close.closedAlready!(asked('kept'))).toBeNull()
     // A core that keeps no stopped agents knows none closed.
-    expect(setup({ registry }).close.closedAlready!(asked('kept'))).toBe(false)
+    expect(setup({ registry }).close.closedAlready!(asked('kept'))).toBeNull()
   })
 
   describe('what an agent is doing', () => {
@@ -160,6 +168,55 @@ describe('closing agents no window shows', () => {
         expect(other).toHaveBeenCalledOnce()
         expect(once.deps.engineReady).not.toHaveBeenCalled()
       }
+    })
+  })
+
+  describe('whether the engine\'s own store holds nothing a resume would bring back', () => {
+    // The fixtures' store: one user row, under the key `agent:main:plain`.
+    const fixtures = join(import.meta.dirname, '..', '..', 'engines', 'openclaw', '__fixtures__')
+    let stateDir = ''
+    beforeEach(() => {
+      stateDir = mkdtempSync(join(tmpdir(), 'close-openclaw-'))
+      const database = join(stateDir, 'agents', 'main', 'agent')
+      mkdirSync(database, { recursive: true })
+      const db = new (builtinSqlite()!)(join(database, 'openclaw-agent.sqlite'), { readOnly: false })
+      db.exec(readFileSync(join(fixtures, 'schema.sql'), 'utf8'))
+      db.exec(readFileSync(join(fixtures, 'plain.sql'), 'utf8'))
+      db.close()
+    })
+    afterEach(() => { closeSqliteHandles(); rmSync(stateDir, { recursive: true, force: true }) })
+    const empty = (over: Partial<RegisteredSession>) =>
+      setup().close.conversationEmpty!(row({ engine: 'openclaw', openclawStateDir: stateDir, ...over }))
+
+    it('an OpenClaw whose key has no user row holds nothing', async () => {
+      expect(await empty({ sessionId: 'agent:main:other' })).toBe(true)
+      expect(await empty({ sessionId: 'agent:main:other', processIdentity: { pid: 4321 } as RegisteredSession['processIdentity'] })).toBe(true)
+    })
+
+    it('an OpenClaw whose key has one holds a conversation', async () => {
+      expect(await empty({ sessionId: 'agent:main:plain' })).toBe(false)
+    })
+
+    it('reads a closed OpenClaw by its folder, never by the open files of its pid, which may be another TUI now', async () => {
+      // The closed record's pid is now another OpenClaw, whose folder has no store; the record's own conversation is in
+      // OpenClaw's default folder.
+      const other = mkdtempSync(join(tmpdir(), 'close-openclaw-other-'))
+      vi.mocked(nativeOpenFiles).mockImplementation(async pid => pid === 7777 ? [join(other, 'state', 'openclaw.sqlite')] : [])
+      const fallback = env.OPENCLAW_STATE_DIR
+      env.OPENCLAW_STATE_DIR = stateDir
+      try {
+        const closed = row({ engine: 'openclaw', sessionId: 'agent:main:plain', processIdentity: { pid: 7777 } as RegisteredSession['processIdentity'] })
+        const { close } = setup({ registry: { advertised: vi.fn(() => []), byAgent: vi.fn(() => undefined) } as unknown as ClosingDeps['registry'] })
+        expect(await close.conversationEmpty!(closed)).toBe(false)
+      } finally {
+        env.OPENCLAW_STATE_DIR = fallback
+        rmSync(other, { recursive: true, force: true })
+      }
+    })
+
+    it('says nothing of an OpenClaw with no key, nor of another engine, even beside an empty store', async () => {
+      expect(await empty({ sessionId: '' })).toBe(false)
+      expect(await empty({ engine: 'claude', sessionId: 'agent:main:other' })).toBe(false)
     })
   })
 
@@ -289,15 +346,20 @@ describe('agent_close', () => {
     ask({ request: vi.fn(async () => ({})) }, { ...target, mode: 'now', onlyIfHidden: 'yes' })
   })
 
-  // Dee, 11-01: a Swarm Product Manager's close passes its guard only as the switch it names (lib/closeAgentService.ts).
-  it('passes on the Change agent switch a close names, only in the shape Change agent makes it', () => {
+  // anh Dee, 2026-11-13: an experiment never touches the core. A Change agent close names its switch, which the core once
+  // checked for one component's agents; it is a close as any other now, and the core reads nothing of the switch.
+  it('closes a close that names a Change agent switch as any close', () => {
     const request = vi.fn(async () => ({}))
     ask({ request }, { ...target, mode: 'now', changeId: 'e'.repeat(32) })
-    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now', changeId: 'e'.repeat(32) })
-    for (const changeId of ['E'.repeat(32), 'e'.repeat(31), 7, '../x']) {
-      ask({ request }, { ...target, mode: 'now', changeId })
-      expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
-    }
+    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
+  })
+
+  // A client cannot name the cleanup's rule: only CoreApi.agents.closeStarted sets it.
+  it('never passes on a background rule a client names', () => {
+    const request = vi.fn(async () => ({ closed: true as const }))
+    const { close } = createCloseRequests({ cleanupPreview: async () => ({}), closeAgentService: () => ({ request }) as never })
+    close({ agentId: 'a1', sessionId: 's1', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle', background: 'count', pastCeiling: true }, vi.fn())
+    expect(request).toHaveBeenCalledWith({ agentId: 'a1', sessionId: 's1', createdAt: '2026-10-12T08:00:00.000Z', mode: 'idle' })
   })
 
   it('refuses a request it cannot read, and says when the close failed or there is no service to ask', async () => {

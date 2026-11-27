@@ -9,14 +9,25 @@ export const hooks: HookContract = {
     // The person's own. A home the person moved (CLAUDE_CONFIG_DIR, lib/engineHomes.ts) gets the same block
     // in its own settings.json (core/engines/hooks.ts).
     home: { inHome: '.claude' },
-    file: 'settings.json',
+    fileName: 'settings.json',
     // SessionStart/UserPromptSubmit bind mutable engine-session metadata to the process agent. SessionEnd
     // only asks discovery to reconcile: the process, not the hook, owns the tile lifetime. UserPromptSubmit
     // is the CATCH hook, so a SessionStart missed because the adapter started late is repaired on first input.
     // Stop/StopFailure are the authoritative turn-close signals (Stop = normal finish incl. max_tokens/
     // refusal; StopFailure = turn ended on an API error, where Stop does NOT fire) — they close a turn even
     // when the JSONL-derived turn_ended is missed. Neither supports a matcher (silently ignored).
-    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' }],
+    // Notification is how a session outside a pane says it waits for the person, which the hook tells the devices
+    // (hook/notify.mjs); for a session in a pane the hook ignores it: it fires only once the person has not typed for
+    // 6 s, and never for a dialog answered sooner (facts-claude §1). Its matcher names the types that wait for the
+    // person (notify.mjs NEEDS_INPUT), so the idle notice after every turn starts no hook.
+    // In a pane, PreToolUse (`AskUserQuestion` only, so no hook runs for any other tool), PermissionRequest and
+    // Elicitation say the session waits on the person as the dialog opens. SubagentStart/SubagentStop count a
+    // turn's open subagents, so its Stop does not end it while one still works. No PreCompact, PostToolBatch or
+    // ElicitationResult: a wait ends on what follows it.
+    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' },
+      { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' },
+      { event: 'PreToolUse', matcher: 'AskUserQuestion' }, { event: 'PermissionRequest' }, { event: 'Elicitation' },
+      { event: 'SubagentStart' }, { event: 'SubagentStop' }],
     timeout: 5,
     // Agent Messages: a teammate's message reaches a working agent at its next tool call (kit/messagesHook.ts).
     inbox: { event: 'PostToolUse' },
@@ -30,12 +41,15 @@ export const hooks: HookContract = {
     // says), and the plugin's (`mcp__plugin_<plugin>_<server>__<tool>`). By name, not `mcp__harness__*`: another
     // product's MCP server is also often added as `harness`, and its tools are not Harness's to allow. And
     // `harness --help`, which every harness is told to read as it starts (lib/agentAttribution.ts): in ask mode it was
-    // the one question left in a hand-off (2026-10-12, in a clean VM). It only prints.
+    // the one question left in a hand-off (2026-10-12, in a clean VM). It only prints. And `harness device notify`, as
+    // exactly its three words (facets/hooks.ts HARNESS_AGENT_COMMANDS): a question before it would wait for the person
+    // it calls. Claude Code's prefix rule does not cover a compound command (`;`, `&&`, `$(…)`), which still asks.
     allow: {
       list: ['permissions', 'allow'],
       unless: ['deny', 'ask'],
       rules: ['Bash(harness --help)', 'Bash(harness -h)', 'Bash({launcher} --help)',
-        'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}'],
+        'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}',
+        'Bash(harness {command}:*)', 'Bash({launcher} {command}:*)'],
     },
     commandNamesHome: false,
     // Windows: exec form, `command` (the managed node.exe) and `args`, run without a shell. In shell form Claude Code runs
@@ -44,8 +58,8 @@ export const hooks: HookContract = {
     win32Runner: 'argv',
     upToDate: { command: 'first-ours', matcher: false },
     messages: {
-      current: '[hooks] Claude session + turn (Stop/StopFailure) hooks already installed',
-      installed: '[hooks] installed Claude session + turn (Stop/StopFailure) hooks → {file}',
+      current: '[hooks] Claude Code session, turn, wait and subagent hooks already installed',
+      installed: '[hooks] installed Claude Code session, turn, wait and subagent hooks → {file}',
       updated: '[hooks] updated (path/port changed) → {script} --port {port} in {file}',
       after: '[hooks] (takes effect on the next claude session start)',
       failed: '[hooks] failed to write settings.json:',
@@ -53,4 +67,6 @@ export const hooks: HookContract = {
   },
   sessionFile: { suffix: '.jsonl' },
   stopClosesTurns: true,
+  // `/clear`. A `resume` or a `compact` brings history back, and `startup` is its process's first conversation.
+  newConversation: { event: 'SessionStart', sources: ['clear'] },
 }

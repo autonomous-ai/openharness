@@ -100,7 +100,8 @@ void main() {
     expect(await draft.readAsString(), 'keep this');
   });
 
-  test('knows one repository however git spells it', () {
+  test('knows one repository however git spells it', () async {
+    Future<String?> noAlias(String host) async => null;
     for (final address in [
       'https://github.com/owner/project.git',
       'https://github.com/owner/project/',
@@ -111,13 +112,17 @@ void main() {
       'git://github.com/owner/project.git',
     ]) {
       expect(
-        repositoryIdentity(address),
+        await resolvedRepositoryIdentity(address, noAlias),
         'github.com/owner/project',
         reason: address,
       );
     }
     for (final address in ['/srv/git/project.git', 'file:///srv/project', '']) {
-      expect(repositoryIdentity(address), isNull, reason: address);
+      expect(
+        await resolvedRepositoryIdentity(address, noAlias),
+        isNull,
+        reason: address,
+      );
     }
   });
 
@@ -528,6 +533,51 @@ void main() {
       // Each attempt sees only its own staging folder.
       expect(seen.map((names) => names.length), [1, 1]);
     });
+  });
+
+  test("runs the resolver's git", () async {
+    final parent = await Directory(p.join(root.path, 'projects')).create();
+    // Absolute and missing: a bare `git` would run the real one instead.
+    final missing = p.join(root.path, 'no-git', 'git');
+    String noGit() => throw const ProcessException('git', [], 'not found', 2);
+    for (final program in [() => missing, noGit]) {
+      await expectLater(
+        RepositoryClone(program: program)
+            .run(GitHubRepository.parse('owner/project')!, parent.path),
+        throwsA(
+          isA<RepositoryCloneException>().having(
+            (error) => error.message,
+            'message',
+            'Git could not start. Install Git on this computer, then retry.',
+          ),
+        ),
+      );
+    }
+
+    final checkout = p.join(root.path, 'checkout');
+    for (final args in [
+      ['init', checkout],
+      [
+        '-C',
+        checkout,
+        'remote',
+        'add',
+        'origin',
+        'https://example.invalid/o/r.git',
+      ],
+    ]) {
+      expect((await Process.run('git', args)).exitCode, 0);
+    }
+    expect(
+      await RepositoryClone.readCheckoutOrigin(checkout),
+      'https://example.invalid/o/r.git',
+    );
+    for (final program in [() => missing, noGit]) {
+      expect(
+        await RepositoryClone.readCheckoutOrigin(checkout, program: program),
+        isNull,
+      );
+    }
   });
 }
 

@@ -10,11 +10,13 @@ import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createHomeAdoptions } from './homeAdoptions.js'
 import * as nativeHooks from '../../engines/nativeHooks.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { validTerminalRuntime } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { hermesGatewayProcess, type ProcessRow } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
@@ -30,7 +32,7 @@ export interface EngineHookDeps {
   tmuxBackend: unknown
   /** A ptyhost hint names a pane of the Harness PTY host; without that backend there is nothing it can point at. */
   ptyHostBackend?: unknown
-  agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'trigger'>
+  agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'nudge'>
   registry: Pick<typeof registry, 'byRuntimeEngine' | 'byAgent'>
   syncSession: (row: RegisteredSession) => void
 }
@@ -40,8 +42,8 @@ export interface EngineHookDeps {
  * starts its engine before it records it: a resume looks for the process every 250ms, a create or a
  * fork backs off to 750ms, and a restart finds it the same way and then probes it, twice over when it
  * falls back to a new conversation (two 8s discovery budgets, swap.ts). The hook itself is answered
- * before the wait (`onWait`): its client gives up on a reply after 500ms and then writes the registry
- * itself (hook/notify.mjs), so only the daemon's record waits.
+ * before the wait (`onWait`): its engine waits on it, and its client gives up on a reply after 500ms
+ * (hook/notify.mjs), so only the daemon's record waits.
  */
 export const PROCESS_RECORD_WAIT_MS = 20_000
 /** How often a waiting hook reads the rows on its panes again: memory, not a process table. */
@@ -140,10 +142,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
 
   const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, bySessionPane = false, onWait }) => {
     if (!callerPid) return null
-    // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
-    // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
-    // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
-    // bound (e2e/updates.e2e.ts). macOS's /bin/sh is a bash that execs the hook: never seen there.
+    // Who the hook came from, read as it arrives. A caller that exits with its hook (its 500ms, or `onWait`'s
+    // answer) is gone after the reconcile pass or the wait, and a restart's new conversation was then never
+    // bound (e2e/updates.e2e.ts, on Linux at the time). On Linux the hook now names the nearest ancestor that
+    // outlives it (hook/notify.mjs hookCallerPid), and macOS's /bin/sh execs the hook, so on both the caller
+    // is alive. Windows still needs this read: Codex and Copilot run their hook through PowerShell, Command
+    // Code through cmd.exe, a shell that is the hook's parent and exits with it. The read only narrows that
+    // window: a core held past the shell's exit starts it too late (e2e/stallHook.e2e.ts).
     const arrival = processRows().then(rows => rows?.map(row => ({ ...row })) ?? null)
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
@@ -157,7 +162,17 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
     // A pass that outran its deadline has not yet opened the agent a hook from a new engine belongs to.
     let overdue = false
-    for (const runtime of resolved) if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true
+    for (const runtime of resolved) {
+      try { if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true }
+      catch (error) {
+        if (!(error instanceof IdentityReadUnavailable)) throw error
+        // A pane commit can supersede discovery's observation, or the process it observed change before it could
+        // publish it. Match fresh evidence through the existing wait. Answered 500, the hook client wrote the
+        // registry itself while this daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
+        overdue = true
+        console.log(`[hooks] reconciliation held · ${errorKind(error)} · checking current process evidence`)
+      }
+    }
 
     let table = await arrival
     // A `ps` already running (processRows shares it) may predate the hook's process; the next read has it.
@@ -193,7 +208,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
     // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
     // dispatched there must not rewrite its row before that pane operation has committed its route.
-    // Acknowledge now so the hook client never falls back to writing the registry itself.
+    // Acknowledge now, as before the wait above: the engine waits on its hook.
     for (;;) {
       const pending = choice.agent && panePending?.(choice.agent.agentId)
       if (!pending) break
@@ -230,7 +245,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
   // SessionEnd describes the mutable engine session, never process lifetime. Reconcile now; discovery
   // decides whether the agent still exists from terminal inventory + ps.
   const onSessionEnd = (_sessionId: string, _reason: string | undefined): void => {
-    void agentReconciler.trigger()
+    agentReconciler.nudge()
   }
   const onAdmissionHeld = (id: string, reason: string | undefined): void => {
     const row = registry.byAgent(id)
@@ -295,14 +310,16 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   const pending: Promise<void>[] = []
   const hookStep = (vendor: string, install: () => void | boolean | Promise<unknown>): void => {
     if (options.only && !options.only.has(vendor)) return
-    const failed = (error: unknown) => {
-      console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
-    }
+    const skipped = (why: string) => { console.warn(`[hooks] ${vendor} install skipped · ${why}`) }
+    const failed = (error: unknown) => skipped(errorKind(error))
+    // An installer stopped by a missing notify.mjs has said so in its own line (kit/notifyHooks.ts hooksNotInstalled); a
+    // generic second line for the same failure only buried it (#3954 review).
+    const unavailable = () => { if (!missingHookScript(vendor)) skipped('native hook preparation is unavailable') }
     try {
       const result = install()
-      if (result === false) failed('native hook preparation is unavailable')
+      if (result === false) unavailable()
       else if (result && typeof result !== 'boolean') pending.push(result.then(answer => {
-        if (answer === false) failed('native hook preparation is unavailable')
+        if (answer === false) unavailable()
       }, failed))
     } catch (error) { failed(error) }
   }
@@ -315,7 +332,10 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     confirm: confirmHomes,
     install: async (engine, home) => {
       if (options.only && !options.only.has(engine)) return
-      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current })) throw new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`)
+      // The hold line prints only the error's kind (homeAdoptions.ts), so the code is what names the engine there.
+      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current })) {
+        throw Object.assign(new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`), { code: `${engine.toUpperCase()}_HOOKS_UNAVAILABLE` })
+      }
       console.log(`[hooks] ${sessionStoreContracts[engine].product} hooks installed in its adopted home`)
     },
     held: reason => {
@@ -324,7 +344,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     },
   })
   adoptions.submit(options.environment ?? process.env)
-  void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${error instanceof Error ? error.message : error}`))
+  void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${errorKind(error)}`))
   const nativeOptions = { current: adoptions.current }
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port, nativeOptions))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port, nativeOptions))

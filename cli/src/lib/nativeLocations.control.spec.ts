@@ -89,18 +89,22 @@ it('Copilot binding retains its previous conversation when native ownership move
   const row = { engine: 'copilot', agentId: 'private-agent', sessionId: 'previous', registeredAt: 0, runtimes: [],
     processIdentity: { pid: 4242, executable: 'copilot', startMarker: '2026-10-09T00:00:00Z' } } as unknown as RegisteredSession
   const register = vi.fn(() => null)
-  const deps = { registry: { byProcess: () => row, bySession: () => undefined, register,
+  const deps = { registry: { byProcess: () => row, byAgent: () => row, bySession: () => undefined, register,
     setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return true } },
     announceSession: vi.fn(),
+    attachSession: vi.fn(async () => true), followsLive: () => false,
     homes: { copilot: join(root, 'copilot') } } as unknown as BindDeps
   const observed: DiscoveredTerminalAgent = { engine: 'copilot', cwd: root, runtimes: [], primaryRuntimeKey: '',
     args: 'copilot', resumeSessionId: null, processIdentity: row.processIdentity! }
   const binding = (await import('../core/agents/bind.js')).createBinding(deps)
   await binding.bindObservedAgent(observed)
   expect(register).not.toHaveBeenCalled(); expect(row.sessionId).toBe('previous')
-  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('process conversation changed'))
+  // The reason stays on the row; the log names only the kind.
+  expect(row.identityHold).toContain('process conversation changed')
+  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'))
   await binding.bindObservedAgent(observed)
-  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: B, transcriptPath: undefined }))
+  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: B, transcriptPath: undefined }),
+    { current: expect.any(Function) })
 })
 
 it.each(['path', 'root', 'stat'] as const)('holds a Cursor pool when %s validation is unavailable beside a readable competitor', async failure => {

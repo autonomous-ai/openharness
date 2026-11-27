@@ -11,7 +11,9 @@
  * own process delivers by asking the core (`answer`, services/turnsLink.ts) and hears only its own
  * deliveries, told to it until it has them: a delivery it made is its business and no other process's.
  */
+import { randomUUID } from 'node:crypto'
 import type { CoreApi, TurnDelivery } from './api.js'
+import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 
@@ -23,10 +25,6 @@ export const HELD_DELIVERIES = 1_000
  *  makes a few a minute. */
 export const KEPT_DELIVERERS = 10_000
 
-/** A service must keep checking authority while a turn waits for an idle terminal. */
-export const DELIVERY_LEASE_MS = 3_000
-const guarded = (id: string) => id.startsWith('team:service:')
-const owned = (service: string, id: string) => id.startsWith(`team:service:${service}:`) && id.length <= 240
 
 export interface DeliveriesDeps {
   /** Write the text into the agent under the delivery id (core/input.ts `submitAgent`). */
@@ -37,27 +35,37 @@ export interface DeliveriesDeps {
   tell(service: string, event: TurnDelivery): void
   /** The services in their own processes that may deliver turns: writing into an agent is no other's to ask. */
   deliverers: ReadonlySet<string>
-  /** What holds a typed delivery from the agent's pane now, read with nothing written (core/input.ts `holdOf`); absent, nothing. */
-  hold?: (agentId: string, deliveryId: string) => Promise<string | null>
+  /** The turn a quiet delivery (`DeliveryOptions.quiet`) started is open in [agentId]: said once, as the input says that
+   *  delivery `started` (core/turns/recaps.ts `quietTurn`); absent, nobody listens. */
+  quietStarted?: (agentId: string) => void
   log?: (line: string) => void
+  /** A new id, unique on this computer (an acknowledged input's); a random UUID unless a test gives one. */
+  newId?: () => string
   now?: () => number
 }
+
+/**
+ * How long an acknowledged input waits by default in each of its two phases: until its words are pasted (`ackMs`; the
+ * daemon checks the runtime and waits for the engine and the pane first, 8.6 to 15.7 s under load on a lamp), then from
+ * the paste until the engine's turn starts (`takenMs`). What `harness reply` waits by default.
+ */
+export const ACK_DEFAULT_MS = 30_000
+/** Bounds on each phase: a second at least, so a typed line has a look to land in, and the longest wait OpenClaw's own
+ *  submission check makes (three 10 s windows, lib/sessionInput.ts) with room, at most. */
+export const ACK_MIN_MS = 1_000
+export const ACK_MAX_MS = 120_000
+
+/** An input id a program may name its own input by: `program:` and a UUID. */
+const PROGRAM_INPUT_ID = /^program:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+const ackWindow = (value: unknown): number =>
+  Math.min(ACK_MAX_MS, Math.max(ACK_MIN_MS, typeof value === 'number' && Number.isFinite(value) ? value : ACK_DEFAULT_MS))
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 export function createDeliveries(deps: DeliveriesDeps) {
   const log = deps.log ?? ((line: string) => console.warn(line))
   const listeners = new Set<(event: TurnDelivery) => void>()
-  const now = deps.now ?? Date.now
-  const leases = new Map<string, Map<string, number>>()
-  const lease = (service: string, input: unknown): boolean => {
-    if (!deps.deliverers.has(service) || !input || typeof input !== 'object' || Array.isArray(input)) return false
-    const entries = Object.entries(input)
-    if (entries.length > HELD_DELIVERIES || entries.some(([id, until]) => !owned(service, id) || typeof until !== 'number' || !Number.isFinite(until))) return false
-    const ceiling = now() + DELIVERY_LEASE_MS
-    leases.set(service, new Map(entries.map(([id, until]) => [id, Math.min(until as number, ceiling)])))
-    return true
-  }
   /** Which process made each delivery, oldest first. */
   const makers = new Map<string, string>()
   /**
@@ -82,35 +90,31 @@ export function createDeliveries(deps: DeliveriesDeps) {
     settled({ deliveryId, sessionId: taken.agentId, state: 'rejected', reason: 'cancelled' })
     return true
   }
-  /** Deliveries from a person's message, which close a question open on the pane, until they settle. */
-  const answering = new Map<string, { writtenAt?: number }>()
-  const answers = (writtenAt: unknown) => Number.isFinite(writtenAt) ? { writtenAt: writtenAt as number } : {}
-  /** Deliveries of a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), which the short-turn guard never
-   *  holds. Kept through a write the pane held (`team_waiting_*`), as its maker asks what holds it before it writes it again; gone
-   *  once it settles otherwise, and the oldest past KEPT_DELIVERERS. */
-  const own = new Set<string>()
-  const markOwn = (deliveryId: string): void => {
-    own.delete(deliveryId)
-    own.add(deliveryId)
-    if (own.size > KEPT_DELIVERERS) own.delete(own.values().next().value!)
+  /** Mark a delivery in [marks], as the newest: the oldest past KEPT_DELIVERERS is forgotten, so a mark never settled cannot pile up. */
+  const keep = (marks: Set<string>, deliveryId: string): void => {
+    marks.delete(deliveryId)
+    marks.add(deliveryId)
+    if (marks.size > KEPT_DELIVERERS) marks.delete(marks.values().next().value!)
   }
+  /** Quiet deliveries (`DeliveryOptions.quiet`) whose turn has not been heard to start. Kept while `queued` or only written
+   *  (`delivered`): the input says `started` once the turn it typed begins. `rejected` or `unknown` takes one off and says
+   *  nothing, as a turn nobody can tie to the line tells as any turn does: none is made quiet on a guess. */
+  const quiet = new Set<string>()
   const settled = (event: TurnDelivery): void => {
-    if (event.state !== 'queued') answering.delete(event.deliveryId)
-    if (event.state !== 'queued' && !(event.state === 'rejected' && event.reason?.startsWith('team_waiting_'))) own.delete(event.deliveryId)
+    // One lookup in a Set that is empty unless a quiet line is on its way.
+    if (event.state !== 'queued' && event.state !== 'delivered' && quiet.delete(event.deliveryId) && event.state === 'started') deps.quietStarted?.(event.sessionId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
-        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
+        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${errorKind(error)}`)
       }
     }
     const maker = makers.get(event.deliveryId)
     if (maker) deps.tell(maker, event)
   }
 
-  const holdOf = async (agentId: string, deliveryId: string): Promise<string | null> => await deps.hold?.(agentId, deliveryId) ?? null
-  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries' | 'holdOf'> = {
+  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
     deliver: (agentId, content, deliveryId, options) => {
-      if (options?.answersQuestion) answering.set(deliveryId, answers(options.writtenAt))
-      if (options?.personsOwn) markOwn(deliveryId)
+      if (options?.quiet) keep(quiet, deliveryId)
       submit(agentId, content, deliveryId)
     },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
@@ -118,27 +122,80 @@ export function createDeliveries(deps: DeliveriesDeps) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    leaseDeliveries: async (service, input) => lease(service, input),
-    holdOf,
+  }
+
+  /**
+   * An acknowledged input (`input_ack`, #4393): words a program on this computer types into a harness it owns, answered
+   * only once the engine has taken them, so a program never reads "sent" for words that were lost. Delivered as any
+   * feature's turn, under a delivery id of its own (`program:`, never `team:`), and answered at the first of: its turn
+   * `started` (taken; for OpenClaw the Gateway's run, not text in the composer), `rejected` (nothing was taken), `unknown`
+   * (typed, its turn never confirmed), or a deadline. Two deadlines, one per phase:
+   * - [ackMs] until the words are pasted (`delivered`). A delivery not yet being written is then taken back, so a
+   *   program told `cancelled: true` may send the words again; one being written is left to finish.
+   * - [takenMs] from the paste until the turn starts. Past it the words are said `written`, for the program to follow
+   *   (`harness wait --after`) rather than send twice.
+   * Each answer is logged with both phases' times: the first numbers to warn at scale (#4393, Design).
+   */
+  const acknowledged = (payload: Payload, answer: (result: Payload) => void): void => {
+    const agentId = text(payload.agentId)
+    const content = typeof payload.text === 'string' ? payload.text : ''
+    if (!agentId || !content.trim()) { answer({ error: 'INVALID_INPUT' }); return }
+    const ackMs = ackWindow(payload.ackMs)
+    const takenMs = ackWindow(payload.takenMs)
+    // The program's own id for its input when it gave one, so it can follow the input even if this answer is lost.
+    const inputId = typeof payload.inputId === 'string' && PROGRAM_INPUT_ID.test(payload.inputId) ? payload.inputId : `program:${(deps.newId ?? randomUUID)()}`
+    const now = deps.now ?? Date.now
+    const began = now()
+    // The latest answer: a paste that comes late leaves its turn less of [takenMs], never more, so the caller (which
+    // waits ackMs + takenMs and some) always hears this answer rather than its own request's timeout.
+    const last = began + ackMs + takenMs
+    let pastedAt: number | null = null
+    let cancelling = false
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const arm = (ms: number, fire: () => void): void => {
+      clearTimeout(timer)
+      if (done) return
+      timer = setTimeout(fire, ms)
+      timer.unref()
+    }
+    const finish = (result: Payload): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      stop()
+      const end = now()
+      const phases = pastedAt === null ? `pre-paste ${end - began}ms` : `pre-paste ${pastedAt - began}ms, paste to ${String(result.state)} ${end - pastedAt}ms`
+      log(`[input-ack] ${agentId.slice(0, 8)} ${String(result.state)} in ${end - began}ms (${phases})`)
+      answer({ inputId, ...result })
+    }
+    // Pasted, and its turn not seen to start within [takenMs]: written, to be followed.
+    const late = (): void => finish({ state: 'timeout', cancelled: false, written: pastedAt !== null })
+    const stop = turns.onDelivery((event) => {
+      if (event.deliveryId !== inputId) return
+      if (event.state === 'delivered') { pastedAt = now(); arm(Math.max(0, Math.min(takenMs, last - pastedAt)), late) }
+      else if (event.state === 'started') finish({ state: 'taken', takenAt: now() })
+      // A delivery taken back at the deadline is said `rejected` at once: the deadline's answer, not a refusal.
+      else if (event.state === 'rejected') { if (!cancelling) finish({ state: 'rejected', reason: event.reason ?? 'rejected' }) }
+      else if (event.state === 'unknown') finish({ state: 'unknown', reason: event.reason ?? 'unknown' })
+    })
+    arm(ackMs, () => {
+      cancelling = true
+      const cancelled = cancel(inputId)
+      cancelling = false
+      if (cancelled) finish({ state: 'timeout', cancelled: true, written: false })
+      // Being written now: never taken back mid-paste. Its paste starts the [takenMs] window; a paste that never says
+      // so is answered at the end of that window all the same.
+      else arm(takenMs, late)
+    })
+    submit(agentId, content, inputId)
   }
 
   return {
     /** The delivery members of the core's own `CoreApi`, for the services in its process. */
     turns,
 
-    /** Null leaves older delivery namespaces to their existing policy. An unknown
-     * guarded ID is denied, including after a core restart forgets all leases. */
-    canWrite(deliveryId: string): boolean | null {
-      if (!guarded(deliveryId)) return null
-      const service = deliveryId.split(':')[2]
-      return (leases.get(service)?.get(deliveryId) ?? 0) > now()
-    },
-
-    /** The delivery, when it is unsettled and came from a person's message (`DeliveryOptions.answersQuestion`), else null. */
-    answersQuestion: (deliveryId: string): { writtenAt?: number } | null => answering.get(deliveryId) ?? null,
-
-    /** Whether the delivery is a person's own words in their agent's 1:1 chat (`DeliveryOptions.personsOwn`), held by no short-turn guard. */
-    personsOwn: (deliveryId: string): boolean => own.has(deliveryId),
+    acknowledged,
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input
@@ -154,24 +211,19 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
     /** A service in its own process delivering a turn, or taking one back (`service_query`): null when the
      *  query is not one of these. Refused for a service that is not a deliverer. */
-    answer(service: string, query: string, payload: Payload): Payload | Promise<Payload> | null {
-      if (query !== 'deliver' && query !== 'cancel_delivery' && query !== 'lease_deliveries' && query !== 'delivery_hold') return null
+    answer(service: string, query: string, payload: Payload): Payload | null {
+      if (query !== 'deliver' && query !== 'cancel_delivery') return null
       if (!deps.deliverers.has(service)) return { error: 'NOT_A_DELIVERER' }
-      if (query === 'lease_deliveries') return { leased: lease(service, payload.leases) }
       const deliveryId = text(payload.deliveryId)
       if (!deliveryId) return { error: 'INVALID_DELIVERY' }
-      if (guarded(deliveryId) && !owned(service, deliveryId)) return { error: 'INVALID_DELIVERY' }
       if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
-      // A pane's state is read only for a delivery its own maker holds (team:service:<it>:): never another agent's pane at large.
-      if (query === 'delivery_hold') return agentId && owned(service, deliveryId) ? holdOf(agentId, deliveryId).then(hold => ({ hold })) : { error: 'INVALID_DELIVERY' }
       if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }
       // Known before it is written: the input says `queued` as it takes it, and that is the maker's to hear.
       makers.delete(deliveryId)
       makers.set(deliveryId, service)
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
-      if (payload.answersQuestion === true) answering.set(deliveryId, answers(payload.writtenAt))
-      if (payload.personsOwn === true) markOwn(deliveryId)
+      if (payload.quiet === true) keep(quiet, deliveryId)
       submit(agentId, payload.text, deliveryId)
       return {}
     },

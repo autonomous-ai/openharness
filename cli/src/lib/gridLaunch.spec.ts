@@ -19,6 +19,7 @@ import {
 import { piProviderExtensionIn } from './gridAssignmentWire.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { hashOf } from './log.js'
 
 /** The shape the desktop actually sends, with values read off the live control plane. */
 const WIRE = {
@@ -309,12 +310,22 @@ describe('the engines that cannot', () => {
 })
 
 describe('describeGridLaunch', () => {
-  it('names the grid and the model, and never the key', () => {
-    const line = describeGridLaunch('claude', WITH_MODEL, 'on')
-    expect(line).toContain('autonomous.ai')
-    expect(line).toContain('GLM-4.7-Flash')
+  it('names a grid by its id and the model, never its name, a hash of it, or the key', () => {
+    // The line goes to the daemon log (agent create and retarget), which Export logs sends off the machine,
+    // and a grid's name is one the person can choose: short, so its hash is guessable.
+    const line = describeGridLaunch('claude', { ...WITH_MODEL, networkName: 'Home sentinel' }, 'on')
+    expect(line).not.toContain('sentinel')
+    expect(line).not.toContain(hashOf('Home sentinel'))
+    expect(line).toContain(`claude -> a grid (${WITH_MODEL.networkId}) · GLM-4.7-Flash`)
     expect(line).not.toContain(WIRE.apiKey)
     expect(describeGridLaunch('claude', OVERRIDE, 'on')).not.toContain(WIRE.apiKey)
+  })
+
+  it('names a saved API by a fixed word: its id is made from the name the person gave it', () => {
+    const line = describeGridLaunch('claude', { ...WITH_MODEL, networkId: 'api:sentinel-api', networkName: 'Sentinel API' }, 'on')
+    expect(line).not.toMatch(/sentinel/i)
+    expect(line).not.toContain(hashOf('Sentinel API'))
+    expect(line).toContain('claude -> an API · GLM-4.7-Flash')
   })
 
   it('names the web-search status — the daemon log is where a degraded launch says why', () => {
@@ -523,10 +534,9 @@ describe('opencode declares the grid as a provider', () => {
     expect(launch().args).toEqual(['-m', 'autonomous-ai/Auto'])
   })
 
-  it('writes EXACTLY ONE model, which is what the probe reads back', () => {
-    // `readOpencodeGridAssignment` answers "which model is this agent on" from this file alone,
-    // precisely so it never has to parse a live process's argv — which flickered. A second entry
-    // here would leave that question unanswerable and the probe would go back to saying nothing.
+  it('writes EXACTLY ONE model, the one the agent was created with', () => {
+    // The row's grid is what this launch recorded, as the process is not read back. A second entry
+    // here would let the agent switch to a model that record does not name.
     expect(Object.keys(config('DeepSeek-V4-Flash-0731').provider['autonomous-ai'].models))
       .toEqual(['DeepSeek-V4-Flash-0731'])
     expect(Object.keys(config().provider['autonomous-ai'].models)).toEqual(['Auto'])
@@ -693,6 +703,13 @@ describe('web tools (grid ADR 0041)', () => {
     // Bearer included — `bearer_token_env_var` takes a bare token, this one does not, and ADR 0041
     // D-d calls confusing the two a silent 401.
     expect(launchOf('codex', WITH_MCP).env.GRID_MCP_AUTHORIZATION).toBe(`Bearer ${WIRE.apiKey}`)
+  })
+
+  it('puts the Codex web tools in every request, not behind tool search', () => {
+    // Deferred, they lost the search to ChatGPT apps and the model used the apps' web search
+    // (e2e, codex 0.170.0, 2026-11-18). See `codexMcpArgs`.
+    expect(codexArg('mcp_servers.harness.omit_tools_from'))
+      .toBe('mcp_servers.harness.omit_tools_from=["deferred"]')
   })
 
   it('declares it in the config file opencode already gets', () => {

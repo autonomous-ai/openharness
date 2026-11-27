@@ -17,11 +17,14 @@
  */
 import { WebSocket } from 'ws'
 import { hostname } from 'os'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { tuiPresence, WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
-import { AuthSessionError, AuthSessionManager } from '../lib/authSession.js'
+import { AuthSessionError } from '../lib/authSession.js'
+import { AuthSessionManager } from '../lib/authRefresh.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { decodeTerminalHop, TerminalHopDirection } from '../lib/terminalBinary.js'
+import { errorKind } from '../lib/log.js'
 import { VERSION } from '../version.js'
 
 const APP_PING_MS = 15_000
@@ -133,7 +136,7 @@ export class UpstreamLink {
   private readonly events: UpstreamEvents
 
   constructor({ machineId, auth, computerId = '', autonomousEnv = 'prod', events }: UpstreamOptions) {
-    this.auth = auth ?? new AuthSessionManager(env.BACKEND_WS_URL.replace(/\/$/, '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:'))
+    this.auth = auth ?? new AuthSessionManager(backendHttpBase())
     this.testToken = auth ? undefined : machineId
     this.events = events
     // `?label=<hostname>` lets the backend record which machine connected (shown on the machine card);
@@ -190,7 +193,8 @@ export class UpstreamLink {
 
     ws.on('open', () => {
       this.openedAt = Date.now()
-      console.log(`[backend] connected → ${this.url}`)
+      // `harness start` waits for the marker (lib/daemonLaunch.ts); the URL names this computer's hostname.
+      console.log(`[backend] connected · ${backendName(this.url)}`)
       this.events.status(true)
       this.drainQueue()
       this.events.up()
@@ -254,9 +258,12 @@ export class UpstreamLink {
     }
     ws.on('close', (code) => onGone(`close ${code}`))
     ws.on('error', (err) => {
-      const e = err as Error & { code?: string }
-      const msg = e.message || e.code || String(err)
-      console.error('[backend] socket error:', msg)
+      const msg = err.message
+      // A refused upgrade's HTTP status is a number in fixed words, and `harness start` tells a revoked sign-in, a busy
+      // machine and a wrong backend apart by it (lib/daemonLaunch.ts connectFailure). Any other message can name the
+      // backend's host, so the line carries the kind and that number alone.
+      const status = Number(/^Unexpected server response: (\d{3})$/.exec(msg)?.[1])
+      console.error(`[backend] socket error: ${errorKind(err)}${status ? ` · Unexpected server response: ${status}` : ''}`)
       // 401 on the upgrade = the access token was refused. Refresh it and come back; the socket is
       // torn down the ordinary way below (`ws.close()` → onGone: timers, status, streams), which is
       // what the previous shape skipped — it nulled `this.ws` first, so onGone returned at its first
@@ -290,7 +297,7 @@ export class UpstreamLink {
             if (this.closed) return
             if (this.ws === ws) { this.ws = null; try { ws.terminate() } catch { /* ignore */ } }
             const delay = reconnectDelay(this.attempts++)
-            console.log(`[backend] token refresh failed (${error instanceof Error ? error.message : String(error)}) — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
+            console.log(`[backend] token refresh failed (${errorKind(error)}) — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
             this.redialIn(delay)
           })
       } else if (/Unexpected server response: 40[13]\b/.test(msg)) {
@@ -397,7 +404,7 @@ export class UpstreamLink {
         if (err) {
           item.attempts++
           this.draining = false
-          console.error(`[backend] queued send failed (id=${item.id}, attempts=${item.attempts}):`, err.message)
+          console.error(`[backend] queued send failed (id=${item.id}, attempts=${item.attempts}):`, errorKind(err))
           try { ws.close() } catch { /* ignore */ }
           return
         }
@@ -408,7 +415,7 @@ export class UpstreamLink {
     } catch (err) {
       item.attempts++
       this.draining = false
-      console.error(`[backend] queued send threw (id=${item.id}, attempts=${item.attempts}):`, err instanceof Error ? err.message : err)
+      console.error(`[backend] queued send threw (id=${item.id}, attempts=${item.attempts}):`, errorKind(err))
       try { ws.close() } catch { /* ignore */ }
     }
   }

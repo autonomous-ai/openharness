@@ -24,10 +24,9 @@ void main() {
     expect(wide, isNot(contains('app.store')));
   });
 
-  test('the + menu is New tab, New Swarm, Split pane, History', () {
+  test('the + menu is New tab, Split pane, History', () {
     expect(_commands(runnableWebMenu((_) => true, compact: false)), [
       'swarm.new',
-      'super_tab.new',
       'pane.split_right',
       'navigation.history',
     ]);
@@ -87,7 +86,7 @@ void main() {
 
   test('rows that cannot run, and groups left empty, are not drawn', () {
     final menu = runnableWebMenu(
-      (command) => !command.startsWith('swarm.') && command != 'super_tab.new',
+      (command) => !command.startsWith('swarm.'),
       compact: false,
     );
     expect(menu, hasLength(kWebMenuGroups.length - 1));

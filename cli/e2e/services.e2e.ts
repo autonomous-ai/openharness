@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { SERVICE_HOSTS } from '../src/harnessd/services.js'
+import { DONE_QUIET_MS } from '../src/lib/agentNotifications.js'
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true })).agents)
@@ -63,31 +64,6 @@ const EVERY_PROCESS_FAILING = Object.entries(SERVICE_HOSTS).filter(([name]) => (
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
-
-  it('reads linked PR URLs without an agent and keeps one inaccessible PR apart', async () => {
-    daemon = await IsolatedDaemon.create({ env: { VITEST: '' } })
-    // The fake binary is in this fixture's private PATH and home. No developer login or GitHub network is used.
-    writeFileSync(join(daemon.root, 'bin', 'gh'), `#!/bin/sh
-case "$3" in
-  */2) echo 'HTTP 404: Not Found' >&2; exit 1 ;;
-esac
-printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-10-22T06:00:00Z","additions":32,"deletions":6,"statusCheckRollup":[{"conclusion":"SUCCESS"}]}'
-`, { mode: 0o755 })
-    await daemon.start()
-    const client = await LocalClient.connect(daemon)
-    const urls = ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2']
-    const answer = await until('the projects service to be ready', async () => {
-      const result = await client.request('git_pull_requests_status', { urls })
-      return result.error === 'SERVICE_UNAVAILABLE' && result.retryable ? null : result
-    }, 15_000, 100)
-    expect(answer).toMatchObject({ rows: [
-      { url: urls[0], status: 'found', title: 'A merged pull request', state: 'Merged', checks: { passed: 1, total: 1 } },
-      { url: urls[1], status: 'no_access' },
-    ] })
-    expect(await client.request('git_pull_requests_status', { urls: ['https://example.com/pull/1'] })).toMatchObject({ error: 'INVALID_URLS' })
-    expect(daemon.coresStarted()).toBe(1)
-    client.close()
-  })
 
   it('with every service failing to start, in its own process or in the core, the core starts, runs an agent through turns and a restart, and says each one is unavailable', async () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...QUICK_TO_PARK } })
@@ -158,11 +134,11 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     expect(await client.request('project_preview', { path: '/no/such/folder' })).not.toHaveProperty('service')
     expect(await client.request('machine_resources', {})).not.toHaveProperty('error')
     for (const line of [
-      '[service search] touch failed · injected fault: search.touch',
-      '[service search] session_search failed · injected fault: search.session_search',
-      '[service workspaces] nameBranches failed · injected fault: workspaces.nameBranches',
+      '[service search] touch failed · Error',
+      '[service search] session_search failed · Error',
+      '[service workspaces] nameBranches failed · Error',
       // The recaps failing on every turn event: those turns have no recap, and every one of them still ends.
-      '[service recaps] lifecycle failed · injected fault: recaps.lifecycle',
+      '[service recaps] lifecycle failed · Error',
     ]) await until(line, () => d.log().includes(line) || null, 15_000, 250)
     const agent = await row(client, agentId)
     expect(agent?.sessionId).toBeTruthy()
@@ -179,13 +155,13 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
     for (const service of EVERY_PROCESS_FAILING.split(',')) {
-      expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
+      expect(daemon.log()).toContain(`[services] ${service} did not start · Error · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
     const agentId = await boundAgent(daemon, client, 'no-services')
     await turn(client, agentId, 'first, with no services')
-    // With the recaps off a turn has no recap, and ends all the same.
-    await new Promise((done) => setTimeout(done, 1_000))
+    // With the recaps off a turn has no recap, and ends all the same: read past the quiet window a recap would wait out.
+    await new Promise((done) => setTimeout(done, 1_000 + DONE_QUIET_MS))
     expect(client.frames.filter((frame) => frame.type === 'turn_summary')).toEqual([])
     // Off, never UNSUPPORTED: the apps read that as "update the CLI".
     expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })
@@ -201,8 +177,7 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     expect(await client.request('usage_read', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'usage', retryable: false })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: false })
     expect(await client.request('shell_capabilities', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'shell', retryable: false })
-    for (const type of ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',
-      'agent_instructions_read', 'agent_instructions_write']) {
+    for (const type of ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file']) {
       expect(await client.request(type, { agentId, path: daemon.projectsDir }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: false })
     }
     // A window's name off: the apps keep the names they have.
@@ -227,7 +202,7 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
 
   it('with services in the core failing on every call, they are switched off and every turn still reaches the client', async () => {
     daemon = await IsolatedDaemon.create({
-      env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,viewers.frameContext,viewers.attach,workspaces.nameBranches', ...IN_THE_CORE },
+      env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,viewers.surface,workspaces.nameBranches', ...IN_THE_CORE },
     })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-120).join('\n')}`) })
     await daemon.start()
@@ -237,10 +212,13 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     // Each turn calls search at its start and its end: the fifth failure switches search off, and the
     // turns after it are delivered exactly as the ones before.
     for (let i = 1; i <= 4; i++) await turn(client, agentId, `turn ${i}`)
+    // Viewer projections no longer call a feature port. Exercise its remaining public surface boundary.
+    for (let i = 0; i < 5; i++) expect(await client.request('viewer_surface', { surfaceId: `fault-${i}`, agentId, op: 'close' }))
+      .toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'viewers' })
     await until('search to be switched off', () => daemon!.log().includes('[services] search switched off after 5 failures'), 15_000)
     await until('the viewers to be switched off', () => daemon!.log().includes('[services] viewers switched off after 5 failures'), 15_000)
-    expect(daemon.log()).toContain('[services] search.touch failed · injected fault: search.touch')
-    expect(daemon.log()).toContain('[services] viewers.frameContext failed · injected fault: viewers.frameContext')
+    expect(daemon.log()).toContain('[services] search.touch failed · Error')
+    expect(daemon.log()).toContain('[services] viewers.surface failed · Error')
 
     // Off, search says so; the agent's row still carries everything the core owns.
     expect(await client.request('session_search', { query: 'turn' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })
@@ -278,7 +256,7 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     // request says search is off. Its other request, and the core's, go on.
     expect(answers.slice(0, 5)).toEqual(Array(5).fill(expect.objectContaining({ error: 'SERVICE_FAILED', service: 'search' })))
     expect(answers[5]).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })
-    expect(daemon.log()).toContain('[services] search.session_search failed · injected fault: search.session_search')
+    expect(daemon.log()).toContain('[services] search.session_search failed · Error')
     expect((await client.request('agents_list', {})).agents).toEqual([])
     client.close()
   })
@@ -310,7 +288,7 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     for (const service of ['usage', 'monitor', 'projects', 'recaps']) {
       await until(`${service} to connect`, () => d.log().includes(`[services] ${service} connected`) || null, 30_000, 200)
     }
-    expect(d.log()).toContain('[service workspaces] did not start · injected fault: workspaces')
+    expect(d.log()).toContain('[service workspaces] did not start · Error')
     const client = await LocalClient.connect(d)
     const agentId = await boundAgent(d, client, 'edge-without-workspaces')
     expect((await client.request('fs_list_dir', {})).error).toBeUndefined()
@@ -358,8 +336,8 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     expect(await client.request('grid_models_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'models' })
     // The October 6 bundled run received the RPC before the master's stdout delivered this same
     // fault. They are separate streams: the reply is not a barrier on the captured daemon log.
-    await until('the model service fault to reach the daemon log', () => d.log().includes('[service models] grid_models_list failed · injected fault: models.grid_models_list'))
-    expect(d.log()).toContain('[service models] grid_models_list failed · injected fault: models.grid_models_list')
+    await until('the model service fault to reach the daemon log', () => d.log().includes('[service models] grid_models_list failed · Error'))
+    expect(d.log()).toContain('[service models] grid_models_list failed · Error')
     // Its other requests are still its own answers: with no agent here, no Model/Effort choices.
     expect(await client.request('models_list', {})).toMatchObject({ models: [] })
     expect(await client.request('grid_fleet_capabilities', {})).toMatchObject({ protocol: 1 })
@@ -384,15 +362,15 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
     await ended
     // ⌘K started the devices (core/devicesWake.ts); the window's tab, as a desktop says it, reaches the dial.
     client.send('app_panes', { agentIds: [agentId], foreground: true })
-    await until('the dial to fail', () => daemon?.log().includes('[devices] dial failed · injected fault: dial') || null, 15_000, 100)
+    await until('the dial to fail', () => daemon?.log().includes('[devices] dial failed · Error') || null, 15_000, 100)
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })
 
   it('with the fleet not starting, or failing on every call, ⌘K says so and the core runs its agents on', async () => {
     for (const [faults, reason, said] of [
-      ['fleet', 'no agent list yet', '[devices] fleet did not start · injected fault: fleet · the devices run without it'],
-      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[devices] fleet.routeSend failed · injected fault: fleet.routeSend'],
+      ['fleet', 'no agent list yet', '[devices] fleet did not start · Error · the devices run without it'],
+      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[devices] fleet.routeSend failed · Error'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
       const d = daemon
@@ -414,8 +392,8 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
   it('with the devices not starting in the core\'s process, or the Devices tab failing, ⌘K and the tab say so and the core runs on', async () => {
     // In their own process this is e2e/devicesProcess.e2e.ts's crash loop; here, the service host's guard.
     for (const [faults, said] of [
-      ['devices', '[services] devices did not start · injected fault: devices · the core runs without it'],
-      ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · injected fault: devices.harness_devices_list'],
+      ['devices', '[services] devices did not start · Error · the core runs without it'],
+      ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · Error'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults, ...IN_THE_CORE } })
       const d = daemon

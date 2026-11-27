@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { VOICE_CLAIM_MS } from '../superTabs/voiceMessages.js'
 import { transcribe as deviceDeepgram } from './deepgram.js'
 import { transcribeWavWithDeepgram } from './deepgramWav.js'
 import { transcribe as deviceGemini } from './gemini.js'
+import { STT_TIMEOUT_MS } from './sttTimeout.js'
 
 vi.mock('../config/env.js', () => ({ env: { DEEPGRAM_API_KEY: 'dg-key', GEMINI_API_KEY: 'gm-key', GEMINI_STT_MODEL: 'gemini-test' } }))
 
-// A speech-to-text service that stops answering holds its call, and with it a chat voice message's memory slot and claim
-// (store.ts readVoice), until the connection gives up on its own, minutes later. Every call ends by its own timeout instead.
+// A speech-to-text service that stops answering holds its call, and with it what the call holds, until the connection gives up
+// on its own, minutes later. Every call ends by its own timeout instead.
 const asked: number[] = []
 
 /** A service that never answers, as a hung connection does: the call ends only when its signal does. */
@@ -35,17 +35,14 @@ afterEach(() => {
 
 describe('every speech-to-text call', () => {
   const calls: Array<[string, () => Promise<unknown>]> = [
-    ['Deepgram, for a chat voice message and the dial\'s WAV', () => transcribeWavWithDeepgram(Buffer.from('wav'), 'audio/wav', 'en')],
+    ['Deepgram, for the dial\'s WAV', () => transcribeWavWithDeepgram(Buffer.from('wav'), 'audio/wav', 'en')],
     ['Deepgram, for the device\'s PCM', () => deviceDeepgram(Buffer.from('pcm'), 16000, 'en')],
     ['Gemini, for the device\'s PCM', () => deviceGemini(Buffer.from('pcm'), 16000)],
   ]
 
-  it.each(calls)('%s ends when the service stays silent, before another may claim the same voice message', async (_name, call) => {
+  it.each(calls)('%s ends by its own timeout when the service stays silent', async (_name, call) => {
     await expect(call()).rejects.toMatchObject({ name: 'TimeoutError' })
-    expect(asked).toHaveLength(1)
-    expect(asked[0]!).toBeGreaterThan(0)
-    // At most half the claim: it starts before the file is read and the quota reserved (store.ts readVoice).
-    expect(asked[0]!).toBeLessThanOrEqual(VOICE_CLAIM_MS / 2)
+    expect(asked).toEqual([STT_TIMEOUT_MS])
   })
 
   // Gemini retries a busy answer: its attempts and their waits share one deadline, or slow answers would add up to minutes.

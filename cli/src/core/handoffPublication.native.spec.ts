@@ -19,6 +19,8 @@ vi.mock('node:child_process', () => {
   return { execFile, execFileSync: forbidden, exec: forbidden, execSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
+// The fixture git above answers by name: the host's absolute git, or a login-shell search for it, never reaches it.
+vi.mock('../lib/gitOnPath.js', async original => ({ ...await original<object>(), gitPath: async () => 'git' }))
 const summaryFault = vi.hoisted(() => ({ fail: false }))
 vi.mock('../lib/compactSummary.js', async original => {
   const actual = await original<typeof import('../lib/compactSummary.js')>()
@@ -438,7 +440,7 @@ async function processPrepare(ctx: Awaited<ReturnType<typeof setup>>,
     const requestId = `query-${++next}`; replies.set(requestId, resolve)
     link.receive(clone({ type: 'service_query', payload: { ...payload, query, requestId } }))
   }))
-  const service = startHandoff(processCore, undefined, undefined, undefined, LOADED_HANDOFF_LIMITS)
+  const service = startHandoff(processCore, undefined, undefined, LOADED_HANDOFF_LIMITS)
   const link = links.accept('handoff', 'fixture-token', { sendFrame: frame => {
     const wire = clone(frame)
     if (wire.type === 'service_query_result') replies.get(String(wire.payload!.requestId))!(wire.payload!)

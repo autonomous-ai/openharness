@@ -11,8 +11,11 @@
  */
 
 import type { AgentEngine } from '../../engines/types.js'
+import { codeOrLength } from '../log.js'
 import type { TerminateOutcome } from '../deleteAgentFallback.js'
-import type { RegisteredSession } from '../registry.js'
+import { PANE_START_TIMEOUT_MS } from '../ptyHost/client.js'
+import type { LaunchPublication, RegisteredSession } from '../registry.js'
+import { AtomicWriteUnconfirmed } from '../secureState.js'
 import { KILL_CONFIRMED } from '../restartAgent.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../restoreAgents.js'
 import type { TerminalBackend } from '../terminalBackend.js'
@@ -32,23 +35,25 @@ const MOVE_TIMEOUT_MS = 30_000
 export const MOVE_PROBE_INTERVAL_MS = 500
 
 /**
- * Bounds on every step, so the whole move ends well under 120 s on every path: a mailbox message held longer is sent
+ * Bounds on every step, so the whole move ends under 120 s on every path: a mailbox message held longer is sent
  * again (gate.ts), and the routes the move holds have no auto-release. A step that overruns is abandoned and fails the
- * move as any failure there does.
+ * move as any failure there does. The new pane's create and respawn have the host client's own bound on them
+ * (PANE_START_TIMEOUT_MS, 15 s): a move onto a host just installed is their cold start, and a shorter bound here wins.
  *
- * Before the hold: capture 5 + launch 10 + create 5 = 20 s. Held, on the longest path (a fallback whose every step
- * takes its whole bound): stop 10 + prepare 5 + respawn 5 + probe 30 + close the new pane 5 + relaunch 20 = 75 s.
- * Held, on the longest success: stop 10 + prepare 5 + respawn 5 + probe 30 + retarget 5 + release 5 + close the old
- * pane 5 = 65 s. At most 95 s in all.
+ * Before the hold: capture 5 + launch 10 + create 15 = 30 s. Held, on the longest path (a fallback whose every step
+ * takes its whole bound): stop 10 + prepare 5 + respawn 15 + probe 30 + close the new pane 5 + relaunch 20 = 85 s.
+ * Held, on the longest success: stop 10 + prepare 5 + respawn 15 + probe 30 + retarget 5 + release 5 + close the old
+ * pane 5 = 75 s. At most 115 s in all.
  */
 export const MOVE_CAPTURE_TIMEOUT_MS = 5_000
 /** Restore's launch waits for the grid's or the Store's answer (`relaunchOverrides`) and the permission check. */
 export const MOVE_LAUNCH_TIMEOUT_MS = 10_000
-export const MOVE_CREATE_TIMEOUT_MS = 5_000
 /** The old engine's stop: its native conversation released, then SIGTERM and, after a grace, SIGKILL. */
 export const MOVE_STOP_TIMEOUT_MS = 10_000
-/** Each single host or core call while held: preparing the conversation, respawn, retarget, release, a pane's close. */
+/** Each single host or core call while held but the respawn: preparing the conversation, retarget, release, a pane's close. */
 export const MOVE_STEP_TIMEOUT_MS = 5_000
+/** What the conversation's repair leaves of its step's bound: a chunk read and the flushes after it. */
+const MOVE_PREPARE_MARGIN_MS = 1_000
 /** The old pane's relaunch: a restart's resume attempt and its fresh retry, each with its own wait for the engine. */
 export const MOVE_RELAUNCH_TIMEOUT_MS = 20_000
 
@@ -71,8 +76,9 @@ export interface MoveAgentDeps {
   buildLaunch: RestoreAgentsDeps['buildLaunch']
   /** What `buildLaunch` leaves out with `prepare: false`, run once the old engine is confirmed stopped, as a restart
    *  prepares after its kill: `prepareSessionResume` (the conversation's repair, a Pi session's copy) and
-   *  `refreshGridWebSearch`. Throws when the conversation could not be prepared. */
-  prepareResume(session: RegisteredSession): Promise<void>
+   *  `refreshGridWebSearch`. Throws when the conversation could not be prepared. [waiting] turns false a second before
+   *  the step's bound: the repair then leaves the history as it is. */
+  prepareResume(session: RegisteredSession, waiting: () => boolean): Promise<void>
   /** Stop the old engine and keep its pane, as `paneSwapDeps`' `terminate` does after its `holdOpen` (core/agents/
    *  swap.ts): a pane that is not held is closed with its process, and the fallback needs it. */
   stopEngine(session: RegisteredSession): Promise<TerminateOutcome>
@@ -81,7 +87,8 @@ export interface MoveAgentDeps {
   /** Point the row at [runtime], in one `registry.transaction`: `updateRuntimes(agentId, [runtime],
    *  terminalRouteKey(runtime))` and `updateProcessIdentity`, then announce the session as a restart does. Throws
    *  only when the row was not switched. */
-  swap(agentId: string, runtime: TerminalRuntimeRef, identity: ProcessIdentity): void
+  swap(agentId: string, runtime: TerminalRuntimeRef, identity: ProcessIdentity): Promise<LaunchPublication>
+  complete(): void
   /** Move the agent's open streams to [runtime] (`TerminalStreamManager.retarget`). */
   retarget(agentId: string, runtime: TerminalRuntimeRef): Promise<void>
   /** Hand the new pane back to the backend's default disposal once it is the agent's, as a restart does
@@ -238,15 +245,17 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
   /** Step 6 ran: the new pane may run an engine, so it must be confirmed closed before the old one is relaunched. */
   let respawned = false
   /** Step 8 ran: the row names the new pane, whose engine runs. Nothing after it may relaunch the old one. */
-  let swapped = false
+  let publication: 'never-published' | 'uncertain' | 'confirmed' = 'never-published'
 
   /** Undo everything a failed or cancelled move did before its swap. The gate is released by the caller after it. */
   const recover = async (reason: string): Promise<MoveOutcome> => {
     const cancelled = reason === CANCELLED || reason === IN_USE || reason === NOT_ELIGIBLE
     const notMoved = (fellBack: boolean): MoveOutcome => ({ moved: false, reason, fellBack, ...(cancelled ? { cancelled: true as const } : {}) })
-    if (swapped) {
-      log(`[terminal] move ${agentId}: after the switch, ${reason}`)
-      return { moved: true, resumed: true }
+    if (publication !== 'never-published') {
+      for (const key of routeHolds.keys()) keptRoutes.add(key)
+      await deps.gate.refuse(agentId)
+      log(`[terminal] move ${agentId}: ${publication} publication; the move remains held`)
+      return notMoved(false)
     }
     let newPaneClosed = true
     if (created) {
@@ -257,7 +266,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
         // Its route stays held, so discovery never mints it a second agent, possibly beside the same conversation:
         // until the daemon restarts, whose start closes it (`removeOrphanMovePanes`), or a later close of it.
         keptRoutes.add(terminalRouteKey(newPane))
-        log(`[terminal] move ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : closed.reason}); its route stays held`)
+        log(`[terminal] move ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : codeOrLength(closed.reason)}); its route stays held`)
       }
     }
     if (!stopped) return notMoved(false)
@@ -271,7 +280,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // The old pane's engine runs again before the gate opens, so held input reaches a live engine. When it does not
     // come back, the input still goes to the old pane, as it does after a failed restart.
     const relaunched = await bounded(() => deps.relaunchOld(session), MOVE_RELAUNCH_TIMEOUT_MS, 'the relaunch in the old pane')
-    if (!relaunched.done) log(`[terminal] move ${agentId}: ${relaunched.reason}`)
+    if (!relaunched.done) log(`[terminal] move ${agentId}: the relaunch in the old pane did not complete (${codeOrLength(relaunched.reason)})`)
     return notMoved(relaunched.done && relaunched.value)
   }
 
@@ -304,7 +313,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
 
     // 3. The new pane, waiting with no engine.
     const creating = Promise.resolve().then(() => deps.createSeeded(session, seed))
-    const made = await bounded(() => creating, MOVE_CREATE_TIMEOUT_MS, 'opening the new pane')
+    const made = await bounded(() => creating, PANE_START_TIMEOUT_MS, 'opening the new pane')
     if (!made.done) {
       // A create answered after its bound made a pane nothing will use: close it then.
       void creating.then(async (late) => {
@@ -335,14 +344,17 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     if (!stop.done) return await recover(stop.reason)
     if (!KILL_CONFIRMED.has(stop.value)) return await recover(`could not confirm the old ${engine} process stopped (${stop.value})`)
     if (!deps.current()) return await recover(CANCELLED)
-    const prepared = await bounded(() => deps.prepareResume(session), MOVE_STEP_TIMEOUT_MS, `preparing the ${engine} conversation`)
+    // A long conversation's repair stops a second before the step's bound, and the agent moves with its history as it is
+    // (the old engine ran on it): left to run past the bound, it went on beside the fallback (engines/kit/resumeRepair.ts).
+    const preparing = Date.now() + MOVE_STEP_TIMEOUT_MS - MOVE_PREPARE_MARGIN_MS
+    const prepared = await bounded(() => deps.prepareResume(session, () => Date.now() < preparing), MOVE_STEP_TIMEOUT_MS, `preparing the ${engine} conversation`)
     if (!prepared.done) return await recover(prepared.reason)
     if (!deps.current()) return await recover(CANCELLED)
 
     // 6. The engine resumes in the new pane, over its scrollback.
     respawned = true
     const newPane = created
-    const spawn = await bounded(() => deps.respawn(newPane, launch), MOVE_STEP_TIMEOUT_MS, `starting ${engine} in the new pane`)
+    const spawn = await bounded(() => deps.respawn(newPane, launch), PANE_START_TIMEOUT_MS, `starting ${engine} in the new pane`)
     if (!spawn.done) return await recover(spawn.reason)
     if (!spawn.value.ok) return await recover(`could not start ${engine} in the new pane: ${spawn.value.reason ?? 'unknown reason'}`)
     if (!deps.current()) return await recover(CANCELLED)
@@ -355,21 +367,29 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // 8. The row names the new pane first, synchronously, and only then are the streams moved: a stream opened during
     // the hold opened on the pane the row named, and retarget moves it with the rest. Retargeted before the switch, a
     // stream opened in between would land on the old pane and stay there.
-    try { deps.swap(agentId, newPane, identity) } catch (error) {
-      return await recover(`could not switch the row: ${error instanceof Error ? error.message : String(error)}`)
+    try {
+      const receipt = await deps.swap(agentId, newPane, identity)
+      if (receipt.state === 'confirmed') publication = 'confirmed'
+      if (receipt.state !== 'confirmed' || !receipt.entry || !deps.current()) return await recover('destination publication was not confirmed for this owner')
+    } catch (error) {
+      if (error instanceof AtomicWriteUnconfirmed) publication = 'uncertain'
+      return await recover('destination publication failed')
     }
-    swapped = true
     created = null
     const streams = await bounded(() => deps.retarget(agentId, newPane), MOVE_STEP_TIMEOUT_MS, 'moving open streams')
-    if (!streams.done) log(`[terminal] move ${agentId}: ${streams.reason}`)
+    if (!streams.done) log(`[terminal] move ${agentId}: moving open streams did not complete (${codeOrLength(streams.reason)})`)
+    if (!deps.current()) return await recover(CANCELLED)
     const released = await bounded(() => deps.releaseHold(newPane), MOVE_STEP_TIMEOUT_MS, 'releasing the new pane')
-    if (!released.done) log(`[terminal] move ${agentId}: ${released.reason}`)
+    if (!released.done) return await recover('the confirmed destination remains held')
+    if (!deps.current()) return await recover(CANCELLED)
 
     // 9. The old pane, which nothing names now.
     for (const old of session.runtimes) {
+      if (!deps.current()) return await recover(CANCELLED)
       const closed = await bounded(() => deps.killPane(old), MOVE_STEP_TIMEOUT_MS, 'closing the old pane')
-      if (!closed.done || !closed.value) log(`[terminal] move ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
+      if (!closed.done || !closed.value) log(`[terminal] move ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : codeOrLength(closed.reason)})`)
     }
+    deps.complete()
     return { moved: true, resumed: true }
   } catch (error) {
     return await recover(`the move failed: ${error instanceof Error ? error.message : String(error)}`)

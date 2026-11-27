@@ -9,28 +9,19 @@
  * (2026-10-05).
  */
 import { env } from './config/env.js'
-import { swarmOn } from './harnessd/swarmSwitch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { harnessdEnv, holdHarnessdEnv } from './lib/harnessdEnv.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { unixSocketPath } from './lib/localSocket.js'
-import { ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
+import { errorKind, exitOnFatal, ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
 import { hostServices, type ServiceHost, type ServiceHostOptions, type ServiceProcess } from './services/process.js'
-import type * as SwarmServicesEntry from './superTabs/inServices.js'
 
 export interface ServiceProcessOptions {
   dataDir: string
   socketPath: string
   machineId: string
   token: string
-  /** The Swarm's side of the services that act on it (superTabs/inServices.ts): loaded only while the Swarm is on, and
-   *  only for those services (`SWARM_HELPED`). Absent, each runs as it does without the Swarm. */
-  swarm?: SwarmServices
 }
-export type SwarmServices = typeof SwarmServicesEntry
-
-/** The services that act on the Swarm from outside it, each given its side while it is on (superTabs/inServices.ts). */
-export const SWARM_HELPED: ReadonlySet<string> = new Set(['agentCleanup', 'sharing', 'handoff', 'models'])
 type Runner = (options: ServiceProcessOptions) => ServiceProcess
 
 /** The processes the master runs that speak only to it, never to the core: they need no local socket. */
@@ -40,6 +31,7 @@ const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
   ['engine-claude', async () => (await import('./engines/claude/claudeReaderProcess.js')).runClaudeReader],
   ['engine-codex', async () => (await import('./engines/codex/codexReaderProcess.js')).runCodexReader],
+  ['engine-others', async () => (await import('./engines/others/otherEnginesProcess.js')).runOtherEngines],
   ['search', async () => (await import('./services/searchProcess.js')).runSearchService],
   ['viewers', async () => (await import('./services/viewersProcess.js')).runViewersService],
   ['workspaces', async () => (await import('./services/workspacesProcess.js')).runWorkspacesService],
@@ -47,6 +39,10 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['monitor', async () => (await import('./services/monitorProcess.js')).runMonitorService],
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
   ['windowNames', async () => (await import('./services/windowNamesProcess.js')).runWindowNamesService],
+  ['engineProbe', async () => (await import('./services/engineProbeProcess.js')).runEngineProbeService],
+  ['goals', async () => (await import('./services/goalsProcess.js')).runGoalsService],
+  ['hachi', async () => (await import('./services/hachiProcess.js')).runHachiService],
+  ['homeBridge', async () => (await import('./services/homeBridgeProcess.js')).runHomeBridgeService],
   ['shell', async () => (await import('./services/shellProcess.js')).runShellService],
   ['handoff', async () => (await import('./services/handoffProcess.js')).runHandoffService],
   ['connectors', async () => (await import('./services/connectorsProcess.js')).runConnectorsService],
@@ -62,7 +58,6 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['orchestrator', async () => (await import('./services/orchestratorProcess.js')).runOrchestratorService],
   ['memory', async () => (await import('./services/memoryProcess.js')).runMemoryService],
   ['router', async () => (await import('./services/routerProcess.js')).runRouterService],
-  ['superTabs', async () => (await import('./services/superTabsProcess.js')).runSuperTabsService],
   ['cloud', async () => (await import('./services/cloudProcess.js')).runCloudService],
   // Not a service the core knows: the master runs it beside them (harnessd/services.ts `UPDATER_HOST`).
   ['updater', async () => (await import('./services/updaterProcess.js')).runUpdaterService],
@@ -78,16 +73,15 @@ export interface ServiceProcessDeps {
   /** The process the services run in; swapped in tests for one that touches no channel, signal or exit. */
   host?: (options: ServiceHostOptions) => ServiceHost
   exit?: (code: number) => never
-  /** Loads the Swarm's side of the services (superTabs/inServices.ts); swapped in tests. */
-  swarm?: () => Promise<SwarmServices>
+  /** What ends the process on an error nothing caught, under its tag (lib/log.ts `exitOnFatal`). */
+  fatal?: (tag: string) => void
 }
-
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 /**
  * Run the services [named] (`search`, or `workspaces,usage`) until the master stops them; exits 2 for a
- * name this build does not know. Throws when none of them starts, as a lone service whose start throws
- * always did: the process ends, and the master decides whether to try again.
+ * name this build does not know. Exits 1 when none of them starts, as a lone service whose start threw
+ * always did: the process ends, and the master decides whether to try again. Never by throwing on: Node
+ * would print the error whole, its words and its stack, into the daemon's log.
  */
 export async function startServiceProcess(named: string | undefined, deps: ServiceProcessDeps = {}): Promise<ServiceProcess> {
   // First, before any service starts a child that would inherit them: the viewers' servers, an engine's
@@ -95,6 +89,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   holdHarnessdEnv()
   const runners = deps.runners ?? SERVICE_RUNNERS
   const exit = deps.exit ?? ((code: number) => process.exit(code))
+  const fatal = deps.fatal ?? ((tag: string) => exitOnFatal(tag, 2))
   const names = [...new Set((named ?? '').split(',').map((name) => name.trim()).filter(Boolean))]
   const socketPath = unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
   const unknown = names.length ? names.find((name) => !runners.has(name)) : '(none)'
@@ -108,32 +103,29 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     console.error(`[service] ${names.join(',')}: the core has no local socket to reach`)
     return exit(2)
   }
-  // The master names the process (`edge` for the services it shares); a process started by hand is named
-  // for what it runs. The same name as the hard link it was exec'd through (harnessd/processName.ts): one
-  // name in ps and Activity Monitor.
-  const title = harnessdEnv().HARNESSD_SERVICE || names.join(',')
-  process.title = `harnessd-${title}`
+  // The master names the process (`edge` for the services it shares); a process started by hand is named for what
+  // it runs. The name is on its lines in the log. What ps and Activity Monitor call it is the hard link it was
+  // exec'd through (harnessd/processName.ts), never a title: on macOS a title put the process's environment where
+  // `pgrep -f` reads its arguments (architecture.processTitle.spec.ts).
+  const processName = harnessdEnv().HARNESSD_SERVICE || names.join(',')
   // Its lines share the daemon's log with the master's: a write a full disk refuses is dropped, not fatal.
   ignoreLogWriteErrors()
+  // And an error nothing caught is one line of its kind there, then exit 1 for the master to restart it: Node's own
+  // report is its message and stack. Before any service loads, the gateway's among them.
+  fatal(`[service ${processName}]`)
   // As every daemon process did at load: a service that runs `ps` or `git` must not get mangled output.
   ensureUtf8Locale()
   // Its lines go to the daemon's log between the core's and the master's, which are stamped: unstamped,
   // a service's said nothing of when.
   installTimestampedConsole()
   const loaded = await Promise.all(names.map(async (name) => [name, await runners.get(name)!()] as const))
-  // Off (`HARNESS_SWARM`), none of the Swarm's code is loaded here; on, only a process running a service that acts on it
-  // loads its side, as the services did before there was a switch.
-  const swarm = swarmOn(harnessdEnv()) && names.some((name) => SWARM_HELPED.has(name))
-    ? await (deps.swarm ?? (() => import('./superTabs/inServices.js')))() : undefined
   const options: ServiceProcessOptions = {
     dataDir: env.ADAPTER_DATA_DIR,
     socketPath: socketPath ?? '',
     machineId: readOrMintComputerId(env.ADAPTER_COMPUTER_ID_FILE, env.ADAPTER_COMPUTER_ID),
     token: harnessdEnv().HARNESSD_SERVICE_TOKEN ?? '',
-    ...(swarm ? { swarm } : {}),
   }
   const running: ServiceProcess[] = []
-  let failure: unknown = null
   for (const [name, run] of loaded) {
     try {
       running.push(run(options))
@@ -141,12 +133,11 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
       // One service that cannot start is off, and the others in its process run on: the core answers its
       // requests SERVICE_UNAVAILABLE, as for any service that is down. In-process, the core's host does
       // the same with a start that throws (core/serviceHost.ts).
-      failure ??= error
-      console.error(`[service ${name}] did not start · ${describe(error)}`)
+      console.error(`[service ${name}] did not start · ${errorKind(error)}`)
     }
   }
-  if (!running.length) throw failure
-  const host = (deps.host ?? hostServices)({ name: title, services: names })
+  if (!running.length) return exit(1)
+  const host = (deps.host ?? hostServices)({ name: processName, services: names })
   for (const service of running) host.add(service)
   return {
     stop: () => Promise.allSettled(running.map((service) => Promise.resolve().then(() => service.stop()))).then(() => {}),

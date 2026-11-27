@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { checkPidRuntime, terminateDeletedAgent } from '../../lib/deleteAgentFallback.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv } from '../../lib/engineLaunch.js'
 import { engineBin } from '../../lib/engineBin.js'
-import { stopConflictingBackgroundJob } from '../../lib/claudeBackgroundJob.js'
+import type { ClearBackgroundJob } from '../../engines/facets/backgroundJob.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { mergedLaunchEnv } from './launchEnv.js'
@@ -17,7 +17,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, type RelaunchArgvOptions, type RestartAgentDeps } from '../../lib/restartAgent.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionActive } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { signalAgentProcess } from '../../lib/processSignals.js'
@@ -27,17 +27,16 @@ import { paneReadIdentity } from '../transcripts/readIdentity.js'
 export interface PaneSwapDeps {
   restartJobs?: AgentRestartCoordinator
   byAgent: (agentId: string) => RegisteredSession | undefined
-  prepareSessionResume: (session: RegisteredSession) => void
+  prepareSessionResume: (session: RegisteredSession, current: () => boolean) => Promise<unknown>
   /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
   keepAbandonedConversation: (left: RegisteredSession) => void
   /** Release the conversation on its engine's server before replacing the terminal client. */
   stopNative: StopAgentServiceDeps['stopNative']
+  /** Stops a Claude Code background job holding the session before it is resumed, in its worker (core/engines/backgroundJobs.ts). */
+  stopBackgroundJob?: ClearBackgroundJob
 }
 
-/** How long a relaunched engine must stay running before a restart counts it as come up (`waitForProcess`). */
-export const SWAP_SETTLE_MS = 500
-
-export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedConversation, stopNative, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
+export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedConversation, stopNative, stopBackgroundJob, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
   /**
    * The dependencies a pane-process swap needs, for both callers that do one.
    *
@@ -67,6 +66,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     current?: () => boolean,
   ): RestartAgentDeps => {
     const target = { ...session, processIdentity: session.processIdentity && { ...session.processIdentity } }
+    const heldToken = launch.native?.token
     const identity = paneReadIdentity(target)
     const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
       && paneReadIdentity(byAgent(target.agentId)) === identity
@@ -96,7 +96,8 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     })
     return {
       ...(current ? { isCurrent: current } : {}),
-      prepareResume: () => prepareSessionResume(session),
+      // The history is replaced only while the swap holds, as `restartAgent` judges it (`isCurrent`).
+      prepareResume: async () => { await prepareSessionResume(session, () => current?.() !== false) },
       // The conversation the swap meant to reopen: the one a fallback to a fresh start leaves behind.
       keepAbandoned: () => keepAbandonedConversation(session),
       // Only a backend that can refuse is asked (tmux, too old for `-e`); the pty host takes any environment.
@@ -154,15 +155,20 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
             // Up means still up a moment later: a launch the engine refuses (`codex resume` after an update
             // dropped it) runs for an instant, and seen then, the restart said "resumed" and never fell back
             // to a fresh start (e2e/updates.e2e.ts on Linux, whose faster start put it in the first look).
-            await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
-            waited += SWAP_SETTLE_MS
+            await new Promise((resolve) => setTimeout(resolve, ENGINE_SETTLE_MS))
+            waited += ENGINE_SETTLE_MS
             const still = await resolvePaneEngineProcess(backend, runtime, session.engine)
-            if (sameProcessIdentity(still, found)) return found
+            // The later look: a Node engine started as `node` (Claude Code installed with npm) renames itself
+            // (process.title) while settling, which on Linux changes its `comm`, the row's executable, and the
+            // publication's refresh compares the executable.
+            if (sameProcessIdentity(still, found)) return still
           }
           delayMs = Math.min(delayMs * 2, 750)
         }
         return null
       },
+      // The held shell this swap's own launch runs under when the guard held it: only a native launch has a token.
+      ...(heldToken && backend.isHeld ? { heldShell: () => backend.isHeld!(runtime, heldToken) } : {}),
       buildArgv: (opts) => buildEngineLaunchArgv(session.engine, relaunchOptions(opts)),
       // The same command, built without its launch script (no file is written), before anything is stopped.
       launchRefusal: (opts) => {
@@ -172,12 +178,12 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
       // (launchOverrides.ts), not a signal the pane is elsewhere, so it must not gate this off. A DSH
       // agent's pane is the one case that may run on a different host entirely, whose `claude --bg`
       // jobs this process cannot see.
-      ...(session.engine === 'claude' && !session.dsh ? { stopConflictingJob: () =>
+      ...(session.engine === 'claude' && !session.dsh && stopBackgroundJob ? { stopConflictingJob: () =>
         // The exact environment the pane is about to get, the same way `respawn` above builds it: `launch.env`
         // already carries a native launch's own CLAUDE_CONFIG_DIR (launchOverrides.ts merges `native.environment`
         // into it), and `engineLaunchEnv` adds Windows's own-process variables.
-        stopConflictingBackgroundJob({ bin: engineBin(session.engine), sessionId: session.sessionId,
-          env: { ...process.env, ...launch.env, ...engineLaunchEnv(session.engine, launch.native) } }) } : {}),
+        stopBackgroundJob(session.engine, { bin: engineBin(session.engine), sessionId: session.sessionId,
+          env: { ...process.env, ...launch.env, ...engineLaunchEnv(session.engine, launch.native) } }, line => console.log(`[resume] ${line}`)) } : {}),
       log: (message) => console.log(message),
     }
   }

@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 
 let scratch = '', bundle = ''
 let daemon: IsolatedDaemon | undefined
@@ -30,14 +30,12 @@ it.each(['missing', 'stalled'] as const)('binds, follows Copilot resume and loca
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = `console.error('[fixture] ${marker} stalled'); await new Promise(() => {});\n`
   }
-  const script = join(scratch, mode, 'cli.js')
-  mkdirSync(dirname(script), { recursive: true })
-  writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+  const script = buildWithLean(join(scratch, mode), bundle, files)
   const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
   onTestFailed(() => console.log(d.log()))
   const first = 'aaaaaaaa-1111-4222-8333-444444444444', next = 'bbbbbbbb-1111-4222-8333-444444444444'
-  d.env.COPILOT_HOME = join(d.root, 'copilot')
-  d.env.CURSOR_HOME = join(d.root, 'cursor')
+  d.env.COPILOT_HOME = join(d.env.HOME!, 'copilot')
+  d.env.CURSOR_HOME = join(d.env.HOME!, 'cursor')
   const cwd = join(d.projectsDir, 'native'); mkdirSync(cwd)
   for (const engine of ['copilot', 'cursor'] as const) {
     const path = join(d.root, 'bin', engine)
@@ -72,7 +70,10 @@ console.log('fixture-${engine}-ready'); setInterval(() => {}, 1000);
   const newer = new Date(Date.now() + 2000); utimesSync(lock, newer, newer)
   // A competing native location that cannot be read must retain the old binding,
   // without stopping discovery of the Cursor siblings below.
-  await until('Copilot binding held for its incomplete lock pool', () => d.log().includes('binding held · Conversation identity is held: a native identity location is not a regular file'), 30_000, 100)
+  // The log names the hold's kind; its reason is on the agent's row, which clients are sent.
+  await until('Copilot binding held for its incomplete lock pool', () => d.log().includes('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'), 30_000, 100)
+  await until('the hold\'s reason on Copilot\'s row', async () => (await rows()).find(row => row.id === copilot.id)?.identityHold
+    ?.includes('a native identity location is not a regular file') || null, 30_000, 100)
   expect((await rows()).find(row => row.id === copilot.id)?.sessionId).toBe(first)
   // The two Copilot bindings already occupy reader slots. Three more pending Cursor sessions
   // saturate the four-slot pool before the final Cursor is asked to locate its transcript.

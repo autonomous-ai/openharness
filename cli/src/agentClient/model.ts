@@ -3,6 +3,11 @@
  * a harness's row in `harness ps`, which harness a name means, and its last turn from a page of its transcript.
  */
 import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
+import type { AgentLaunch } from '../lib/registry.js'
+import type { EngineLiveness } from '../lib/paneEngineProcess.js'
+import { HACHI_ID } from '../dsh/builtinIds.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { engineName } from '../messages/model.js'
 import type { Ledger, LedgerMember } from './ledger.js'
 
@@ -15,7 +20,15 @@ export interface Frame {
   engine?: string
   status?: string
   activity?: { state?: string } | null
+  /** The daemon's sentence for a state it names (lib/agentFrame.ts): a hold, or a reader rebuilding. */
+  namedState?: string
+  /** Its launch; `failed`, live or stopped, is one that started nothing, with its code and words. */
+  launch?: AgentLaunch | null
+  /** It has not taken its first task yet (lib/agentFrame.ts). Absent from an older daemon. */
+  starting?: boolean
   tmuxPane?: string | null
+  /** A fresh observation on the owning daemon, present only when the CLI asked it to check the engine. */
+  engineLiveness?: EngineLiveness
   /** Where it runs: a PTY host's pane is named by its instance and pane (Windows). */
   terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } | null
   project?: { cwd?: string; root?: string; branch?: string | null; worktree?: boolean } | null
@@ -25,6 +38,8 @@ export interface Frame {
   parentAgentId?: string | null
   /** `agent` when another agent started it, here or from another machine or outside Harness. */
   startedBy?: string | null
+  /** The harness package it runs, by id (`autonomous/hachi`); null for a plain agent. */
+  dsh?: string | null
   /** `cloud`: a harness in its maker's cloud (lib/cloudAgents.ts), with no pane and no session. Its state and words are
    *  the cloud service's: `cloud.state` and `cloud_transcript`. */
   location?: string
@@ -46,10 +61,15 @@ export interface Caller extends LedgerMember {
   outside?: boolean
   /** Another agent started this harness, as the core's row says (`startedBy`, `parentAgentId`): one level down. */
   startedByAgent?: boolean
+  /** The Hachi harness (docs/design/2026-11-12-hachi.md): while the account has Hachi on, it starts and tells harnesses
+   *  without `agents-start-agents` and `agents-tell-agents`, by the person's turning Hachi on. */
+  hachi?: true
 }
 
-/** `installing`, `starting`, `failed`: a harness asked for that has not started (commands.ts `Asked`). */
-export type State = 'working' | 'idle' | 'needs-input' | 'stopped' | 'offline' | 'unknown' | 'installing' | 'starting' | 'failed'
+/** `installing`: a harness asked for that has not started (commands.ts `Asked`). `starting`: that, or one that has not
+ *  taken its first task yet; `failed`: one its machine refused, or whose launch started nothing (`listedStateOf`).
+ *  `held`: one Harness cannot follow until the person acts (`namedStateOf`). */
+export type State = 'working' | 'idle' | 'needs-input' | 'held' | 'stopped' | 'offline' | 'unknown' | 'installing' | 'starting' | 'failed'
 
 export interface Row {
   name: string
@@ -71,6 +91,17 @@ export interface Row {
   about?: string
   /** A cloud harness's maker state, beside [state]. Absent for a harness on this machine. */
   cloud?: CloudMeta
+  /** Why its launch started nothing (`failureOf`). Absent when it did not fail. */
+  failure?: Failure
+}
+
+export interface Failure { error: string; detail: string | null }
+
+/** Why [frame]'s launch failed, or nothing: the daemon keeps the reason on the row and in its archive. A resume not
+ *  confirmed yet is not a failure: its engine may be running (the desk says "Not confirmed"). */
+export function failureOf(frame: Frame): Failure | undefined {
+  const launch = frame.launch
+  return launch?.state === 'failed' && launch.error !== 'RESUME_UNCONFIRMED' ? { error: launch.error, detail: launch.detail ?? null } : undefined
 }
 
 /** What `ps`, `show` and `wait` JSON say about a cloud harness, beside Harness's own state. */
@@ -110,6 +141,35 @@ export function stateOf(frame: Frame): State {
   return state === 'working' ? 'working' : state === 'idle' ? 'idle' : 'unknown'
 }
 
+/** The sentences only the person can clear. Any other is a state Harness recovers from by itself: a sentence from a
+ *  newer daemon is one too, so a client never tells the person to fix what it does not know. */
+const HELD: ReadonlySet<string> = new Set<string>([...Object.values(OPENCLAW_STATES), MISSING_HELPER, REPLACED_PROGRAM])
+
+/** [frame]'s named state and whether it is held, or nothing: a stopped, offline or cloud harness is never held, and a
+ *  sentence that is not a non-empty string (an older or malformed frame) is no sentence. */
+export function namedStateOf(frame: Frame): { sentence: string; held: boolean } | null {
+  const sentence = frame.namedState
+  if (frame.status === 'stopped' || frame.status === 'offline' || frame.location === 'cloud') return null
+  if (typeof sentence !== 'string' || !sentence) return null
+  return { sentence, held: HELD.has(sentence) || isOpenclawLocalStopped(sentence) }
+}
+
+/** The state `ps`, `show`, `wait` and `watch` list [frame] in: a failed launch over a hold, a hold over a start, and a
+ *  start over what its screen shows (an OpenClaw idle before its first task is typed). A stopped or cloud harness is in
+ *  its own state. */
+export function listedStateOf(frame: Frame): State {
+  const state = stateOf(frame)
+  if (state === 'stopped' || frame.location === 'cloud') return state
+  if (failureOf(frame)) return 'failed'
+  if (namedStateOf(frame)?.held) return 'held'
+  if (frame.starting === true) return 'starting'
+  if (state !== 'offline') {
+    if (frame.engineLiveness === 'gone') return 'stopped'
+    if (frame.engineLiveness === 'unknown') return 'unknown'
+  }
+  return state
+}
+
 /**
  * The harness on [pane] in [frames], when it is an agent: who is calling. Null only for a person: a terminal's pane,
  * or one Harness does not know. Matching active harnesses only made an agent the person, with the person's right to
@@ -127,7 +187,8 @@ export function callerOf(frames: Frame[], pane: string | undefined, machineId: s
     || !!pty && f.terminal?.runtimes?.some(r => r.backend === 'ptyhost' && r.instance === pty[1] && r.paneId === pty[2]))
   const frame = on.find((f) => f.status === 'active') ?? on.filter(isAgent).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
   if (!frame || !isAgent(frame)) return null
-  return { machineId, agentId: frame.id, name: frame.name || frame.id.slice(0, 8), engine: frame.engine ?? '', ...(frame.startedBy === 'agent' || frame.parentAgentId ? { startedByAgent: true } : {}) }
+  return { machineId, agentId: frame.id, name: frame.name || frame.id.slice(0, 8), engine: frame.engine ?? '', ...(frame.startedBy === 'agent' || frame.parentAgentId ? { startedByAgent: true } : {}),
+    ...(frame.dsh === HACHI_ID ? { hachi: true as const } : {}) }
 }
 
 /**
@@ -171,10 +232,11 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
   const rows: Row[] = []
   for (const frame of frames) {
     if (!isAgent(frame)) continue
-    const state = stateOf(frame)
+    const state = listedStateOf(frame)
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
-    if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
+    if (state === 'stopped' && stateOf(frame) === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
     const cloud = cloudMeta(frame)
+    const failure = failureOf(frame)
     const member = { machineId: ctx.machineId, agentId: frame.id }
     const you = ctx.caller?.agentId === frame.id && ctx.caller.machineId === ctx.machineId
     const parent = ctx.ledger.parentOf(member)
@@ -192,19 +254,22 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
       self: you,
       lastActive: Number.isFinite(last) ? new Date(last).toISOString() : null,
       ...(cloud ? { cloud } : {}),
+      ...(failure ? { failure } : {}),
     })
   }
-  // Working first, then by last activity: what an agent choosing where work goes looks at first.
-  const rank = (r: Row): number => (r.state === 'working' || r.state === 'needs-input' ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
+  // Busy first, then by last activity: what an agent choosing where work goes looks at first.
+  const rank = (r: Row): number => (busy(r) ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
   return rows.sort((a, b) => rank(a) - rank(b) || (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
 }
+
+/** Working, starting on its first task, or waiting on the person. */
+const busy = (r: Row): boolean => r.state === 'working' || r.state === 'starting' || r.state === 'needs-input' || r.state === 'held'
 
 /** How many rows an agent's `ps` shows unless asked for all: on the owner's Mac, 40 rows became about 8 to read. */
 export const AGENT_ROWS = 15
 
-/** An agent's `ps`: its own first, then those working or waiting on the person, then the rest; [max] at most. */
+/** An agent's `ps`: its own first, then the busy ones, then the rest; [max] at most. */
 export function forAgent(rows: readonly Row[], max = AGENT_ROWS): { shown: Row[]; more: number } {
-  const busy = (r: Row) => r.state === 'working' || r.state === 'needs-input'
   const ordered = [...rows.filter((r) => r.yours), ...rows.filter((r) => !r.yours && busy(r)), ...rows.filter((r) => !r.yours && !busy(r))]
   return { shown: ordered.slice(0, max), more: Math.max(0, ordered.length - max) }
 }

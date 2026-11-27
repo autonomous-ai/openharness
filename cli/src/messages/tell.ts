@@ -28,6 +28,9 @@ export interface TellRefusal { code: 'TELL_OFF' | 'NOT_YOURS' | 'NOT_RUNNING'; m
 export interface TellCheck {
   /** The switch, as this machine keeps the account's experiments. */
   on: boolean
+  /** Hachi is on for the account: a harness the Hachi harness started, as this machine records it, may be told by it
+   *  without the switch (docs/design/2026-11-12-hachi.md, "Starting others needs the person's yes"). */
+  hachi: boolean
   /** Who started which harness, as this machine records it. */
   lineage: Pick<Ledger, 'parentOf'>
   /** This machine's id. */
@@ -42,8 +45,8 @@ export interface TellCheck {
  * record could not be written when it started: `harness new` said so then).
  */
 export function tellRefusal(check: TellCheck, from: LedgerMember, agentId: string): TellRefusal | null {
-  if (!check.on) return { code: 'TELL_OFF', message: TELL_OFF_TEXT }
   const parent = check.lineage.parentOf({ machineId: check.self, agentId })
+  if (!check.on && !(check.hachi && parent?.by.hachi)) return { code: 'TELL_OFF', message: TELL_OFF_TEXT }
   if (!parent || parent.by.machineId !== from.machineId || parent.by.agentId !== from.agentId) {
     return { code: 'NOT_YOURS', message: 'You did not start that harness, as its machine records it, so you may not tell it. Only the person can.' }
   }

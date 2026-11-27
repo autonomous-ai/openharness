@@ -18,15 +18,15 @@
 import type { BackendNotice } from '../core/api.js'
 import { env } from '../config/env.js'
 import type { AppSwarms } from '../cable/cableSession.js'
-import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
-import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type VoiceRouteReply, type WindowFocus } from '../core/api.js'
+import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps } from './devices.js'
+import { listenForDevices, openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
@@ -48,10 +48,13 @@ export interface DevicesServiceOptions {
   socketPath: string
   machineId: string
   token: string
-  /** For this service's tests: its start and its link. */
+  /** For this service's tests: its start, its link and its listener. */
   start?: typeof startDevices
   run?: (options: ServiceProcessOptions) => ServiceProcess
+  openListener?: typeof openDevicesListener
   processEnv?: NodeJS.ProcessEnv
+  /** For this service's tests: the platform the listener is opened for. */
+  platform?: NodeJS.Platform
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -85,6 +88,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
    *  that had ended, and no recaps, until the next restart. */
   let dialWatching = false
   let view: View = { agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false }
+  /** Whether a view landed: before one, `view.agents` is a stand-in, and the dial setup must not read it as the core
+   *  listing no Claude agent, which would take out the skill a Harness Claude agent brought (services/devices.ts). */
+  let viewed = false
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
   let viewing: Promise<void> | null = null
   const refresh = (): Promise<void> => {
@@ -92,6 +98,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     if (!core) return Promise.resolve()
     const asking = core.query('view').then((answer) => {
       if (!Array.isArray(answer.agents)) return
+      viewed = true
       const machine = object(answer.machine)
       view = {
         agents: answer.agents as Viewed[],
@@ -104,8 +111,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     viewing = asking
     return asking
   }
-  /** What the devices say again to a core that connects (services/devices.ts `onCoreConnected`). */
-  let coreConnected: (() => void) | undefined
+  /** What the devices end for a core that goes (services/devices.ts `onCoreGone`). */
+  let coreGone: (() => void) | undefined
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
@@ -202,8 +209,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       return validUsage(usage) ? usage : null
     },
     daemon: DAEMON_UNKNOWN,
-    // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts `super_tabs`).
-    superTabRequest: (payload) => ask('super_tabs', payload).catch((): Record<string, unknown> => ({ error: 'SERVICE_UNAVAILABLE' })),
     // The Wi-Fi device beside the dials has a link of its own (services/wifiProcess.ts).
     wifi: unasked.wifi,
   }
@@ -216,7 +221,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     cableDisabled: env.CABLE_DISABLE,
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
-    onCoreConnected: (run) => { coreConnected = run },
+    agentsRead: () => viewed,
+    onCoreGone: (run) => { coreGone = run },
+    // Their own listener: the devices started inside the core's process are given none but on Windows (services/inline.ts).
+    listen: listenForDevices(options.dataDir, options.platform ?? process.platform, options.openListener ?? openDevicesListener),
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort
@@ -225,10 +233,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   const heard: Record<string, (payload: Record<string, unknown>) => void> = {
     notice: ({ notice }) => { if (notice && typeof notice === 'object') for (const listener of noticeListeners) listener(notice as BackendNotice) },
     card: ({ frame }) => port.card(object(frame)),
+    // Checked and bounded by the core before it was sent (core/observedHook.ts), and kept nowhere there.
+    observed: ({ kind: _kind, ...event }) => port.observed(event as unknown as Parameters<DevicesPort['observed']>[0]),
     desk: ({ agentIds, foreground }) => port.desk(strings(agentIds), foreground !== false),
     swarms: ({ swarms }) => port.swarms(swarms && typeof swarms === 'object' ? swarms as AppSwarms : null),
-    swarmCards: ({ items }) => port.swarmCards(Array.isArray(items) ? items as SwarmCard[] : []),
-    swarmCardRecap: ({ recap }) => port.swarmCardRecap(object(recap) as unknown as LeadRecap),
     unread: ({ items }) => port.unread(Array.isArray(items) ? items as UnreadNotification[] : []),
     appFocus: ({ machineId, agentId }) => port.appFocus(text(machineId), text(agentId)),
     seen: ({ agentId, readToken }) => port.seen(text(agentId), typeof readToken === 'string' ? readToken : undefined),
@@ -236,11 +244,12 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     windowFocus: ({ focus }) => port.windowFocus(focusOf(focus)),
     windowReply: ({ which, connId, machineId, reply }) =>
       port.windowReply(which === 'form' ? 'form' : which === 'visit' ? 'visit' : 'selection', text(connId), text(machineId), object(reply)),
-    voiceReply: ({ voiceId, reply }) => port.voiceReply(text(voiceId), object(reply) as unknown as VoiceRouteReply),
     windowGone: ({ connId }) => port.windowGone(text(connId)),
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
+    // The mod's poll whose client went before its answer (core/deviceHookCalls.ts): it ends.
+    'inbox.gone': ({ pollId }) => port.inboxGone(text(pollId)),
     // Everything at once, as the core keeps it: this process (re)connected, and starts where the windows are.
     // What a window has not said is not said to the dial: a fresh process holds nothing yet, and a dial still
     // attached through a core's restart keeps its tab until the windows, reconnecting, say theirs again.
@@ -267,6 +276,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return step === 'no_agents' ? { step } : { ...step }
     },
+    // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until a transcript takes it
+    // or the hold runs out.
+    inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
   }
 
   const service = (options.run ?? runServiceProcess)({
@@ -281,11 +293,13 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     onConnected: (connection) => {
       core = connection
-      coreConnected?.()
       if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },
-    onDisconnected: () => { core = null },
+    onDisconnected: () => {
+      core = null
+      coreGone?.()
+    },
   })
   return {
     stop: async () => {

@@ -11,10 +11,10 @@ import { COPILOT_HOOK_SETTINGS } from '../copilot/contract.js'
 import { CURSOR_HOOK_SETTINGS } from '../cursor/contract.js'
 import { DEVIN_HOOK_SETTINGS } from '../devin/contract.js'
 import { GROK_HOOK_SETTINGS } from '../grok/contract.js'
+import { fileTag } from '../../lib/log.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { installHermesHooks } from '../nativeHooks.js'
 import { installHookSettings, notifyHookEntry } from './hookSettings.js'
-import { HookPreparationHeld } from './nativeHookFiles.js'
 import { installNativeHookSettings } from './nativeHookSettings.js'
 import { hookArgv, hookScriptCandidates, identitySettings, quoteHookCommand } from './notifyHooks.js'
 
@@ -87,53 +87,96 @@ describe('the notify.mjs a hook line names', () => {
 })
 
 // B4.1 review: a hook line a runner would misread is refused (quoteHookCommand). That refusal is an install that
-// failed, logged with its reason like any other, never a rejected promise the daemon reports with a stack trace.
+// failed, logged with what holds it like any other, never a rejected promise the daemon reports with a stack trace.
 describe('a hook argument the Windows runner refuses', () => {
-  it('fails the install with its reason for PowerShell (Codex): a typographic quote in the home it names', async () => {
+  it('fails the install for PowerShell (Codex): a typographic quote in the home it names', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
     const home = join(dir, 'co\u2019dex')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(false)
     // One line, no stack (B4.10 review).
-    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed: a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
+    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed · a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
     expect(existsSync(home)).toBe(false)
   })
 
-  it('fails the install with its reason for PowerShell (Copilot): a typographic quote in its home', async () => {
+  it('fails the install for PowerShell (Copilot): a typographic quote in its home', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
     const copilotHome = join(dir, 'O\u2019Brien')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const rule = { ...COPILOT_HOOK_SETTINGS, file: join(copilotHome, 'hooks', 'harness.json') }
     expect(await installNativeHookSettings(rule, 19473, { environment: { HOME: dir, COPILOT_HOME: copilotHome } }, 'win32')).toBe(false)
-    expect(error.mock.calls).toEqual([['[hooks] Copilot hooks are not installed: a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
+    expect(error.mock.calls).toEqual([['[hooks] Copilot hooks are not installed · a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
     expect(existsSync(copilotHome)).toBe(false)
   })
 
-  // Any held preparation is one line on Windows; off Windows the log is what it always was: the failure line and the error.
-  it('is one line on Windows for any held install, and the failure line with its error off Windows', async () => {
+  // Any held preparation is one line on Windows; off Windows the log is what it always was: the failure line and what holds it.
+  it('is one line on Windows for any held install, and the failure line with what holds it off Windows', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const claudeHome = join(dir, 'claude'), rule = { ...COMMANDCODE_HOOK_SETTINGS, file: join(dir, 'commandcode', 'settings.json') }
-    for (const file of [join(claudeHome, claude.settings.file), rule.file]) {
+    for (const file of [join(claudeHome, claude.settings.fileName), rule.file]) {
       mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, '{"hooks":[]}\n')
     }
     expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'win32')).toBe(false)
     expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(false)
     expect(error.mock.calls).toEqual([
-      ['[hooks] Claude Code hooks are not installed: the hook settings do not have the declared object shape'],
-      ['[hooks] Command Code hooks are not installed: the hooks member is not an object'],
+      ['[hooks] Claude Code hooks are not installed · the hook settings do not have the declared object shape'],
+      ['[hooks] Command Code hooks are not installed · the hooks member is not an object'],
     ])
     error.mockClear()
     expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'linux')).toBe(false)
     expect(await installNativeHookSettings(rule, 19473, {}, 'linux')).toBe(false)
-    expect(error.mock.calls.map(([line, reason]) => [line, (reason as Error).message])).toEqual([
-      [claude.settings.messages.failed, 'Hook preparation is waiting: the hook settings do not have the declared object shape'],
-      [COMMANDCODE_HOOK_SETTINGS.messages.failed, 'Hook preparation is waiting: the hooks member is not an object'],
+    expect(error.mock.calls).toEqual([
+      [claude.settings.messages.failed, 'the hook settings do not have the declared object shape'],
+      [COMMANDCODE_HOOK_SETTINGS.messages.failed, 'the hooks member is not an object'],
     ])
-    expect(error.mock.calls.every(([, reason]) => reason instanceof HookPreparationHeld)).toBe(true)
+  })
+})
+
+// Windows PowerShell 5's `Set-Content -Encoding utf8` starts a file with a BOM, and `Out-File` writes UTF-16. With the BOM
+// kept, every install failed with a SyntaxError and every create waited on the engine's hooks for good
+// (docs/plans/2026-11-25-win-hook-admission-design.md, D).
+describe('a settings file Windows PowerShell saved', () => {
+  it('installs Claude Code\'s hooks into a settings.json Windows PowerShell 5 saved with a BOM, and writes it back without one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
+    mkdirSync(home); writeFileSync(file, '﻿{"theme":"dark"}\r\n')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    const written = readFileSync(file)
+    expect(written[0]).toBe('{'.charCodeAt(0))
+    const settings = JSON.parse(written.toString('utf8'))
+    expect(settings.theme).toBe('dark')
+    expect(settings.hooks.Stop).toHaveLength(1)
+  })
+
+  it('installs Codex\'s hooks into a hooks.json and a config.toml each saved with a BOM, and writes both back without one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'codex'), file = join(home, codex.settings.fileName), config = join(home, codex.settings.reviewed!.fileName)
+    mkdirSync(home)
+    writeFileSync(file, '﻿{"hooks":{}}\r\n'); writeFileSync(config, '﻿model = "gpt-5"\r\n')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+    for (const path of [file, config]) expect(readFileSync(path)[0]).not.toBe(0xef)
+    expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).hooks)).toEqual(codex.settings.events.map(({ event }) => event))
+    const reviews = readFileSync(config, 'utf8')
+    expect(reviews.startsWith('model = "gpt-5"')).toBe(true)
+    expect(reviews).toContain('trusted_hash = ')
+  })
+
+  it('holds a settings.json saved as UTF-16, as before, and leaves it byte for byte', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"theme":"dark"}\r\n', 'utf16le')])
+    mkdirSync(home); writeFileSync(file, utf16)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(false)
+    expect(readFileSync(file).equals(utf16)).toBe(true)
   })
 })
 
@@ -142,7 +185,7 @@ describe('a hook argument the Windows runner refuses', () => {
 describe('Claude Code\'s exec-form hook already in place', () => {
   it('is left alone: a second install writes nothing and says it is current', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
     const written = readFileSync(file, 'utf8'), before = statSync(file, { bigint: true })
@@ -159,7 +202,7 @@ describe('Claude Code\'s exec-form hook already in place', () => {
 
   it('is rewritten when only its arguments changed (another port)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
     log.mockClear()
@@ -210,7 +253,7 @@ describe('an engine with no hooks on Windows', () => {
 describe('Codex\'s PowerShell hook on Windows', () => {
   it('is written as the line PowerShell reads, and a second install writes nothing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'codex'), file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+    const home = join(dir, 'codex'), file = join(home, codex.settings.fileName), config = join(home, codex.settings.reviewed!.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
@@ -224,8 +267,21 @@ describe('Codex\'s PowerShell hook on Windows', () => {
     const before = [stamp(file), stamp(config)]
     log.mockClear()
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
-    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', file))
+    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', fileTag(file)))
     expect([stamp(file), stamp(config)]).toEqual(before)
+  })
+
+  it('writes every Codex event the one PowerShell line, PreToolUse with its matcher, Interrupt with timeout 3', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'codex')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+    const { command } = notifyHookEntry(codex.settings, hookArgv(19473, 'codex', home), 'win32')!
+    const block = (timeout: number, matcher?: string) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command, timeout }] }]
+    expect(JSON.parse(readFileSync(join(home, codex.settings.fileName), 'utf8')).hooks).toEqual({
+      SessionStart: block(5, 'startup|resume|clear|compact'), UserPromptSubmit: block(5), Stop: block(5),
+      PermissionRequest: block(5), PreToolUse: block(5, 'request_user_input'), Interrupt: block(3),
+    })
   })
 })
 
@@ -283,7 +339,7 @@ describe.skipIf(process.platform === 'win32')('a hook of ours with a stray args 
 
   it('is current for Claude Code: no write', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'linux')).toBe(true)

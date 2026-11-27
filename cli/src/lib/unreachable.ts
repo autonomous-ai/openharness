@@ -11,8 +11,9 @@
  * command it sandboxes whether or not Harness runs; but kill(pid, 0) still answers ESRCH for a pid that is gone. With a
  * sandbox and no daemon, the agent is told to start Harness outside the sandbox, where `harness start` can write.
  */
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { env } from '../config/env.js'
+import { readPidFile } from './daemonState.js'
 
 export const NOT_RUNNING = 'Harness is not running here. Start it with `harness start`.'
 /**
@@ -36,12 +37,11 @@ export interface SandboxEvidence {
   signal?: (pid: number, signal: 0) => void
 }
 
-/** The daemon's pid, as the pid file in [dataDir] names it (lib/daemonState.ts `PID_FILE`). */
+/** The daemon's pid, as the pid file in [dataDir] names it (lib/daemonState.ts `PID_FILE`); a file that cannot be read
+ *  names none. */
 export function pidIn(dataDir: string): number | null {
-  try {
-    const pid = parseInt(readFileSync(join(dataDir, 'adapter.pid'), 'utf8').trim(), 10)
-    return pid > 0 ? pid : null
-  } catch { return null }
+  const read = readPidFile(join(dataDir, 'adapter.pid'))
+  return read.state === 'pid' ? read.pid : null
 }
 
 /** A connection or a file refused by a policy on the way, not by a daemon that is not there (ECONNREFUSED, ENOENT). */
@@ -69,6 +69,12 @@ export function sandboxed({ error, pid = null, env = process.env, signal = (p, s
 export function unreachableText(evidence: SandboxEvidence = {}): string {
   if (sandboxed(evidence)) return SANDBOXED
   return codexSandbox(evidence.env ?? process.env) ? START_OUTSIDE : NOT_RUNNING
+}
+
+/** What to say when this shell cannot reach the daemon of [dataDir]: stopped, or out of reach in a sandbox. The agent
+ *  verbs reach the daemon that made their pane, whose folder may not be this CLI's. */
+export function daemonUnreachableText(error?: unknown, dataDir: string = env.ADAPTER_DATA_DIR): string {
+  return unreachableText({ error, pid: pidIn(dataDir) })
 }
 
 /** What `harness start` says for [evidence.error] in place of the error itself, or null when it is no sandbox's doing:

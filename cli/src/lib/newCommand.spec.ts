@@ -13,8 +13,14 @@ const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, local: null, goal: null, programTokenFile: null, json: false,
     })
+  })
+
+  it('takes the goal a harness is started for (harness goal open)', () => {
+    expect(parseNewArgs(['codex', '--goal', '3fa2b1c9', 'api', '--', 'fix it'], env)).toMatchObject({ agent: 'codex', goal: '3fa2b1c9', projectName: 'api' })
+    expect(() => parseNewArgs(['codex', '--goal'], env)).toThrow('--goal needs a value.')
+    expect(() => parseNewArgs(['codex', '--goal', ' '], env)).toThrow('--goal needs a value.')
   })
 
   it('sends a model as the app\'s box does, for the machine to check, and none for a terminal', () => {
@@ -133,7 +139,7 @@ describe('harness new: the words', () => {
     expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '2.5'], env)).toThrow(/1 to 1000/)
   })
 
-  // Swarm v3 (task #4215): an agent starts with its owner's own settings. A mode is sent only when the person typed one;
+  // Task #4215: an agent starts with its owner's own settings. A mode is sent only when the person typed one;
   // the default `auto` went to every engine that has it, and before that to every engine, which the daemon refused
   // (INVALID_PERMISSION_MODE) for the ten without a PERMISSION_MODES row.
   it('sends a permission mode only when the person typed one', () => {
@@ -197,11 +203,38 @@ describe('harness new: the words', () => {
     expect(() => resolveNewMachine('gpu', machines)).toThrow('No machine called “gpu”. Yours: MacBook Pro, Mac mini. Shared with you: Mac Auto, Mac mini, studio.local.')
     expect(() => resolveNewMachine('linux', machineChoices({}, null))).toThrow('No machine called “linux”. Yours: none.')
   })
+
+  // A skill run's OpenClaw keeps its runtime and tools in the pane's own process, on a folder of its own (#4173).
+  const at = { cwd: '/work', home: '/home/u', platform: 'linux' as const, isFolder: (p: string) => ['/run/skill-1', '/work/run it', "/run/it's"].includes(p) }
+  const ARGS = parseNewArgs([], env)
+  it('--local names the folder an OpenClaw run lives in', () => {
+    expect(parseNewArgs(['openclaw', '--local', '/run/skill-1', '--', 'do it'], at)).toMatchObject({ agent: 'openclaw', local: '/run/skill-1', prompt: 'do it', cwd: '/work' })
+    expect(parseNewArgs(['openclaw', '--local', 'run it'], at).local).toBe('/work/run it')
+    expect(parseNewArgs(['openclaw', '--local', '/run/skill-1/'], at).local).toBe('/run/skill-1')
+    expect(parseNewArgs(['openclaw', '--local', "/run/it's"], at).local).toBe("/run/it's")
+    expect(parseNewArgs(['openclaw'], at).local).toBeNull()
+  })
+
+  it('--local is refused for another agent, another machine, a folder that is not there, and with no value', () => {
+    expect(() => parseNewArgs(['codex', '--local', '/run/skill-1'], at)).toThrow('--local is for OpenClaw only.')
+    expect(() => parseNewArgs(['--local', '/run/skill-1'], at)).toThrow('--local is for OpenClaw only.')
+    expect(() => parseNewArgs(['openclaw', '--machine', 'office', '--local', '/run/skill-1'], at)).toThrow('--local runs on this computer only.')
+    expect(() => parseNewArgs(['openclaw', '--local', '/nowhere'], at)).toThrow('/nowhere is not a folder.')
+    expect(() => parseNewArgs(['openclaw', '--local', '--json'], at)).toThrow('--local needs a value.')
+  })
+
+  it('the folder goes with the create, and only then', () => {
+    expect(newAgentPayload({ ...ARGS, agent: 'openclaw', local: '/run/skill-1' }, '/work')).toMatchObject({ engine: 'openclaw', openclawLocal: '/run/skill-1' })
+    expect(newAgentPayload({ ...ARGS, agent: 'openclaw', local: null }, '/work')).not.toHaveProperty('openclawLocal')
+  })
 })
 
 class FakeSocket extends EventEmitter implements NewSocket {
   sent: Array<{ type: string; payload: Record<string, unknown> }> = []
-  constructor(private answer: (frame: { type: string; payload: Record<string, unknown> }) => Record<string, unknown> | null) {
+  constructor(
+    private answer: (frame: { type: string; payload: Record<string, unknown> }) => Record<string, unknown> | null,
+    private connected: Record<string, unknown> = {},
+  ) {
     super()
   }
   // Opens once somebody is listening for it, as a real socket opens after it is constructed.
@@ -215,7 +248,7 @@ class FakeSocket extends EventEmitter implements NewSocket {
     const frame = JSON.parse(data) as { type: string; payload: Record<string, unknown> }
     this.sent.push(frame)
     queueMicrotask(() => {
-      if (frame.type === 'machine_select') { this.emit('message', JSON.stringify({ type: 'connected', payload: {} })); return }
+      if (frame.type === 'machine_select') { this.emit('message', JSON.stringify({ type: 'connected', payload: this.connected })); return }
       const payload = this.answer(frame)
       if (payload) this.emit('message', JSON.stringify({ type: `${frame.type}_result`, payload: { ...payload, requestId: frame.payload.requestId } }))
     })
@@ -258,6 +291,28 @@ class RefusedSocket extends EventEmitter implements NewSocket {
 }
 
 describe('harness new: the daemon', () => {
+  const ME = 'm2'
+  // A real folder: `harness new` itself asks the disk whether it is one.
+  const FOLDER = mkdtempSync(join(tmpdir(), 'harness-local-'))
+  async function newWith(argv: string[], over: { connected: Record<string, unknown> }) {
+    const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'a1', name: 'skill-1' } } : null, over.connected)
+    const d = deps(argv, socket)
+    const code = await newCommand(d)
+    return { code, errors: d.err, sent: socket.sent }
+  }
+
+  it('refuses --local against a daemon that does not say it knows it, before anything is sent', async () => {
+    const run = await newWith(['openclaw', '--local', FOLDER], { connected: { machineId: ME } })
+    expect(run.code).toBe(1)
+    expect(run.errors).toEqual(['This Harness daemon is too old for --local. Restart Harness.'])
+    expect(run.sent.filter((frame) => frame.type !== 'machine_select')).toEqual([])
+  })
+
+  it('sends --local to a daemon that knows it', async () => {
+    const run = await newWith(['openclaw', '--local', FOLDER], { connected: { machineId: ME, features: ['openclaw-local'] } })
+    expect(run.sent.find((frame) => frame.type === 'agent_create')!.payload).toMatchObject({ engine: 'openclaw', openclawLocal: FOLDER })
+  })
+
   it('says a sandbox is in the way when the daemon runs but its port is refused, and passes on anything else', async () => {
     // Linux: the signal reaches the daemon, so it runs, and the sandbox refuses the connect (lib/unreachable.ts).
     const sandboxed = deps(['claude', '--name', 'opinion', '--', 'a second opinion'], new FakeSocket(() => null), { connect: () => new RefusedSocket('EPERM') })
@@ -533,7 +588,7 @@ describe('harness new: the daemon', () => {
     const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex. The harness starts once it is installed.' } }
     const pending: Array<[string, Record<string, unknown>]> = []
     const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), existing: async () => null,
-      pending: (machineId: string, creation: Record<string, unknown>) => { pending.push([machineId, creation]) } }
+      pending: (machineId: string, creation: Record<string, unknown>) => { pending.push([machineId, creation]); return null } }
     const run = async (env: NodeJS.ProcessEnv, json = false, name = 'cx') => {
       let clock = 0
       const socket = new FakeSocket((frame) => frame.type === 'agent_create' || frame.type === 'agent_create_status' ? installing : frame.type === 'agent_create_cancel' ? { state: 'cancelled' } : null)
@@ -565,11 +620,22 @@ describe('harness new: the daemon', () => {
     expect(spacedMcp.d.out[0]!.split('\n').at(-1)).toBe('Next: harness_wait (names: "code review")  (until it has started and answered)')
   })
 
+  it('says an agent\'s ask it could not record, and goes on with the start', async () => {
+    const warning = 'Harness could not record that you asked for cx: it may still start. Do not start it again.'
+    const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }),
+      pending: () => warning }
+    const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'pending' }
+      : frame.type === 'agent_create_status' ? { state: 'created', agent: { id: 'h1', name: 'cx' } } : null)
+    const d = deps(['codex', '--name', 'cx'], socket, { origin: async () => origin, sleep: async () => {} })
+    expect(await newCommand(d)).toBe(0)
+    expect(d.err).toEqual([warning])
+  })
+
   it('names no harness it was given no name for, and asks for at least ten seconds however long the setup took', async () => {
     let clock = 0
     const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex.' } }
     // Forty seconds gone before the machine answered: a slow line to another machine.
-    const origin = { check: async () => { clock += 45_000 }, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => {} }
+    const origin = { check: async () => { clock += 45_000 }, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => null }
     let asks = 0
     const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? installing : frame.type === 'agent_create_status' ? (asks++, installing) : null)
     const d = deps(['codex'], socket, { origin: async () => origin, now: () => clock, sleep: async (ms) => { clock += ms } })
@@ -581,7 +647,7 @@ describe('harness new: the daemon', () => {
 
   it('still cancels an agent\'s launch held for anything but an install, at 40 seconds', async () => {
     let clock = 0
-    const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => {} }
+    const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => null }
     const socket = new FakeSocket((frame) => frame.type === 'agent_create_cancel' ? { state: 'cancelled' }
       : frame.type === 'agent_create' || frame.type === 'agent_create_status' ? { state: 'pending', held: { service: 'native', detail: 'Waiting.' } } : null)
     const d = deps(['codex', '--name', 'cx'], socket, { origin: async () => origin, now: () => clock, sleep: async (ms) => { clock += ms } })
@@ -610,11 +676,69 @@ describe('harness new: the daemon', () => {
 
   it('records the creation a harness was asked by when the machine made it', async () => {
     const created: unknown[][] = []
-    const origin = { check: async () => {}, prompt: (text: string) => text, answer: () => ({ effect: '', next: [] }), pending: () => {},
+    const origin = { check: async () => {}, prompt: (text: string) => text, answer: () => ({ effect: '', next: [] }), pending: () => null,
       created: async (...args: unknown[]) => { created.push(args); return null } }
     const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'cx' } } : null)
     expect(await newCommand(deps(['codex', '--name', 'cx'], socket, { origin: async () => origin }))).toBe(0)
     expect(created).toEqual([['m2', { id: 'k1', name: 'cx' }, socket.sent.find((f) => f.type === 'agent_create')!.payload.creationId]])
+  })
+
+  describe('--goal: a harness Hachi starts for one of its goals', () => {
+    const goalOrigin = (goal: { check?: (id: string) => Promise<void>; add?: (id: string, harness: Record<string, unknown>) => Promise<string | null> } = {}) => {
+      const checked: string[] = [], added: Array<[string, Record<string, unknown>]> = []
+      const origin = { check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }), pending: () => null,
+        goal: {
+          check: goal.check ?? (async (id: string) => { checked.push(id) }),
+          add: goal.add ?? (async (id: string, harness: Record<string, unknown>) => { added.push([id, harness]); return null }),
+        } }
+      return { origin, checked, added }
+    }
+
+    it('checks the goal before anything starts, and records the harness under it once made', async () => {
+      const { origin, checked, added } = goalOrigin()
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'api-fix' } } : null)
+      expect(await newCommand(deps(['codex', '--goal', 'g1', '--name', 'api-fix'], socket, { origin: async () => origin }))).toBe(0)
+      const creationId = socket.sent.find((f) => f.type === 'agent_create')!.payload.creationId
+      expect(checked).toEqual(['g1'])
+      expect(added).toEqual([['g1', { machineId: 'm2', creationId, agentId: 'k1' }]])
+    })
+
+    it('records one still installing by its creation, as it starts by itself later', async () => {
+      const { origin, added } = goalOrigin()
+      let clock = 0
+      const installing = { state: 'pending', held: { service: 'install', detail: 'Installing Codex.' } }
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' || frame.type === 'agent_create_status' ? installing : null)
+      const d = deps(['codex', '--goal', 'g1', '--name', 'cx'], socket, { origin: async () => origin, now: () => clock, sleep: async (ms) => { clock += ms } })
+      expect(await newCommand(d)).toBe(0)
+      expect(added).toEqual([['g1', { machineId: 'm2', creationId: socket.sent.find((f) => f.type === 'agent_create')!.payload.creationId }]])
+    })
+
+    it('starts nothing for a goal it may not use: not Hachi exits 5, an unknown goal 1', async () => {
+      for (const [error, code] of [[new AgentClientError('NOT_HACHI', 'Only Hachi keeps goals.'), 5], [new AgentClientError('UNKNOWN_GOAL', 'No such goal.'), 1]] as const) {
+        const { origin } = goalOrigin({ check: async () => { throw error } })
+        const socket = new FakeSocket(() => null)
+        const d = deps(['codex', '--goal', 'g1'], socket, { origin: async () => origin })
+        expect(await newCommand(d)).toBe(code)
+        expect(d.err).toEqual([error.message])
+        expect(socket.sent).toEqual([])
+      }
+      // The person, or an agent with no goals (no origin, or one that keeps none), is refused the same.
+      for (const origin of [null, { ...goalOrigin().origin, goal: undefined }]) {
+        const socket = new FakeSocket(() => null)
+        const d = deps(['codex', '--goal', 'g1', '--json'], socket, { origin: async () => origin })
+        expect(await newCommand(d)).toBe(5)
+        expect(JSON.parse(d.out[0]!)).toMatchObject({ ok: false, code: 'NOT_HACHI' })
+        expect(socket.sent).toEqual([])
+      }
+    })
+
+    it('says so, and keeps the harness, when it could not be recorded under the goal', async () => {
+      const { origin } = goalOrigin({ add: async () => 'api-fix was started but not recorded under goal g1: Harness could not save the goal on this computer.' })
+      const socket = new FakeSocket((frame) => frame.type === 'agent_create' ? { state: 'created', agent: { id: 'k1', name: 'api-fix' } } : null)
+      const d = deps(['codex', '--goal', 'g1', '--name', 'api-fix'], socket, { origin: async () => origin })
+      expect(await newCommand(d)).toBe(0)
+      expect(d.err).toEqual(['api-fix was started but not recorded under goal g1: Harness could not save the goal on this computer.'])
+    })
   })
 
   it('reads the folder off the harness the machine made', async () => {
@@ -739,6 +863,18 @@ describe('harness new: the daemon', () => {
     expect(await newCommand(deps(['codex', '--', 'go'], outside, { origin: async () => ({ ...origin, parentAgentId: undefined }) }))).toBe(0)
     expect(outside.sent[1]!.payload.startedBy).toBe('agent')
     expect(outside.sent[1]!.payload).not.toHaveProperty('parentAgentId')
+    expect(outside.sent[1]!.payload).not.toHaveProperty('startedByHachi')
+  })
+
+  it('run by Hachi: says so on the create, beside the agent that started it, so its launches count as Hachi\'s too', async () => {
+    const origin = {
+      check: async () => {}, prompt: (text: string) => text, created: async () => null, answer: () => ({ effect: '', next: [] }),
+      parentAgentId: 'hachi-agent', hachi: true as const,
+    }
+    const socket = new FakeSocket((frame) => frame.type === 'fs_list_dir' ? { path: '/Users/mini', entries: [] }
+      : frame.type === 'agent_create' ? { state: 'created', agent: { id: 'kid', name: 'kid' } } : null)
+    expect(await newCommand(deps(['codex', '--', 'review it'], socket, { origin: async () => origin }))).toBe(0)
+    expect(socket.sent[1]!.payload).toMatchObject({ startedBy: 'agent', startedByHachi: true, parentAgentId: 'hachi-agent' })
   })
 
   it('turns the machine\'s refusal into words, and a usage slip into the usage', async () => {

@@ -2,8 +2,13 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch } from './nativeLaunch.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
+import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { engineHooks } from './hooks.js'
+import { HookPreparationHeld, HookScriptMissing } from './kit/hookHeld.js'
 import * as hooks from './nativeHooks.js'
+import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
+import { shellSingleQuote } from '../lib/shellQuote.js'
+import { launchScriptOf } from '../testing/launchScript.js'
 
 const fixture = vi.hoisted(() => ({ identity: '', current: true, hooks: true, version: '2.0.0', help: '--auto --permission-mode --approve-for-me', calls: [] as string[], pending: [] as (() => void)[], stalled: false, failed: false, environments: [] as NodeJS.ProcessEnv[], exit: 0, stderr: '' }))
 vi.mock('./kit/launchExecutable.js', async original => ({ ...await original<typeof import('./kit/launchExecutable.js')>(), captureLaunchExecutable: vi.fn(async (engine: string) => ({ state: 'ready',
@@ -137,6 +142,21 @@ it('does not let another engine\'s network setting, or its own sibling engine\'s
     expect((home as { detail: string }).detail).toMatch(/^HOME names a network or device path.*such as /)
   } finally { host.win32 = false }
 })
+it('refuses an OpenClaw launch whose OPENCLAW_HOME is a network path on Windows', async () => {
+  host.win32 = true
+  try {
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
+      environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCLAW_HOME: '\\\\server\\share\\h' } } as never)
+    const result = await inspectNativeLaunch('openclaw')
+    expect(result).toMatchObject({ ok: false, refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((result as { detail: string }).detail).toMatch(/^OPENCLAW_HOME names a network or device path/)
+  } finally { host.win32 = false }
+})
+it('OPENCLAW_HOME is a launch location, and moves the state folder a launch derives', () => {
+  expect(LAUNCH_LOCATION_VARIABLES).toContain('OPENCLAW_HOME')
+  expect(nativeHookLocations({ HOME: '/home/u', OPENCLAW_HOME: '/h' }).OPENCLAW_STATE_DIR).toBe('/h/.openclaw')
+  expect(nativeHookLocations({ HOME: '/home/u' }).OPENCLAW_STATE_DIR).toBe('/home/u/.openclaw')
+})
 it('does not refuse a double-slash location off Windows', async () => {
   expect(await inspectNativeLaunch('codex', { codexHome: '//server/share/x' })).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
 })
@@ -155,6 +175,13 @@ it.each(['claude', 'codex', 'hermes'] as const)('prepares the captured %s profil
   fixture.hooks = false
   expect(await prepared.launch.prepareHooks(19473, () => true)).toBe(false)
   expect(await prepared.launch.prepareHooks(19473, () => false)).toBe(false)
+})
+it('hands a Hermes launch\'s hooks the executable it runs, whose version decides them', async () => {
+  const prepared = await inspectNativeLaunch('hermes')
+  if (!prepared.ok) throw new Error('fixture was held')
+  expect(await prepared.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(hooks.installHermesHooks).toHaveBeenCalledWith(19473, '/fixture/hermes', expect.objectContaining({
+    environment: expect.objectContaining({ HERMES_HOME: '/fixture/hermes' }), executable: expect.objectContaining({ command: '/fixture/engine' }) }))
 })
 it('does not treat a longer flag as support for the selected permission mode', async () => {
   fixture.help = '--auto-update'
@@ -176,6 +203,23 @@ it.each(['claude', 'codex'] as const)('confirms the final %s home before acknowl
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
   expect(result.launch.ready?.()).toBe(true)
   expect(result.launch.environment[variable]).toBe(selected)
+})
+
+it('a held hook preparation logs what holds it, a missing hook script too, and any other failure its kind', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error('fixture held')
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookPreparationHeld('a hook file changed while it was written'))
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookScriptMissing())
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new TypeError('no such file /Users/dee/x'))
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  expect(warn.mock.calls).toEqual([
+    ['[launch] native hook preparation held · a hook file changed while it was written'],
+    ["[launch] native hook preparation held · notify.mjs is missing, so no hook of Harness's could run"],
+    ['[launch] native hook preparation held · TypeError'],
+  ])
 })
 
 it('does not adopt a home when hooks fail or the owner is revoked', async () => {
@@ -356,6 +400,57 @@ it('an explicit claudeHome is adopted as a known home, so its transcripts bind',
   if (!result.ok) throw Error(result.detail)
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
   expect(confirmHome).toHaveBeenCalledWith('claude', '/fixture/profile')
+})
+
+it('exports a Hermes home the process named, and never one Harness worked out', async () => {
+  const named = await inspectNativeLaunch('hermes', { hermesHome: '/data/profiles/work' })
+  expect(named.ok && named.launch.environment.HERMES_HOME).toBe('/data/profiles/work')
+  const derived = await inspectNativeLaunch('hermes', { hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true })
+  expect(derived.ok && derived.launch.environment.HERMES_HOME).toBe('/fixture/hermes')   // the launch shell's own, untouched
+})
+
+describe('a local OpenClaw launch', () => {
+  const AGENT = 'aaaaaaaa-1111-4222-8333-000000000001'
+  const LOCAL_CLEAR = ['OPENCLAW_CONFIG_PATH', 'OPENCLAW_AGENT_DIR', 'OPENCLAW_OAUTH_DIR', 'OPENCLAW_WORKSPACE_DIR']
+  // A launch shell that sets its own state folder, as an owner's profile would.
+  const shellWithState = () => vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+    executable: { command: '/fixture/engine', identity: `${fixture.identity}:openclaw`, current: () => fixture.current },
+    environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCLAW_STATE_DIR: '/shell/state' } } as never)
+  it('pins its folder and clears the other OpenClaw paths', async () => {
+    shellWithState()
+    const found = await inspectNativeLaunch('openclaw', { openclawLocal: "/run/it's" })
+    if (!found.ok) throw new Error(found.detail)
+    expect(found.launch.openclawLocal).toBe("/run/it's")
+    expect(found.launch.environment.OPENCLAW_STATE_DIR).toBe("/run/it's")
+    expect(found.launch.clearEnvironment).toEqual(expect.arrayContaining(LOCAL_CLEAR))
+    const script = launchScriptOf(buildEngineLaunchArgv('openclaw', { native: found.launch, agentId: AGENT }, '/bin/zsh', '/opt/node', 'grid', null))
+    expect(script).toContain(`export OPENCLAW_STATE_DIR=${shellSingleQuote("/run/it's")}`)
+    expect(script.indexOf('OPENCLAW_CONFIG_PATH')).toBeLessThan(script.indexOf('export OPENCLAW_STATE_DIR='))
+  })
+  it('keeps its folder through what the launch adds or clears as it prepares', async () => {
+    shellWithState()
+    const found = await inspectNativeLaunch('openclaw', { openclawLocal: '/run/skill-1' })
+    if (!found.ok) throw new Error(found.detail)
+    expect(await found.launch.prepareHooks(0, () => true, { OPENCLAW_STATE_DIR: '/shared/state' })).toBe(true)
+    expect(found.launch.environment.OPENCLAW_STATE_DIR).toBe('/run/skill-1')
+    expect(await found.launch.prepareHooks(0, () => true, {}, ['OPENCLAW_STATE_DIR'])).toBe(true)
+    expect(found.launch.environment.OPENCLAW_STATE_DIR).toBe('/run/skill-1')
+    expect(found.launch.clearEnvironment).not.toContain('OPENCLAW_STATE_DIR')
+  })
+  it('a launch with no folder, and another engine given one, are as before', async () => {
+    shellWithState()
+    const shared = await inspectNativeLaunch('openclaw', {})
+    if (!shared.ok) throw new Error(shared.detail)
+    expect(shared.launch).not.toHaveProperty('openclawLocal')
+    expect(shared.launch.environment.OPENCLAW_STATE_DIR).toBe('/shell/state')
+    for (const key of LOCAL_CLEAR) expect(shared.launch.clearEnvironment).not.toContain(key)
+    const plain = await inspectNativeLaunch('claude', {})
+    const given = await inspectNativeLaunch('claude', { openclawLocal: '/run/skill-1' })
+    if (!plain.ok || !given.ok) throw new Error('fixture held')
+    expect(given.launch).not.toHaveProperty('openclawLocal')
+    expect(given.launch.environment).toEqual(plain.launch.environment)
+    expect(given.launch.clearEnvironment).toEqual(plain.launch.clearEnvironment)
+  })
 })
 
 // Windows has no launch script to probe Codex's owned-process flag before each run (engines/kit/launchStartup.ts):

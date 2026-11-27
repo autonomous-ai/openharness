@@ -1,5 +1,3 @@
-import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
-import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
  * SessionStart/SessionEnd (127.0.0.1:<PORT>). This replaces the old Fastify routes — the browser
@@ -10,28 +8,32 @@ import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { admitHook, hooksFor } from './engines/hooks.js'
+import { admitHook, hooksFor, startsNewConversation } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
+import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
-import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
+import { createPendingAdmissions, type AdmissionDecision, type AdmissionHold } from './core/engines/pendingAdmission.js'
+import { createSessionHookWait, sessionKey, type AdmissionTicket, type SessionHookWaitBounds, type WaitingRoute } from './core/engines/sessionHookWait.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
+import { startMarkerMs } from './lib/processProof.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { sid } from './lib/log.js'
+import { codeOrLength, errorKind, hashOf, sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches, PEER_LOOKUP_UNANSWERED, PEER_LOOKUP_UNANSWERED_MESSAGE } from './lib/localCredential.js'
-import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
+import type { HttpAnswer } from './core/api.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -67,7 +69,14 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
-  onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
+  /** A paneless agent's hook event (core/observedHook.ts): checked, rate limited and forwarded, never kept. */
+  onObserved?: (body: unknown) => 'ok' | 'invalid' | 'dropped'
+  /** The mod's held poll for a spoken prompt (core/deviceHookCalls.ts). `gone` aborts when the client goes before its
+   *  answer. */
+  onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
+  /** A route a service answers, once the door let its request in (core/serviceRoutes.ts): its answer, or null when no
+   *  service answers `path`. */
+  onServiceRoute?: (path: string, request: DoorRequest, localOk: boolean, socket: boolean) => Promise<HttpAnswer> | null
 
   onRegistered: (
     entry: RegisteredSession,
@@ -78,6 +87,9 @@ export interface HookServerHandlers {
       /** An agent this bind left with no session and no process — see registry.register. */
       orphaned?: { agentId: string; sessionId: string } | null
       hookEvent?: string
+      /** When the binding this rebind replaced began, epoch ms: only on the engine's own new-conversation hook
+       *  (engines/hooks.ts `startsNewConversation`), and only when that start reads. */
+      newConversationSince?: number
     },
   ) => void | Promise<void>
 
@@ -109,7 +121,6 @@ export interface HookServerHandlers {
   onAdmissionStop?: (entry: RegisteredSession, unmatched: boolean) => boolean
   /** Captured before a same-conversation registration waits; Cancel or forget supersedes that Stop. */
   captureAdmissionStop?: (entry: RegisteredSession) => () => boolean
-  onPromptSubmitted?: (agentId: string, prompt: string) => void
   /** A session's UserPromptSubmit hook, and when its engine ran it (`X-Harness-Hook-Fired-At`): what a Stop
    *  that arrives late is told apart from the turn the prompt opened by (core/turns/turnHooks.ts). */
   onPromptHook?: (sessionId: string, firedAt: number) => void
@@ -126,74 +137,24 @@ export interface HookServerHandlers {
     /** When the engine ran the hook; absent from a hook client too old to say. */
     firedAt?: number
   }) => void
+  /** The engine waits on the person: a permission, a question. */
+  onPersonWait?: (body: { sessionId: string; firedAt?: number }) => void
+  /** A subagent of the session started, or stopped, and when its engine ran the hook. */
+  onSubagent?: (body: { sessionId: string; started: boolean; firedAt?: number }) => void
   /** For the end-to-end suite only: how long a Stop hook is held before it is acted on, as the hook's own
    *  verification can take under load (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`). */
   stopHookDelayMs?: number
-  /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
-  onPair?: (code: string) => Promise<PairOutcome>
-  /** `harness pairings` — list E2EE-paired browsers. */
-  onListPairs?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
-  onRevoke?: (id: string) => PairOutcome | Promise<PairOutcome>
-  /** `harness unpair --all` — unpair every browser. */
-  onRevokeAll?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness remote-password set` — stretch + persist a new persistent remote password on the
-   *  running daemon's live E2EE state. */
-  onSetRemotePassword?: (password: string) => Promise<PairOutcome>
-  /** `harness remote-password clear` — remove the persistent remote password. */
-  onClearRemotePassword?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness remote-password status` — whether one is set, and its fingerprint. */
-  onRemotePasswordStatus?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
-   *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
-  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome | Promise<PairOutcome>
-  /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
-  onGroupList?: () => PairOutcome | Promise<PairOutcome>
-  onGroupSync?: () => PairOutcome | Promise<PairOutcome>
-  onGroupRemove?: (selector: string) => PairOutcome | Promise<PairOutcome>
-  /** `harness devices list|remove|rebaseline` and the window's Devices list — the account's device key
-   *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
-  onDevicesList?: () => Promise<PairOutcome>
-  onDevicesRemove?: (pub: string) => Promise<PairOutcome>
-  onDevicesRebaseline?: (confirm: boolean, head?: { seq: number; hash: string }) => Promise<PairOutcome>
-  /** `harness devices history` and the window's History — every add and remove, as this machine verified it. */
-  onDevicesHistory?: () => Promise<PairOutcome>
-  /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
-  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
   /** The daemon's status (GET /api/status): what `harness status`, the desktop's discovery and scripts read. */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
-  /** GET /api/machines — proxy the user's full machine list from backend using this daemon's own
-   *  saved SSO session, so a local GUI client never needs a token of its own. */
+  /** GET /api/machines — the user's full machine list from the backend, through this daemon's own sign-in, so a local
+   *  GUI client never needs a token of its own: the core's, which answers it from its own copy while the gateway is away
+   *  and signed out without starting it (core/gatewayLink.ts `machines`). */
   onMachinesList?: () => Promise<PairOutcome>
-  /** PATCH /api/machines/:machineId — proxy a rename to backend the same way. */
-  onMachineRename?: (machineId: string, name: string) => Promise<PairOutcome>
-  /** DELETE /api/machines/:machineId — proxy a delete to backend the same way. */
-  onMachineDelete?: (machineId: string) => Promise<PairOutcome>
-  /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
-  onAuthMe?: () => Promise<PairOutcome>
-  /** PATCH /api/auth/me — the signed-in person's own account name (`{ name }`, task #2654), passed to the backend, which
-   *  validates it and answers the profile as GET does; a local write, so CSRF-guarded like the desk's ops. */
-  onAuthMeUpdate?: (body: unknown) => Promise<PairOutcome>
-  /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
-   *  Add Phone QR), minted by backend against this daemon's own session. */
-  onAuthHandoff?: () => Promise<PairOutcome>
   /** POST /api/daemon/stop — `harness stop` on Windows (core/daemonStopRoute.ts). Trusted local only: over TCP any
    *  process on the machine, another user's included, could stop this user's daemon. Given on Windows only; without
    *  it the route does not exist (404), as before on a Mac or Linux. */
   onDaemonStop?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
-  /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
-  onDeskRead?: () => Promise<PairOutcome>
-  /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
-   *  local write, so CSRF-guarded like a rename. */
-  onDeskOps?: (body: unknown) => Promise<PairOutcome>
-  /** GET /api/agent-messages — the account's tabs and who is in each (docs/design/2026-10-10-agent-messages.md),
-   *  proxied like the desk without starting the experiment's process. An older window draws each tab's chat icon
-   *  from its flag, which no daemon reads now: the account's experiment decides (lib/agentSettings.ts). */
-  onAgentMessagesRead?: () => Promise<PairOutcome>
-  /** PATCH /api/agent-messages/tabs/:tabId — an older window's tab switch, passed to the backend so it gets the
-   *  answer it expects, and deciding nothing; a local write, so CSRF-guarded like the desk's ops. */
-  onAgentMessagesWrite?: (tabId: string, body: unknown) => Promise<PairOutcome>
   /** GET/PATCH /api/agent-settings — what the person lets agents do (lib/agentSettings.ts): the account's experiments
    *  as this computer keeps them, and a change written through to the account (`harness settings`, and an older
    *  window's Settings ▸ Agents). The write is CSRF-guarded like the others. */
@@ -203,25 +164,7 @@ export interface HookServerHandlers {
    *  here too (core/experiments.ts `createAgentSettingsSync`). */
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
-  onProductFeedback?: (body: unknown) => Promise<PairOutcome>
-  /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
-   *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
-  onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
-  /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
-   *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
-  onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
-  /** A chat file over 10 MB goes straight to storage (superTabs/attach.ts): its link asked for, and its upload said complete,
-   *  with this computer's account. Small JSON both ways; the bytes never pass through here. */
-  onSuperTabAttachmentUpload?: (path: string, body: Record<string, unknown>) => Promise<PairOutcome>
-  onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
-  onProductUsageRead?: () => Promise<PairOutcome>
-  onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
-  /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
-   *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
-  onStore?: StoreHandler
 }
-
-export { STORE_PATH_RE } from './lib/storeProxy.js'
 
 const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
@@ -251,9 +194,35 @@ export function hookFiredAt(req: Pick<http.IncomingMessage, 'headers'>): number 
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
+const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-hook-codex-home'
+
+/**
+ * What a hook says of its own environment, in two headers: a daemon that does not read a header ignores it, where it
+ * refuses a body with a field it does not list. Each is judged alone: a refused one is named, never the request.
+ */
+export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>, platform?: NodeJS.Platform): { gateway?: 'ori' | null; codexHome?: string; refused: string[] } {
+  const facts: { gateway?: 'ori' | null; codexHome?: string; refused: string[] } = { refused: [] }
+  const gateway = req.headers[GATEWAY_HEADER]
+  if (gateway === 'ori') facts.gateway = 'ori'
+  else if (gateway === 'none') facts.gateway = null
+  else if (gateway !== undefined) facts.refused.push(GATEWAY_HEADER)
+  const home = req.headers[CODEX_HOME_HEADER]
+  if (home !== undefined) {
+    // Percent-encoded by the hook: Node refuses a header value above U+00FF, and a path may hold any character.
+    let decoded: string | undefined
+    try { decoded = typeof home === 'string' ? decodeURIComponent(home) : undefined } catch { decoded = undefined }
+    // Absolute as agent_create takes a home: on Windows a drive's path. A share's or a device's would have the core's
+    // realpath open another computer's folder on every registration.
+    if (decoded !== undefined && homeIsAbsolute(decoded, platform) && decoded.length <= 1_024 && !/[\u0000-\u001f\u007f]/.test(decoded)) facts.codexHome = decoded
+    else facts.refused.push(CODEX_HOME_HEADER)
+  }
+  return facts
+}
+
 function validHookBody(value: unknown): value is BoundHookBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const body = value as Record<string, unknown>
+  // No hook of this build sends prompt; an older install's hook may during an update and is not refused for it. Nothing reads it.
   if (body.prompt !== undefined && (typeof body.prompt !== 'string' || Buffer.byteLength(body.prompt) > 128 * 1024)) return false
   if (Object.keys(body).some((field) => !HOOK_BODY_FIELDS.has(field))) return false
   if (body.engine !== undefined && (typeof body.engine !== 'string' || !ENGINES.includes(body.engine as AgentEngine))) return false
@@ -387,26 +356,26 @@ export function knownTranscriptFor(body: RegisterInput, agent: RegisteredSession
 }
 
 /** Read source evidence without binding. Unreadable stores never authorize a conversation. */
-async function inspectHermesKind(sessionId: string, knownHome?: string): Promise<AdmissionDecision<string | undefined>> {
+async function inspectHermesKind(sessionId: string, knownHome?: string, capture?: (verify: () => void) => void): Promise<AdmissionDecision<string | undefined>> {
   if (!HERMES_SOURCE.id.test(sessionId)) return { kind: 'accept', value: undefined }
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
       sql: columns => storeSourceQuery(HERMES_SOURCE, columns), params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
-      columns: ['id', 'source'], pointKey: 'id', knownHome,
+      columns: ['id', 'source'], pointKey: 'id', knownHome, capture,
     })
-    if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
-    if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
+    if (!found.length) return { kind: 'hold', code: 'HERMES_SOURCE_MISSING', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
+    if (found.length !== 1) return { kind: 'hold', code: 'HERMES_SOURCE_AMBIGUOUS', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
     const { home, aliases, row } = found[0]
-    if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
+    if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', code: 'HERMES_SOURCE_ELSEWHERE', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
     // A unified-runtime row names its creator separately; an unstamped one waits like a row not written yet.
     const source = rowSessionSource(HERMES_SOURCE, row)
-    if (source === null) return { kind: 'hold', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
+    if (source === null) return { kind: 'hold', code: 'HERMES_CREATOR_MISSING', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
     if (typeof source !== 'string' || source.length > 128) throw new IdentityReadUnavailable('the Hermes source record is invalid')
     if (!isInteractiveSource(HERMES_SOURCE, source)) return { kind: 'reject', reason: 'hermes_subagent' }
     return { kind: 'accept', value: knownHome ?? (home === env.HERMES_HOME ? undefined : home) }
   } catch (error) {
     if (!(error instanceof IdentityReadUnavailable)) throw error
-    return { kind: 'hold', reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }
+    return { kind: 'hold', code: 'HERMES_SOURCE_UNAVAILABLE', failure: errorKind(error), reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }
   }
 }
 
@@ -426,16 +395,16 @@ export function clientEnvPane(clientEnv: unknown): HookTerminalHint | null {
 }
 
 /** The pane Hermes froze with [sessionId] when it was created (`HERMES_SESSION_PANE`), or null: none, or unreadable. */
-async function hermesCreationPane(sessionId: string): Promise<HookTerminalHint | null> {
+async function hermesCreationPane(sessionId: string, capture?: (verify: () => void) => void): Promise<HookTerminalHint | null> {
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
       sql: HERMES_SESSION_PANE.query, params: [HERMES_SESSION_PANE.key(sessionId), sessionId], maxRows: 1,
-      maxBuffer: HERMES_SESSION_PANE.maxBuffer, columns: ['id'], pointKey: 'id',
+      maxBuffer: HERMES_SESSION_PANE.maxBuffer, columns: ['id'], pointKey: 'id', capture,
     })
     return found.length === 1 ? clientEnvPane(found[0].row.client_env) : null
   } catch (error) {
     if (!(error instanceof IdentityReadUnavailable)) throw error
-    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${error.message}`)
+    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${errorKind(error)}`)
     return null
   }
 }
@@ -446,8 +415,8 @@ async function hermesCreationPane(sessionId: string): Promise<HookTerminalHint |
  * conversation in a new pane, and Hermes keeps the creation policy); else the creation pane, for an agent that is still
  * opening there. Null: neither is known, so nothing says which pane the session is.
  */
-async function hermesSessionHint(sessionId: string): Promise<HookTerminalHint | null> {
-  const created = await hermesCreationPane(sessionId)
+async function hermesSessionHint(sessionId: string, capture?: (verify: () => void) => void): Promise<HookTerminalHint | null> {
+  const created = await hermesCreationPane(sessionId, capture)
   if (created && registry.byRuntimeEngine(created, 'hermes')) return created
   const bound = registry.bySession(sessionId)
   const runtime = bound?.engine === 'hermes' ? bound.runtimes[0] : undefined
@@ -469,6 +438,24 @@ export interface HookServerOptions {
   admissionReceiptCapacity?: number
   /** Bound native payload and provenance retained by pending admission or linked Stop. */
   admissionBytesCapacity?: number
+  /** A test's bounds for the hooks waiting behind their session's admission (core/engines/sessionHookWait.ts). */
+  hookWait?: Partial<SessionHookWaitBounds>
+}
+
+/** Claude Code's own SessionEnd reasons, its hook input's `reason` (read from Claude Code 2.1.330): fixed words, logged as
+ *  they are. Any other engine's reason is logged as a code or a length. */
+const SESSION_END_REASONS: readonly string[] = ['clear', 'resume', 'logout', 'prompt_input_exit', 'other']
+
+/** A session's follow-up hooks: each needs its session bound, and waits behind its session's admission until it is. */
+const FOLLOW_UP_ROUTES = new Map<string, WaitingRoute>([
+  ['/api/hook/turn-stop', 'turn-stop'], ['/api/hook/wait', 'wait'], ['/api/hook/subagent', 'subagent'],
+  ['/api/hook/tool-start', 'tool-start'], ['/api/hook/turn-start', 'turn-start'], ['/api/hook/session-end', 'session-end'],
+])
+/** What a route takes of a valid body: a wait says that the engine waits and when, never on what (what the person is
+ *  asked stays in the pane), and a subagent hook says started or stopped. */
+const FOLLOW_UP_TAKES: Partial<Record<WaitingRoute, (body: BoundHookBody) => boolean>> = {
+  wait: (body) => body.input === undefined && body.prompt === undefined,
+  subagent: (body) => body.hookEvent === 'SubagentStart' || body.hookEvent === 'SubagentStop',
 }
 
 /** The `/api/status` fields a caller without the local credential is answered. */
@@ -491,12 +478,34 @@ export function startHookServer(
   const hookToken = loadOrCreateHookToken(env.ADAPTER_DATA_DIR)
   const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
+  const waits = createSessionHookWait(options.hookWait)
+  // Per agent and delivery, the end of its latest admission job's ticket, and the job whose end that is.
+  // `admissions.submit` drops an older job of a delivery for a newer request of it, or keeps the older one and drops the
+  // newer request, whose callbacks then never run (`kept`, pendingAdmission.ts). So the job still queued decides,
+  // whatever its reason; a dropped one ends `stale_hook`, if at all, and that end changes nothing. Its session's waiting
+  // hooks hang on that end: one never called leaves them to their time limit.
+  const admissionJobEnds = new Map<string, { end: () => void; live: object }>()
+  const admissionJob = (agentId: string, deliveryId: string, ticket: AdmissionTicket) => {
+    const key = JSON.stringify([agentId, deliveryId]), job = {}
+    const before = admissionJobEnds.get(key), latest = { end: ticket.queued(), live: job }
+    admissionJobEnds.set(key, latest)
+    return {
+      kept: () => { if (before) latest.live = before.live },
+      ended: (reason?: string) => {
+        const decides = admissionJobEnds.get(key)
+        if (!decides || (decides.live !== job && reason === 'stale_hook')) return
+        admissionJobEnds.delete(key)
+        decides.end()
+      },
+    }
+  }
   let admissionArrival = 0
   const admissionHolds = new Map<string, Map<string, string>>()
   type StopAcknowledgement = { status: number; reply: unknown }
   type LinkedStop = (body: BoundHookBody, firedAt: number | undefined) => StopAcknowledgement | Promise<StopAcknowledgement>
   type Receipt = { fingerprint: string; status: number; reply: unknown; pending: boolean; bytes: number; linkedStop?: LinkedStop }
-  const admissionReceipts = new Map<string, { scope: string; records: Map<string, Receipt> }>()
+  // Per agent: its receipts, how many of its admissions are in their registry write, and how many holds it has had.
+  const admissionReceipts = new Map<string, { scope: string; records: Map<string, Receipt>; writing: number; holds: number }>()
   const resolvingStops = new Map<string, { fingerprint: string; stop: LinkedStop }>()
   let receiptCount = 0, receiptBytes = 0
   const saveReceipt = (records: Map<string, Receipt>, id: string, next?: Receipt) => {
@@ -510,7 +519,63 @@ export function startHookServer(
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
   let lastRefusalLogAt = 0
+  /** Apart from a refused host's minute: a pane whose binding went stale, refused every turn, never hides one. */
+  let lastUnboundLogAt = 0
+  /** 403 to a hook its session's process did not send. Said at most once a minute, as a refused host is, in a minute
+   *  of its own: a pane whose binding went stale sends one every turn. */
+  const unbound = (sessionId: string | undefined, route: WaitingRoute) => {
+    if (Date.now() - lastUnboundLogAt > 60_000) {
+      lastUnboundLogAt = Date.now()
+      console.warn(`[hooks] ${sid(sessionId ?? '?')} ${route} refused · unbound`)
+    }
+    return { status: 403, body: { error: 'UNBOUND_HOOK' } }
+  }
+  /** A follow-up hook bound to its session's process, and its effect: one code for a hook as it arrives and as it runs
+   *  once its session's admission settled, with the time its engine ran it. */
+  const followUp = async (route: WaitingRoute, body: BoundHookBody, firedAt: number | undefined): Promise<{ status: number; body: unknown }> => {
+    const owner = await verifiedBoundMutation(body, handlers)
+    if (!owner) return unbound(body.sessionId, route)
+    const { sessionId } = owner
+    const at = firedAt ? { firedAt } : {}
+    switch (route) {
+      case 'session-end': {
+        const reason = body.reason && (SESSION_END_REASONS.includes(body.reason) ? body.reason : codeOrLength(body.reason))
+        console.log(`[hooks] ${sid(sessionId)} session-end${reason ? ` · reason=${reason}` : ''}`)
+        handlers.onSessionEnd(sessionId, body.reason)
+        break
+      }
+      case 'tool-start':
+        if (body.toolUseId && body.toolName) {
+          console.log(`[hooks] ${sid(sessionId)} tool-start · tool=${body.toolName}`)
+          handlers.onToolStart?.({ sessionId, toolUseId: body.toolUseId, toolName: body.toolName, input: body.input })
+        }
+        break
+      case 'turn-start':
+        handlers.onTurnStart?.({ sessionId })
+        break
+      case 'turn-stop': {
+        const identity = paneReadIdentity(owner)
+        console.log(`[hooks] ${sid(sessionId)} turn-stop${body.status ? ` · status=${body.status}` : ''}`)
+        const stop = { sessionId, status: body.status, transcriptPath: body.transcriptPath, ...at }
+        if (handlers.stopHookDelayMs) setTimeout(() => {
+          if (paneReadIdentity(registry.byAgent(owner.agentId)) === identity) handlers.onTurnStop?.(stop)
+        }, handlers.stopHookDelayMs)
+        else handlers.onTurnStop?.(stop)
+        break
+      }
+      case 'wait':
+        handlers.onPersonWait?.({ sessionId, ...at })
+        break
+      case 'subagent':
+        handlers.onSubagent?.({ sessionId, started: body.hookEvent === 'SubagentStart', ...at })
+        break
+    }
+    return { status: 200, body: { ok: true } }
+  }
   const handle: http.RequestListener = (req, res) => {
+    // A session-start's admission once its body is read: unsettled until this request's route returns, by whichever
+    // return, the process-record wait included (core/engines/sessionHookWait.ts).
+    let admission: AdmissionTicket | undefined
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
       const json = (code: number, body: unknown): void => {
@@ -524,11 +589,13 @@ export function startHookServer(
       // Before any route, reads included. See lib/loopbackRequest.ts.
       if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
         // At most one line a minute: enough to explain a client that was refused, not a lever for a
-        // page to flood the log. Host and Origin are the sender's, so they are escaped and bounded.
+        // page to flood the log. The address, Host and Origin are the sender's (a page's URL can name the person's
+        // work), so the address is its length and each header, when sent, a tag that reads the same while this daemon runs.
         if (Date.now() - lastRefusalLogAt > 60_000) {
           lastRefusalLogAt = Date.now()
-          const shown = (v: unknown) => JSON.stringify(String(v ?? '').slice(0, 80))
-          console.warn(`[hooks] refused ${req.method} ${url.slice(0, 80)} · host=${shown(req.headers.host)} origin=${shown(req.headers.origin)}`)
+          const sent = ([['host', req.headers.host], ['origin', req.headers.origin]] as const)
+            .flatMap(([name, value]) => value ? [`${name}=${hashOf(value)}`] : [])
+          console.warn(`[hooks] refused ${req.method} (${url.length} chars)${sent.length ? ` · ${sent.join(' ')}` : ''}`)
         }
         json(403, { error: 'FORBIDDEN_HOST' }); return
       }
@@ -538,7 +605,7 @@ export function startHookServer(
       const proxied = async (call: () => Promise<{ status: number; body: unknown }>): Promise<void> => {
         try { const out = await call(); json(out.status, out.body) }
         catch (e) {
-          console.error(`[hook] ${req.method} ${url} failed:`, e instanceof Error ? e.message : e)
+          console.error(`[hook] ${req.method} failed:`, errorKind(e))
           json(502, { success: false, error: { code: 'PROXY_FAILED', message: e instanceof Error ? e.message : 'INTERNAL' } })
         }
       }
@@ -547,6 +614,17 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
+      /** A route a service answers (core/serviceRoutes.ts), written as it answered, with the headers its route declares:
+       *  false when no service answers this path and method. Whether a write carries the local header, and whether it came
+       *  over the daemon's own socket, is its route's to ask, and its body is read only then, up to its route's bound. */
+      const serviceRoute = async (): Promise<boolean> => {
+        const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', readBody: (max) => readBody(req, max) }, localOk, trustedLocal)
+        if (!routed) return false
+        const result = await routed
+        for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
+        json(result.status, result.body)
+        return true
+      }
       // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
       // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
       // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
@@ -582,13 +660,9 @@ export function startHookServer(
         if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer) || !credentialOk) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
-        if (!handlers.onAutonomousDeviceRequest) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
-        let body: unknown
-        if (req.method !== 'GET') {
-          try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        }
-        const result = await handlers.onAutonomousDeviceRequest(req.method ?? '', req.url ?? '', body)
-        json(result.status, result.body); return
+        // The Wi-Fi device's services', as the client sent it: the gateway's, its service's and the machine add-ons'.
+        if (!await serviceRoute()) json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } })
+        return
       }
       if (req.method === 'GET' && url === '/api/health') {
         json(200, { ok: true, version: VERSION }); return
@@ -615,6 +689,15 @@ export function startHookServer(
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
+        const engine = body.engine ?? 'claude'
+        const deliveryHeader = req.headers['x-harness-hook-delivery-id']
+        const nativeDeliveryId = typeof deliveryHeader === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(deliveryHeader) ? deliveryHeader : undefined
+        const deliveryId = nativeDeliveryId ?? randomUUID()
+        if (body.sessionId) admission = waits.admission(sessionKey(engine, body.sessionId), deliveryId)
+        // Only a refused header's name is logged: its value is a path or a word of the hook's own environment.
+        const refusedHeader = (name: string) => console.warn(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} header refused · ${name}`)
+        const { refused, ...taken } = hookFacts(req)
+        for (const name of refused) refusedHeader(name)
         // Every rejection below says WHY, out loud. They used to be silent, and a hook that arrives and
         // is dropped looks exactly like a hook that never fired — which is precisely the confusion behind
         // "the agent is running in my terminal but the list does not show it".
@@ -641,7 +724,6 @@ export function startHookServer(
             + ` but this machine is v${VERSION} — that pane loaded an older copy.`)
           console.warn('[hooks] restart the pane (or reload its plugins) to pick up the current build')
         }
-        const engine = body.engine ?? 'claude'
         // Capture before process resolution yields. Native time is unchanged across client retries.
         const admissionOrder = { firedAt: hookFiredAt(req), arrival: ++admissionArrival }
         const fingerprint = createHash('sha256').update(JSON.stringify([body, admissionOrder.firedAt])).digest('hex')
@@ -659,9 +741,6 @@ export function startHookServer(
           body.tmuxPane = hint.backend === 'tmux' ? hint.paneId : undefined
         }
         if (!runtimeHints.length) { ignore('not_in_terminal'); return }
-        const deliveryHeader = req.headers['x-harness-hook-delivery-id']
-        const nativeDeliveryId = typeof deliveryHeader === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(deliveryHeader) ? deliveryHeader : undefined
-        const deliveryId = nativeDeliveryId ?? randomUUID()
         const carriesStop = !!nativeDeliveryId && (engine === 'cursor' && body.hookEvent === 'stop'
           || engine === 'commandcode' && (body.hookEvent === 'Stop' || body.hookEvent === 'StopFailure'))
         const stopProvenance = (value: BoundHookBody, firedAt: number | undefined) => JSON.stringify([
@@ -683,6 +762,8 @@ export function startHookServer(
         const preliminary = carriesStop && body.sessionId ? registry.bySession(body.sessionId) : undefined
         const stopScope = preliminary?.engine === engine ? scopeOf(preliminary) : undefined
         const stopWitness = stopScope ? handlers.captureAdmissionStop?.(preliminary!) : undefined
+        // Waited on more than registry writes (the process record, a hold, a queue paused by one): its Stop
+        // may belong to an earlier turn. A slow write, its own or an earlier hook's of its agent, only delays the reply.
         let deferred = false
         if (carriesStop) resolvingStops.set(deliveryId, { fingerprint, stop: (stop, firedAt) => {
           if (stopProvenance(stop, firedAt) !== originalStop) return conflict
@@ -698,11 +779,9 @@ export function startHookServer(
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
             ...(bySessionPane ? { bySessionPane } : {}),
             // A relaunch records its engine's process a moment after the engine starts, and a hook in that
-            // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
-            // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down
-            // (hook/notify.mjs, fallbackRegister), with a row of its own in place of the agent's, which
-            // the running daemon's next save took in. Told the registration is pending, it writes nothing,
-            // as for a transcript not yet written below, and the wait goes on here.
+            // moment waits for the record, up to 20s. Its client does not: the engine waits on its hook
+            // command, which gives up on a reply after 500ms (hook/notify.mjs). Told the registration is
+            // pending, it ends at once, and the wait goes on here.
             // Hermes admission has a separate bounded queue after resolution. Do not
             // claim a slot before one exists: its hook client can retry this live hold.
             onWait: () => { deferred = true; answer(202, { pending: false, retry: true, detail: 'Waiting for the engine process record; admission is not queued yet.' }) },
@@ -726,7 +805,7 @@ export function startHookServer(
           for (const delivery of history.records.keys()) saveReceipt(history.records, delivery)
           admissionReceipts.delete(id)
         }
-        const history = admissionReceipts.get(processAgent.agentId) ?? { scope: receiptScope(processAgent)!, records: new Map() }
+        const history = admissionReceipts.get(processAgent.agentId) ?? { scope: receiptScope(processAgent)!, records: new Map(), writing: 0, holds: 0 }
         admissionReceipts.set(processAgent.agentId, history)
         const completed = history.records.get(deliveryId)
         if (completed) {
@@ -743,24 +822,33 @@ export function startHookServer(
         }
         let inspectionIdentity: string | undefined
         let prepared: RegisterInput = body
-        let committed: ReturnType<typeof registry.register> = null
-        let settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
+        let committed: Awaited<ReturnType<typeof registry.register>> = null
+        let replyTimer: ReturnType<typeof setTimeout> | undefined
+        let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
+        // When the binding this registration replaced began, kept for its announcement.
+        let replacedSince: number | undefined
+        // A turn-stop answered pending before this settled, kept only until acceptance claims it or rejection drops it.
+        let parkedStop: { stop: BoundHookBody; firedAt: number | undefined } | undefined
+        // The agent's hold count when this began waiting on an earlier hook's write.
+        let waitedHolds: number | undefined
         const live = () => registry.byAgent(processAgent.agentId)
         const current = () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
           && live()?.active !== false && scopeOf(live()) === scope
         const publishHold = () => {
           const reason = [...admissionHolds.get(processAgent.agentId)?.values() ?? []].at(-1)
           try { handlers.onAdmissionHeld?.(processAgent.agentId, reason) }
-          catch (error) { console.warn('[hooks] admission status notification failed', error) }
+          catch (error) { console.warn('[hooks] admission status notification failed', errorKind(error)) }
         }
-        const held = (reason: string) => {
+        const held = ({ code, reason, failure }: AdmissionHold) => {
+          clearTimeout(replyTimer)
           deferred = true
+          history.holds++
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
           publishHold()
-          console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} held · ${reason}`)
+          console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} held · ${code}${failure ? ` · ${failure}` : ''}`)
           answer(200, { pending: true })
         }
         const clearHold = () => {
@@ -770,6 +858,7 @@ export function startHookServer(
           publishHold()
         }
         const completedReply = (status: number, reply: unknown) => {
+          clearTimeout(replyTimer)
           // A pruned old process cannot reinsert its receipts from a late callback.
           if (admissionReceipts.get(processAgent.agentId) === history) saveReceipt(history.records, deliveryId,
             { ...history.records.get(deliveryId)!, status, reply, pending: false, bytes: carriesStop ? retainedBytes : 0 })
@@ -783,10 +872,20 @@ export function startHookServer(
           followupFingerprint = sent
           // The registration itself owns this native Stop, even if its second
           // HTTP delivery outruns source recovery. Never close a later live turn.
-          if (!settled || stopRetained) {
-            deferred = true
+          // Its client leaves on pending and never sends it again: acceptance claims it.
+          if (!settled) {
+            // Its bytes join its registration's receipt, inside the same budget, until settling rewrites that receipt.
+            const receipt = history.records.get(deliveryId)
+            const bytes = retainedBytes + 2 * JSON.stringify(stop).length
+            if (!receipt || receiptBytes - receipt.bytes + bytes > bytesCapacity) {
+              return { status: 429, reply: { pending: false, error: 'HOOK_ADMISSION_BUSY',
+                detail: 'Hook acknowledgement storage is full; this Stop was not kept.' } }
+            }
+            saveReceipt(history.records, deliveryId, { ...receipt, bytes })
+            parkedStop = { stop, firedAt }
             return { status: 200, reply: { pending: true } }
           }
+          if (stopRetained) return { status: 200, reply: { pending: true } }
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (stopInvocationClaimed) return { status: 200, reply: { ok: true, duplicate: true } }
           const owner = await verifiedBoundMutation(stop, handlers)
@@ -815,60 +914,101 @@ export function startHookServer(
         }
         const prepare = (): AdmissionDecision<string | undefined> | null => {
           if (!current()) return { kind: 'reject', reason: 'stale_hook' }
-          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
+          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', code: 'STOP_SETTLING', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const row = live()!
           if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId
             // A paneId is only unique within one pty host.
             && (hint.backend !== 'ptyhost' || (runtime.backend === 'ptyhost' && runtime.instance === hint.instance))))) {
-            return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
+            return { kind: 'hold', code: 'HOOK_PANE_UNOWNED', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
-          prepared = { ...body, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
+          prepared = { ...body, ...taken, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
             runtimes: row.runtimes.map(runtime => ({ ...runtime })), primaryRuntimeKey: row.primaryRuntimeKey,
             transcriptPath: knownTranscriptFor(body, row) }
           const admission = admitHook(engine, prepared)
           if (!admission.accepted) return admission.reason === 'engine_hook_failed'
-            ? { kind: 'hold', reason: 'Waiting for complete native hook evidence.' } : { kind: 'reject', reason: admission.reason }
+            ? { kind: 'hold', code: 'HOOK_EVIDENCE_INCOMPLETE', reason: 'Waiting for complete native hook evidence.' } : { kind: 'reject', reason: admission.reason }
           return null
         }
-        const commit = (hermesHome: string | undefined): AdmissionDecision<string | undefined> => {
-          if (!current() || paneReadIdentity(live()) !== inspectionIdentity) return { kind: 'hold', reason: 'Waiting for fresh evidence after the binding changed.' }
-          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
+        const commit = async (hermesHome: string | undefined, admissionCurrent: () => boolean): Promise<AdmissionDecision<string | undefined>> => {
+          if (!current() || paneReadIdentity(live()) !== inspectionIdentity) return { kind: 'hold', code: 'BINDING_CHANGED', reason: 'Waiting for fresh evidence after the binding changed.' }
+          if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', code: 'STOP_SETTLING', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const prior = live()
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
-            held: !!(prior.identityHold || prior.interpretationHold) }
-          committed = registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true })
+            held: !!(prior.identityHold || prior.interpretationHold),
+            // When the binding a rotation replaces began: its bind, or, for a resumed row no hook has bound yet
+            // (`boundAt: null`), its engine's start.
+            since: prior.boundAt ?? startMarkerMs(prior.processIdentity?.startMarker ?? '') ?? undefined }
+          let verifySource: (() => void) | undefined, verifyPane: (() => void) | undefined
+          if (waitedHolds !== undefined && waitedHolds !== history.holds) deferred = true
+          committing = true
+          history.writing++
+          try {
+            committed = await registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true,
+              ...(engine === 'hermes' && body.sessionId ? { refresh: async () => {
+                if (bySessionPane) {
+                  const hint = await hermesSessionHint(body.sessionId!, verify => { verifyPane = verify })
+                  if (JSON.stringify(hint) !== JSON.stringify(runtimeHints[0])) {
+                    throw new IdentityReadUnavailable('the Hermes session pane changed during registration')
+                  }
+                }
+                const refreshed = await inspectHermesKind(body.sessionId!, live()?.hermesHome ?? undefined, verify => { verifySource = verify })
+                if (refreshed.kind !== 'accept' || refreshed.value !== hermesHome) {
+                  throw new IdentityReadUnavailable('the Hermes session source changed during registration')
+                }
+              } } : {}),
+              current: () => {
+                verifyPane?.()
+                verifySource?.()
+                return admissionCurrent() && current() && paneReadIdentity(live()) === inspectionIdentity
+                  && !handlers.hookAdmissionBlocked?.(processAgent.agentId)
+              } })
+          } finally { committing = false; history.writing-- }
+          if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
             stopUnmatched ||= deferred || before?.sessionId !== committed.entry.sessionId
               || before?.transcriptPath !== committed.entry.transcriptPath || before?.held === true
-            if (!handlers.onAdmissionStop && stopUnmatched) return { kind: 'hold', reason: 'Waiting for core ownership of the unmatched Stop.' }
+            if (!handlers.onAdmissionStop && stopUnmatched) return { kind: 'hold', code: 'UNMATCHED_STOP', reason: 'Waiting for core ownership of the unmatched Stop.' }
             stopRetained = handlers.onAdmissionStop?.(committed.entry, stopUnmatched) ?? false
-            if (stopUnmatched && !stopRetained) return { kind: 'hold', reason: 'Waiting for core ownership of the unmatched Stop.' }
+            if (stopUnmatched && !stopRetained) return { kind: 'hold', code: 'UNMATCHED_STOP', reason: 'Waiting for core ownership of the unmatched Stop.' }
           }
-          if (committed) committedIdentity = paneReadIdentity(committed.entry)
+          if (committed) {
+            committedIdentity = paneReadIdentity(committed.entry)
+            replacedSince = committed.rebound === before?.sessionId ? before?.since : undefined
+          }
           return committed ? { kind: 'accept', value: hermesHome } : { kind: 'reject', reason: 'invalid_session_registration' }
         }
         const notify = () => {
           const result = committed!
           clearHold()
+          const owner = live()
+          if (!owner || !current() || paneReadIdentity(owner) !== committedIdentity) {
+            console.warn('[hooks] committed admission notification skipped: owner changed')
+            return
+          }
+          // Core cleared the live admission hold; the durable commit reply is a detached snapshot.
+          result.entry = structuredClone(owner)
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
-            + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
+            + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${hashOf(result.entry.hermesHome)}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {
-            try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', error)) }
-            catch (error) { console.warn('[hooks] committed admission notification failed', error) }
+            try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', errorKind(error))) }
+            catch (error) { console.warn('[hooks] committed admission notification failed', errorKind(error)) }
           }
           // Native prompt credit follows the durable bind, never an attempted one.
           if (body.hookEvent === 'UserPromptSubmit') {
-            optional(() => handlers.onPromptSubmitted?.(result.entry.agentId, body.prompt ?? ''))
             if (admissionOrder.firedAt && body.sessionId) optional(() => handlers.onPromptHook?.(body.sessionId!, admissionOrder.firedAt!))
           }
+          // A rebind replays its first turn live only on the engine's own word that the conversation is new: a resume or a
+          // fork also rebinds to a transcript born late, and would send its whole history (lib/firstTurnReplay.ts).
+          const since = replacedSince !== undefined && startsNewConversation(engine, body.hookEvent, body.source) ? replacedSince : undefined
           optional(() => handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound,
-            orphaned: result.orphaned, hookEvent: body.hookEvent }))
+            orphaned: result.orphaned, hookEvent: body.hookEvent, ...(since === undefined ? {} : { newConversationSince: since }) }))
         }
         const enqueue = () => {
           saveReceipt(history.records, deliveryId, { fingerprint, status: 200, reply: { pending: true }, pending: true, bytes: retainedBytes,
             ...(carriesStop ? { linkedStop } : {}) })
+          const job = admission && admissionJob(processAgent.agentId, deliveryId, admission)
           const queued = admissions.submit(processAgent.agentId, deliveryId, {
             conversationId: body.sessionId,
             order: { ...admissionOrder, scope: admissionProcessScope(processAgent) ?? processAgent.agentId },
@@ -879,22 +1019,53 @@ export function startHookServer(
             commit,
             held,
             reject: reason => {
-              clearHold()
-              console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
-              if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
-              else completedReply(200, { ignored: true, reason })
+              try {
+                parkedStop = undefined
+                clearHold()
+                console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
+                if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
+                else completedReply(200, { ignored: true, reason })
+              } finally { job?.ended(reason) }
             },
-            accept: () => { completedReply(200, { ok: true }); notify() },
+            accept: () => {
+              // Ended even if a step throws: unsettled, it would hold its session's later hooks. Those run on a later turn,
+              // after the bind's announcements here, which they rely on.
+              try {
+                completedReply(200, { ok: true }); notify()
+                // A turn-stop parked while this was in flight is claimed as one sent now would be, through every fence.
+                const parked = parkedStop
+                parkedStop = undefined
+                // Its client left on pending and hears no reply: a claim that closed nothing is said here.
+                if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
+                  if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
+                }).catch(error => console.warn(`[hooks] parked linked Stop claim failed · ${errorKind(error)}`))
+              } finally { job?.ended() }
+            },
           })
+          if (queued === 'kept') job?.kept()
           if (queued) {
-            // Synchronous native admission settles in this turn's microtasks. A
-            // queued predecessor or asynchronous source gets an owned pending reply.
+            // A registry commit has its own bounded deadline and owns its reply.
+            // A queued predecessor or asynchronous source still answers pending.
             if (engine === 'hermes') answer(200, { pending: true })
-            else setImmediate(() => { if (!settled) deferred = true; answer(200, { pending: true }) })
+            else setImmediate(() => {
+              if (settled) return
+              if (committing) {
+                // The hook process itself has a five-second timeout. Slow durable
+                // preparation retains the delivery while its caller leaves promptly.
+                replyTimer = setTimeout(() => answer(200, { pending: true }), 250)
+                replyTimer.unref()
+                return
+              }
+              // Behind an earlier hook's write of its agent it waits on a write too, unless that hook is held by then.
+              if (history.writing && !admissionHolds.has(processAgent.agentId)) waitedHolds = history.holds
+              else deferred = true
+              answer(200, { pending: true })
+            })
           } else {
+            job?.ended()
             saveReceipt(history.records, deliveryId)
             const detail = 'Too many unverified hooks are pending; this hook was not queued. Retry after recovery.'
-            console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · ${detail}`)
+            console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · HOOK_ADMISSION_BUSY`)
             answer(429, { pending: false, error: 'HOOK_ADMISSION_BUSY', detail })
           }
         }
@@ -902,72 +1073,24 @@ export function startHookServer(
         return
       }
 
-      if (req.method === 'POST' && url === '/api/hook/session-end') {
+      const route = req.method === 'POST' ? FOLLOW_UP_ROUTES.get(url) : undefined
+      if (route) {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
+        let body: BoundHookBody, bytes: number
         try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
+          const text = await readBody(req)
+          const parsed = JSON.parse(text) as unknown
+          if (!validHookBody(parsed) || FOLLOW_UP_TAKES[route]?.(parsed) === false) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
+          bytes = Buffer.byteLength(text)
         } catch { json(400, { error: 'bad json' }); return }
-        if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId) {
-          console.log(`[hooks] ${sid(body.sessionId)} session-end${body.reason ? ` · reason=${body.reason}` : ''}`)
-          handlers.onSessionEnd(body.sessionId, body.reason)
-        }
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/tool-start') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId && body.toolUseId && body.toolName) {
-          console.log(`[hooks] ${sid(body.sessionId)} tool-start · tool=${body.toolName}`)
-          handlers.onToolStart?.({
-            sessionId: body.sessionId,
-            toolUseId: body.toolUseId,
-            toolName: body.toolName,
-            input: body.input,
-          })
-        }
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/turn-start') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId) handlers.onTurnStart?.({ sessionId: body.sessionId })
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/turn-stop') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        const delivery = req.headers['x-harness-hook-delivery-id']
+        const firedAt = hookFiredAt(req)
+        // The Stop a Cursor or Command Code registration carries keeps its registration's path, ahead of any wait.
+        const delivery = route === 'turn-stop' ? req.headers['x-harness-hook-delivery-id'] : undefined
         if (typeof delivery === 'string') {
           const pending = resolvingStops.get(delivery)?.stop ?? [...admissionReceipts.values()]
             .map(history => history.records.get(delivery)?.linkedStop).find(Boolean)
-          const acknowledgement = await pending?.(body, hookFiredAt(req))
+          const acknowledgement = await pending?.(body, firedAt)
           if (acknowledgement) { json(acknowledgement.status, acknowledgement.reply); return }
           if (/^[a-zA-Z0-9_-]{16,96}$/.test(delivery) && (body.engine === 'cursor' || body.engine === 'commandcode')) {
             // These native clients register this same delivery before Stop. A
@@ -975,163 +1098,52 @@ export function startHookServer(
             json(202, { pending: false, retry: true, detail: 'Waiting for the linked Stop registration to be admitted.' }); return
           }
         }
-        const owner = await verifiedBoundMutation(body, handlers)
-        if (!owner) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId) {
-          const identity = paneReadIdentity(owner)
-          console.log(`[hooks] ${sid(body.sessionId)} turn-stop${body.status ? ` · status=${body.status}` : ''}`)
-          const fired = hookFiredAt(req)
-          const stop = { sessionId: body.sessionId, status: body.status, transcriptPath: body.transcriptPath, ...(fired ? { firedAt: fired } : {}) }
-          if (handlers.stopHookDelayMs) setTimeout(() => {
-            if (paneReadIdentity(registry.byAgent(owner.agentId)) === identity) handlers.onTurnStop?.(stop)
-          }, handlers.stopHookDelayMs)
-          else handlers.onTurnStop?.(stop)
+        // Its session not bound yet, behind an admission of it that arrived first: kept and answered `pending`, which its
+        // client takes as sent, and run as it arrived once that admission settled. Refused, it was lost: its client sends
+        // a hook once. Bound or not, behind its session's hooks still waiting or running, which it would overtake.
+        const { engine, sessionId } = body
+        if (engine && sessionId && waits.hold(sessionKey(engine, sessionId), { route, sessionId, bytes,
+          bound: registry.bySession(sessionId)?.engine === engine, run: async () => { await followUp(route, body, firedAt) } })) {
+          json(200, { pending: true }); return
         }
+        const reply = await followUp(route, body, firedAt)
+        json(reply.status, reply.body)
+        return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/observed') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let body: unknown
+        // 4 KB: an event is a few ids and paths. Over the limit readBody gives '', which is not JSON.
+        try { body = JSON.parse(await readBody(req, 4096)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        // A dropped event (rate limited, or the devices not there) is not the hook's error: it never retries.
+        if (handlers.onObserved?.(body) === 'invalid') { json(400, { error: 'invalid observed body' }); return }
         json(200, { ok: true })
         return
       }
 
-      // `harness pair <code>` → run CPace toward the browser that is waiting to pair. Long-polls until
-      // the handshake completes/fails (bounded by the manager's round timers). Loopback-only; the PAKE
-      // itself is the security (a local process can trigger, but only the real code completes pairing).
-      if (req.method === 'POST' && url === '/api/pair') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onPair) { json(503, { error: 'PAIRING_UNAVAILABLE' }); return }
-        let body: { code?: string }
-        try { body = JSON.parse(await readBody(req)) as { code?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.code) { json(400, { error: 'MISSING_CODE' }); return }
-        try { const out = await handlers.onPair(body.code); json(out.status, out.body) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
+      if (req.method === 'POST' && url === '/api/hook/inbox') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        // Before the body is read: a mod whose Claude Code quit holds no poll the devices should still answer.
+        const gone = new AbortController()
+        res.once('close', () => { if (!res.writableEnded) gone.abort() })
+        // The caller check was awaited above: a client that went during it closed before this listened, and is gone already.
+        if (req.socket.destroyed) return
+        let body: unknown
+        // 1 KB: a session id.
+        try { body = JSON.parse(await readBody(req, 1024)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        const answer = handlers.onInbox ? await handlers.onInbox(body, gone.signal) : 'off'
+        if (gone.signal.aborted) return
+        if (answer === 'invalid') { json(400, { error: 'invalid inbox body' }); return }
+        // A poll the devices could not hold, or one over the bound, is not an empty hold: the mod asks again in 60 s, not at once.
+        if (answer === 'off') { json(503, { error: 'NO_DEVICE' }); return }
+        json(200, answer)
         return
       }
 
-      // `harness remote-password set` → stretch + persist a new persistent remote password on the
-      // running daemon's live E2EE state (so an in-progress `harness link connect` from another
-      // machine sees it immediately, with no daemon restart needed).
-      if (req.method === 'POST' && url === '/api/remote-password/set') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSetRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { password?: string }
-        try { body = JSON.parse(await readBody(req)) as { password?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.password) { json(400, { error: 'MISSING_PASSWORD' }); return }
-        try { const out = await handlers.onSetRemotePassword(body.password); json(out.status, out.body) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-
-      // `harness remote-password clear` → remove the persistent remote password.
-      if (req.method === 'POST' && url === '/api/remote-password/clear') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onClearRemotePassword(); json(out.status, out.body); return
-      }
-
-      // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
-      if (req.method === 'POST' && url === '/api/link/trust-peer') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onTrustLinkedPeer) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown; machineId?: unknown; label?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
-        if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
-        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
-        const out = await handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
-        json(out.status, out.body); return
-      }
-
-      // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
-      if (req.method === 'GET' && url === '/api/group') {
-        if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onGroupList(); json(out.status, out.body); return
-      }
-      // `harness group sync` → compare rosters with every reachable member now.
-      if (req.method === 'POST' && url === '/api/group/sync') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onGroupSync(); json(out.status, out.body); return
-      }
-      // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
-      if (req.method === 'POST' && url === '/api/group/remove') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onGroupRemove) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { selector?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
-        const out = await handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
-      }
-
-      // `harness devices list` / the window's Devices list → the account's devices, as this machine's
-      // verified copy of the device key log has them. Read-only (public keys and labels).
-      if (req.method === 'GET' && url === '/api/devices') {
-        if (!handlers.onDevicesList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onDevicesList(); json(out.status, out.body); return
-      }
-      // `harness devices remove <fp>` / Remove in the window → out of the log, signed by this machine.
-      if (req.method === 'POST' && url === '/api/devices/remove') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesRemove) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.pub !== 'string' || !body.pub) { json(400, { error: 'MISSING_PUB' }); return }
-        const out = await handlers.onDevicesRemove(body.pub); json(out.status, out.body); return
-      }
-      // `harness devices rebaseline` → what trusting the backend's log again would change; `confirm`
-      // does it (the only way out of a frozen log).
-      if (req.method === 'POST' && url === '/api/devices/rebaseline') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesRebaseline) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { confirm?: unknown; head?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
-        // The head the person was shown in the preview: a confirm only goes ahead on that same list.
-        let head: { seq: number; hash: string } | undefined
-        if (body.head !== undefined) {
-          const h = body.head as { seq?: unknown; hash?: unknown } | null
-          if (!h || typeof h !== 'object' || typeof h.seq !== 'number' || !Number.isSafeInteger(h.seq) || h.seq < 0
-            || typeof h.hash !== 'string' || h.hash.length > 128) { json(400, { error: 'BAD_HEAD' }); return }
-          head = { seq: h.seq, hash: h.hash }
-        }
-        const out = await handlers.onDevicesRebaseline(body.confirm === true, head); json(out.status, out.body); return
-      }
-
-      // `harness devices history` → the log's adds and removes, newest first. Local only: it is the
-      // account's whole device story, and the fetch behind it is a backend call as this machine.
-      if (req.method === 'GET' && url === '/api/devices/history') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesHistory) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onDevicesHistory(); json(out.status, out.body); return
-      }
-      // `harness devices dismiss [<fp>]` / "It's mine" / "Got it" → new devices marked as seen here.
-      if (req.method === 'POST' && url === '/api/devices/dismiss') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesDismiss) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown; pubs?: unknown; baseline?: unknown; confirm?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
-        if (body.pub !== undefined && (typeof body.pub !== 'string' || !body.pub)) { json(400, { error: 'MISSING_PUB' }); return }
-        // The keys a window displayed, so a key accepted since the window read the list is not cleared unseen.
-        if (body.pubs !== undefined && (!Array.isArray(body.pubs) || body.pubs.length > 256
-          || body.pubs.some((k) => typeof k !== 'string' || !k || k.length > 256))) { json(400, { error: 'BAD_PUBS' }); return }
-        const out = await handlers.onDevicesDismiss({
-          ...(typeof body.pub === 'string' ? { pub: body.pub } : {}),
-          ...(Array.isArray(body.pubs) ? { pubs: body.pubs as string[] } : {}),
-          ...(body.baseline === true ? { baseline: true } : {}),
-          // "It's mine" for one device: the account's other devices are told too (deviceLogSyncer `dismiss`).
-          ...(body.confirm === true ? { confirm: true } : {}),
-        }); json(out.status, out.body); return
-      }
-
-      // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same
-      // gating tier as /api/pairs.
-      if (req.method === 'GET' && url === '/api/remote-password/status') {
-        if (!handlers.onRemotePasswordStatus) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onRemotePasswordStatus(); json(out.status, out.body); return
-      }
-
-      // Local GUI clients (e.g. the desktop app): read the full machine list / rename or delete one /
-      // read the signed-in profile through this daemon's own SSO session, so the local caller never
-      // holds a bearer token itself — loopback trust does the authenticating. Reads are ungated (same
-      // tier as /api/status); the rename/delete mutations are CSRF-guarded like every other local write.
+      // Local GUI clients (the desktop app): the full machine list and the harnesses shared with this account, through this
+      // daemon's own sign-in, so the local caller never holds a bearer token itself. The account's other routes are the
+      // gateway's (below, `onServiceRoute`).
       if (req.method === 'GET' && url === '/api/machines') {
         const list = handlers.onMachinesList
         if (!list) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1140,29 +1152,6 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/harness-shares') {
         if (!handlers.onSharedHarnesses) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onSharedHarnesses); return
-      }
-      if (req.method === 'GET' && url === '/api/desk') {
-        if (!handlers.onDeskRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onDeskRead); return
-      }
-      if (req.method === 'POST' && url === '/api/desk/ops') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDeskOps) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onDeskOps!(body)); return
-      }
-      if (req.method === 'GET' && url === '/api/agent-messages') {
-        if (!handlers.onAgentMessagesRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onAgentMessagesRead); return
-      }
-      const agentMessagesTab = req.method === 'PATCH' ? /^\/api\/agent-messages\/tabs\/([A-Za-z0-9_-]{1,64})$/.exec(url) : null
-      if (agentMessagesTab) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAgentMessagesWrite) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onAgentMessagesWrite!(agentMessagesTab[1], body)); return
       }
       if (req.method === 'GET' && url === '/api/agent-settings') {
         if (!handlers.onAgentSettingsRead) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1179,97 +1168,6 @@ export function startHookServer(
         if (!handlers.onExperimentalRead) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onExperimentalRead); return
       }
-      if (req.method === 'POST' && url === '/api/product-usage/report') {
-        // On every answer, a refusal too: the Desktop counts names newer than revision 1 only after
-        // reading it here, because a proxy that predates a name refused the whole report.
-        res.setHeader(APP_USAGE_VOCABULARY_HEADER, String(APP_USAGE_VOCABULARY))
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductUsageReport) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try {
-          const raw = await readBody(req, 8192)
-          body = JSON.parse(raw)
-        } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        // Without the names this contract does not know yet; see lib/appProductUsageReport.ts.
-        const report = appProductUsageReport(body)
-        if (!report) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        try {
-          const result = await handlers.onProductUsageReport(report)
-          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
-          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
-          json(result.status, result.body)
-        } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
-        return
-      }
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
-      if (attachment) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
-        // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
-        // `post --attach` names itself; the backend checks that this account runs that agent.
-        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
-      }
-      const direct = req.method === 'POST'
-        ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments\/uploads(\/[A-Za-z0-9_-]{1,160}\/complete)?$/.exec(url) : null
-      if (direct) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSuperTabAttachmentUpload) { json(503, { error: 'UNAVAILABLE' }); return }
-        // A link's request names the file ({conversationId, name, mime, size}); a completion's is {}, and may be empty.
-        let body: unknown
-        try { const raw = await readBody(req, 8192); body = direct[1] && !raw.trim() ? {} : JSON.parse(raw) } catch { body = null }
-        if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
-        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
-        const { conversationId, name, mime, size } = body as Record<string, unknown>
-        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return
-      }
-      const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
-      if (signInAnswer) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSignInAnswer) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        // The code and nothing else: whose account approves is this computer's session, never the caller's.
-        const code = (body as { code?: unknown } | null)?.code
-        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1
-            || typeof code !== 'string' || code.length < 1 || code.length > 128) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        const action = signInAnswer[1] as 'lookup' | 'approve' | 'deny'
-        await proxied(() => handlers.onSignInAnswer!(action, { code })); return
-      }
-      if (req.method === 'POST' && url === '/api/product-usage/feedback') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductFeedback) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        const feedback = body as { answer?: unknown; id?: unknown } | null
-        if (!feedback || typeof feedback !== 'object' || Object.keys(feedback).length !== 2
-            || !PRODUCT_FEEDBACK.includes(feedback.answer as never) || typeof feedback.id !== 'string'
-            || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(feedback.id)) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        await proxied(() => handlers.onProductFeedback!(feedback)); return
-      }
-      if (req.method === 'GET' && url === '/api/product-usage/settings') {
-        if (!handlers.onProductUsageRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onProductUsageRead); return
-      }
-      if (req.method === 'POST' && url === '/api/product-usage/settings') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductUsageWrite) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1 || typeof (body as { enabled?: unknown }).enabled !== 'boolean') {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        await proxied(() => handlers.onProductUsageWrite!(body)); return
-      }
       if (req.method === 'PATCH' && url === '/api/experimental-settings') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onExperimentalWrite) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1277,102 +1175,32 @@ export function startHookServer(
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onExperimentalWrite!(body)); return
       }
-      if (req.method === 'GET' && url === '/api/auth/me') {
-        const me = handlers.onAuthMe
-        if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(me); return
-      }
-      if (req.method === 'PATCH' && url === '/api/auth/me') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAuthMeUpdate) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onAuthMeUpdate!(body)); return
-      }
-      // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
-      // a credential. So not the CSRF header, which any local process can send, but the daemon's
-      // owner-only socket: the filesystem has already said this is the user who signed in. Another
-      // account on a shared computer reaches the loopback port, never the socket. A client on TCP is
-      // refused, and the Add Phone QR goes without the code (the phone asks for an emailed one).
-      if (req.method === 'POST' && url === '/api/auth/handoff') {
-        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onAuthHandoff); return
-      }
-      // Stopping the daemon ends every agent's link to it: like the phone code above, the daemon's own trusted
-      // endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
+      // Stopping the daemon ends every agent's link to it: like the phone's sign-in code (`ServiceHttpRoute.door`), the
+      // daemon's own trusted endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
       // Windows only: the route exists when its handler is given (core/daemonStopRoute.ts daemonStopRoute).
       if (req.method === 'POST' && url === '/api/daemon/stop' && handlers.onDaemonStop) {
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         await proxied(handlers.onDaemonStop); return
       }
-      if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        const rename = handlers.onMachineRename
-        if (!rename) { json(503, { error: 'UNAVAILABLE' }); return }
-        const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
-        if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
-        let body: { name?: string }
-        try { body = JSON.parse(await readBody(req)) as { name?: string } } catch { json(400, { error: 'bad json' }); return }
-        const name = body.name
-        if (!name) { json(400, { error: 'MISSING_NAME' }); return }
-        await proxied(() => rename(machineId, name)); return
-      }
-      if (req.method === 'DELETE' && url.startsWith('/api/machines/')) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        const remove = handlers.onMachineDelete
-        if (!remove) { json(503, { error: 'UNAVAILABLE' }); return }
-        const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
-        if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
-        await proxied(() => remove(machineId)); return
-      }
-
-      // The Harness Store: ratings and reviews in the backend, through this daemon's own session. The
-      // rules (reads ungated, writes behind the local header, the paths it forwards) are storeProxy.ts's.
-      if (url.startsWith('/api/store/')) {
-        // A request an http.Server hands over always has its url; `url` above is it without the query.
-        const route = await routeStoreRequest({ method: req.method, url: req.url as string, localOk, readBody: () => readBody(req) }, handlers.onStore)
-        if ('forward' in route) await proxied(route.forward)
-        else json(route.status, route.body)
-        return
-      }
-
-      // `harness pairings` — list paired browsers.
-      if (req.method === 'GET' && url === '/api/pairs') {
-        if (!handlers.onListPairs) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onListPairs(); json(out.status, out.body); return
-      }
-
-      // `harness unpair <id>` — unpair one browser; signals it (if online) to re-pair.
-      if (req.method === 'POST' && url === '/api/revoke') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onRevoke) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { id?: string }
-        try { body = JSON.parse(await readBody(req)) as { id?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.id) { json(400, { error: 'MISSING_ID' }); return }
-        const out = await handlers.onRevoke(body.id); json(out.status, out.body); return
-      }
-
-      // `harness unpair --all` — unpair every browser.
-      if (req.method === 'POST' && url === '/api/revoke-all') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onRevokeAll) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onRevokeAll(); json(out.status, out.body); return
-      }
-
+      // A route a service answers (core/api.ts `SERVICE_HTTP_ROUTES`): the account's (the desk, Agent Messages' tabs, the
+      // account's name, the phone half of a sign-in and the phone's sign-in code, the usage reports and choice, a machine's
+      // rename and delete, the Store's ratings and reviews) and the keys' (`harness pair`, `unpair`, `remote-password`,
+      // `link connect`, `group`, `devices`), each the gateway's. The door's checks above are done. Never one of the paths
+      // open without the local credential (a hook's): a caller that has not shown it reaches no service here.
+      if (credentialOk && await serviceRoute()) return
       json(404, { error: 'not found' })
     })().catch((error: unknown) => {
       // Whatever a handler throws, the request is answered: an engine's hook that waits on this server
       // holds up that engine's turn until its own timeout, and the desktop waits out thirty seconds.
-      console.error(`[hooks] ${req.method} ${(req.url ?? '').split('?')[0].slice(0, 80)} failed:`, error instanceof Error ? error.message : error)
+      console.error(`[hooks] ${req.method} failed:`, errorKind(error))
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'INTERNAL' }))
       } else if (!res.writableEnded) res.end()
-    })
+    }).finally(() => admission?.requestDone())
   }
   const server = http.createServer(handle)
-  server.once('close', () => admissions.close())
+  server.once('close', () => { admissions.close(); waits.close() })
 
   return new Promise((resolve, reject) => {
     let fellBack = false
@@ -1388,7 +1216,7 @@ export function startHookServer(
         console.error(`[hooks] 127.0.0.1:${port} is already in use — another adapter is probably running.`)
         console.error('        Use a different PORT; no other user\'s daemon was stopped.')
       } else {
-        console.error('[hooks] listen failed:', err)
+        console.error('[hooks] listen failed:', errorKind(err))
       }
       reject(err)
     }
@@ -1397,13 +1225,19 @@ export function startHookServer(
       const actual = (server.address() as AddressInfo).port
       hosts = loopbackHosts(actual)
       console.log(`[hooks] listening on 127.0.0.1:${actual} (SessionStart/SessionEnd callbacks)`)
+      // The permission hook (deviceClaude/asked.ts) and the mod's voice poll post only over the socket, so without one the
+      // person sees why the dial shows no waiting prompt and takes no voice.
+      const tcpOnly = (): void => {
+        console.warn('[hooks] the dial\'s waiting prompts and voice from the Claude Code plugin are off: no Unix socket')
+        resolve({ server, port: actual, localSocket: null })
+      }
       const socketPath = options.socketPath
-      if (!socketPath) { resolve({ server, port: actual, localSocket: null }); return }
+      if (!socketPath) { tcpOnly(); return }
       // The private socket is mandatory when opting into multi-user startup. A duplicate daemon
       // must not survive on a random port while another one owns this user's socket.
       listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
         (localSocket) => {
-          console.log(`[hooks] listening on ${socketPath}`)
+          console.log('[hooks] listening on the private socket')
           resolve({ server, port: actual, localSocket })
         },
         (error: unknown) => {
@@ -1413,8 +1247,8 @@ export function startHookServer(
             reject(error)
             return
           }
-          console.warn(`[hooks] local socket unavailable (${socketPath}): ${error instanceof Error ? error.message : error}`)
-          resolve({ server, port: actual, localSocket: null })
+          console.warn(`[hooks] local socket unavailable · ${errorKind(error)}`)
+          tcpOnly()
         },
       )
     })

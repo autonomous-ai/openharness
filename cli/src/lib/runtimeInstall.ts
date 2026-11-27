@@ -1,13 +1,15 @@
 import { spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, sep, win32 } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 
 import { env } from '../config/env.js'
 import { gridAvailable, gridChildEnv, gridCommand, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
 import { installGrid } from './gridInstall.js'
 import { followWindowsGridPin } from './gridWindowsPin.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
+import { atomicWriteFile } from './secureState.js'
 import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
+import { systemProgram } from './windows/powershell.js'
 
 /**
  * Provisioning the Node the CLI runs on, from inside the CLI.
@@ -39,9 +41,8 @@ export function unpackCommand(
   archive: string,
   into: string,
   platform: NodeJS.Platform = process.platform,
-  systemRoot: string | undefined = process.env.SystemRoot,
 ): { file: string; args: string[] } {
-  if (platform === 'win32') return { file: win32.join(systemRoot || 'C:\\Windows', 'System32', 'tar.exe'), args: ['-xf', archive, '-C', into] }
+  if (platform === 'win32') return { file: systemProgram('tar.exe'), args: ['-xf', archive, '-C', into] }
   return { file: '/usr/bin/tar', args: ['-xzf', archive, '-C', into] }
 }
 
@@ -240,6 +241,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult
       try {
         mkdirSync(staging, { recursive: true, mode: 0o700 })
         const archive = join(staging, `${spec.name}${layout.archiveSuffix}`)
+        // not a state file: a one-shot download, unpacked and removed
         writeFileSync(archive, bytes)
         const unpack = unpackCommand(archive, staging)
         if (!await finishesCleanly(unpack.file, unpack.args, 120_000)) return kept('download-failed')
@@ -266,14 +268,15 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult
     if (spec.followsPin && existsSync(unrunnable)) return kept('does-not-run')
     if (!await spec.runs(binary)) {
       if (spec.followsPin) {
-        try { writeFileSync(unrunnable, `${new Date().toISOString()}\n`, { mode: 0o600 }) } catch { /* the retry is the cost */ }
+        try { atomicWriteFile(unrunnable, `${new Date().toISOString()}\n`, 'cache') } catch { /* the retry is the cost */ }
       }
       return kept('does-not-run')
     }
     // Written last, and only once the binary has answered: Desktop Harness and the hook installer
-    // both read this file to decide what to execute, so it must never name something that cannot run.
-    if (!spec.leavesPointer) writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, { mode: 0o600 })
-    spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
+    // both read this file to decide what to execute, so it must never name something that cannot run. Flushed: one a
+    // power cut emptied names nothing to run until a reinstall.
+    if (!spec.leavesPointer) atomicWriteFile(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, 'cache', { durable: true })
+    spec.log(`  ✓ ${spec.label} runtime ready (${artifact.version})`)
     if (spec.retiresSuperseded) retireSuperseded(spec.name, key, target, installed)
     return { path: binary, reason: null }
   } catch {
@@ -365,7 +368,7 @@ export async function ensureNodeMeetsMinimum(
     manifestTimeoutMs: timeoutMs,
     leavesPointer: true,
   })
-  if (result.reason) log(`  ✗ Node stays at ${installed}: ${result.reason}`)
+  if (result.reason) log(`  ✗ Node stays on the one installed: ${result.reason}`)
   return { node: result.path, reason: result.reason }
 }
 

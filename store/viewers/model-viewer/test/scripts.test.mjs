@@ -63,7 +63,9 @@ function sandbox(script, { node = 'real', npm = true, harness = null, harnessNpm
   const root = mkdtempSync(join(tmpdir(), 'model-viewer-scripts-'))
   roots.push(root)
   const pkg = join(root, 'pkg'), bin = join(root, 'bin'), home = join(root, 'home')
-  mkdirSync(pkg); mkdirSync(bin); mkdirSync(home)
+  mkdirSync(pkg); mkdirSync(bin)
+  // A home still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too (runtimes.sh's rule).
+  mkdirSync(join(home, '.harness'), { recursive: true })
   for (const name of [script, 'runtimes.sh']) symlinkSync(join(packageDir, name), join(pkg, name))
   for (const tool of ['bash', 'dirname', 'cat']) symlinkSync(systemTool(tool), join(bin, tool))
   if (node === 'real') symlinkSync(process.execPath, join(bin, 'node'))

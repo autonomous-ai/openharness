@@ -255,61 +255,6 @@ class ApiClient {
     );
   }
 
-  /// Posts [form] to [path] and answers whatever came back, a refusal too: a
-  /// file's way up has its own errors to read. A browser sends it to the
-  /// backend with its token; on a computer the local daemon passes it on.
-  Future<Response<dynamic>> postForm(
-    String path,
-    FormData form, {
-    CancelToken? cancelToken,
-    ProgressCallback? onSendProgress,
-  }) => _dio.post<dynamic>(
-    path,
-    data: form,
-    cancelToken: cancelToken,
-    onSendProgress: onSendProgress,
-    options: Options(
-      // The backend streams the file into storage before it answers.
-      receiveTimeout: const Duration(minutes: 2),
-      // The daemon answers 403 without it. The backend is not sent it: from a
-      // browser a custom header would add a CORS preflight.
-      headers: auth == null ? {'x-adapter-local': '1'} : null,
-    ),
-  );
-
-  /// Posts [body] as JSON to [path] and answers whatever came back, a refusal
-  /// too: the steps either side of a file sent straight to storage. Like
-  /// [postForm], through the local daemon on a computer and to the backend
-  /// with this browser's token.
-  Future<Response<dynamic>> postJson(
-    String path,
-    Map<String, dynamic> body, {
-    CancelToken? cancelToken,
-  }) => _dio.post<dynamic>(
-    path,
-    data: body,
-    cancelToken: cancelToken,
-    options: Options(
-      // Finishing checks the stored file before it answers.
-      receiveTimeout: const Duration(minutes: 2),
-      headers: auth == null ? {'x-adapter-local': '1'} : null,
-    ),
-  );
-
-  /// One Swarm call ([method] on [path], `/api/super-tabs…`) straight to the
-  /// backend with this browser's sign-in, answered whole: the web's Swarm
-  /// transport (super_tabs/backend_transport.dart) reads the envelope, as a
-  /// machine's relay reads it for a computer.
-  Future<Response<dynamic>> superTabCall(
-    String method,
-    String path, {
-    Map<String, dynamic>? body,
-  }) => _dio.request<dynamic>(
-    path,
-    data: body,
-    options: Options(method: method),
-  );
-
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;
@@ -506,6 +451,26 @@ class ApiClient {
     } catch (_) {
       return null;
     }
+  }
+
+  /// A sign-in already approved for this account, for an Intern 3 with no screen to show a QR on:
+  /// `{ticket, expiresIn}` (backend `issueBoxTicket`). Handed to it over its setup hotspot; it
+  /// spends it once it is on the person's Wi-Fi (`harness login --ticket`). A credential, so the
+  /// daemon gives it over its owner-only socket alone, as [phoneSignInCode].
+  Future<String> boxTicket() async {
+    final res = await _dio.post(
+      '/api/auth/box/ticket',
+      data: const <String, Object?>{},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    // An older CLI does not know the route: its door's 404. The dialog offers its update.
+    if (res.statusCode == 404) throw HarnessTooOldException();
+    final data = unwrapApiResponse(res);
+    final ticket = data is Map ? data['ticket'] : null;
+    if (ticket is! String || ticket.isEmpty) {
+      throw ApiException('Harness did not send a sign-in for Intern 3.');
+    }
+    return ticket;
   }
 
   // -- the account's device key log (viewer builds: straight to the backend, signed) --
@@ -919,6 +884,13 @@ class ApiException implements Exception {
   ApiException(this.message, {this.status});
   @override
   String toString() => message;
+}
+
+/// This computer's Harness predates a route the app asked of it (its door's 404): updating it is
+/// the way on.
+class HarnessTooOldException extends ApiException {
+  HarnessTooOldException()
+    : super('Update Harness on this computer to set up Intern 3.', status: 404);
 }
 
 bool isUnauthorizedError(Object error) =>

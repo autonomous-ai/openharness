@@ -82,7 +82,7 @@ export const launch: EngineLaunch = {
     items: [{ type: 'response_item', at: ['payload'] }, { type: 'compacted', at: ['payload', 'replacement_history'], list: true }],
     repair: 'portable-reasoning',
     backup: '.reasoning-backup-', temporary: '.reasoning-tmp-',
-    names: { file: 'Codex rollout', history: 'Codex history', items: 'Codex reasoning items' },
+    names: { record: 'Codex rollout', history: 'Codex history', items: 'Codex reasoning items' },
   },
   startup: {
     /**
@@ -128,15 +128,6 @@ export const launch: EngineLaunch = {
     // sends none, and costs the whole `withinMs`.
     resizeRepaint: { clears: '\u001b[3J', ends: '\u001b[?2026l', withinMs: 250 },
   },
-  /**
-   * Codex asks "Update available" on a start with a newer release out, with Update now (`npm install -g`) the highlighted
-   * row, and no one is at a Swarm agent's terminal to answer (Studio Codex, 2026-10-29: tasks held behind it). The
-   * startup check is `check_for_update_on_startup` in config.toml's top level (0.165.0's ConfigToml), and `-c` outranks
-   * the person's file, as `screen.args` does. Only for sessions the Swarm starts: a person's Codex keeps asking, and
-   * updating Codex stays their choice. Codex that still shows the prompt is answered with Skip by the host
-   * (superTabs/terminal.ts).
-   */
-  swarmArgs: ['-c', 'check_for_update_on_startup=false'],
   /**
    * Codex 0.162.1 has no setting for its attribution's text: its own line ("Generated with [Codex](…)") is an
    * instruction in its developer message (`<git_attribution>`), on or off by workspace. `developer_instructions` is

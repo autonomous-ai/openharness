@@ -1,11 +1,12 @@
 import type { ExecFileException } from 'node:child_process'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ExecDone } from './patientExec.js'
 import { lsofShowsPeer, nativeFirst, peerIsThisAccount, portHolderIsThisAccount, procNetListener, procNetOwner, runWindowsNative, WINDOWS_PEER_LOOKUPS, WINDOWS_PEER_MS, WINDOWS_PEER_NATIVE_MS, WINDOWS_PEER_QUEUE, windowsListenerQuery, windowsPeerQuery, type WindowsNativeRun, type WindowsPeerRun } from './peerAccount.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 describe('who is at the other end of a loopback connection', () => {
   const opened: Array<() => unknown> = []
@@ -397,8 +398,7 @@ describe('who is at the other end of a loopback connection', () => {
       const was = process.env.HARNESS_PTY_BIN
       try {
         const helper = path.join(dir, 'harness-pty')
-        writeFileSync(helper, '#!/bin/sh\necho "$@" > "$0.args"\necho yes\n')
-        chmodSync(helper, 0o755)
+        writeExecutable(helper, '#!/bin/sh\necho "$@" > "$0.args"\necho yes\n')
         process.env.HARNESS_PTY_BIN = helper
         expect(await peerIsThisAccount(socket(54_200), 'win32')).toBe(true)
         expect(readFileSync(`${helper}.args`, 'utf8').trim()).toBe(`peer-account --peer-port 54200 --own-port 18473 --daemon-pid ${process.pid}`)

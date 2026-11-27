@@ -11,6 +11,32 @@ function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmi
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
+  it.each(['same', 'cancelled', 'new conversation', 'same conversation'] as const)(
+    'rechecks admission authority after durable preparation: %s', async change => {
+      const queue = createPendingAdmissions()
+      let live = true, attempts = 0, finish!: () => void, entered!: () => void
+      const started = new Promise<void>(resolve => { entered = resolve })
+      const waiting = new Promise<void>(resolve => { finish = resolve })
+      const original = request({ order: { scope: 'process', firedAt: 10, arrival: 1 }, conversationId: 'parent', current: () => live,
+        commit: async (value, current) => {
+          expect(current()).toBe(true)
+          if (++attempts > 1) return { kind: 'accept', value }
+          entered(); await waiting
+          expect(current()).toBe(change === 'same' || change === 'same conversation')
+          return { kind: 'accept', value }
+        } })
+      queue.submit('agent', 'first', original)
+      await started
+      if (change === 'cancelled') live = false
+      const next = request({ order: { scope: 'process', firedAt: 20, arrival: 2 },
+        conversationId: change === 'same conversation' ? 'parent' : 'child', inspect: async () => ({ kind: 'reject', reason: 'delegated' }) })
+      if (change === 'new conversation' || change === 'same conversation') queue.submit('agent', 'next', next)
+      finish(); await flush(); await flush(); await flush()
+      if (change === 'cancelled') expect(original.reject).toHaveBeenCalledExactlyOnceWith('stale_hook')
+      else if (change === 'new conversation') expect(next.reject).toHaveBeenCalledExactlyOnceWith('delegated')
+      else expect(original.accept).toHaveBeenCalledExactlyOnceWith('home')
+      queue.close()
+    })
   it.each(['held', 'throws', 'throws a non-Error'] as const)('retains the exact candidate until its %s durable commit succeeds', async failure => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20 })
@@ -19,12 +45,14 @@ describe('pending hook admission', () => {
       if (writable) return { kind: 'accept', value: 'committed' }
       if (failure === 'throws') throw new Error('durable registry unavailable')
       if (failure === 'throws a non-Error') throw 'unavailable'
-      return { kind: 'hold', reason: 'durable registry unavailable' }
+      return { kind: 'hold', code: 'DURABLE_ADMISSION_WAIT', reason: 'durable registry unavailable' }
     })
     const held = request({ commit })
     queue.submit('agent', 'delivery', held); await flush()
     expect(held.accept).not.toHaveBeenCalled()
-    expect(held.held).toHaveBeenCalledWith(expect.stringContaining('durable'))
+    // A hold the queue makes of a failure carries a fixed code and the failure's kind for the log; its reason keeps the words.
+    expect(held.held).toHaveBeenCalledWith({ kind: 'hold', code: 'DURABLE_ADMISSION_WAIT', reason: expect.stringContaining('durable'),
+      ...(failure === 'held' ? {} : { failure: failure === 'throws' ? 'Error' : 'string' }) })
     writable = true
     await vi.advanceTimersByTimeAsync(20)
     expect(commit).toHaveBeenCalledTimes(2)
@@ -50,7 +78,7 @@ describe('pending hook admission', () => {
     const queue = createPendingAdmissions({ retryMs: 20 })
     let readable = false
     const child = request({ order: { scope: 'process', firedAt: 10, arrival: 1 },
-      inspect: async () => readable ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', reason: 'unreadable' } })
+      inspect: async () => readable ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' } })
     const parent = request({ order: { scope: 'process', firedAt: 10, arrival: 2 } })
     queue.submit('agent', 'child', child); await flush()
     queue.submit('agent', 'parent', parent); await flush()
@@ -67,7 +95,7 @@ describe('pending hook admission', () => {
     const queue = createPendingAdmissions({ retryMs: 20 })
     let readable = false
     const b = request({ order: { scope: 'process', firedAt: 20, arrival: 1 },
-      inspect: async () => readable ? { kind: 'accept', value: 'b20' } : { kind: 'hold', reason: 'unreadable' } })
+      inspect: async () => readable ? { kind: 'accept', value: 'b20' } : { kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' } })
     const a = request({ order: { scope: 'process', firedAt: 15, arrival: 2 } })
     const oldB = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
     const legacyB = request({ order: { scope: 'process', firedAt: undefined, arrival: 4 } })
@@ -90,7 +118,7 @@ describe('pending hook admission', () => {
     const queue = createPendingAdmissions()
     let live = true
     const old = request({ order: { scope: 'process', firedAt, arrival: 1 }, current: () => live,
-      inspect: async () => ({ kind: 'hold', reason: 'unreadable' }) })
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
     queue.submit('agent', 'session', old); await flush()
     live = false
     const fresh = request({ order: { scope: 'process', firedAt, arrival: 2 } })
@@ -105,7 +133,7 @@ describe('pending hook admission', () => {
     const queue = createPendingAdmissions({ retryMs: 20 })
     let readable = false
     const inspect = async (): Promise<AdmissionDecision<string>> => readable
-      ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', reason: 'unreadable' }
+      ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }
     const b = request({ order: { scope: 'process', firedAt: 20, arrival: 1 }, inspect })
     const legacy = request({ order: { scope: 'process', firedAt: undefined, arrival: 2 }, inspect })
     const a = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
@@ -141,7 +169,7 @@ describe('pending hook admission', () => {
     const queue = createPendingAdmissions()
     let oldProcess = true
     const old = request({ order: { scope: 'old-process', firedAt: 100, arrival: 1 }, current: () => oldProcess,
-      inspect: async () => ({ kind: 'hold', reason: 'unreadable' }) })
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
     queue.submit('agent', 'old-session', old); await flush()
     oldProcess = false
     const replacement = request({ order: { scope: 'new-process', firedAt: 200, arrival: 2 } })
@@ -162,12 +190,12 @@ describe('pending hook admission', () => {
     expect(older.accept).not.toHaveBeenCalled()
     const equal = request({ order: { scope: 'process', firedAt: 20, arrival: 4 } })
     queue.submit('agent', 'a', equal); await flush()
-    expect(equal.held).toHaveBeenCalledWith(expect.stringContaining('hook order'))
+    expect(equal.held).toHaveBeenCalledWith(expect.objectContaining({ code: 'HOOK_ORDER_AMBIGUOUS', reason: expect.stringContaining('hook order') }))
     expect(equal.accept).not.toHaveBeenCalled()
     const noTimestamp = request({ order: { scope: 'process', firedAt: undefined, arrival: 5 } })
     queue.submit('agent', 'legacy', noTimestamp); await flush()
     await vi.advanceTimersByTimeAsync(20)
-    expect(noTimestamp.held).toHaveBeenCalledOnce()
+    expect(noTimestamp.held).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: 'HOOK_ORDER_UNTIMED', reason: expect.stringContaining('no native timestamp') }))
     queue.close()
   })
 
@@ -175,14 +203,14 @@ describe('pending hook admission', () => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20 })
     const held = request({ order: { scope: 'process', firedAt: 20, arrival: 2 },
-      inspect: async () => ({ kind: 'hold', reason: 'waiting' }) })
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'waiting' }) })
     queue.submit('agent', 'newer', held); await flush()
     const older = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
     queue.submit('agent', 'older', older); await flush()
     expect(older.inspect).not.toHaveBeenCalled()
     const equal = request({ order: { scope: 'process', firedAt: 20, arrival: 4 } })
     queue.submit('agent', 'equal', equal); await flush()
-    expect(equal.held).toHaveBeenCalledWith(expect.stringContaining('hook order'))
+    expect(equal.held).toHaveBeenCalledWith(expect.objectContaining({ code: 'HOOK_ORDER_AMBIGUOUS', reason: expect.stringContaining('hook order') }))
     expect(equal.accept).not.toHaveBeenCalled()
     // A fresh native hook disambiguates the intent and supersedes older candidates.
     const fresh = request({ order: { scope: 'process', firedAt: 30, arrival: 5 } })
@@ -205,7 +233,7 @@ describe('pending hook admission', () => {
     expect(newer.accept).toHaveBeenCalledOnce()
     queue.close()
     reject(new Error('late attachment failed')); await flush()
-    expect(warning).toHaveBeenCalledOnce()
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[hooks] pending admission callback failed', 'Error')
     expect(vi.getTimerCount()).toBe(0)
     warning.mockRestore()
   })
@@ -214,12 +242,12 @@ describe('pending hook admission', () => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20, capacity: 2 })
     const parentInspect = vi.fn<PendingAdmission<string>['inspect']>()
-      .mockResolvedValueOnce({ kind: 'hold', reason: 'unreadable' })
+      .mockResolvedValueOnce({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' })
       .mockResolvedValueOnce({ kind: 'accept', value: 'parent' })
     const parent = request({ inspect: parentInspect })
     expect(queue.submit('agent', 'parent', parent)).toBe(true); await flush()
     const childInspect = vi.fn<PendingAdmission<string>['inspect']>()
-      .mockResolvedValueOnce({ kind: 'hold', reason: 'unreadable' })
+      .mockResolvedValueOnce({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' })
       .mockResolvedValueOnce({ kind: 'reject', reason: 'delegated' })
     const child = request({ inspect: childInspect })
     queue.submit('agent', 'child', child); await flush()
@@ -227,7 +255,7 @@ describe('pending hook admission', () => {
     expect(queue.submit('agent', 'overflow', overflow)).toBe(false)
     expect(overflow.inspect).not.toHaveBeenCalled()
     // Repeating a delivery keeps its original place and timer without consuming another slot.
-    expect(queue.submit('agent', 'child', child)).toBe(true); await flush(); await flush()
+    expect(queue.submit('agent', 'child', child)).toBe('kept'); await flush(); await flush()
     await vi.advanceTimersByTimeAsync(20)
     expect(child.reject).toHaveBeenCalledExactlyOnceWith('delegated')
     expect(parent.accept).toHaveBeenCalledExactlyOnceWith('parent')
@@ -257,7 +285,7 @@ describe('pending hook admission', () => {
     const accept = vi.fn(failure)
     queue.submit('accepted', 'session', request({ accept })); await flush()
     const inspect = vi.fn<PendingAdmission<string>['inspect']>()
-      .mockResolvedValueOnce({ kind: 'hold', reason: 'unavailable' })
+      .mockResolvedValueOnce({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unavailable' })
       .mockResolvedValueOnce({ kind: 'accept', value: 'recovered' })
     const held = request({ inspect, held: failure })
     queue.submit('held', 'session', held); await flush()
@@ -273,9 +301,9 @@ describe('pending hook admission', () => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions()
     const inspect = vi.fn<PendingAdmission<string>['inspect']>()
-      .mockResolvedValueOnce({ kind: 'hold', reason: 'store unavailable' })
-      .mockResolvedValueOnce({ kind: 'hold', reason: 'store unavailable' })
-      .mockResolvedValueOnce({ kind: 'hold', reason: 'waiting for its row' })
+      .mockResolvedValueOnce({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'store unavailable' })
+      .mockResolvedValueOnce({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'store unavailable' })
+      .mockResolvedValueOnce({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'waiting for its row' })
       .mockResolvedValueOnce({ kind: 'accept', value: 'own home' })
     const r = request({ inspect })
     queue.submit('agent', 'session', r); await flush()
@@ -296,7 +324,7 @@ describe('pending hook admission', () => {
       .mockResolvedValueOnce({ kind: 'reject', reason: 'delegated' })
     const r = request({ inspect })
     queue.submit('agent', 'session', r); await flush()
-    expect(r.held).toHaveBeenCalledWith('The session source could not be read. broken reader')
+    expect(r.held).toHaveBeenCalledWith({ kind: 'hold', code: 'SOURCE_UNREADABLE', failure: 'Error', reason: 'The session source could not be read. broken reader' })
     await vi.advanceTimersByTimeAsync(20)
     expect(r.reject).toHaveBeenCalledExactlyOnceWith('delegated')
     expect(r.accept).not.toHaveBeenCalled()
@@ -330,7 +358,7 @@ describe('pending hook admission', () => {
     queue.submit('stale', 'session', stale)
     expect(stale.inspect).not.toHaveBeenCalled()
     let active = true
-    const held = request({ current: () => active, inspect: async () => ({ kind: 'hold', reason: 'unreadable' }) })
+    const held = request({ current: () => active, inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
     queue.submit('first', 'session', held); await flush()
     queue.submit('first', 'session', request()); await flush()
     expect(vi.getTimerCount()).toBe(0)
@@ -346,6 +374,44 @@ describe('pending hook admission', () => {
     queue.submit('after', 'session', after)
     expect(after.inspect).not.toHaveBeenCalled()
   })
+
+  // The caller learns that the newer request's callbacks will never run: the kept job's end, whatever its reason, is the
+  // delivery's end (hookServer.ts admissionJob).
+  it('says when it keeps a delivery\'s older job in place of a newer request of it', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions()
+    let live = true
+    const held = request({ order: { scope: 'process', firedAt: 20, arrival: 1 }, current: () => live,
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
+    expect(queue.submit('agent', 'd1', held)).toBe(true); await flush()
+    const resent = [
+      request({ order: { scope: 'process', firedAt: 20, arrival: 2 } }),
+      request({ order: { scope: 'process', firedAt: 10, arrival: 3 } }),
+      request({ order: { scope: 'process', firedAt: undefined, arrival: 4 } }),
+    ]
+    for (const each of resent) expect(queue.submit('agent', 'd1', each)).toBe('kept')
+    await flush()
+    for (const each of resent) expect(each.inspect).not.toHaveBeenCalled()
+    // Replaced, not kept: the same time once the older job is no longer current, or a later one.
+    live = false
+    const fresh = request({ order: { scope: 'process', firedAt: 20, arrival: 5 },
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
+    expect(queue.submit('agent', 'd1', fresh)).toBe(true); await flush()
+    expect(fresh.held).toHaveBeenCalledOnce()
+    const later = request({ order: { scope: 'process', firedAt: 30, arrival: 6 } })
+    expect(queue.submit('agent', 'd1', later)).toBe(true); await flush()
+    expect(later.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
+  it("admits a new conversation's timed hook over a resumed row's untimed binding", async () => {
+    const queue = createPendingAdmissions()
+    const hook = request({ conversationId: 'new', binding: { id: 'old', at: null }, order: { scope: 'process', firedAt: 50, arrival: 1 } })
+    queue.submit('agent', 'd1', hook); await flush()
+    expect(hook.accept).toHaveBeenCalledOnce()
+    expect(hook.held).not.toHaveBeenCalled()
+    queue.close()
+  })
 })
 
 
@@ -358,12 +424,12 @@ it('retains distinct prompts for one conversation in order through source recove
     inspect: async () => { if (!readable) throw 'source unavailable'; return { kind: 'accept', value: 'first' } },
     accept: value => { accepted.push(value) } })
   const second = request({ conversationId: 'conversation', binding: () => ({ id: 'conversation', at: 1 }),
-    inspect: async () => readable ? { kind: 'accept', value: 'second' } : { kind: 'hold', reason: 'source unavailable' },
+    inspect: async () => readable ? { kind: 'accept', value: 'second' } : { kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'source unavailable' },
     accept: value => { accepted.push(value) } })
   queue.submit('agent', 'delivery-one', first); await flush()
   queue.submit('agent', 'delivery-two', second); await flush()
   expect(accepted).toEqual([])
-  expect(first.held).toHaveBeenCalledWith(expect.stringContaining('Native evidence unavailable'))
+  expect(first.held).toHaveBeenCalledWith({ kind: 'hold', code: 'SOURCE_UNREADABLE', failure: 'string', reason: expect.stringContaining('Native evidence unavailable') })
   readable = true
   await vi.advanceTimersByTimeAsync(40)
   expect(accepted).toEqual(['first', 'second'])
@@ -377,11 +443,11 @@ it('rotates conversation groups so a newer delegated candidate cannot starve two
   let readable = false
   const accepted: string[] = []
   const a1 = request({ conversationId: 'parent', order: { scope: 'process', firedAt: 10, arrival: 1 },
-    inspect: async () => readable ? { kind: 'accept', value: 'a1' } : { kind: 'hold', reason: 'unavailable' }, accept: value => { accepted.push(value) } })
+    inspect: async () => readable ? { kind: 'accept', value: 'a1' } : { kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unavailable' }, accept: value => { accepted.push(value) } })
   const a2 = request({ conversationId: 'parent', order: { scope: 'process', firedAt: 20, arrival: 2 },
     accept: () => { accepted.push('a2') } })
   const b = request({ conversationId: 'child', order: { scope: 'process', firedAt: 20, arrival: 3 },
-    inspect: async () => readable ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', reason: 'unavailable' } })
+    inspect: async () => readable ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unavailable' } })
   queue.submit('agent', 'a1', a1); await flush()
   queue.submit('agent', 'a2', a2); await flush()
   queue.submit('agent', 'b', b); await flush()

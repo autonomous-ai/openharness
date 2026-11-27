@@ -8,8 +8,9 @@
 // board becomes a dial, and a reset over USB-Serial/JTAG does NOT change the attachment, measured), or
 // when it gets old. A board that once greeted as a dial is remembered as one and never judged foreign
 // again: a dial rebooting while the daemon restarts is silent too, and a verdict then strands it.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import type { DialPort } from './serial.js'
 
 /** A verdict about an attachment we can identify holds this long: the safety net for a board that
@@ -23,18 +24,28 @@ interface Verdict { session?: string; at: number; dial?: true; board?: string }
 
 const keyOf = (port: DialPort) => (port.serialNumber ?? port.path).toUpperCase()
 
+/** Did any board ever greet as a dial on this computer? Its mark is never removed (since CLI 0.4.54), so this says a dial
+ *  was here before any newer record of one. An unreadable file says no. */
+export function greetedAsDial(file: string): boolean {
+  const read = readState(file, 'cache', jsonObject)
+  return read.state === 'ok' && Object.values(read.value).some((v) => (v as Partial<Verdict> | null)?.dial === true)
+}
+
 export class DialVerdicts {
   private readonly foreign = new Map<string, Verdict>()
+  /** The file could not be read (EACCES, EMFILE): this run keeps its verdicts in memory and writes nothing over it. */
+  private unread = false
 
   constructor(private readonly file?: string, private readonly now: () => number = Date.now) {
     if (!file || !existsSync(file)) return
-    try {
-      const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
-      for (const [key, value] of Object.entries(raw)) {
-        const v = value as Partial<Verdict> | null
-        if (v && typeof v.at === 'number') this.foreign.set(key, { at: v.at, ...(typeof v.session === 'string' ? { session: v.session } : {}), ...(v.dial === true ? { dial: true as const } : {}), ...(typeof v.board === 'string' ? { board: v.board } : {}) })
-      }
-    } catch { /* unreadable: start with no opinions, and rewrite it on the next verdict */ }
+    // A file that cannot be parsed is set aside: start with no opinions, and write a new one on the next verdict.
+    const read = readState(file, 'cache', jsonObject)
+    this.unread = read.state === 'unreadable'
+    if (read.state !== 'ok') return
+    for (const [key, value] of Object.entries(read.value)) {
+      const v = value as Partial<Verdict> | null
+      if (v && typeof v.at === 'number') this.foreign.set(key, { at: v.at, ...(typeof v.session === 'string' ? { session: v.session } : {}), ...(v.dial === true ? { dial: true as const } : {}), ...(typeof v.board === 'string' ? { board: v.board } : {}) })
+    }
   }
 
   /** Was this very attachment of this board already found not to be a dial? */
@@ -74,12 +85,10 @@ export class DialVerdicts {
   }
 
   private save(): void {
-    if (!this.file) return
+    if (!this.file || this.unread) return
     try {
       mkdirSync(dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.foreign)))
-      renameSync(tmp, this.file)
+      atomicWriteFile(this.file, JSON.stringify(Object.fromEntries(this.foreign)), 'cache')
     } catch { /* a verdict that cannot be saved is still in memory for this run */ }
   }
 }

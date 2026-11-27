@@ -90,10 +90,6 @@ class UsageController extends ChangeNotifier {
     _remote.where((machine) => !machine.isLocal).toList(),
   );
 
-  /// Whether the rail has anything at all to say — figures, or a reason there
-  /// are none. False only before the first cycle resolves.
-  bool get hasAnswer => readings.any((r) => r.status != UsageStatus.loading);
-
   void start() {
     if (_disposed || _timer != null) return;
     _started = true;

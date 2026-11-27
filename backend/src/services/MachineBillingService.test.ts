@@ -107,7 +107,7 @@ const proPlan = {
   catalogSource: 'autonomous-bff', catalogSyncedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
 }
 const maxPlan = { ...proPlan, id: 'plan-max', name: 'Max', priceUsd: 100, dailyVoiceLimitSeconds: 0, externalPlanId: 39 }
-const freePlan = { ...proPlan, id: 'plan-free', name: 'Free', priceUsd: 0, dailyVoiceLimitSeconds: 600, externalPlanId: 37 }
+const freePlan = { ...proPlan, id: 'plan-free', name: 'Free', priceUsd: 0, dailyVoiceLimitSeconds: 1800, externalPlanId: 37 }
 const remotePlan = {
   ...proPlan,
   id: 'plan-remote',
@@ -583,7 +583,7 @@ describe('machine billing lifecycle', () => {
       ['Free', 10_000_000], ['Pro', 50_000_000], ['Max', 0],
     ])
     expect(result.plans.map((plan) => [plan.name, plan.dailyVoiceLimitSeconds])).toEqual([
-      ['Free', 600], ['Pro', 1800], ['Max', 0],
+      ['Free', 1800], ['Pro', 1800], ['Max', 0],
     ])
   })
 

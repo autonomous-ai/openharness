@@ -1,3 +1,6 @@
+import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import { startDevices as startDevicesService, type DevicesDeps } from './devices.js'
+import { listenForDevices } from './devicesListener.js'
 export { questionControlFor } from '../engines/questionControls.js'
 /**
  * The services that run in a process of their own by default (harnessd/services.ts `SERVICE_HOSTS`), for
@@ -14,10 +17,18 @@ export { questionControlFor } from '../engines/questionControls.js'
  * declared in core/api.ts, which it loads either way.
  */
 export { engineTranscriptFor } from '../engines/transcripts.js'
+// A conversation kept in a database read whole, for a service in this process (core/api.ts `transcripts`): theirs, as
+// each service's own process reads it (lib/databaseHistory.ts), loaded only once one asks (engines/inProcess.ts).
+export { databaseHistory } from '../engines/storeHistory.js'
 export { liveFor } from '../engines/live.js'
+// The other engines' live streams, and their reads, in this process: as their worker serves them.
+export { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
 export { screenFor } from '../engines/screens.js'
 export { submissionFor } from '../engines/submissions.js'
 export { nativeControlFor } from '../engines/nativeControls.js'
+export { backgroundJobFor } from '../engines/backgroundJobs.js'
+export { providerMoveFor } from '../engines/providerMoves.js'
+export { prepareResume } from '../engines/resumePreparation.js'
 export { modelControlFor } from '../engines/modelControls.js'
 export { runtimeFor } from '../engines/runtime.js'
 export { startGateway } from '../gateway/start.js'
@@ -27,7 +38,9 @@ export { startMemory } from './memory.js'
 export { startCloud } from './cloud.js'
 export { startConnectors } from './connectors.js'
 export { startSharedMachines } from './sharedMachines.js'
-export { startDevices } from './devices.js'
+export { startGoals } from './goals.js'
+export { startHachiInCore } from './hachi.js'
+export { startHomeBridgeInCore } from './homeBridge.js'
 export { startHandoff } from './handoff.js'
 export { startMessagesInCore } from './messages.js'
 export { startModels } from './models.js'
@@ -46,4 +59,15 @@ export { startUsageInCore } from './usage.js'
 export { startViewers } from './viewers.js'
 export { startWifi } from './wifi.js'
 export { startWindowNames } from './windowNames.js'
+export { startEngineProbe } from './engineProbe.js'
 export { startWorkspaces } from './workspaces.js'
+
+/**
+ * The devices in the core's process. On Windows with their own pipe, as in their own process: every service runs in the
+ * core's there (masterProcess.ts `masterEnv`), and without it `harness device notify`, the editors' extensions and the
+ * plugins reach no dial. Until Windows services run in their own process. Elsewhere none, as before. `platform` is for
+ * its tests.
+ */
+export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps, platform: NodeJS.Platform = process.platform): ServiceRequests {
+  return startDevicesService(core, ports, platform === 'win32' ? { ...deps, listen: listenForDevices(core.dataDir, platform) } : deps)
+}

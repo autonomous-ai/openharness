@@ -46,11 +46,16 @@ describe('Codex\'s shared server, from the Codex worker', () => {
     return { d, c, s, agent, count, close, pane }
   }
 
-  /** This daemon's `codex app-server proxy` clients, as the process table shows them, with their parents. */
-  const proxies = (d: IsolatedDaemon) => execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
-    .map(line => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter((match): match is RegExpExecArray => !!match)
-    .filter(match => match[3].includes(join(d.root, 'bin', 'codex')) && match[3].includes('app-server proxy'))
-    .map(match => ({ pid: Number(match[1]), parent: Number(match[2]) }))
+  /** This daemon's `codex app-server proxy` clients, as the process table shows them, with their parents. A row whose
+   *  parent is itself a row is left out: it is the tie's watcher (lib/tied.ts), its command's child, sharing its argv. */
+  const proxies = (d: IsolatedDaemon) => {
+    const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
+      .map(line => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter((match): match is RegExpExecArray => !!match)
+      .filter(match => match[3].includes(join(d.root, 'bin', 'codex')) && match[3].includes('app-server proxy'))
+      .map(match => ({ pid: Number(match[1]), parent: Number(match[2]) }))
+    const pids = new Set(rows.map(row => row.pid))
+    return rows.filter(row => !pids.has(row.parent))
+  }
   // A replacement process, connected to the core: the worker is back, not merely started.
   const linked = (d: IsolatedDaemon) => d.log().split('[services] engine-codex connected').length - 1
   const replacement = async (d: IsolatedDaemon, before: number, connections: number) => until('a replacement Codex worker', () => {

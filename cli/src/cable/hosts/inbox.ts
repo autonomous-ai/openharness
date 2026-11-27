@@ -1,0 +1,148 @@
+/** The core waits 27 s, so a hold that runs out is answered here, as an empty hold the mod follows at once. */
+const HOLD_MS = 25_000
+/** The mod opens its next poll at once after one closes: within milliseconds on the socket, and on Windows once a minute
+ *  only after its follower read the process table, up to 3 s (deviceClaude/inbox.ts). This long after, it is not coming
+ *  soon, and words for it would wait their 5 s for nothing. */
+const READY_MS = 5_000
+/** A transcript waits this long for the mod's next poll, then the dial says the agent is not listening yet. */
+const WAIT_MS = 5_000
+/** Sessions whose last poll closed recently; past this many the oldest goes. */
+const MAX_CLOSED = 256
+/** The gone ids kept for a poll still to come; past this many the oldest goes. */
+const MAX_EARLY_GONE = 16
+
+export interface InboxDeps {
+  now(): number
+  /** Runs `run` after `ms`; the result cancels it. */
+  after(ms: number, run: () => void): () => void
+}
+
+/** What became of a transcript: a poll took it, one before it still waits for the session's next poll, or no poll came. */
+export type Delivery = 'taken' | 'busy' | 'missed'
+
+type Poll = { pollId: string; resolve: (answer: { text?: string }) => void; cancel: () => void }
+type Waiting = { text: string; resolve: (delivery: Delivery) => void; cancel: () => void }
+
+/**
+ * The mod's long polls, one per Claude Code session, and the dial's transcripts for them. A transcript lives only until
+ * a poll takes it or its 5 s pass: nothing is queued for later.
+ */
+export class Inbox {
+  /** Each session's open poll. The core admits at most 64, which bounds them here. */
+  private readonly polls = new Map<string, Poll>()
+  /** Each session's one transcript waiting for its next poll. */
+  private readonly waiting = new Map<string, Waiting>()
+  /** When each session's last poll closed, oldest first. */
+  private readonly closed = new Map<string, number>()
+  /** Ids `gone` found no open poll for, oldest first. Its notice can come before its own poll: the devices process handles
+   *  a notice at once and a call a microtask later (services/process.ts), and the socket hands it several in one tick. */
+  private readonly early = new Set<string>()
+  private readonly pollListeners = new Set<(sessionId: string) => void>()
+
+  constructor(private readonly deps: InboxDeps) {}
+
+  poll(pollId: string, sessionId: string): Promise<{ text?: string }> {
+    // Its client went before it came: nobody is there to take a transcript.
+    if (this.early.delete(pollId)) return Promise.resolve({})
+    // The newer poll is the one its client still waits on: it is held, never answered at once, or the mod asks again at once.
+    const older = this.polls.get(sessionId)
+    if (older) this.close(sessionId, older, {})
+    const waiting = this.waiting.get(sessionId)
+    if (waiting) {
+      this.endWait(sessionId, waiting, 'taken')
+      this.closedNow(sessionId)
+      return Promise.resolve({ text: waiting.text })
+    }
+    return new Promise((resolve) => {
+      const held: Poll = { pollId, resolve, cancel: this.deps.after(HOLD_MS, () => this.close(sessionId, held, {})) }
+      this.polls.set(sessionId, held)
+      // Told only now it is held, so a deliver from a listener finds this poll: the Claude app's wake hands the first
+      // poll of the session it opened its words (the design, § 3.4).
+      for (const listener of [...this.pollListeners]) {
+        try { listener(sessionId) } catch { /* the listener's fault is its own to say: the poll stays held */ }
+      }
+    })
+  }
+
+  /** Hears each poll as it is held, with its session id; a poll answered at once is not. The result stops it. */
+  onPoll(listener: (sessionId: string) => void): () => void {
+    this.pollListeners.add(listener)
+    return () => { this.pollListeners.delete(listener) }
+  }
+
+  /** The poll's client went, or a newer poll replaced it. The session whose open poll it closed: its client may have gone
+   *  mid-hold, as when Claude Code dies with its pane, which sends no session-end hook. The core tells a replaced poll gone
+   *  before it hands on the newer one, so that one names its session too, with its client still there. */
+  gone(pollId: string): string | undefined {
+    for (const [sessionId, open] of this.polls) {
+      if (open.pollId === pollId) {
+        this.close(sessionId, open, {})
+        return sessionId
+      }
+    }
+    this.early.add(pollId)
+    if (this.early.size > MAX_EARLY_GONE) this.early.delete(this.early.values().next().value!)
+    return undefined
+  }
+
+  ready(sessionId: string): boolean {
+    return this.polls.has(sessionId) || this.recent(sessionId)
+  }
+
+  /** Taken when a poll took the text. The mod sends no acknowledgement: that is all "sent" can mean. */
+  deliver(sessionId: string, text: string): Promise<Delivery> {
+    const open = this.polls.get(sessionId)
+    if (open) {
+      this.close(sessionId, open, { text })
+      return Promise.resolve('taken')
+    }
+    if (this.waiting.has(sessionId)) return Promise.resolve('busy')
+    if (!this.recent(sessionId)) return Promise.resolve('missed')
+    return new Promise((resolve) => {
+      const waiting: Waiting = { text, resolve, cancel: this.deps.after(WAIT_MS, () => this.endWait(sessionId, waiting, 'missed')) }
+      this.waiting.set(sessionId, waiting)
+    })
+  }
+
+  /** The core that held the polls went, or the devices stop. */
+  closeAll(): void {
+    for (const [sessionId, open] of this.polls) this.close(sessionId, open, {})
+    for (const [sessionId, waiting] of this.waiting) this.endWait(sessionId, waiting, 'missed')
+    // Those polls died with their core, and the mod waits 60 s after a failed poll: none comes back soon.
+    this.closed.clear()
+  }
+
+  private close(sessionId: string, open: Poll, answer: { text?: string }): void {
+    this.polls.delete(sessionId)
+    open.cancel()
+    this.closedNow(sessionId)
+    open.resolve(answer)
+  }
+
+  private endWait(sessionId: string, waiting: Waiting, delivery: Delivery): void {
+    this.waiting.delete(sessionId)
+    waiting.cancel()
+    waiting.resolve(delivery)
+  }
+
+  private closedNow(sessionId: string): void {
+    // Set again rather than updated, so the map stays in the order the polls closed and the oldest is first.
+    this.closed.delete(sessionId)
+    this.closed.set(sessionId, this.deps.now())
+    this.drop()
+  }
+
+  private recent(sessionId: string): boolean {
+    this.drop()
+    return this.closed.has(sessionId)
+  }
+
+  /** From the oldest: each closed 5 s ago or more, and any past the 256 kept. */
+  private drop(): void {
+    const now = this.deps.now()
+    for (const [sessionId, at] of this.closed) {
+      if (now - at < READY_MS && this.closed.size <= MAX_CLOSED) return
+      this.closed.delete(sessionId)
+    }
+  }
+}

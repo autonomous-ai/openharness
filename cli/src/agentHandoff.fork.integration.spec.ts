@@ -126,10 +126,10 @@ describe('fork record → registry → stopped copy → inheritance (real module
       // Rebound after the fork: only a RECORDED session may still be inherited.
       registeredAt: t0 - 3_600_000, boundAt: t0 + 60_000, projectDir: 'ws',
     } as unknown as RegisteredSession
-    const fork = m.registry.openPendingAgent({
+    const fork = (await m.registry.openPendingAgent({
       engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }], cwd: ws,
       forkedFrom: forkOriginAsCliBuildsIt(parent, 'harness Devops'),
-    })!
+    }))!
     return { parent, parentFile, fork }
   }
 
@@ -276,7 +276,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     const marker = startMarker()
     ownFile(Date.parse(marker) + 500)
     processRecord(FOUND_SESSION, marker)
-    const holder = m.registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: ws })!
+    const holder = (await m.registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: ws }))!
     new m.StoppedAgentStore(join(data, 'stopped-agents')).save({ ...holder, sessionId: FOUND_SESSION, active: false })
     await expect(ask(m, cliDeps(m, [unbound(marker)]))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
@@ -286,7 +286,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     const marker = startMarker()
     ownFile(Date.parse(marker) + 500)
     processRecord(FOUND_SESSION, marker)
-    const other = m.registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: ws })!
+    const other = (await m.registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: ws }))!
     const store = new m.StoppedAgentStore(join(data, 'stopped-agents'))
     store.save({ ...other, sessionId: 'unrelated-session', active: false })
     // Readable and not the holder: discovery goes ahead.

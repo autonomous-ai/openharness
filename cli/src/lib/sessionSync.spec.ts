@@ -31,10 +31,10 @@ function harness(overrides: Partial<SessionSyncDeps> = {}) {
 describe('session sync', () => {
   it('keeps an existing pane through registry reload, early metadata sync, and terminal rediscovery', async () => {
     registry.load()
-    const opened = registry.openProcessAgent({
+    const opened = (await registry.openProcessAgent({
       agentId: 'restart-agent', engine: 'codex', tmuxPane: '%16',
       processIdentity: { pid: 42, executable: 'codex', startMarker: 'test-process' },
-    })!.entry
+    }))!.entry
     const h = harness({ terminalAvailable: (agentId) => registry.terminalAvailable(agentId) })
     await h.sync(opened)
     expect(h.send).toHaveBeenCalledTimes(1)
@@ -84,11 +84,10 @@ describe('session sync', () => {
   })
 
   it('preserves launch-failure reporting and contains projection errors', async () => {
-    const error = new Error('projection failed')
-    const h = harness({ project: vi.fn().mockRejectedValue(error) })
+    const h = harness({ project: vi.fn().mockRejectedValue(new TypeError('projection failed')) })
     await h.sync(row({ launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } }))
     expect(h.onFailed).toHaveBeenCalledWith('agent-a', 'See terminal.')
-    expect(h.warn).toHaveBeenCalledWith(error)
+    expect(h.warn).toHaveBeenCalledWith('TypeError')
     expect(h.send).not.toHaveBeenCalled()
     expect(h.sendCommander).not.toHaveBeenCalled()
   })

@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
+import { harnessPathText } from '../config/harnessHome.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
@@ -16,6 +17,7 @@ import { isTerminalEngine, PROCESS_ENGINES, type AgentEngine } from '../engines/
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { OPENCLAW_LAUNCH } from '../engines/openclaw/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
+import { notStoreAppAlias } from './windows/storeAppAlias.js'
 import { windowsEngineArgv } from './windows/launch.js'
 import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from './windows/engineStart.js'
 import { defaultWindowsShell } from './windows/shell.js'
@@ -32,6 +34,8 @@ import { shellSingleQuote } from './shellQuote.js'
 import { browserPrelude } from './browserShim.js'
 import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { errorKind } from './log.js'
+import { atomicWriteFile } from './secureState.js'
 
 export { shellSingleQuote }
 
@@ -96,9 +100,10 @@ export function permissionModeApproves(mode: string): boolean {
  * rather than guess, the way `gridLaunch.ts` refuses an engine with no endpoint contract.
  *
  * An entry is the argv placed BEFORE the text: a flag (`['--prompt']`) or nothing at all for an
- * engine that reads a bare positional. Each entry cites where it was read from.
+ * engine that reads a bare positional. `'typed'`: the engine takes it, but not in argv; Harness types it
+ * into the pane once the engine can take it ([typedFirstPrompt]). Each entry cites where it was read from.
  */
-export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] | null>> = {
+export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 'typed' | null>> = {
   ...launchField('firstPromptArgs'),
   // `opencode --help`: `--prompt  prompt to use`, a TUI flag — the interactive session starts with
   // the message submitted. A flag rather than a positional because opencode's own positional is
@@ -121,8 +126,7 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   grok: null,
   agy: null,
   copilot: null,
-  // `openclaw tui --help` (2026.11.2): `--message <text>  Send an initial message after connecting`.
-  openclaw: ['--message'],
+  openclaw: OPENCLAW_LAUNCH.firstPrompt,
   terminal: null,
 }
 
@@ -146,12 +150,19 @@ export function supportsFirstPrompt(engine: AgentEngine): boolean {
   return FIRST_PROMPT_ARGS[engine] !== null
 }
 
-/** The argv that hands `prompt` to `engine` as its first message. Throws [FirstPromptUnsupportedError]
- *  for an engine with no contract, so a caller cannot build an argv that silently drops the prompt. */
+/** The argv that hands `prompt` to `engine` as its first message: none for a typed one, which the pane
+ *  gets instead. Throws [FirstPromptUnsupportedError] for an engine with no contract, so a caller cannot
+ *  build an argv that silently drops the prompt. */
 export function firstPromptArgs(engine: AgentEngine, prompt: string): string[] {
   const lead = FIRST_PROMPT_ARGS[engine]
   if (lead === null) throw new FirstPromptUnsupportedError(engine)
-  return [...lead, prompt]
+  return lead === 'typed' ? [] : [...lead, prompt]
+}
+
+/** The first prompt a launch of `engine` leaves to be typed into its pane, since its argv does not carry it;
+ *  `undefined` when there is none or the argv carries it. */
+export function typedFirstPrompt(engine: AgentEngine, prompt: string | undefined): string | undefined {
+  return FIRST_PROMPT_ARGS[engine] === 'typed' && prompt ? prompt : undefined
 }
 
 /**
@@ -238,9 +249,10 @@ export interface LaunchCommandOptions {
    * after every flag, because two of the three engines take it positionally and a positional is only
    * unambiguous once the options are exhausted.
    *
-   * A launch option and nothing more: it is never written to the registry row, so a relaunch (which
-   * resumes a session that already has its first turn) never repeats it. Never logged either — it is
-   * what the user typed.
+   * A launch option and nothing more for an engine that takes it in argv: it is never written to the
+   * registry row, so a relaunch (which resumes a session that already has its first turn) never repeats
+   * it. A typed one ([typedFirstPrompt]) is not in argv at all. Never logged either — it is what the
+   * user typed.
    */
   firstPrompt?: string
   /**
@@ -399,9 +411,11 @@ export function supportsNativeFork(engine: AgentEngine): boolean {
 
 /** The executable argv, before the interactive-shell wrapper is applied. */
 export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandOptions = {}): string[] {
+  // An OpenClaw run on its own folder: `tui --local`, which takes its session by name only (OPENCLAW_LAUNCH).
+  const local = engine === 'openclaw' && !!opts.native?.openclawLocal
   // Windows: the flags its declared startup puts first (Codex's `--no-daemon`), which a launch script probes for elsewhere.
   const argv = [opts.native?.executable?.command ?? engineBin(engine), ...(process.platform === 'win32' ? windowsStartupArgs(engine, opts.native) : []),
-    ...LAUNCH_BASE_ARGS[engine] ?? []]
+    ...LAUNCH_BASE_ARGS[engine] ?? [], ...(local ? OPENCLAW_LAUNCH.local : [])]
   // A fork is a resume that leaves the source alone; the two are exclusive, and the fork wins.
   const fork = opts.forkSessionId ? LAUNCH_FORK_FLAG[engine] : undefined
   const resumeFlag = fork ? fork.lead : opts.resumeSessionId ? LAUNCH_RESUME_FLAG[engine] : undefined
@@ -420,7 +434,7 @@ export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandO
     if (flags) argv.push(...flags)
   }
   if (!resumeIsSubcommand && resumeFlag && sessionArg) {
-    argv.push(...resumeFlag, sessionArg, ...(fork?.after ?? []))
+    argv.push(...local ? OPENCLAW_LAUNCH.resumeLocal(sessionArg) : [...resumeFlag, sessionArg], ...(fork?.after ?? []))
   }
   const newSession = LAUNCH_NEW_SESSION[engine]
   if (newSession && opts.agentId && !(resumeFlag && sessionArg)) argv.push(...newSession(opts.agentId))
@@ -522,7 +536,7 @@ export function zshNewUserGuard(environment: NodeJS.ProcessEnv = process.env): s
     const file = join(folder, '.zshenv')
     let current: string | null = null
     try { current = readFileSync(file, 'utf8') } catch { /* not written yet */ }
-    if (current !== ZSH_GUARD_ZSHENV) writeFileSync(file, ZSH_GUARD_ZSHENV, { mode: 0o600 })
+    if (current !== ZSH_GUARD_ZSHENV) atomicWriteFile(file, ZSH_GUARD_ZSHENV, 'cache')
   } catch {
     // A ZDOTDIR without its .zshenv would leave the person's own ZDOTDIR unrestored: launch as before.
     return []
@@ -568,6 +582,7 @@ function launchFile(content: (path: string) => string): string {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   sweepLaunchFiles(directory)
   const file = join(directory, `${randomUUID()}.sh`)
+  // not a state file: a fresh name, complete before tmux is started with it
   writeFileSync(file, content(file), { mode: 0o600 })
   return file
 }
@@ -600,6 +615,40 @@ function sourcedOnce(script: string): string {
 }
 
 /**
+ * A pane's command for each attempt of its create (createAgentPane.ts `argv`): [first], built before the pane, then a
+ * launch built again ([build]) for each retry, with a one-time file of its own: the shell of the pane before it removed
+ * its file as it read it, and a retry handed that argv ran a file already gone (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ * A pane closed at once (its registration refused) may never have read its file: the retry removes it, which nothing
+ * else would before the sweep an hour on. A launch with no such file (Windows, or no data folder) runs again as it is:
+ * on Windows the pane's other launch facts were read from it (`windowsPaneLaunch`'s `held`).
+ */
+export function launchAttempts(first: string[], build: () => string[]): (attempt: number) => string[] {
+  let last = first
+  return (attempt) => {
+    const file = attempt === 1 ? null : launchFileOf(last)
+    if (!file) return last
+    try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
+    last = build()
+    return last
+  }
+}
+
+/** The one-time file [argv] names: the argument `sourcedOnce` or `throughPosixShell` made, exactly; null without one. */
+function launchFileOf(argv: readonly string[]): string | null {
+  for (const arg of argv) {
+    const name = /([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.sh)'$/.exec(arg)?.[1]
+    if (!name) continue
+    const file = join(env.ADAPTER_DATA_DIR, 'launch', name)
+    const quoted = shellSingleQuote(file)
+    if (arg === `. ${quoted}` || arg === `exec ${posixRunner()} ${quoted}`) return file
+  }
+  return null
+}
+
+/** What the held shell of a launch the native guard held says, and the row of that launch (lib/restoreAgents.ts). */
+export const STARTING_AGAIN = 'Starting again.'
+
+/**
  * Full argv for a fresh tmux pane. `exec` replaces the shell with the engine,
  * preserving process discovery while loading the same startup files a user
  * gets in Terminal/iTerm/Ubuntu Terminal. Arguments are positional, not a
@@ -620,7 +669,7 @@ export function buildEngineLaunchArgv(
   // executable or settings changed since they were confirmed waits in a held pane instead, as the guard below does.
   if (process.platform === 'win32') {
     return opts.native?.executable && !nativeLaunchConfirmed(opts.native)
-      ? windowsHeldPaneArgv('Waiting for native launch preparation to be confirmed.', opts.native.token)
+      ? windowsHeldPaneArgv(STARTING_AGAIN, opts.native.token)
       : command
   }
   // An engine whose declared startup runs in the script gets one even where the daemon has no login shell.
@@ -656,7 +705,7 @@ export function buildEngineLaunchArgv(
     : opts.installFirst
       ? installFirstScript(opts.installFirst)
       : 'harness_engine_bin=$1\n'
-  const heldCommand = `/bin/sh -c ${shellSingleQuote('trap \'\' INT QUIT TSTP; printf \'%s\\n\' \"$1\"; while :; do sleep 3600; done')} harness-held ${shellSingleQuote('Waiting for native launch preparation to be confirmed.')} ${shellSingleQuote(opts.native?.token ?? '')}`
+  const heldCommand = `/bin/sh -c ${shellSingleQuote('trap \'\' INT QUIT TSTP; printf \'%s\\n\' \"$1\"; while :; do sleep 3600; done')} harness-held ${shellSingleQuote(STARTING_AGAIN)} ${shellSingleQuote(opts.native?.token ?? '')}`
   // tmux retains pane_start_command across exec. Transition this pane to the
   // inert command so core can recognize its exact token after a crash, using the
   // same server-side predicate as every other held launch. No engine has run.
@@ -675,17 +724,36 @@ export function buildEngineLaunchArgv(
   return opts.native ? ['/usr/bin/env', `${NATIVE_LAUNCH_MARKER}=${opts.native.token}`, ...argv] : argv
 }
 
+/** The daemon's variables an engine starts with on every platform, so it reads the same state Harness does. */
+const LAUNCH_ENVIRONMENT: Readonly<Partial<Record<AgentEngine, readonly string[]>>> = { openclaw: OPENCLAW_LAUNCH.environment }
+
 /**
- * The variables a launch sets around its engine on Windows, which has no `/usr/bin/env` to put in front of the argv
- * (`buildEngineLaunchArgv` leaves it out there): the screen's (engines/kit/launchScreen.ts) and a native launch's
- * marker. The caller sends them with the pane's env (the pty host's create and respawn env), which the engine
- * inherits, after the launch's own so they win as the prefix did. None elsewhere, where they are in the argv. A screen's
+ * The variables a launch sets around its engine. Everywhere: the daemon's non-empty values of those its engine names
+ * ([LAUNCH_ENVIRONMENT]); a pane's shell does not inherit the daemon's environment, so without them a TUI would open
+ * another state folder than the one Harness reads. On Windows also those it cannot put in front of the argv, having no
+ * `/usr/bin/env` (`buildEngineLaunchArgv` leaves it out there): the screen's (engines/kit/launchScreen.ts) and a native
+ * launch's marker, which elsewhere are in the argv. The caller sends them with the pane's env (the pty host's create
+ * and respawn env), which the engine inherits, after the launch's own so they win as the prefix did. A screen's
  * cleared variables cannot ride an env; no engine declares any (facets/launch.ts `clearEnvironment`).
  */
-export function engineLaunchEnv(engine: AgentEngine, native?: Pick<NativeLaunch, 'token'>, platform: NodeJS.Platform = process.platform): Record<string, string> | undefined {
-  if (platform !== 'win32') return undefined
-  // As the prefix wrote it: `${token}`, which a native launch always has (nativeLaunch.ts).
-  const variables = { ...screenVariables(launchContract(engine)), ...(native ? { [NATIVE_LAUNCH_MARKER]: `${native.token}` } : {}) }
+export function engineLaunchEnv(
+  engine: AgentEngine,
+  native?: Pick<NativeLaunch, 'token' | 'openclawLocal'>,
+  platform: NodeJS.Platform = process.platform,
+  daemon: NodeJS.ProcessEnv = process.env,
+): Record<string, string> | undefined {
+  const variables: Record<string, string> = {}
+  for (const name of LAUNCH_ENVIRONMENT[engine] ?? []) {
+    const value = daemon[name]
+    if (value) variables[name] = value
+  }
+  // A local run's state is its own folder, over the daemon's; its OPENCLAW_HOME stays the daemon's.
+  if (engine === 'openclaw' && native?.openclawLocal) variables.OPENCLAW_STATE_DIR = native.openclawLocal
+  if (platform === 'win32') {
+    Object.assign(variables, screenVariables(launchContract(engine)))
+    // As the prefix wrote it: `${token}`, which a native launch always has (nativeLaunch.ts).
+    if (native) variables[NATIVE_LAUNCH_MARKER] = `${native.token}`
+  }
   return Object.keys(variables).length ? variables : undefined
 }
 
@@ -749,7 +817,7 @@ export const ENGINE_INPUT_DRAIN_SH = '  if harness_tty=$(stty -g 2>/dev/null) &&
  * pane does not die with it: `harness_after` records the exit status on the pane (`ENGINE_EXIT_PANE_OPTION`,
  * which is how the daemon tells "the engine left" from "the install is still running") and `exec`s
  * the user's interactive shell in its place, exactly as a terminal opened with ⌘⇧T is. The daemon
- * then turns the row back into a terminal (`registry.releaseEngine`) rather than deleting it, and
+ * then turns the row back into a terminal (`registry.confirmEngineExit`) rather than deleting it, and
  * typing the engine's name into that shell adopts it again (`adoptEngine`). A 127 is the one exit
  * that still ends the pane: the command was not found at all, and "not installed" needs to stay
  * a failure the app can name rather than a prompt with an error above it.
@@ -982,8 +1050,8 @@ export function buildTerminalLaunchArgv(
  *
  * The hint names the fix for the platform this daemon generates the script on, which is the one
  * the pane runs on. `$PWD` is left to the shell so the message names the folder as entered. Short
- * lines, the action first: a dialog that relays the pane's last lines keeps about 180 characters
- * (agentCreateDiagnosis.ts), and the folder path alone can take half of that.
+ * lines, the action first: the person reads them in the pane, and the folder path alone can take
+ * half a line.
  */
 export function unreadableCwdGuard(platform: NodeJS.Platform = process.platform): string {
   const hints = platform === 'darwin'
@@ -1213,7 +1281,9 @@ const TYPICAL_INSTALL_SECONDS: Readonly<Record<string, number>> = { opencode: 10
 /** The progress shown while the installer's output streams into the log (argv: label, seconds, log, waiting). */
 const INSTALL_PROGRESS_JS = [
   'const fs=require("fs");const [label,sec,log,waiting]=process.argv.slice(1);const E=Number(sec)*1000;const t0=Date.now();',
+  // not a state file: the installer's log, appended as its output streams
   'const out=fs.openSync(log,"a");fs.writeSync(out,"\\n--- "+new Date().toISOString()+" installing "+label+"\\n");',
+  // not a state file: the same log
   'process.stdin.on("data",(d)=>fs.writeSync(out,d));',
   'const rows=waiting==="1"?3:2;let drawn=false;',
   'const draw=()=>{const t=Date.now()-t0;const f=Math.min(0.97,Math.max(0.04,1-1/(1+2.4*t/E)));const n=Math.round(f*24);',
@@ -1306,7 +1376,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // minutes) while the download still runs ends the pane rather than starting a second install.
     ...(downloadEngine ? [
       'harness_wait_download() {',
-      '  harness_dl_pid=$(cat "$HOME/.harness/run/downloading-$1" 2>/dev/null) || return 0',
+      `  harness_dl_pid=$(cat "${harnessPathText('run')}/downloading-$1" 2>/dev/null) || return 0`,
       "  case \"$harness_dl_pid\" in ''|*[!0-9]*) return 0 ;; esac",
       '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
       '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',
@@ -1323,10 +1393,10 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     ] : []),
     'harness_quiet=0',
     ...(friendly ? [
-      'harness_install_log="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
+      'harness_install_log="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
       // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
-      'harness_install_rc="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
-      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "$HOME/.harness/logs" 2>/dev/null && harness_quiet=1`,
+      'harness_install_rc="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
+      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "${harnessPathText('logs')}" 2>/dev/null && harness_quiet=1`,
     ] : []),
     ...(downloadEngine ? [`harness_find_engine "$1" || harness_wait_download ${shellSingleQuote(downloadEngine.replace(/[^a-z0-9-]/g, ''))}`] : []),
     'if ! harness_find_engine "$1"; then',
@@ -1399,7 +1469,7 @@ function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
   ].join('\n')
 }
 
-export type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
+type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
 /**
  * Does the same interactive shell that launches a new agent resolve this CLI?
  *
@@ -1416,7 +1486,11 @@ export async function commandAvailableInInteractiveShell(
 ): Promise<boolean | CommandAvailability> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) {
-    const found = binaryOnPath(command) || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+    // Windows: a Store app's alias passes accessSync but is no engine (lib/windows/storeAppAlias.ts), and a launch looks
+    // past it to install the engine. Counted here, New showed an older Claude desktop app's `claude.exe` as Claude Code
+    // installed, so the install it then got came without the dialog announcing it.
+    const found = binaryOnPath(command, process.env, notStoreAppAlias)
+      || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate, process.env, notStoreAppAlias)) : false)
     return detailed ? { status: found ? 'available' : 'missing' } : found
   }
   const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
@@ -1451,7 +1525,7 @@ export async function commandOutputInInteractiveShell(engine: AgentEngine, comma
       : windowsEngineArgv(engine, [command, ...args])
   } catch (error) {
     // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
-    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${error instanceof Error ? error.message : error}`)
+    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${errorKind(error)}`)
     return null
   }
   const [file, ...argv] = run

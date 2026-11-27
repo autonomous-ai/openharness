@@ -342,9 +342,7 @@
   ],
   "openclaw first": [
     "openclaw",
-    "tui",
-    "--message",
-    "literal ; $(first message)"
+    "tui"
   ],
   "installation installed": {
     "code": 0,

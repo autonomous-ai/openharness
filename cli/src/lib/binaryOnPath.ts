@@ -7,12 +7,14 @@
 import { accessSync, constants } from 'node:fs'
 import { delimiter, join } from 'node:path'
 
-export function binaryOnPath(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveBinaryOnPath(command, env) !== null
+export function binaryOnPath(command: string, env: NodeJS.ProcessEnv = process.env, accept: (path: string) => boolean = () => true): boolean {
+  return resolveBinaryOnPath(command, env, accept) !== null
 }
 
-/** The same lookup, answering WHERE — the first executable PATH entry that has it, or null. */
-export function resolveBinaryOnPath(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
+/** The same lookup, answering WHERE — the first executable PATH entry that has it, or null. [accept] passes over a
+ *  file that is executable but not the program wanted (an engine's probe: a Windows Store app's alias). */
+export function resolveBinaryOnPath(command: string, env: NodeJS.ProcessEnv = process.env,
+  accept: (path: string) => boolean = () => true): string | null {
   if (!command) return null
   const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
   const candidates = command.includes('/') || command.includes('\\')
@@ -20,7 +22,10 @@ export function resolveBinaryOnPath(command: string, env: NodeJS.ProcessEnv = pr
     : (env.PATH ?? '').split(delimiter).filter(Boolean).map((dir) => join(dir, command))
   for (const candidate of candidates) {
     for (const extension of extensions) {
-      try { accessSync(candidate + extension, constants.X_OK); return candidate + extension } catch { /* next */ }
+      try {
+        accessSync(candidate + extension, constants.X_OK)
+        if (accept(candidate + extension)) return candidate + extension
+      } catch { /* next */ }
     }
   }
   return null
@@ -28,6 +33,16 @@ export function resolveBinaryOnPath(command: string, env: NodeJS.ProcessEnv = pr
 
 const WINDOWS_PROGRAM = /\.(?:exe|cmd|bat|com)$/i
 const WINDOWS_LAUNCH_EXTENSIONS = ['.exe', '.cmd', '.bat', '.com']
+
+/** The shared Windows extension/PATH order, without filesystem work. */
+export function windowsLaunchCandidates(command: string, environment: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32' || !command || WINDOWS_PROGRAM.test(command)) return []
+  const stem = command.replace(/\.ps1$/i, '')
+  const candidates = stem.includes('/') || stem.includes('\\')
+    ? [stem]
+    : (environment.PATH ?? environment.Path ?? '').split(';').filter(Boolean).map((dir) => join(dir, stem))
+  return candidates.flatMap(candidate => WINDOWS_LAUNCH_EXTENSIONS.map(extension => candidate + extension))
+}
 
 /**
  * The program a Windows launch names for [command]: its `.exe`, or else its `.cmd`/`.bat` shim, never its `.ps1`.
@@ -39,15 +54,8 @@ const WINDOWS_LAUNCH_EXTENSIONS = ['.exe', '.cmd', '.bat', '.com']
  * and when there is none, [command] is returned as it is: the launch then fails as it did.
  */
 export function windowsLaunchCommand(command: string, environment: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
-  if (platform !== 'win32' || !command || WINDOWS_PROGRAM.test(command)) return command
-  const stem = command.replace(/\.ps1$/i, '')
-  const candidates = stem.includes('/') || stem.includes('\\')
-    ? [stem]
-    : (environment.PATH ?? environment.Path ?? '').split(';').filter(Boolean).map((dir) => join(dir, stem))
-  for (const candidate of candidates) {
-    for (const extension of WINDOWS_LAUNCH_EXTENSIONS) {
-      try { accessSync(candidate + extension, constants.F_OK); return candidate + extension } catch { /* next */ }
-    }
+  for (const candidate of windowsLaunchCandidates(command, environment, platform)) {
+    try { accessSync(candidate, constants.F_OK); return candidate } catch { /* next */ }
   }
   return command
 }

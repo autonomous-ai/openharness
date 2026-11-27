@@ -80,7 +80,7 @@ describe('submission verification in the engine workers', () => {
     c.send('message', { agentId: agent.id, content: '!latestart held' })
     await until('the message reported unconfirmed', () => c.frames.slice(first).some(frame => frame.type === 'error' && frame.agentId === agent.id
       && /could not be confirmed/.test(String(frame.payload?.message))) || null, 20_000, 50)
-    expect(d.log()).toContain('engine_submission_read failed · injected fault')
+    expect(d.log()).toContain('engine_submission_read failed · Error')
     expect(d.log()).not.toMatch(/accepted \(queued\/submitted\) · engine=codex/)
     const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 30_000, 'the held turn')
     release()

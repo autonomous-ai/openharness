@@ -22,7 +22,7 @@ import 'usage_window.dart';
 String usageAccountKey(UsageProvider provider, String accountId) =>
     _sha16('${provider.name}:$accountId');
 
-/// A Swarm profile (an engine account of a machine), as the CLI, the backend and
+/// A profile (an engine account of a machine), as the CLI, the backend and
 /// this app all name it: the first 16 hex characters of
 /// sha256(`<machineId>:<engine>:<realpath>`), or `...:default` for the engine's
 /// default account. Same contract as the CLI's `profileId`.

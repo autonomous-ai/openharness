@@ -3,9 +3,11 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell, shellSingleQuote } from './engineLaunch.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // Use real npm against a local package, with networking and lifecycle scripts disabled.
 // Fake npm missed the fresh-account EACCES failure in a shared Homebrew prefix.
@@ -18,7 +20,7 @@ afterEach(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const installLog = (home: string) => readFileSync(join(home, '.harness/logs/install-codex.log'), 'utf8')
+const installLog = (home: string) => readFileSync(join(harnessPath('logs', home), 'install-codex.log'), 'utf8')
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'harness-user-engine-'))
@@ -34,7 +36,7 @@ function fixture() {
   mkdirSync(pkg)
   const name = 'harness-user-engine-fixture'
   writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, version: '1.0.0', bin: { [name]: 'engine.js' } }))
-  writeFileSync(join(pkg, 'engine.js'), '#!/usr/bin/env node\nconsole.log("ENGINE_READY:" + JSON.stringify(process.argv.slice(2)))\n')
+  writeExecutable(join(pkg, 'engine.js'), '#!/usr/bin/env node\nconsole.log("ENGINE_READY:" + JSON.stringify(process.argv.slice(2)))\n')
   const runtime = (name: string) => {
     const bin = join(root, name, 'bin')
     mkdirSync(bin, { recursive: true })
@@ -101,7 +103,7 @@ describe('engine installation for a fresh OS user', () => {
 
     // The availability probe uses the same per-user candidates as the launch, without installing.
     const probe = join(f.home, '..', 'bash')
-    writeFileSync(probe, '#!/bin/sh\nshift\nexec /bin/sh -c "$@"\n', { mode: 0o700 })
+    writeExecutable(probe, '#!/bin/sh\nshift\nexec /bin/sh -c "$@"\n')
     vi.stubEnv('PATH', f.env.PATH)
     await expect(commandAvailableInInteractiveShell(f.name, probe, f.recipe)).resolves.toBe(true)
   })
@@ -117,7 +119,7 @@ describe('engine installation for a fresh OS user', () => {
       expect(installLog(f.home)).toContain('trying the npm package instead')
       expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
       expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
-      expect(readdirSync(join(f.home, '.harness/logs')).filter((file) => file.endsWith('.rc'))).toEqual([])
+      expect(readdirSync(harnessPath('logs', f.home)).filter((file) => file.endsWith('.rc'))).toEqual([])
     })
   }
 

@@ -27,6 +27,7 @@ export function agentsHelp(): string {
     `        ${synopsis(CLOSE_USAGE)}`,
     `        ${synopsis(TELL_USAGE)}   more work for one you started, while the person allows it`,
     `        ${sendLine()}`,
+    '        harness browser --help   your browser, when your person has started it',
     '',
     'A whole job:',
     '  harness new <agent> --name <name> <project> -- <task>',
@@ -35,7 +36,7 @@ export function agentsHelp(): string {
     '  harness close <name>',
     'Most commands end with Next: the command to run next. --json gives it as "next".',
     '',
-    'States: working, idle, needs the person, installing, starting, stopped, gone, closed, failed.',
+    'States: working, idle, needs the person, held, installing, starting, stopped, gone, closed, failed.',
     `Exit codes: ${EXIT.ok} done · ${EXIT.failed} failed · ${EXIT.usage} wrong command · ${EXIT.needsInput} needs the person · `
       + `${EXIT.stopped} stopped or gone · ${EXIT.refused} refused (do not retry) · ${EXIT.timeout} still working when the wait ended.`,
     `Limits: ${SPAWN_LIMITS.livePerHarness} of yours open at once, ${SPAWN_LIMITS.perWindow} starts in ${SPAWN_LIMITS.windowMs / 60_000} minutes;`,

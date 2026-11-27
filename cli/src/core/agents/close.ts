@@ -9,6 +9,7 @@ import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { CloseAgentService, inspectCloseActivity, type CloseAgentServiceDeps, type CloseMode } from '../../lib/closeAgentService.js'
 import type { OpenTabProtection } from '../../lib/openTabProtection.js'
 import { sid } from '../../lib/log.js'
+import { openclawUserRowSince } from '../../lib/openclawStore.js'
 import { projectDisplayName, type RegisteredSession, type registry } from '../../lib/registry.js'
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -35,12 +36,8 @@ export interface ClosingDeps {
   engineReady: (engine: string, ms: number) => Promise<void>
   /** The agents stopped and kept: a close of one already closed is answered closed. */
   stoppedAgents?: Pick<StoppedAgentStore, 'get' | 'resumeReservedAt'>
-  /** Whether the agent may be a Lead, which is never closed, as core/main.ts hands it in; absent, none is. */
-  leadProtected?: (agentId: string, changeId?: string) => boolean
-  /** Whether another switch of a Lead's engine is running, as core/main.ts hands it in; absent, none is. */
-  leadSwitching?: (agentId: string, changeId: string) => boolean
-  /** A Lead's switch's close ended, as core/main.ts hands it in; absent, nothing is told. */
-  leadSwitchEnded?: (agentId: string, changeId: string, stopped: boolean) => void
+  /** How many background commands an idle agent still runs, as core/main.ts hands it in; absent, none is read. */
+  backgroundCommands?: CloseAgentServiceDeps['backgroundCommands']
 }
 
 /** How long a close waits for an engine worker that restarted under its read, before reading once more. */
@@ -48,7 +45,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
-  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected, leadSwitching, leadSwitchEnded,
+  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, backgroundCommands,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -104,19 +101,25 @@ export function createAgentClosing({
     },
     stop: stopAgent,
     changed: announceSession,
-    leadProtected,
-    leadSwitching,
-    leadSwitchEnded,
-    // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
-    // that cannot be read says nothing, and the close is answered as changed, as before.
+    backgroundCommands,
+    // OpenClaw binds its key at launch, before any task: a key whose store has no user row has nothing to resume. A
+    // record already closed is read by its folder alone: its TUI exited, and its pid may now be another OpenClaw's.
+    conversationEmpty: async s => s.engine === 'openclaw' && !!s.sessionId
+      && await openclawUserRowSince(s.sessionId, {
+        pid: registry.byAgent(s.agentId) ? s.processIdentity?.pid ?? 0 : 0,
+        stateDir: s.openclawStateDir,
+      }, 0) === false,
+    // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed, and that
+    // record says whether a conversation was kept. A record that cannot be read says nothing, and the close is answered
+    // as changed, as before.
     closedAlready: request => {
-      if (!stoppedAgents || registry.byAgent(request.agentId)) return false
+      if (!stoppedAgents || registry.byAgent(request.agentId)) return null
       try {
-        if (stoppedAgents.resumeReservedAt(request.agentId) !== null) return false
+        if (stoppedAgents.resumeReservedAt(request.agentId) !== null) return null
         const stopped = stoppedAgents.get(request.agentId)
-        return !!stopped && new Date(stopped.registeredAt).toISOString() === request.createdAt
-          && (!request.sessionId || stopped.sessionId === request.sessionId)
-      } catch { return false }
+        return stopped && new Date(stopped.registeredAt).toISOString() === request.createdAt
+          && (!request.sessionId || stopped.sessionId === request.sessionId) ? stopped : null
+      } catch { return null }
     },
   })
   const cleanupPreview = async (): Promise<Record<string, unknown>> => {
@@ -164,9 +167,7 @@ export function createCloseRequests({ cleanupPreview, closeAgentService }: {
     }
     // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
     void service.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
-      ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}),
-      // Change agent names its switch, which a Swarm Product Manager's close guard checks (lib/closeAgentService.ts).
-      ...(typeof payload.changeId === 'string' && /^[0-9a-f]{32}$/.test(payload.changeId) ? { changeId: payload.changeId } : {}) })
+      ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
       .then(result => reply(result), () => reply({ error: 'CLOSE_FAILED' }))
   }
   return { preview, close }

@@ -3,26 +3,34 @@
     {
       "name": "browser_navigate",
       "description": "Open a URL in the current tab of your Browser, a Chrome your person can also see and use.",
+      "example": "navigate https://example.com",
+      "note": "open a page in the current tab",
       "inputSchema": { "type": "object", "properties": { "url": { "type": "string" } }, "required": ["url"] }
     },
     {
       "name": "browser_back",
       "description": "Go back one page in the current tab.",
+      "example": "back",
       "inputSchema": { "type": "object", "properties": {} }
     },
     {
       "name": "browser_snapshot",
       "description": "Read the current page as an accessibility tree. Interactive elements carry refs such as e12 for the other tools.",
+      "example": "snapshot",
+      "note": "read the page; elements get refs such as e12",
       "inputSchema": { "type": "object", "properties": {} }
     },
     {
       "name": "browser_click",
       "description": "Click the element with this ref from the last snapshot.",
+      "example": "click e12",
       "inputSchema": { "type": "object", "properties": { "ref": { "type": "string" } }, "required": ["ref"] }
     },
     {
       "name": "browser_type",
       "description": "Type text into the element with this ref, replacing what it holds. With submit, press Enter after.",
+      "example": "type e7 \"hello\" --submit",
+      "note": "replaces what the field holds; --submit presses Enter",
       "inputSchema": {
         "type": "object",
         "properties": { "ref": { "type": "string" }, "text": { "type": "string" }, "submit": { "type": "boolean" } },
@@ -32,11 +40,13 @@
     {
       "name": "browser_press",
       "description": "Press a key or a chord, such as Enter, Escape, ArrowDown or Control+A.",
+      "example": "press Enter",
       "inputSchema": { "type": "object", "properties": { "key": { "type": "string" } }, "required": ["key"] }
     },
     {
       "name": "browser_select",
       "description": "Choose options, by value or label, in the select element with this ref.",
+      "example": "select e9 \"Viet Nam\"",
       "inputSchema": {
         "type": "object",
         "properties": { "ref": { "type": "string" }, "values": { "type": "array", "items": { "type": "string" } } },
@@ -46,16 +56,22 @@
     {
       "name": "browser_scroll",
       "description": "Scroll the page by dy pixels; negative scrolls up.",
+      "example": "scroll 600",
+      "note": "pixels; a negative number scrolls up",
       "inputSchema": { "type": "object", "properties": { "dy": { "type": "number" } }, "required": ["dy"] }
     },
     {
       "name": "browser_screenshot",
       "description": "See the current tab as a JPEG image.",
+      "example": "screenshot",
+      "note": "saves a JPEG and prints its path; read that file",
       "inputSchema": { "type": "object", "properties": {} }
     },
     {
       "name": "browser_tabs",
       "description": "List, open, switch to or close tabs. index is a tab's number from list; close without it closes the current tab.",
+      "example": "tabs list",
+      "note": "also: tabs new, tabs select 2, tabs close",
       "inputSchema": {
         "type": "object",
         "properties": { "action": { "type": "string", "enum": ["list", "new", "select", "close"] }, "index": { "type": "integer" } },
@@ -65,6 +81,8 @@
     {
       "name": "browser_wait",
       "description": "Wait until text appears on the page, or for ms milliseconds. At most 30000 ms.",
+      "example": "wait \"Inbox\"",
+      "note": "or: wait --ms 2000",
       "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "ms": { "type": "integer", "maximum": 30000 } } }
     }
   ]

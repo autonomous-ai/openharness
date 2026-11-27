@@ -6,7 +6,6 @@ export default defineConfig({
   test: {
     ...base.test,
     include: ['src/dsh/**/*.spec.ts', 'src/backendSocket.dsh.spec.ts'],
-    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       enabled: true,

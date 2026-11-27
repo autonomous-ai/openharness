@@ -1,12 +1,17 @@
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LiveEvent } from '../normalize.js'
-import { SessionSearchIndex, folderWords, type SearchSource } from './indexer.js'
+import type { ProcessRow } from '../processTable.js'
+import { OpenSessions } from './external.js'
+import { claudeProvider } from './externals/claude.js'
+import { listProcesses, processView } from './externals/support.js'
+import { SessionSearchIndex, folderWords, type SearchSource, type SessionSearchIndexOptions } from './indexer.js'
 import { SessionSearchStore } from './store.js'
+import { builtinSqlite } from '../sqliteBuiltin.js'
 
 const dirs: string[] = []
 const cleanups: Array<() => void> = []
@@ -281,6 +286,44 @@ describe('SessionSearchIndex', () => {
     expect(store.session('e1')).toBeDefined()
   })
 
+  // Cmd-P must not resume a conversation the Claude app still has open: two processes would write it. Desktop refuses
+  // a hit that is open in an app (swarm_search.dart `sessionUnavailable`), so the daemon has to say so. It did not:
+  // macOS `ps` cut the app's Claude Code to `/Users/<name>` and nothing matched it as Claude Code (2026-11-15).
+  it('says a conversation the Claude app has open is open in an app', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'session-search-claude-app-'))
+    dirs.push(root)
+    const sessionId = '33333333-3333-4333-8333-333333333333'
+    const path = '/Users/someone/Library/Application Support/Claude/claude-code/2.1.325/485fdac4332e/claude.app/Contents/MacOS/claude'
+    const startMarker = 'Sun Nov 15 15:41:22 2026'
+    // The row as macOS reads it: `comm` cut at 16 bytes, argv[0] split at the space, the whole path beside them.
+    const app: ProcessRow = { pid: 73704, parentPid: 73703, executable: path.slice(0, 16), startMarker,
+      args: `${path} --output-format stream-json`, commandPath: path }
+    // Claude Code's own record of the session it has open (engines/claude/adoption.ts).
+    mkdirSync(join(root, 'sessions'))
+    writeFileSync(join(root, 'sessions', '73704.json'), JSON.stringify({ pid: 73704, sessionId, status: 'idle', startedAt: Date.parse(startMarker) + 400 }))
+    const transcriptPath = join(root, `${sessionId}.jsonl`)
+    writeFileSync(transcriptPath, prompt('why does the dial scroll jump', 0) + answer('The delta is doubled.', 1))
+    const openSessions = new OpenSessions({
+      providers: [claudeProvider({ projectsDir: join(root, 'projects'), home: root })],
+      view: () => processView(async () => null, () => true, () => listProcesses(async () => [app])),
+      // The app's process has no terminal, and is in no pane of Harness's.
+      ttys: async (pids) => new Map(pids.map((pid) => [pid, null])),
+      harnessTtys: async () => new Set(),
+    })
+    const store = SessionSearchStore.open(':memory:')!
+    const index = new SessionSearchIndex({
+      store, agents: () => [], openSessions,
+      sources: () => [{ agentId: '', sessionId, engine: 'claude', transcriptPath, header: '', changedAt: 1,
+        external: { cwd: '/work/dial', origin: 'claude-app', title: '' } }],
+    })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.sweep()
+    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    // A search never waits for a process table: it reads the last look.
+    await openSessions.fresh()
+    expect(index.search('dial scroll').hits[0]).toMatchObject({ sessionId, agentId: '', external: { origin: 'claude-app', open: true, openIn: 'app' } })
+  })
+
   it('starts over when the transcript was rewritten shorter', async () => {
     const { path, found, settle } = setup(prompt('first long conversation about cohorts and retention', 0) + answer('Done with the cohort table.', 1))
     await settle()
@@ -478,5 +521,142 @@ describe('SessionSearchIndex', () => {
     expect(folderWords('/home/me/code/worktrees/autonomous-harness/dapper-otter')).toBe('dapper-otter autonomous-harness')
     expect(folderWords('C:\\work\\app')).toBe('app work')
     expect(folderWords(null)).toBe('')
+  })
+})
+
+describe('SessionSearchIndex forgetting', () => {
+  // a1 has s1 (current) and s0 (before a /new); a2 has s2; two outside conversations e1, e2 (agent id '').
+  const source = (agentId: string, sessionId: string): SearchSource => ({
+    agentId, sessionId, engine: 'claude', transcriptPath: null, header: `${sessionId} work`, changedAt: 1,
+    ...(agentId ? {} : { external: { cwd: '/work', origin: 'terminal', title: sessionId } }),
+  })
+  let path: string
+  let store: SessionSearchStore
+  let index: SessionSearchIndex
+  let sources: SearchSource[]
+  let discover: () => Promise<void>
+  let options: Omit<SessionSearchIndexOptions, 'store'>
+  let logs: string[]
+  const drained = (target: SessionSearchIndex) => vi.waitFor(() => {
+    const state = target as unknown as { discovering: boolean; running: boolean }
+    expect(state.discovering || state.running).toBe(false)
+  })
+  const indexOn = (onStore: SessionSearchStore) => {
+    const made = new SessionSearchIndex({ ...options, store: onStore })
+    cleanups.push(() => { made.stop(); onStore.close() })
+    return made
+  }
+
+  beforeEach(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-search-forget-'))
+    dirs.push(dir)
+    path = join(dir, 'index.db')
+    sources = [source('a1', 's1'), source('a2', 's2'), source('', 'e1'), source('', 'e2')]
+    discover = async () => {}
+    logs = []
+    options = { sources: () => sources, agents: () => ['a1', 'a2'], discover: () => discover(), log: (line) => logs.push(line) }
+    store = SessionSearchStore.open(path)!
+    store.writeSession({ sessionId: 's0', agentId: 'a1', engine: 'claude', path: '', header: 's0 work', size: 0, mtime: 0,
+      resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 0 }, 0, [])
+    index = indexOn(store)
+    index.sweep(); await drained(index)
+    expect(store.sessionIds().sort()).toEqual(['e1', 'e2', 's0', 's1', 's2'])
+  })
+
+  it("deleting a harness's conversation removes every session filed under its agent, and no one else's", () => {
+    index.deleteHistory('s1')
+    expect(store.sessionIds().sort()).toEqual(['e1', 'e2', 's2'])
+    index.deleteHistory('e1')
+    expect(store.sessionIds().sort()).toEqual(['e2', 's2'])
+  })
+
+  it('a deleted conversation still on disk is not indexed again, by this index or by a new one on the same store', async () => {
+    // Its source is still listed: OpenClaw's kept store.
+    index.deleteHistory('s1')
+    index.sweep(); await drained(index)
+    expect(store.session('s1')).toBeUndefined()
+    const restarted = indexOn(SessionSearchStore.open(path)!)
+    restarted.sweep(); await drained(restarted)
+    expect(restarted.session('s1')).toBeUndefined()
+  })
+
+  it('the exclusion goes once the conversation is gone from disk, never after a discovery that failed', async () => {
+    index.deleteHistory('s1')
+    sources = sources.filter((listed) => listed.sessionId !== 's1')
+    discover = async () => { throw new Error('scan failed') }
+    index.sweep(); await drained(index)
+    expect(store.excluded().has('s1')).toBe(true)
+    discover = async () => {}
+    index.sweep(); await drained(index)
+    expect(store.excluded().has('s1')).toBe(false)
+  })
+
+  // `harness search` reads the file while the daemon runs: a read open across the delete keeps the checkpoint from
+  // finishing, and the erased words stay in the files until one does.
+  it('a checkpoint a reader held is said, and finished at the next sweep', async () => {
+    store.writeSession({ sessionId: 's9', agentId: 'a1', engine: 'claude', path: '', header: 's9 work', size: 0, mtime: 0,
+      resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 1 }, 0, [{ turn: 0, offset: 0, at: null, ask: 'email zanzibarquokka', answer: 'sent', tools: '' }])
+    store.checkpoint()
+    const reader = new (builtinSqlite()!)(path, { readOnly: true })
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) FROM turns').all()
+    index.deleteHistory('s1')
+    expect(logs).toContain('[search] a reader held the index: what a delete erased stays in its files until it lets go')
+    reader.exec('COMMIT')
+    reader.close()
+    index.sweep(); await drained(index)
+    const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+    expect(bytes.includes('zanzibarquokka')).toBe(false)
+  })
+
+  // A search's read lasts milliseconds: the delete's words leave the files a second after it, not at a sweep minutes on.
+  it('a checkpoint a reader held is asked again a second later, a few times at most', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      store.writeSession({ sessionId: 's9', agentId: 'a1', engine: 'claude', path: '', header: 's9 work', size: 0, mtime: 0,
+        resumeOffset: 0, resumeTurn: 0, lastAt: 1, turns: 1 }, 0, [{ turn: 0, offset: 0, at: null, ask: 'email zanzibarquokka', answer: 'sent', tools: '' }])
+      store.checkpoint()
+      const checkpoint = vi.spyOn(store, 'checkpoint')
+      const reader = new (builtinSqlite()!)(path, { readOnly: true })
+      reader.exec('BEGIN')
+      reader.prepare('SELECT count(*) FROM turns').all()
+      index.deleteHistory('s1')
+      vi.advanceTimersByTime(1_000)
+      expect(checkpoint).toHaveBeenCalledTimes(2)
+      reader.exec('COMMIT')
+      reader.close()
+      vi.advanceTimersByTime(2_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3)
+      const bytes = Buffer.concat(['', '-wal'].filter((suffix) => existsSync(path + suffix)).map((suffix) => readFileSync(path + suffix)))
+      expect(bytes.includes('zanzibarquokka')).toBe(false)
+      vi.advanceTimersByTime(60_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3)
+      // One a reader never lets go is asked again a few times, then left to the sweep.
+      const held = new (builtinSqlite()!)(path, { readOnly: true })
+      held.exec('BEGIN')
+      held.prepare('SELECT count(*) FROM turns').all()
+      index.deleteHistory('s2')
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(checkpoint).toHaveBeenCalledTimes(3 + 1 + 5)
+      held.exec('COMMIT')
+      held.close()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a pass still reading a deleted conversation does not write it back, though a sweep meanwhile found it gone', async () => {
+    let read: ((events: LiveEvent[]) => void) | undefined
+    sources = [...sources, { ...source('a3', 'h1'), readHistory: () => new Promise<LiveEvent[]>((resolve) => { read = resolve }) }]
+    index.sweep()
+    await vi.waitFor(() => expect(read).toBeDefined())
+    index.deleteHistory('h1')
+    sources = sources.filter((listed) => listed.sessionId !== 'h1')
+    index.sweep()
+    await vi.waitFor(() => expect((index as unknown as { discovering: boolean }).discovering).toBe(false))
+    read!([{ type: 'user_message', payload: { content: 'the secret plan' } }])
+    await drained(index)
+    expect(store.session('h1')).toBeUndefined()
+    expect(store.excluded().has('h1')).toBe(true)
+    index.sweep(); await drained(index)
+    expect(store.excluded().has('h1')).toBe(false)
   })
 })

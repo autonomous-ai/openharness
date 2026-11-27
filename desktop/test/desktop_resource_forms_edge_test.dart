@@ -259,7 +259,7 @@ void main() {
   });
 
   testWidgets(
-    'deleting an API shared with the Swarm says what stops, its buttons in a bar at the foot, Cancel first',
+    'deleting an API says what it removes, its buttons in a bar at the foot, Cancel first',
     (tester) async {
       final app = _App();
       final controller = ApiConnectionsController(app, machineId: 'm')
@@ -267,22 +267,15 @@ void main() {
         ..connections = [_connection];
       addTearDown(app.dispose);
       addTearDown(controller.dispose);
-      Future<void> mountWith(int? shares) => _mount(
+      await _mount(
         tester,
         ApiPickerForm(
-          key: ValueKey(shares),
           controller: controller,
           connectionId: _connection.id,
           removing: true,
-          swarmShares: shares,
           onClose: (_) {},
           onFocusChanged: (_) {},
         ),
-      );
-      await mountWith(1);
-      expect(
-        find.text('1 model stops being shared with this Swarm'),
-        findsOneWidget,
       );
       expect(find.textContaining('This removes the API and its saved key from '), findsOneWidget);
       final bar = find.byKey(const ValueKey('api-form:delete-bar'));
@@ -294,16 +287,6 @@ void main() {
         tester.getTopLeft(_api('cancel')).dx,
         lessThan(tester.getTopLeft(_api('delete')).dx),
       );
-      await mountWith(3);
-      expect(
-        find.text('3 models stop being shared with this Swarm'),
-        findsOneWidget,
-      );
-      // Not shared, or outside a Swarm: no note.
-      await mountWith(0);
-      expect(find.byKey(const ValueKey('api-form:shares-note')), findsNothing);
-      await mountWith(null);
-      expect(find.byKey(const ValueKey('api-form:shares-note')), findsNothing);
     },
   );
 

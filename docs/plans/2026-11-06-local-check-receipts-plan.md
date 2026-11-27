@@ -12,7 +12,7 @@ Implement sequentially in this session, test first, with one independent review 
 
 ## Global constraints
 
-- Own scripts/ and .github/; this required plan is the only documentation outside them. The PM removes superseded policy prose after shipment.
+- Own scripts/ and .github/; this required plan is the only documentation outside them.
 - No runtime dependencies, live sign-ins, native tool execution or release actions in this gate. Tests use temporary folders and fixture evidence.
 - Receipts identify the whole 40-character head, the named check, its canonical command and cwd, status passed, a positive integer pass count, and platform. Native Mac receipts require macos.
 - At most one `harness-local-checks` fenced JSON list, bounded by the PR body limit and 32 entries; errors name only known required checks, never arbitrary PR text.
@@ -46,4 +46,4 @@ Implement sequentially in this session, test first, with one independent review 
 - [x] Run the new tests, record their expected failure, then implement the contract and workflow wiring.
 - [x] Run targeted receipt/planner/source-input/merge-helper tests and actionlint; use automatic process CI for the full scripts suite.
 - [ ] Add concise receipt instructions/example to the PR template. Record red/green evidence, stable head, platform limits and timing in the draft PR before Ready.
-- [ ] Obtain independent review and hand the completed revision to the PM for merge.
+- [ ] Obtain independent review and hand the completed revision over for merge.

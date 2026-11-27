@@ -13,15 +13,15 @@ vi.mock('../lib/engineLaunch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/engineLaunch.js')>()
   return { ...actual, interactiveEngineShell: (shell?: string) => (seams.sh ? null : actual.interactiveEngineShell(shell)) }
 })
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>()
-  const spawn = ((...args: Parameters<typeof actual.spawn>) => {
+vi.mock('../lib/tied.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/tied.js')>()
+  const spawnTied = ((...args: Parameters<typeof actual.spawnTied>) => {
     if (seams.fakeChild) return seams.fakeChild()
-    const child = actual.spawn(...args)
+    const child = actual.spawnTied(...args)
     seams.started.push(child.pid)
     return child
-  }) as typeof actual.spawn
-  return { ...actual, spawn, default: { ...actual, spawn } }
+  }) as typeof actual.spawnTied
+  return { ...actual, spawnTied }
 })
 
 const { managedNodePath } = await import('../lib/nodeRuntime.js')

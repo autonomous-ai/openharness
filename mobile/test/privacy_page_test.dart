@@ -39,10 +39,19 @@ void main() {
     expect(find.textContaining('kept 10 days'), findsOneWidget);
     // A keyed code can be recomputed from the account id (that is how opt-out deletes it): pseudonymous, not anonymous.
     expect(find.textContaining('anonymous code'), findsNothing);
-    expect(find.textContaining('coded ID instead of your account'), findsWidgets);
+    expect(
+      find.textContaining('coded ID instead of your account'),
+      findsWidgets,
+    );
     expect(find.textContaining('sign-up day'), findsOneWidget);
-    expect(find.textContaining('New reports create no per-person history'), findsNothing);
-    expect(find.textContaining('are not stored with the combined totals'), findsOneWidget);
+    expect(
+      find.textContaining('New reports create no per-person history'),
+      findsNothing,
+    );
+    expect(
+      find.textContaining('are not stored with the combined totals'),
+      findsOneWidget,
+    );
   });
   testWidgets(
     'a failed write leaves an unavailable switch and a reload action',
@@ -66,4 +75,37 @@ void main() {
       expect(find.textContaining('PRIVATE_CANARY'), findsNothing);
     },
   );
+
+  testWidgets('See what’s shared names the dial and voice', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PrivacyPage(
+          feedback: (_, _) async {},
+          request: ({bool? enabled}) async => {'enabled': true},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('See what’s shared'));
+    await tester.pumpAndSettle();
+    // The label and its line are one Text.rich, so the label is matched as the line's start.
+    expect(
+      find.textContaining(
+        'Dial and voice\nDays connected, used and returned to; '
+        'time to first agent; agents shown by engine, host and app',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('seconds of voice turned into text'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'how long agents wait for you; agents\' notices to the dial and whether '
+        'the dial skill is installed; seconds of voice turned into text',
+      ),
+      findsOneWidget,
+    );
+  });
 }

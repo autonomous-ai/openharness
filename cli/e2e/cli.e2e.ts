@@ -20,8 +20,10 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/harnessd/platform.js'
+import { savedDaemonPort } from '../src/lib/daemonRecord.js'
+import { assertNodeAlone } from '../src/testing/testNode.js'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until, type DaemonOptions } from './harness/daemon.js'
 
 type Platform = 'launchd' | 'systemd'
 const uid = process.getuid!()
@@ -94,6 +96,17 @@ async function create(m: Machine, client: LocalClient, folder: string): Promise<
     return agent?.sessionId && agent.status === 'active' ? agent : null
   }, 60_000, 500)
 }
+/** A terminal tile in [folder], once it has its pane. */
+async function tile(m: Machine, client: LocalClient, folder: string): Promise<Record<string, any>> {
+  const cwd = join(m.daemon.projectsDir, folder)
+  mkdirSync(cwd, { recursive: true })
+  const created = await client.request('agent_create', { engine: 'terminal', cwd }, 90_000)
+  expect(created.error, JSON.stringify(created)).toBeUndefined()
+  return until(`${folder} to have its pane`, async () => {
+    const agent = await row(client, created.agent.id)
+    return agent?.tmuxPane ? agent : null
+  }, 60_000, 500)
+}
 const back = (client: LocalClient, agent: Record<string, any>) =>
   until(`${agent.id.slice(0, 8)} to be back`, async () => {
     const now = await row(client, agent.id)
@@ -106,7 +119,10 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** The core a master starts on an installed bundle: from the core's entry in the lean bundle it carries,
  *  written out into the data folder. */
 const leanCore = (m: Machine) => new RegExp(` ${escape(join(m.daemon.dataDir, 'lean'))}/[0-9a-f]{16}/harnessd-core\\.mjs __run$`)
-const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${m.daemon.port}/api/status`)).json() as Record<string, any>
+/** The port this machine's daemon bound, as the daemon recorded it (`daemon-<configured>.json`): `harness start` runs
+ *  it, so the harness never sees its output and cannot say which port it took. */
+const portOf = (m: Machine): number => savedDaemonPort(m.daemon.dataDir, m.daemon.configuredPort)
+const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${portOf(m)}/api/status`)).json() as Record<string, any>
 
 describe('harness start, stop and status from the installed bundle', () => {
   let machine: Machine | undefined
@@ -125,8 +141,8 @@ describe('harness start, stop and status from the installed bundle', () => {
     await m.daemon.close()
   })
 
-  async function install(platform: Platform = process.platform === 'darwin' ? 'launchd' : 'systemd'): Promise<Machine> {
-    const daemon = await IsolatedDaemon.create()
+  async function install(platform: Platform = process.platform === 'darwin' ? 'launchd' : 'systemd', options: DaemonOptions = {}): Promise<Machine> {
+    const daemon = await IsolatedDaemon.create(options)
     const home = daemon.env.HOME!
     // The bundle where the installer puts it, beside its hook script.
     const cliDir = join(home, '.harness', 'cli')
@@ -134,11 +150,14 @@ describe('harness start, stop and status from the installed bundle', () => {
     const cli = join(cliDir, 'cli.js')
     copyFileSync(bundle, cli)
     copyFileSync(join(dirname(bundle), 'notify.mjs'), join(cliDir, 'notify.mjs'))
-    // The managed Node as the installer records it: a runtime folder, and current-node naming its binary.
+    // The managed Node as the installer records it: a runtime folder, and current-node naming its binary. The link
+    // names the run's Node (e2e/harness/testNode.ts), not the worker's: Node names itself by the real path behind a
+    // link, and the product looks beside that path for engines (audit of 2026-11-16,
+    // docs/plans/2026-11-16-e2e-isolation-3-design.md).
     const runtime = daemon.env.ADAPTER_RUNTIME_DIR!
     const node = join(runtime, 'node-e2e', 'bin', 'node')
     mkdirSync(dirname(node), { recursive: true })
-    symlinkSync(process.execPath, node)
+    symlinkSync(process.env.E2E_NODE_PATH!, node)
     writeFileSync(join(runtime, 'current-node'), `${node}\n`)
     const fakes = join(daemon.root, 'platform-bin')
     mkdirSync(fakes)
@@ -147,10 +166,8 @@ describe('harness start, stop and status from the installed bundle', () => {
       writeFileSync(join(fakes, name), `#!${process.execPath}\nimport(${JSON.stringify(fake)}).then((m) => m.run(${JSON.stringify(name)}))\n`, { mode: 0o755 })
     }
     const env: NodeJS.ProcessEnv = {
-      ...daemon.env, PATH: `${fakes}:${daemon.env.PATH}`, XDG_CONFIG_HOME: join(home, '.config'), HARNESSD_TEST_PLATFORM: platform,
+      ...(await daemon.shellEnv()), PATH: `${fakes}:${daemon.env.PATH}`, XDG_CONFIG_HOME: join(home, '.config'), HARNESSD_TEST_PLATFORM: platform,
     }
-    // The defaults, all under the throwaway home: never a folder of the person running the tests.
-    for (const name of ['ADAPTER_CLI_DIR', 'HARNESS_BIN_DIR', 'HARNESS_LOGS_DIR', 'HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH']) delete env[name]
     const definition = platform === 'launchd'
       ? join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
       : join(home, '.config', 'systemd', 'user', SYSTEMD_UNIT)
@@ -167,15 +184,35 @@ describe('harness start, stop and status from the installed bundle', () => {
 
   it('starts on an external Node reached through a managed-runtime symlink without relocating it', async () => {
     // Found by QA on a quiet machine: a Homebrew Node hard-linked under a daemon name aborted in dyld.
-    // install() deliberately points this managed path at the external interpreter running the fixture.
+    // install() deliberately points this managed path at a Node outside the runtime folder: the run's.
     const m = await install()
     const started = await harness(m, 'start')
     expect(started.status, said(started)).toBe(0)
     seen.add(pidOf(m)!)
-    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect((await fetch(`http://127.0.0.1:${portOf(m)}/api/health`)).ok).toBe(true)
     expect(existsSync(join(dirname(dirname(m.node)), 'libexec', 'harnessd', 'harnessd'))).toBe(false)
     const stopped = await harness(m, 'stop')
     expect(stopped.status, said(stopped)).toBe(0)
+  })
+
+  // The product looks for npm-installed engines beside the Node the daemon runs on, whatever PATH says
+  // (lib/engineLaunch.ts `npmRuntimeBins`), and Node names itself by the real path behind the managed link: on a
+  // developer's Mac that was a version manager's folder, with their real engines in it (audit of 2026-11-16,
+  // docs/plans/2026-11-16-e2e-isolation-3-design.md). This reads one path and one listing, and makes no harness.
+  it('runs its core on the run\'s Node, alone in its folder, behind the managed link', async () => {
+    const m = await install()
+    const started = await harness(m, 'start')
+    expect(started.status, said(started)).toBe(0)
+    const master = pidOf(m)!
+    const core = (await statusOf(m)).corePid as number
+    seen.add(master).add(core)
+    // The core's line: the master starts the core on its own Node.
+    const ran = commandOf(core).split(' ')[0]
+    // A yes or a no: at the base the path is the developer's own Node.
+    expect(ran === process.env.E2E_NODE_PATH, 'the core runs on the run\'s Node').toBe(true)
+    // Only after it: a refusal here names the run's folder, never the developer's.
+    expect(() => assertNodeAlone(ran)).not.toThrow()
+    expect((await harness(m, 'stop')).status).toBe(0)
   })
 
   it('without the service: start runs a master and core, an agent outlives stop in tmux and is back on the next start, and no platform is asked', async () => {
@@ -185,15 +222,15 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(started.stdout).toContain('● started · this computer only (not signed in)')
     const master = pidOf(m)!
     expect(alive(master)).toBe(true)
-    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect((await fetch(`http://127.0.0.1:${portOf(m)}/api/health`)).ok).toBe(true)
     const status = await statusOf(m)
     expect(status.pid).toBe(master)
     const core = status.corePid as number
     expect(core).not.toBe(master)
     seen.add(master).add(core)
-    // harnessd's master (it retitles itself), running the installed bundle's core: from the lean bundle that
+    // harnessd's master, running the installed bundle's core: from the lean bundle that
     // bundle carries, written out into the data folder (src/harnessd/leanBundle.ts).
-    expect(commandOf(master)).toBe('harnessd')
+    expect(commandOf(master)).toMatch(/ __harnessd$/)
     expect(commandOf(core)).toMatch(leanCore(m))
 
     const running = await harness(m, 'status')
@@ -225,6 +262,29 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(calls(m), 'no platform tool was asked anything').toEqual([])
   })
 
+  // Another program's token, an agent's session and a provider key, as the shell that runs `harness start` may hold
+  // them: made-up values (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+  it('starts the daemon with only the allowlist of the shell: a pane has none of its tokens, and the env file\'s variables', async () => {
+    const m = await install(undefined, { envFile: { E2E_FROM_ENV_FILE: 'reaches-the-pane' } })
+    const shell = { ...m.env, SENTINEL_TOKEN: 'sentinel-from-the-shell', CLAUDE_CODE_MESSAGING_TOKEN: 'agent-token', ANTHROPIC_API_KEY: 'kept-sentinel' }
+    const started = await harness({ ...m, env: shell }, 'start')
+    expect(started.status, said(started)).toBe(0)
+    seen.add(pidOf(m)!)
+    const client = await LocalClient.connect(m.daemon)
+    const pane = (await tile(m, client, 'shell-env')).tmuxPane
+    const env = await m.daemon.paneEnvironment(pane, 'shell-env')
+    client.close()
+    expect(env.SENTINEL_TOKEN).toBeUndefined()
+    expect(env.CLAUDE_CODE_MESSAGING_TOKEN).toBeUndefined()
+    expect(env.ANTHROPIC_API_KEY).toBe('kept-sentinel')
+    expect(env.PATH).toContain(join(m.daemon.root, 'bin'))
+    expect(env.E2E_FROM_ENV_FILE).toBe('reaches-the-pane')
+    const log = readFileSync(join(m.daemon.dataDir, 'harness.log'), 'utf8')
+    expect(log).toMatch(/\[env\] started with \d+ variables; [1-9]\d* left out \(docs\/cli\.md#the-daemons-environment\)/)
+    expect(log.includes('SENTINEL_TOKEN') || log.includes('sentinel-from-the-shell'), 'the log names no variable').toBe(false)
+    expect((await harness(m, 'stop')).status).toBe(0)
+  })
+
   it.each(['launchd', 'systemd'] as const)('with the service installed for this data folder: start and stop go through %s, and status names it', async (platform) => {
     const m = await install(platform)
     allow(m, 'platform')
@@ -234,7 +294,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     const first = pidOf(m)!
     seen.add(first)
     expect(platformPid(m), `${platform} runs the master`).toBe(first)
-    expect(commandOf(first)).toBe('harnessd')
+    expect(commandOf(first)).toMatch(/ __harnessd$/)
     const firstCore = (await statusOf(m)).corePid as number
     seen.add(firstCore)
     expect(commandOf(firstCore)).toMatch(leanCore(m))
@@ -293,6 +353,42 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect((await harness(m, 'stop')).stdout).toContain(`machine stopped (pid ${third})`)
     expect(calls(m).slice(from)).toEqual([])
     expect(await panes(m)).toBe(before)
+  })
+
+  // On a Linux desktop the login entry and Desktop may both run `harness start` at the same moment: the spawn lock, and
+  // with the opt-in unit systemd, must leave one master per data folder (docs/plans/2026-11-19-dial-linux-design.md § 1.1a).
+  // One machine for both halves: without the unit no platform is asked, whatever HARNESSD_TEST_PLATFORM names.
+  it('two starts at once, as the login entry and Desktop: one master', async () => {
+    const m = await install('systemd')
+    // Of every process, as this check alone still reads them: a second master a start left to launchd is in no tree of
+    // the test's own (testing/spawnedRuns.ts processTree).
+    const masters = () => execFileSync('ps', ['-A', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      .split('\n').flatMap((line) => {
+        const row = /^\s*(\d+)\s+(.*)$/.exec(line)
+        return row && row[2]!.includes(`${m.daemon.root}/`) && row[2]!.endsWith(' __harnessd') ? [{ pid: Number(row[1]) }] : []
+      })
+    const together = async () => {
+      const runs = await Promise.all([harness(m, 'start'), harness(m, 'start')])
+      for (const run of runs) expect(run.status, said(run)).toBe(0)
+      expect(runs.filter((run) => said(run).includes('already running')), 'one start found the other\'s master').toHaveLength(1)
+      const master = pidOf(m)!
+      seen.add(master)
+      expect(alive(master)).toBe(true)
+      expect(masters().map((row) => row.pid)).toEqual([master])
+      return master
+    }
+
+    await together()
+    expect((await harness(m, 'stop')).status).toBe(0)
+    expect(calls(m), 'no platform tool was asked anything').toEqual([])
+
+    allow(m, 'platform')
+    expect((await harness(m, 'service', 'install')).status).toBe(0)
+    seen.add(pidOf(m)!)
+    expect((await harness(m, 'stop')).status).toBe(0)
+    await until('the unit\'s master to go', () => masters().length === 0, 10_000)
+    const master = await together()
+    expect(platformPid(m), 'systemd runs it').toBe(master)
   })
 
   it.each(['launchd', 'systemd'] as const)('ignores a %s definition written for another data folder', async (platform) => {

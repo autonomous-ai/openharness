@@ -19,7 +19,7 @@ check exactly as before.
 background, or make it cheaper; a signed-out person still lands on sign-in; before/after speed marks; tests that
 signed-in and signed-out launches both land on the right screen. Two security reviews (sign-in state).
 
-This plan is written and carried out by its Engineer, test first; there is no execution handoff.
+This plan is written and carried out test first; there is no execution handoff.
 
 ## Design
 

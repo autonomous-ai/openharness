@@ -16,6 +16,7 @@
  * a notice part, and `<part>.<member>` one member.
  */
 import { FAIL, readFallback, ServiceUnavailableError, type PortFallbacks } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 
 export interface PartGuardOptions {
   log?: (line: string) => void
@@ -27,8 +28,6 @@ export interface PartGuardOptions {
 }
 
 type Member = (...args: unknown[]) => unknown
-
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 export function createPartGuard(options: PartGuardOptions = {}) {
   const log = options.log ?? ((line: string) => console.error(line))
@@ -49,12 +48,12 @@ export function createPartGuard(options: PartGuardOptions = {}) {
     const at = now()
     const last = said.get(part)
     if (last && at - last.at < 60_000) { last.quiet++; return }
-    log(`[devices] ${part} failed · ${describe(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
+    log(`[devices] ${part} failed · ${errorKind(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
     said.set(part, { at, quiet: 0 })
   }
 
   const failed = (part: string, member: string, error: unknown, stop: (() => unknown) | undefined): void => {
-    log(`[devices] ${part}.${member} failed · ${describe(error)}`)
+    log(`[devices] ${part}.${member} failed · ${errorKind(error)}`)
     const at = now()
     const recent = [...(failures.get(part) ?? []).filter((t) => at - t < windowMs), at]
     failures.set(part, recent)
@@ -84,7 +83,7 @@ export function createPartGuard(options: PartGuardOptions = {}) {
         target = build()
       } catch (error) {
         off.add(part)
-        log(`[devices] ${part} did not start · ${describe(error)} · the devices run without it`)
+        log(`[devices] ${part} did not start · ${errorKind(error)} · the devices run without it`)
         return null
       }
       const stop = (target as { stop?: () => unknown }).stop?.bind(target)

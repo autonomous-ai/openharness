@@ -2,12 +2,16 @@ import * as esbuild from 'esbuild'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readClaudePluginBundle } from './scripts/lib/claudePluginBundle.mjs'
+import { readOrcaPluginBundle } from './scripts/lib/orcaPluginBundle.mjs'
+import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
+import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
 const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('../store/agents/memories', import.meta.url))))
+const hachiBundle = JSON.stringify(readHachiBundle(fileURLToPath(new URL('../store/agents/hachi', import.meta.url))))
 
 // Bake the version in so `node dist/cli.js version` works in the dev/per-file build too (parity with
 // build-bundle.mjs). The bundle build overrides this from ADAPTER_VERSION at release time.
@@ -49,9 +53,12 @@ try {
       __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
       __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
       __MEMORIES_BUNDLE__: JSON.stringify(memoriesBundle),
+      __HACHI_BUNDLE__: JSON.stringify(hachiBundle),
       // The guest helper and its sudoers drop-in (src/lib/guestHelperAssets.ts): the installed CLI is cli.js alone.
       __GUEST_HELPER__: JSON.stringify(readFileSync('assets/guest-helper/guest-helper.sh', 'utf8')),
       __GUEST_SUDOERS__: JSON.stringify(readFileSync('assets/guest-helper/sudoers', 'utf8')),
+      // The instructions in the model card Codex is given for a grid model (src/lib/codexGridModel.ts).
+      __CODEX_GRID_INSTRUCTIONS__: JSON.stringify(readFileSync('assets/codex/grid-model-instructions.md', 'utf8')),
       // The agent browser's image files (src/services/agentBrowser/assets.ts) and its tool list (src/lib/browserToolsAsset.ts).
       __BROWSER_CONTAINERFILE__: JSON.stringify(readFileSync('assets/browser/Containerfile', 'utf8')),
       __BROWSER_ENTRYPOINT__: JSON.stringify(readFileSync('assets/browser/entrypoint.sh', 'utf8')),
@@ -66,6 +73,13 @@ try {
       __BROWSER_DEVICE_INJECT__: JSON.stringify(readFileSync('assets/browser/device-inject.mjs', 'utf8')),
       // Claude Code's status line script (src/engines/kit/statusLine.ts), which a launch writes into the data folder.
       __STATUS_LINE_SCRIPT__: JSON.stringify(readFileSync('hook/statusline.mjs', 'utf8')),
+      // Harness's VS Code extension (src/devices/vscodeExtension.ts), at this CLI's version: the two ship together.
+      __VSCODE_EXTENSION__: JSON.stringify(await readVscodeExtensionBundle(version)),
+      // Harness's Orca plugin, at this CLI's version: `harness device orca` installs it from the data folder.
+      __ORCA_PLUGIN__: JSON.stringify(readOrcaPluginBundle(version)),
+      // Claude Code's marketplace with Harness's two plugins, at this CLI's version: Claude Code installs them from the
+      // data folder, with no git.
+      __CLAUDE_PLUGIN__: JSON.stringify(readClaudePluginBundle(version)),
     },
     logLevel: 'info',
   })

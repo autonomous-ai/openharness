@@ -1,0 +1,4 @@
+{
+  "port": 8080,
+  "db": { "host": "pg-old.invalid", "port": 5432, "database": "orders", "user": "orders_app", "timeoutMs": 3000 }
+}

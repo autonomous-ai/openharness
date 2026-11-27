@@ -125,7 +125,6 @@ export function createHandoffPublisher(deps: HandoffPublicationDeps) {
         if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
       }
       return await publishHandoff(join(deps.directory, 'handoff-receipts'), prepared, verify, () => {
-        // Native verification and guard fsyncs can consume the remaining deadline without yielding.
         if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
       })
     } catch (error) {

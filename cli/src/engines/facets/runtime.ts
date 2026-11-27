@@ -9,7 +9,9 @@ export interface RuntimeProfile {
   effort: string
 }
 
-export interface RuntimeModelOption { id: string; displayName: string }
+/** One model-and-effort choice. [description] is the engine's own line under the model ("For complex work and everyday
+ * tasks"), where the engine gives one. */
+export interface RuntimeModelOption { id: string; displayName: string; description?: string }
 
 export interface RuntimeState {
   model: string | null
@@ -17,14 +19,14 @@ export interface RuntimeState {
   mode: 'default' | 'plan' | 'unknown'
   cliVersion: string | null
   observedAt: number | null
-  /** The effort the settings last filled in. While [effort] is still that one, the session has shown none of its own, and
-   * a later settings read may change it; an effort the session showed is never replaced by the settings. */
+  /** The effort a configuration read last filled in, the launch flag's or the settings'. While [effort] is still that one,
+   * the session has shown none of its own, and a later read may change it; an effort the session showed is never replaced. */
   settingsEffort?: string
 }
 
 export type RuntimeField = 'model' | 'effort' | 'mode'
 export type RuntimeSession = Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine' | 'model'
-  | 'cliVersion' | 'cwd' | 'transcriptPath' | 'codexHome'>
+  | 'cliVersion' | 'cwd' | 'transcriptPath' | 'codexHome' | 'launchModel'>
 
 /** The transaction belongs to core. An engine interprets evidence against a supplied snapshot. */
 export interface RuntimeControl {
@@ -44,6 +46,25 @@ export interface RuntimeContext {
 /** Engine-private evidence. Core transports it but never interprets its keys. */
 export type RuntimeRecord = Record<string, string | boolean | null>
 
+/**
+ * What one transcript record of another engine says of its session's profile, as that engine's reader reads it in their
+ * worker (engines/others/streams.ts): plain values the core applies to the state it keeps (kit/runtime.ts
+ * `applyProfileEvidence`), so no record of theirs is parsed in the core.
+ */
+export interface ProfileEvidence {
+  cliVersion?: string
+  model?: string
+  effort?: string
+  /** An effort to show while the session has shown none: Cursor names its effort only in its pane. */
+  effortUnset?: string
+  /** What this names confirms a switch in flight to it: Pi's and omp's records name what they switched to. */
+  confirms?: true
+  /** A model that changed reads the configuration again: Command Code keeps an effort per model. */
+  refresh?: true
+  /** The folder the engine's own tools run in (OpenClaw's session header), null when its header names none. */
+  workspace?: string | null
+}
+
 export interface RuntimeCatalogModel {
   slug: string
   displayName: string
@@ -57,8 +78,8 @@ export interface EngineRuntime {
   reduce(context: RuntimeContext, record: RuntimeRecord): void
   transcript(context: RuntimeContext, record: Record<string, unknown>): void
   pane(context: RuntimeContext, text: string): void
-  /** The effort the engine's settings start a session with: a default, which fills an effort the session has not shown
-   * and never replaces one it has (a reply's, a pane's), as `fillConfiguredEffort` applies it. */
+  /** The effort a session starts with: its launch flag's, else its engine's settings'. A default, which fills an effort the
+   * session has not shown and never replaces one it has (a reply's, a pane's), as `fillConfiguredEffort` applies it. */
   configuredEffort?(session: RuntimeSession): Promise<string>
   selectedModel(session: RuntimeSession, state: RuntimeState): string | null
   models(session: RuntimeSession, state: RuntimeState | undefined): Promise<RuntimeModelOption[]>

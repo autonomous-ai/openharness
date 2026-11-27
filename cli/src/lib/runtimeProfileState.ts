@@ -1,14 +1,16 @@
 /** Eager state/control owner; native interpretation is supplied by engine facets. */
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
 export { parseRuntimeProfile } from './runtimeProfileWire.js'
+import { launchFlagsOf } from './launchFlags.js'
 import type { RegisteredSession } from './registry.js'
-import type { RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
+import type { ProfileEvidence, RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../engines/facets/inlineRuntime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
-import { encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
+import { applyProfileEvidence, encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 import { engineNow, isOtherEngine, loadEngine } from '../engines/inProcess.js'
 import { processIdentityKey } from './terminalRuntime.js'
+import { errorKind } from './log.js'
 
 const blankState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 
@@ -39,6 +41,13 @@ const copyControl = (control: RuntimeControl | undefined): RuntimeControl | unde
   ...control, target: { ...control.target },
 }
 
+/** A copy of [session] for an engine to read, with the launch flags only where its process got them (launchFlagsOf). */
+function engineCopy(session: RegisteredSession): RegisteredSession {
+  const copy = { ...session }
+  if (!launchFlagsOf(session)) delete copy.launchModel
+  return copy
+}
+
 export class RuntimeProfileState {
   constructor(private readonly runtimeFor: RuntimeFor,
     private readonly resolve?: (agentId: string) => RegisteredSession | undefined) {}
@@ -47,6 +56,7 @@ export class RuntimeProfileState {
   private readonly waiters = new Map<string, Set<StateWaiter>>()
   private readonly changeTimers = new Map<string, NodeJS.Timeout>()
   private readonly readers = new Map<string, InlineRuntimeReader>()
+  private readonly workspaces = new Map<string, string>()
   private readonly failedReaders = new Set<string>()
   private readonly versions = new WeakMap<RuntimeState, number>()
   private readonly configReads = new WeakMap<RuntimeState, object>()
@@ -86,7 +96,7 @@ export class RuntimeProfileState {
       return reader
     } catch (error) {
       this.failedReaders.add(engine)
-      console.warn(`[runtime-profile] ${engine} reader unavailable:`, error instanceof Error ? error.message : String(error))
+      console.warn(`[runtime-profile] ${engine} reader unavailable:`, errorKind(error))
       return null
     }
   }
@@ -135,12 +145,38 @@ export class RuntimeProfileState {
     let raw: Record<string, unknown> | null
     try { raw = record(JSON.parse(rawLine)) } catch { return false }
     if (!raw) return false
-    const before = this.selectedModel(session)
     const runtime = this.runtimeFor(session.engine)
-    const context = this.observe(this.context(session, silent))
-    if (runtime) runtime.transcript(context, raw)
-    else this.readerNow(session.engine)?.transcript?.(context, raw)
+    if (!runtime) return false
+    const before = this.selectedModel(session)
+    runtime.transcript(this.observe(this.context(session, silent)), raw)
     return this.observed(session, before, silent)
+  }
+
+  /**
+   * What another engine's transcript records said of the profile, read in their worker (facets/runtime.ts
+   * `ProfileEvidence`), applied as their readers applied each record here: in order, to the state this keeps.
+   */
+  evidence(session: RegisteredSession, evidence: readonly ProfileEvidence[], silent = false): boolean {
+    const current = this.currentSession(session)
+    if (!current || !evidence.length) return false
+    session = current
+    const before = this.selectedModel(session)
+    const context = this.observe(this.context(session, silent))
+    for (const one of evidence) {
+      if (one.workspace !== undefined) {
+        if (one.workspace) this.workspaces.set(session.sessionId, one.workspace)
+        else this.workspaces.delete(session.sessionId)
+      }
+      applyProfileEvidence(context, one)
+    }
+    return this.observed(session, before, silent)
+  }
+
+  /** A fold's evidence, on a fresh state: as `hydrate` reads a transcript's lines, silently. */
+  hydrateEvidence(session: RegisteredSession, evidence: readonly ProfileEvidence[]): void {
+    if (this.unbound(session.sessionId) || !this.currentSession(session)) return
+    this.states.set(session.sessionId, freshState(session))
+    this.evidence(session, evidence, true)
   }
 
   ingestPane(session: RegisteredSession, paneText: string, silent = false): boolean {
@@ -181,7 +217,7 @@ export class RuntimeProfileState {
     const reader = runtime ? null : await this.reader(session.engine)
     if (!current() || (!runtime?.configuredEffort && !reader?.config)) return false
     const before = this.selectedModel(session)
-    const context = { ...this.context(session, silent), session: { ...session }, state: { ...state }, control: copyControl(control) }
+    const context = { ...this.context(session, silent), session: engineCopy(session), state: { ...state }, control: copyControl(control) }
     if (runtime?.configuredEffort) fillConfiguredEffort(context.state, await runtime.configuredEffort(context.session))
     else if (!await reader!.config!(context)) return false
     // An optional reader cannot publish into a forgotten/rebound row or replace newer evidence.
@@ -192,8 +228,11 @@ export class RuntimeProfileState {
     return this.observed(session, before, silent)
   }
 
-  supportsControl(session: RegisteredSession): boolean {
-    return !session.gateway && (this.runtimeFor(session.engine)?.supportsControl(session) ?? false)
+  async supportsControl(session: RegisteredSession): Promise<boolean> {
+    if (session.gateway) return false
+    const runtime = this.runtimeFor(session.engine)
+    if (runtime) return runtime.supportsControl(session)
+    return (await this.reader(session.engine))?.supportsControl?.(session) ?? false
   }
 
   effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): boolean {
@@ -214,7 +253,7 @@ export class RuntimeProfileState {
   } {
     const previous = this.state(session.sessionId), version = this.version(previous)
     const identity = readIdentity(session), control = this.controls.get(session.sessionId)
-    const stagedSession = { ...session }, stagedControl = copyControl(control)
+    const stagedSession = engineCopy(session), stagedControl = copyControl(control)
     const staged = freshState(session)
     let committed = false, failed = false
     const current = () => !committed && !failed && !this.unbound(session.sessionId)
@@ -266,11 +305,11 @@ export class RuntimeProfileState {
     try { return await operation() } finally { this.suppressNotifications-- }
   }
 
-  /** The engine's own workspace for this session, when its reader knows one (the frame's `workspace`). Asked of every
-   *  frame, so only a reader already in use answers: building a frame never loads an engine's code. */
+  /** The engine's own workspace for this session, when its records named one (the frame's `workspace`): OpenClaw's
+   *  session header. Asked of every frame, so it reads only what is kept: building a frame never loads an engine's code. */
   workspace(session: RegisteredSession): string | null {
     if (this.unbound(session.sessionId)) return null
-    return this.readers.get(session.engine)?.workspace?.(session.sessionId) ?? null
+    return this.workspaces.get(session.sessionId) ?? null
   }
 
   selectedModel(session: RegisteredSession): string | null {
@@ -357,6 +396,7 @@ export class RuntimeProfileState {
 
   forget(sessionId: string): void {
     this.states.delete(sessionId)
+    this.workspaces.delete(sessionId)
     this.controls.delete(sessionId)
     const timer = this.changeTimers.get(sessionId)
     if (timer) clearTimeout(timer)
@@ -372,7 +412,7 @@ export class RuntimeProfileState {
       if (this.states.has(sessionId)) return
       for (const reader of readers) {
         try { reader.forget?.(sessionId) }
-        catch (error) { console.warn(`[runtime-profile] ${reader.engine} cleanup failed:`, error instanceof Error ? error.message : String(error)) }
+        catch (error) { console.warn(`[runtime-profile] ${reader.engine} cleanup failed:`, errorKind(error)) }
       }
     })
   }
@@ -386,7 +426,13 @@ export class RuntimeProfileState {
     // Display-only through a gateway: the empty catalogue IS the mechanism (see the note above), so web
     // renders a static chip and the device picker closes instead of offering a list we cannot enumerate.
     if (session.gateway) return []
-    return this.runtimeFor(session.engine)?.models(session, this.states.get(session.sessionId)) ?? []
+    const runtime = this.runtimeFor(session.engine)
+    if (runtime) return runtime.models(session, this.states.get(session.sessionId))
+    // Another engine lists its own only where its reader can drive a pick into the pane (OpenCode's pickers): a list
+    // nothing can act on is a picker that flashes open and fails.
+    const reader = await this.reader(session.engine)
+    if (!reader?.supportsControl?.(session) || !reader.models) return []
+    return reader.models(this.context(session, true))
   }
 
   private unbound(sessionId: string): boolean {
@@ -465,9 +511,9 @@ export class RuntimeProfileState {
     return reader?.engine === 'commandcode' ? reader.target(sessionId, profileId) : null
   }
 
-  async opencodeCatalog() {
+  async opencodeCatalog(cwd?: string | null) {
     const reader = await this.reader('opencode')
-    return reader?.engine === 'opencode' ? reader.catalog() : []
+    return reader?.engine === 'opencode' ? reader.catalog(cwd) : []
   }
 
   async kiloCatalog() {

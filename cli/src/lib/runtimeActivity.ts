@@ -20,8 +20,11 @@ export class RuntimeActivityReader {
   async read(session: RegisteredSession): Promise<ActivityState> {
     const state = await this.deps.codex(session)
     if (state !== 'unknown') return state
-    if (session.engine !== 'claude' && session.engine !== 'codex') return 'unknown'
-    const screen = await this.deps.capture(session)
+    if (session.engine !== 'claude' && session.engine !== 'codex' && session.engine !== 'openclaw') return 'unknown'
+    return this.observe(session, await this.deps.capture(session))
+  }
+  /** What [screen], a capture of the session's pane, says against the one read before it. */
+  async observe(session: RegisteredSession, screen: string | null): Promise<ActivityState> {
     const runtime = activityRuntimeKey(session)
     const previous = this.footers.get(session.sessionId)
     const reading = await this.deps.readScreen(session, screen)

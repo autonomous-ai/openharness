@@ -15,7 +15,7 @@
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
-import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { oversizeRow, readStorePages } from '../../lib/sqlitePage.js'
 import {
   MAX_OUTPUT, MAX_THINKING, clip, object, str,
   kiloToolName, toolOutputText, toolResultText, toolSummary, userMessageText,
@@ -25,7 +25,6 @@ import {
 
 const ID_RE = /^[A-Za-z0-9_]+$/
 const POLL_MS = 1_000
-const MAX_BUFFER = 32 * 1024 * 1024
 
 function parseJson(text: unknown): Record<string, unknown> {
   if (typeof text !== 'string') return object(text) ?? {}
@@ -45,24 +44,28 @@ export async function readKiloMessages(
   sessionId: string,
   after?: Cursor | null,
 ): Promise<KiloMessage[]> {
+  return await loadKiloMessages(dbPath, sessionId, after) ?? []
+}
+
+/** As [readKiloMessages], but null when the store did not answer (locked, mid-write, past its deadline). */
+async function loadKiloMessages(
+  dbPath: string,
+  sessionId: string,
+  after?: Cursor | null,
+): Promise<KiloMessage[] | null> {
   if (!ID_RE.test(sessionId)) return []
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
-  const cond = bounded
-    ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
-    : ''
-  const sql =
-    'SELECT m.id AS mid, m.time_created AS mtc, m.data AS mdata, p.id AS pid, p.data AS pdata ' +
-    'FROM message m LEFT JOIN part p ON p.message_id = m.id ' +
-    `WHERE m.session_id = ? ${cond}` +
-    'ORDER BY m.time_created, m.id, p.time_created, p.id;'
-  const params = bounded
-    ? [sessionId, Math.trunc(after!.tc), Math.trunc(after!.tc), after!.id]
-    : [sessionId]
-
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  // #4188: one query for the whole session was refused past 32 MiB on every poll, and the session never seeded. A
+  // page holds whole messages, each with its parts: a message's own row, then its part rows.
+  const result = await readStorePages(dbPath, {
+    table: 'message', where: 't.session_id = ?', params: [sessionId],
+    key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mid', sql: 't.id' }], columns: [{ as: 'mdata', sql: 't.data' }],
+    parts: { table: 'part', on: 'p.message_id = t.id', order: ['ptc', 'pid'],
+      columns: [{ as: 'ptc', sql: 'p.time_created' }, { as: 'pid', sql: 'p.id' }, { as: 'pdata', sql: 'p.data' }] },
+  }, bounded ? [Math.trunc(after!.tc), after!.id] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new KiloSqliteMissing()
-    return [] // db locked / transient — retry next tick
+    return null // db locked / transient — retry next tick
   }
   const rows = result.rows
 
@@ -71,6 +74,7 @@ export async function readKiloMessages(
   for (const row of rows) {
     const mid = str(row.mid)
     if (!mid) continue
+    if (Number(row.page_big)) { oversizeRow('kilo', sessionId, `id ${mid}`); continue }
     let msg = byId.get(mid)
     if (!msg) {
       const mdata = parseJson(row.mdata)
@@ -118,6 +122,8 @@ export class KiloReader {
   private open = false
   private thinking = 0
   private cursor: Cursor | null = null
+  /** Whether the session's rows were read once and seeded; until then nothing is emitted (#4065). */
+  private hydrated = false
   private readonly emittedText = new Map<string, number>() // partId → chars already emitted
   private readonly thinkingIds = new Map<string, string>() // reasoning partId → stable thinkingId
   private readonly toolStarted = new Set<string>()
@@ -132,17 +138,30 @@ export class KiloReader {
   /** Hydrate silently (no replay), then start polling. */
   async start(): Promise<void> {
     try {
-      const all = await readKiloMessages(this.deps.dbPath, this.deps.sessionId, null)
-      const opening = this.hydrate(all)
-      if (opening.length) this.deps.onEvents(opening)
+      await this.seed()
     } catch (err) {
       if (err instanceof KiloSqliteMissing) { this.deps.onFatal?.(err); return }
     }
     this.timer = setInterval(() => { void this.tick() }, this.deps.pollMs ?? POLL_MS)
   }
 
+  /** A read of the store now, as its poll makes: what a drain of the session asks (engines/others/streams.ts). */
+  poll(): Promise<void> { return this.tick() }
+
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Read the whole session and seed from it. A store that does not answer leaves the reader unseeded, and the next tick
+   * reads in full again: with no cursor yet, an incremental read would emit the whole history as new (#4065).
+   */
+  private async seed(): Promise<void> {
+    const all = await loadKiloMessages(this.deps.dbPath, this.deps.sessionId, null)
+    if (!all) return
+    this.hydrated = true
+    const opening = this.hydrate(all)
+    if (opening.length) this.deps.onEvents(opening)
   }
 
   /**
@@ -211,6 +230,7 @@ export class KiloReader {
     if (this.polling) return
     this.polling = true
     try {
+      if (!this.hydrated) { await this.seed(); return }
       const batch = await readKiloMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
       if (batch.length === 0) return
       const events: LiveEvent[] = []

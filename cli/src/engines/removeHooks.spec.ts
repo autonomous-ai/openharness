@@ -1,8 +1,9 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join, win32 } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { hookContracts } from './hooks.js'
 import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
@@ -11,10 +12,11 @@ import { OPENCODE_TUI_PLUGIN } from './opencode/contract.js'
 import { CURSOR_HOOK_SETTINGS } from './cursor/contract.js'
 import { reviewRecords, withReviewRecords } from './kit/hookReview.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { installHookSettings, RULES_HEADER } from './kit/hookSettings.js'
+import { harnessRules, installHookSettings, RULES_HEADER } from './kit/hookSettings.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
 import { removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativePluginSource } from './kit/nativePlugin.js'
+import { hostPlatform } from './kit/windowsFiles.js'
 import { defaultHookTargets, pluginOwned, removeEngineHooks, type HookTargets } from './removeHooks.js'
 
 vi.mock('./kit/homeAdoption.js', async (importOriginal) => {
@@ -46,12 +48,23 @@ function machine(): { root: string; targets: HookTargets } {
     },
   }
 }
+
+// The launcher as macOS and Linux have it, and as Windows does (lib/windows/installLayout.ts).
+const POSIX = join(env.HARNESS_BIN_DIR, 'harness')
+const WIN = win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')
 const write = (file: string, text: string) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text) }
 
 describe('removeEngineHooks', () => {
   it('takes Harness out of every engine\'s files and leaves everything else', async () => {
     const { root, targets } = machine()
-    write(join(root, 'claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] }, permissions: { allow: ['Bash(harness ps:*)', 'Bash(ls)'] } }))
+    // The rules this release writes, so a rule it adds is one it takes out.
+    const allow = hookContracts.claude.settings.allow
+    targets.claude.allowRules = allow ? harnessRules(allow.rules).flat() : []
+    // The launcher as this host spells it, as the rules above do: on a real Windows host, harness.exe.
+    const launcher = hostPlatform() === 'win32' ? WIN : POSIX
+    const notify = ['Bash(harness device notify:*)', `Bash(${launcher} device notify:*)`]
+    write(join(root, 'claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] },
+      permissions: { allow: ['Bash(harness ps:*)', 'Bash(ls)', ...notify, 'Bash(npm test:*)'] } }))
     write(join(root, 'codex', 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: OURS }] }] } }))
     write(join(root, 'codex', 'rules', 'harness.rules'), `${RULES_HEADER}prefix_rule(pattern=["harness"], decision="allow")\n`)
     write(join(root, 'codex-profile', 'hooks.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: OURS }] }] } }))
@@ -64,7 +77,7 @@ describe('removeEngineHooks', () => {
     const outcomes = await removeEngineHooks(targets)
 
     expect(outcomes.filter((o) => o.failed)).toEqual([])
-    expect(JSON.parse(readFileSync(join(root, 'claude', 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: ['Bash(ls)'] } })
+    expect(JSON.parse(readFileSync(join(root, 'claude', 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: ['Bash(ls)', 'Bash(npm test:*)'] } })
     expect(JSON.parse(readFileSync(join(root, 'codex', 'hooks.json'), 'utf8'))).toEqual({ hooks: {} })
     expect(existsSync(join(root, 'codex', 'rules', 'harness.rules'))).toBe(false)
     expect(JSON.parse(readFileSync(join(root, 'codex-profile', 'hooks.json'), 'utf8'))).toEqual({ hooks: {} })
@@ -73,7 +86,7 @@ describe('removeEngineHooks', () => {
     expect(existsSync(dirname(targets.plugins[1].file)), 'the plugin\'s own folder goes with it').toBe(false)
     expect(readFileSync(join(root, 'hermes', 'config.yaml'), 'utf8')).toBe('model: x\n')
     expect(JSON.parse(readFileSync(join(root, 'hermes', 'shell-hooks-allowlist.json'), 'utf8'))).toEqual({ approvals: [{ event: 'x', command: '/mine' }] })
-    expect(outcomes.reduce((n, o) => n + o.removed, 0)).toBe(10)
+    expect(outcomes.reduce((n, o) => n + o.removed, 0)).toBe(12)
   })
 
   it('keeps a plugin somebody else wrote at Harness\'s path', async () => {
@@ -82,6 +95,53 @@ describe('removeEngineHooks', () => {
     const outcomes = await removeEngineHooks(targets)
     expect(outcomes).toContainEqual({ file: targets.plugins[0].file, removed: 0, kept: 'another author’s file' })
     expect(existsSync(targets.plugins[0].file)).toBe(true)
+  })
+
+  it('takes out the Codex rules file an earlier release wrote, and keeps one Harness did not write', async () => {
+    const { root, targets } = machine()
+    targets.codex.homes.push(join(root, 'codex-mine'), join(root, 'codex-first'))
+    const rules = (home: string) => join(root, home, 'rules', 'harness.rules')
+    // The head as releases before this one wrote it, without `device notify`, and before that without `browser`: the
+    // list of commands in its first line changes from one release to the next.
+    const head = (commands: string) => `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${commands})\n`
+      + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
+      + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
+    write(rules('codex'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell, browser')}prefix_rule(pattern=["harness"], decision="allow")\n`)
+    write(rules('codex-profile'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell')}prefix_rule(pattern=["harness"], decision="allow")\n`)
+    write(rules('codex-mine'), '# My own rules.\nprefix_rule(pattern=["harness"], decision="allow")\n')
+    // The first release to write it (CLI 0.3.74 to 0.3.79) began it otherwise.
+    write(rules('codex-first'), '# Written by Harness: agents in a tab with Agent Messages on reply with harness send. Do not edit.\nprefix_rule(pattern=["harness", "send"], decision="allow")\n')
+
+    const outcomes = await removeEngineHooks(targets)
+
+    expect(existsSync(rules('codex'))).toBe(false)
+    expect(existsSync(rules('codex-profile'))).toBe(false)
+    expect(existsSync(rules('codex-first'))).toBe(false)
+    expect(outcomes).toContainEqual({ file: rules('codex-mine'), removed: 0, kept: 'another author’s file' })
+    expect(existsSync(rules('codex-mine'))).toBe(true)
+  })
+})
+
+describe('Harness\'s allowance on Windows', () => {
+  it('the targets name the Windows launcher\'s rules', () => {
+    const { allowRules } = defaultHookTargets(join(machine().root, 'data'), () => ({ claude: [], codex: [] }), 'win32').claude
+    expect(allowRules).toContain(`Bash(${WIN} device notify:*)`)
+    expect(allowRules).toContain('Bash(harness device notify:*)')
+    expect(allowRules.filter((rule) => rule.includes(POSIX))).toEqual([])
+  })
+
+  it('an uninstall takes the Windows rules out of Claude Code\'s list and keeps the person\'s', async () => {
+    const { root, targets } = machine()
+    targets.claude.allowRules = defaultHookTargets(join(root, 'data'), () => ({ claude: [], codex: [] }), 'win32').claude.allowRules
+    const file = join(root, 'claude', 'settings.json')
+    const windows = ['Bash(harness --help)', `Bash(${WIN} --help)`, 'Bash(harness ps:*)', `Bash(${WIN} ps:*)`,
+      'mcp__harness__harness_list', 'Bash(harness device notify:*)', `Bash(${WIN} device notify:*)`]
+    write(file, JSON.stringify({ permissions: { allow: [...windows, 'Bash(npm test:*)'], deny: ['Bash(harness device:*)'] } }))
+
+    const outcomes = await removeEngineHooks(targets, 'win32')
+
+    expect(outcomes.filter((o) => o.failed)).toEqual([])
+    expect(JSON.parse(readFileSync(file, 'utf8')).permissions).toEqual({ allow: ['Bash(npm test:*)'], deny: ['Bash(harness device:*)'] })
   })
 })
 
@@ -275,7 +335,7 @@ describe('Hermes\'s YAML hooks, taken out', () => {
       write(config, `model: x\n\n${block}`)
       write(allowlist, broken)
       const outcomes = await removeNativeYamlHooks(rule, [home])
-      expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: expect.any(String) }])
+      expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: expect.any(String), failedKind: 'the hook approvals are not a readable list' }])
       expect(readFileSync(config, 'utf8')).toBe(`model: x\n\n${block}`)
       expect(readFileSync(allowlist, 'utf8')).toBe(broken)
     }
@@ -287,7 +347,7 @@ describe('Hermes\'s YAML hooks, taken out', () => {
     write(allowlist, approvals)
     chmodSync(allowlist, 0o444)
     const outcomes = await removeNativeYamlHooks(rule, [home])
-    expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: 'the settings file is read-only' }])
+    expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: 'the settings file is read-only', failedKind: 'the settings file is read-only' }])
     expect(readFileSync(config, 'utf8')).toBe(`model: x\n\n${block}`)
   })
 
@@ -323,7 +383,7 @@ describe('Hermes\'s YAML hooks, taken out', () => {
   it('reports a held file by its reason, without the installers\' wording', async () => {
     const { rule, home, config } = hermes()
     write(config, `model: x\n\n${HERMES_HOOK_SETTINGS.begin}\nhooks:\n`)
-    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the managed YAML block has no closing marker' }])
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the managed YAML block has no closing marker', failedKind: 'the managed YAML block has no closing marker' }])
   })
 })
 

@@ -1,0 +1,6 @@
+{
+  "name": "@acme/mailer",
+  "version": "1.8.0",
+  "type": "module",
+  "main": "src/index.js"
+}

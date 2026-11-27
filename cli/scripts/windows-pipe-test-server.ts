@@ -2,7 +2,7 @@
  * A stand-in daemon on the daemon's own pipe code, for the desktop app's real-pipe test
  * (desktop/integration_test/windows_pipe_test.dart). Built from the daemon's pieces, as daemonPipe.real.spec.ts is:
  * lib/localSocket.ts's authenticated pipe, localWsServer.ts's local WebSocket on it, and the token and record the
- * core writes (pipeAuth.ts `ensureDaemonToken`, daemonEndpoint.ts `saveDaemonPort`). Beside it, a squatter: a plain
+ * core writes (pipeAuth.ts `ensureDaemonToken`, daemonRecord.ts `writeDaemonRecord`). Beside it, a squatter: a plain
  * HTTP server on another harness-<id> pipe that answers everything, its 101 included, with a proof that is not the
  * token's — whatever took a dead daemon's name.
  *
@@ -19,7 +19,7 @@ import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import { attachLocalWsServer, type LocalWsBackend } from '../src/localWsServer.js'
-import { saveDaemonPort } from '../src/lib/daemonEndpoint.js'
+import { writeDaemonRecord } from '../src/lib/daemonRecord.js'
 import { listenLocalSocket } from '../src/lib/localSocket.js'
 import { ensureDaemonToken, newPipePath, PIPE_PROOF_HEADER } from '../src/lib/windows/pipeAuth.js'
 
@@ -64,7 +64,7 @@ for (let attempt = 0; ; attempt++) {
 }
 const local = attachLocalWsServer(tcp, { machineId, backend, localSocketServer: pipe.server })
 const tcpPort = (tcp.address() as AddressInfo).port
-saveDaemonPort(dataDir, port, tcpPort, { pipe: pipePath, pid: process.pid })
+writeDaemonRecord(dataDir, port, tcpPort, { pipe: pipePath, pid: process.pid })
 
 const wrongProof = '0'.repeat(64)
 const squatterPath = pipeName()

@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 #include "cable/cable_machines.h"   // cable_machine_t
-#include "cable/cable_types.h"      // cable_swarm_t, cable_swarm_members_t, cable_tile_t
+#include "cable/cable_types.h"      // cable_app_t, cable_swarm_t, cable_swarm_members_t, cable_tile_t
 
 // ---- caps (bytes, NUL included) ----
 #define PRO_VERB_BYTES     128   // turn.started / turn.activity `text`
@@ -21,17 +21,21 @@
 
 // ---- link ----
 // The session came up (`welcome`) or went down (cable gone, 15 s of silence). `machine` is the cabled computer's name
-// (never NULL when up; NULL when down). Called on the transition, and again if a welcome names another computer.
+// (never NULL when up; NULL when down). Called on the transition, and again if a welcome names another computer: that
+// one forgets the last computer's apps.
 // A drop clears everything the daemon told us: pro_app must forget busy agents, abort a sweep and a recording.
 void pro_app_link(bool up, const char *machine);
-// The welcome's features (CABLE_FEATURE_* bits), once per welcome. A drop clears them with the link (pro_app_link(false)).
-void pro_app_features(uint32_t features);
 
 // ---- roster ----
-typedef struct { const char *id, *name, *engine, *machine_id, *machine; } pro_agent_row_t;
-// The complete agent list of the window's tab, once per `agents.end`. Ids are unique and shorter than ID_MAX; at most
-// POD_AGENTS_MAX (32) rows; `name` falls back to the id. A list that ends without a begin is dropped.
-void pro_app_agents(const pro_agent_row_t *rows, int n);
+// `host`: the app the agent lives in ("codex", "vscode", ...), NULL or "" when not said, always shorter than 16 B.
+// `caps_off`: the POD_CAP_* bits the daemon withheld, so a zero-filled row allows everything and no caller can block
+// voice by leaving the field out.
+typedef struct { const char *id, *name, *engine, *machine_id, *machine, *host; uint8_t caps_off; } pro_agent_row_t;
+// The complete agent list the daemon shows (the window's tab, an app's ring, or with `machine_view` the computer's), once
+// per `agents.end`. Ids are unique and shorter than ID_MAX; at most POD_AGENTS_MAX (32) rows; `name` falls back to the
+// id. A list that ends without a begin is dropped.
+// `machine_view`: agents.end said view "machine"; `tab_open`: its `tab` was a non-empty string (a Harness window is open).
+void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open);
 
 // The tab list. `members` is NULL when no tab carried `agentIds` (an older daemon); otherwise members->count[i] and
 // ->id[i][k] belong to items[i], and ->meta[i][k].has says whether `members` described that id. At most SWARMS_MAX
@@ -40,23 +44,14 @@ void pro_app_agents(const pro_agent_row_t *rows, int n);
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members,
                     const char *selected, const cable_tile_t *tiles, int tile_n);
 
-// ---- Swarm cards (hello swarmCard:v1) ----
-// `supertabs`: the current set and order of Swarm ids (at most SWARMS_CARD_MAX, each shorter than ID_MAX, no repeats). A Swarm not
-// listed is dropped; a listed one not yet received stays absent until its `supertab` frame arrives.
-void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n);
-// `supertab`: one Swarm's data (<= SWARM_LEADS_MAX Leads, names cut on a UTF-8 boundary, a bad Lead skipped), replacing that Swarm's. Ignored
-// when its id is not in the last id list. `since_at_ms` and every Lead's `text` are 0/NULL here: the model stamps the clock and keeps the cached texts.
-void pro_app_supertab(const pod_swarm_t *s);
-// `supertab.recap`: the Lead's last message (<= SWARM_TEXT_MAX - 1 bytes; "" when `none`), `at` its epoch seconds.
-void pro_app_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none);
-// `supertab.focus`: the desktop opened this Swarm project. `tab` is non-empty; an empty `lead` (the desktop has the Swarm open with no project, e.g. its Chat with PM)
-// means the Lead last shown in that Swarm, else its first.
-void pro_app_supertab_focus(const char *tab, const char *lead);
-// `supertab.notice`: a new message in one of that Lead's chats (`chat` "lead" | "pm" | "group" | "buddy"; `text` is cut to POD_UNREAD_TEXT). The alert tier of an agent's
-// notice: an entry, the toast, a wake and a beep. A Buddy's chat is ignored. `supertab.notice.read`: that chat was read on the desktop; its entry and toast go.
-// They also go when the Swarm leaves `supertabs` or the Lead leaves its Swarm: access lost sends no read.
-void pro_app_supertab_notice(const char *tab, const char *lead, const char *chat, const char *chat_id, const char *text);
-void pro_app_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
+// ---- apps ----
+// The whole app list of an `apps` frame, replacing the last one. n is 0..CABLE_APPS_MAX (0: the daemon lists no app); ids
+// are unique, non-empty and shorter than CABLE_APP_ID_MAX; waiting and working never exceed count. `shown` is the app
+// whose ring the daemon sends, never NULL ("" none), and may name no row. A frame whose list is not an array is not delivered.
+void pro_app_apps(const cable_app_t *rows, int n, const char *shown);
+// Whether the welcome listed `apps.switch`. Called on every welcome, a keepalive one too, and before the link callback of
+// a first one.
+void pro_app_apps_switch(bool on);
 
 // ---- library ----
 // Same layout as pod_library_row_t (pod_glue.h). `machine` is the machine NAME ("" when the machine list does not
@@ -96,10 +91,9 @@ void pro_app_notif_replace(const pro_notif_row_t *rows, int n);
 // notif.seen: read elsewhere. token is NULL without one.
 void pro_app_notif_seen(const char *id, const char *token);
 
-// request is the question's request id: with the prompt it tells a re-sent question from a new one. super_tab is the Super Tab
-// the asking agent works in (NULL for a plain question; never "", at most SUPER_TAB_MAX - 1 bytes) and attention what it needs
-// (POD_ATTN_DECISION or POD_ATTN_STUCK with a super_tab, POD_ATTN_NONE without).
-void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention);
+// request is the question's request id: with the prompt it tells a re-sent question from a new one. list: the daemon tells
+// it again (`tier: "list"`), so it is filed as an open question with no beep, no wake and no toast.
+void pro_app_question(const char *id, const char *request, const char *text, bool list);
 void pro_app_question_close(const char *id);
 
 // The daemon's surface moved to this agent.

@@ -1,6 +1,6 @@
 // `harness dsh install` on real (local) git repositories: a harness that uses a viewer package
 // installs the viewer too, and narrates the viewer's phases under its own id.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,17 +9,30 @@ import { env } from '../config/env.js'
 import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
+import { writeExecutable } from '../testing/executableFixture.js'
+
+// gitPath keeps the git it finds for the process, and asks the login shell when PATH has none; these tests change PATH
+// between runs, so each run looks on PATH alone, again. The git is this computer's, even where a test stubs the platform.
+vi.mock('../lib/gitOnPath.js', async (original) => {
+  const real = await original<typeof import('../lib/gitOnPath.js')>()
+  const platform = process.platform
+  return { ...real, gitPath: () => real.createProgramPath('git', () => real.findGit({ platform, loginShell: async () => null }))() }
+})
 
 // A setup or a doctor runs in the login shell (dsh/shell.ts): the person's own, with their rc files, took seconds a spawn here.
-// A plain sh stands in for it, as update.spec does.
+// A plain sh stands in for it, as update.spec does. Written and started once per file: a new script's first exec pays
+// the system's check of it, which a loaded Mac made slow when every test paid it.
 let shellDir = ''
-beforeEach(() => {
+let shell = ''
+beforeAll(() => {
   shellDir = mkdtempSync(join(tmpdir(), 'dsh-install-shell-'))
-  const shell = join(shellDir, 'test-shell')
+  shell = join(shellDir, 'test-shell')
   writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
-  vi.stubEnv('SHELL', shell)
+  execFileSync(shell, ['-c', 'true'])
 })
-afterEach(() => { vi.unstubAllEnvs(); rmSync(shellDir, { recursive: true, force: true }) })
+afterAll(() => { rmSync(shellDir, { recursive: true, force: true }) })
+beforeEach(() => { vi.stubEnv('SHELL', shell) })
+afterEach(() => { vi.unstubAllEnvs() })
 
 function gitRepo(dir: string, files: Record<string, string>): string {
   mkdirSync(dir, { recursive: true })
@@ -216,7 +229,7 @@ describe('installDsh, every way it can go', () => {
   const stubGit = (script: string): void => {
     const bin = join(root, 'bin')
     mkdirSync(bin, { recursive: true })
-    writeFileSync(join(bin, 'git'), `#!/bin/sh\nREAL_GIT='${REAL_GIT}'\n${script}\n`, { mode: 0o755 })
+    writeExecutable(join(bin, 'git'), `#!/bin/sh\nREAL_GIT='${REAL_GIT}'\n${script}\n`)
     process.env.PATH = `${bin}:${savedPath}`
   }
   const leftovers = (): string[] => (existsSync(env.DSH_DIR) ? readdirSync(env.DSH_DIR).filter((name) => name.startsWith('.tmp-')) : [])

@@ -17,6 +17,7 @@ import { storeLaunchPort } from '../services/storeLaunch.js'
 import { dshLaunchRequestIn, dshMaterializeRequestIn } from '../services/storeProcess.js'
 import { gridLaunchAnswerIn } from '../core/modelsLink.js'
 import { ApiConnections } from '../lib/apiConnections.js'
+import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import { apiTargetAnswer } from '../lib/apiModels.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
@@ -27,6 +28,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { TerminalBackendCapabilities } from '../lib/terminalTypes.js'
 import { gridLaunchRequestIn } from '../services/modelsProcess.js'
 import { gridLaunchInProcess } from './gridLaunchInProcess.js'
+import { errorKind } from '../lib/log.js'
 
 export interface LaunchWorld {
   /** The data folder: saved APIs, and the config directories written for file-configured engines. */
@@ -40,6 +42,9 @@ export interface LaunchWorld {
   setGridLaunch: (agentId: string, record: unknown) => void
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName?: () => string | null
+  /** Where Harness makes project folders here (lib/projectFolder.ts `projectsRoot`, the core's): the saved APIs' note
+   *  goes only into one. Named by each spec, so no launch reads the home of whoever runs it. */
+  projectsRoot: string
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */
@@ -49,11 +54,13 @@ export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverride
 
 export function launchShapes(world: LaunchWorld) {
   const savedApis = new ApiConnections(world.dataDir)
+  // What the core reads for the note (core/main.ts): the list without keys, never the store.
+  const savedApiList = new ApiConnectionMetadata(world.dataDir)
   const gridName = world.gridName ?? (() => null)
   const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
     if (!cwd) return
-    try { prepareApiInstructions(savedApis, cwd, engine) }
-    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
+    try { prepareApiInstructions(savedApiList, cwd, engine, world.projectsRoot) }
+    catch (error) { console.warn(`[apis] Tool instructions could not be added. Saved connections remain available through harness api. · ${errorKind(error)}`) }
   }
   // The models service's side of the launch port: what its port answers the core with (services/models.ts), across
   // the process boundary as models in its own process is asked (core/modelsLink.ts → services/modelsProcess.ts),
@@ -95,7 +102,7 @@ export function launchShapes(world: LaunchWorld) {
   const helpers = createLaunchHelpers({
     authority: () => () => true,
     prepareApiTools, launchOverridesDeps,
-    setGridLaunch: world.setGridLaunch as never, setTail: () => {},
+    setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
     create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),

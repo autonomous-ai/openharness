@@ -134,8 +134,8 @@ writes it beside the sidecar in `circuitpy.generation`; Workshop writes it from 
 - `dsh_install { id?, url?, ref? }` → runs clone → setup → doctor; pushes
   `dsh_install_status { id, phase: clone|setup|doctor|done|failed, detail? }`; replies `{ ok }` at
   the end (the desktop uses a 10-minute timeout for this one request).
-- Discovery reads `HARNESS_DSH` off the live process (`probeDsh`, same cached env read as
-  `probeCodexHome`) so a pane the daemon did not create, or re-minted after a restart, is labelled.
+- A harness's DSH is set at `agent_create` (`HARNESS_DSH`) and carried by every relaunch. A pane
+  the daemon did not create has none: no process's environment is read for it.
 
 ### The store's facts
 

@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 import { shellSingleQuote } from '../src/lib/shellQuote.js'
 
 let scratch = '', bundle = ''
@@ -27,10 +27,19 @@ it('refuses a native hook destination outside the test, including the OpenCode s
   expect(() => assertHooksContained(d.root, d.env)).toThrow('OPENCODE_PLUGIN_DIR')
   d.env.OPENCODE_PLUGIN_DIR = d.root
   expect(() => assertHooksContained(d.root, d.env)).toThrow('OpenCode plugin parent')
-  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
   expect(() => assertHooksContained(d.root, d.env)).not.toThrow()
   d.env.HOOK_INSTALL_ENGINES = 'unknown'
   expect(() => assertHooksContained(d.root, d.env)).toThrow('supported hook engines')
+})
+
+it('refuses to start from a cli.js with no notify.mjs beside it, before any process starts', async () => {
+  const alone = join(scratch, 'alone', 'cli.js')
+  mkdirSync(dirname(alone), { recursive: true })
+  writeFileSync(alone, '')
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: alone })
+  await expect(d.start()).rejects.toThrow(`${alone} has no notify.mjs beside it`)
+  expect(d.pid).toBeNull()
 })
 
 it('becomes ready and serves control while startup hook preparation is still waiting', async () => {
@@ -38,7 +47,7 @@ it('becomes ready and serves control while startup hook preparation is still wai
   onTestFailed(() => console.log(d.log()))
   const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'startup-probe'), release = join(d.root, 'release-probe')
   d.env.OPENCODE_PATH = binary
-  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
   d.env.HOOK_INSTALL_ENGINES = 'opencode'
   writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs');
@@ -64,7 +73,7 @@ const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)}))
     expect(d.coresStarted()).toBe(1)
   } finally { writeFileSync(release, '') }
   await until('the startup hook to finish after its probe is released', () =>
-    existsSync(join(d.root, 'opencode', 'plugins', 'launcher-register', 'tui.js')), 10_000)
+    existsSync(join(d.env.HOME!, 'opencode', 'plugins', 'launcher-register', 'tui.js')), 10_000)
 }, 30_000)
 
 it('keeps Stop and agent listing responsive while a native launch version probe waits', async () => {
@@ -72,7 +81,7 @@ it('keeps Stop and agent listing responsive while a native launch version probe 
   onTestFailed(() => console.log(d.log()))
   const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'version-entered'), release = join(d.root, 'version-release')
   d.env.OPENCODE_PATH = binary
-  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
   writeFileSync(binary, `#!${process.execPath}\nconsole.log('opencode v2.0.18')\n`, { mode: 0o755 })
   await d.start()
   const c = client = await LocalClient.connect(d)
@@ -164,7 +173,9 @@ it('retains and cancels native-held requests across a core crash, then recovers 
   expect(launched[0].at(-1)).toBe(request.prompt)
 }, 120_000)
 
-it.each(['create', 'fork'] as const)('keeps a post-rc held %s with its original request through repair and core restart', async operation => {
+/** A Codex whose new pane's rc file changes its config once, after preparation, so the real final guard holds the
+ *  launch; every dispatch's argv is recorded. A fork's source conversation is up first. */
+const postRcHeld = async (operation: 'create' | 'fork') => {
   const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { SHELL: '/bin/bash' } })
   onTestFailed(() => console.log(d.log()))
   const executable = join(d.root, 'bin', 'codex'), calls = join(d.root, 'dispatches')
@@ -173,46 +184,87 @@ it.each(['create', 'fork'] as const)('keeps a post-rc held %s with its original 
     + `import { appendFileSync as recordNativeLaunch } from 'node:fs';\nif (!process.argv.includes('--version') && !process.argv.includes('--help')) recordNativeLaunch(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`
     + originalWrapper.slice(line), { mode: 0o755 })
   await d.start()
-  let c = client = await LocalClient.connect(d)
+  const c = client = await LocalClient.connect(d)
   const cwd = join(d.projectsDir, 'post-rc-held'); mkdirSync(cwd)
-  let source: string | undefined
+  let source: { id: string; sessionId: string } | undefined
   if (operation === 'fork') {
     const parent = await c.request('agent_create', { engine: 'codex', cwd, bypassPermission: true }, 30_000)
     expect(parent.error, JSON.stringify(parent)).toBeUndefined()
-    source = parent.agent.id
-    await until('the source conversation to bind', async () => {
+    source = await until('the source conversation to bind', async () => {
       const rows = (await c.request('agents_list')).agents
-      return rows.find((row: any) => row.id === source && row.sessionId)
+      return rows.find((row: any) => row.id === parent.agent.id && row.sessionId)
     }, 30_000)
-    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === source, 30_000)
-    c.send('message', { agentId: source, content: 'private fork source' }); await ended
+    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === parent.agent.id, 30_000)
+    c.send('message', { agentId: parent.agent.id, content: 'private fork source' }); await ended
   }
   // Only the new pane's rc file changes this private config, after preparation.
   // Native probes have no TMUX_PANE. This forces the real final guard to hold.
   const config = join(d.engineConfig.codexHome, 'config.toml'), trigger = join(d.root, 'change-once')
-  const original = await until('startup hook preparation to create the private Codex config', () => {
-    try { return readFileSync(config) } catch { return null }
-  }, 10_000)
+  await until('startup hook preparation to create the private Codex config', () => existsSync(config), 10_000)
   writeFileSync(trigger, '')
   writeFileSync(join(d.env.HOME!, '.bashrc'), `if [ -n "$TMUX_PANE" ] && [ -f ${shellSingleQuote(trigger)} ]; then printf '\\n# changed by private pane fixture\\n' >> ${shellSingleQuote(config)}; /bin/rm ${shellSingleQuote(trigger)}; fi\n`)
-  const response = await c.request(operation === 'create' ? 'agent_create' : 'agent_fork', operation === 'create'
-    ? { engine: 'codex', cwd, bypassPermission: true, prompt: 'original held prompt' }
-    : { agentId: source, prompt: 'original fork prompt' }, 30_000)
+  const dispatched = (): string[][] => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map(one => JSON.parse(one)) : []
+  return { d, c, cwd, source, dispatched }
+}
+
+it.each(['create', 'fork'] as const)('recovers a post-rc held %s from its receipt across a core restart, its request delivered once', async operation => {
+  const { d, c: first, cwd, source, dispatched } = await postRcHeld(operation)
+  const creationId = `post-rc-${operation}-recovery`
+  const prompt = operation === 'create' ? 'original "held" prompt $HOME' : 'original "fork" prompt $HOME'
+  const response = await first.request(operation === 'create' ? 'agent_create' : 'agent_fork', operation === 'create'
+    ? { engine: 'codex', cwd, bypassPermission: true, prompt, creationId }
+    : { agentId: source!.id, prompt, creationId }, 30_000)
+  expect(response, JSON.stringify(response)).toMatchObject({ creationId, state: 'created', agent: { id: expect.any(String) } })
+  const id = response.agent.id
+  await until('the post-rc native hold', () => d.log().includes(`[launch] ${id.slice(0, 8)} starting → held`), 30_000)
+  // The first attempt comes 2 s after the hold, so the boot's restore is what recovers it; should that attempt win,
+  // every assertion below still holds.
+  const before = d.log().length
+  process.kill(d.corePid()!, 'SIGKILL'); first.close()
+  await until('the core to recover while retaining the original request', () => d.log().slice(before).includes('[cli] ready'), 15_000)
+  const c = client = await LocalClient.connect(d)
+  // No repair of the config: the recovery's fresh inspection reads it as the rc file left it.
+  const states: string[] = []
+  const ready = await until('the recovered launch to be ready', async () => {
+    const row = (await c.request('agents_list', { includeStopped: true })).agents.find((one: any) => one.id === id)
+    if (row?.launch?.state && states.at(-1) !== row.launch.state) states.push(row.launch.state)
+    if (row?.launch?.state !== 'ready') throw new Error(`launch ${JSON.stringify(row?.launch ?? null)}`)
+    return row
+  }, 60_000)
+  const synced = [...first.frames, ...c.frames].filter(f => f.type === 'agent_synced' && f.payload?.agent?.id === id)
+  expect(synced.map(f => f.payload.agent.launch?.state)).not.toContain('held')
+  expect(states).not.toContain('held')
+  expect(ready.launch).toEqual({ state: 'ready' })
+  const launched = dispatched()
+  expect(launched).toHaveLength(operation === 'create' ? 1 : 2)
+  if (operation === 'fork') expect(launched[1]).toEqual(expect.arrayContaining(['fork', source!.sessionId]))
+  // Byte for byte, one argv word: quotes and $HOME as the request gave them.
+  expect(launched.at(-1)!.at(-1)).toBe(prompt)
+}, 120_000)
+
+it('fails a post-rc held create made without a creationId, with words that say what to do', async () => {
+  const { d, c, cwd, dispatched } = await postRcHeld('create')
+  const response = await c.request('agent_create', { engine: 'codex', cwd, bypassPermission: true, prompt: 'original held prompt' }, 30_000)
   expect(response.error, JSON.stringify(response)).toBeUndefined()
   const id = response.agent.id
-  const held = async () => (await c.request('agents_list', { includeStopped: true })).agents.find((row: any) => row.id === id)
-  await until('the post-rc native hold', async () => (await held())?.launch?.state === 'held', 30_000)
-  expect((await held()).sessionId).toBeFalsy()
-  writeFileSync(config, original)
-  const before = d.log().length
-  process.kill(d.corePid()!, 'SIGKILL'); c.close()
-  await until('the core to recover while retaining the original request', () => d.log().slice(before).includes('[cli] ready'), 15_000)
-  c = client = await LocalClient.connect(d)
-  expect(await c.request('agent_restart', { agentId: id }, 15_000)).toMatchObject({ error: 'NATIVE_LAUNCH_HELD' })
-  expect(await held()).toMatchObject({ launch: { state: 'held', service: 'native' } })
-  expect((await held()).sessionId).toBeFalsy()
-  const dispatched = existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []
-  expect(dispatched).toHaveLength(operation === 'fork' ? 1 : 0)
+  const row = async () => (await c.request('agents_list', { includeStopped: true })).agents.find((one: any) => one.id === id)
+  const failed = { launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' } }
+  // The hold's guard fails the create as it is held, so the row never shows held: it goes straight to failed.
+  await until('the guard to fail the post-rc native hold', () => d.log().split('\n').some(line =>
+    line.includes(`[launch] ${id.slice(0, 8)} starting → failed`) && line.includes('ENGINE_DID_NOT_START')), 30_000)
+  const { tmuxPane: pane } = await until('the create to fail with nothing to start again from', async () => {
+    const found = await row()
+    if (found?.launch?.state !== 'failed') throw new Error(`launch ${JSON.stringify(found?.launch ?? null)}`)
+    return found
+  }, 30_000)
+  expect(await row()).toMatchObject(failed)
+  expect(pane).toBeTruthy()
+  expect(dispatched()).toEqual([])
+  expect(await c.request('agent_restart', { agentId: id }, 15_000)).toMatchObject({ error: 'NO_ACTIVE_PROCESS' })
+  expect(await row()).toMatchObject(failed)
+  // The held shell stays: a closed pane would turn the tile Unavailable and let discovery remove the row, words and all.
+  expect((await d.tmux.run('list-panes', '-a', '-F', '#{pane_id}')).split('\n')).toContain(pane)
+  expect(dispatched()).toEqual([])
 }, 120_000)
 
 it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
@@ -223,11 +275,10 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     expect(chunks).toHaveLength(1)
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = "console.error('[fixture] legacy hooks stalled'); await new Promise(() => {});\n"
-    const script = join(scratch, mode, 'cli.js'); mkdirSync(dirname(script), { recursive: true })
-    writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+    const script = buildWithLean(join(scratch, mode), bundle, files)
     const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
-    const root = join(d.root, 'native')
+    const root = join(d.env.HOME!, 'native')
     const homes: Record<string, string> = {
       CURSOR_CONFIG_DIR: join(root, 'cursor'), CURSOR_DATA_DIR: join(root, 'cursor-data'),
       OPENCODE_PLUGIN_DIR: join(root, 'opencode', 'plugin'), OPENCODE_DATA_DIR: join(root, 'opencode-data'),
@@ -240,6 +291,12 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     Object.assign(d.env, homes, { HOOK_INSTALL_ENGINES: 'claude,codex,cursor,opencode,kilo,pi,amp,hermes,devin,commandcode,grok,agy,copilot' })
     mkdirSync(homes.HERMES_HOME!, { recursive: true })
     writeFileSync(join(homes.HERMES_HOME!, 'config.yaml'), 'model: fixture\n')
+    // An older Hermes of the test's own, which keeps Harness's hook: the daemon never runs the computer's Hermes.
+    const hermes = join(d.root, 'bin', 'hermes'); d.env.HERMES_PATH = hermes
+    writeFileSync(hermes, `#!${process.execPath}
+if (process.argv.includes('--version')) { console.log('Hermes Agent v0.21.5 (2026.10.7)'); process.exit(0) }
+process.exit(2);
+`, { mode: 0o755 })
     const binary = join(d.root, 'bin', 'opencode'); d.env.OPENCODE_PATH = binary
     writeFileSync(binary, `#!${process.execPath}
 if (process.argv.includes('--version')) { console.log('opencode v2.0.18'); process.exit(0) }

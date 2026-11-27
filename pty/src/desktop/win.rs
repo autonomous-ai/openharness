@@ -26,7 +26,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::KnownFolder;
 use super::registry::{Key, Value};
 use windows_sys::Win32::Foundation::{BOOL, ERROR_FILE_NOT_FOUND, HWND, LPARAM, TRUE};
-use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
     RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW, RegSetValueExW,
@@ -52,6 +54,31 @@ pub const QUIT_MESSAGE: &str = "Autonomous.Harness.Quit";
 
 pub fn wide(text: &OsStr) -> Vec<u16> {
     text.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+/// COM on this thread for as long as it lives, as the shell's objects and handlers need it.
+pub struct Apartment(bool);
+impl Apartment {
+    pub fn enter() -> io::Result<Apartment> {
+        // Without OLE1's DDE, as ShellExecuteEx's documentation asks of its callers.
+        let flags = COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE;
+        // S_FALSE (already entered) is a success to undo as well; RPC_E_CHANGED_MODE is a usable apartment.
+        let hr = unsafe { CoInitializeEx(null(), flags as u32) };
+        if hr == 0x80010106u32 as i32 {
+            return Ok(Apartment(false));
+        }
+        if hr < 0 {
+            return Err(io::Error::from_raw_os_error(hr));
+        }
+        Ok(Apartment(true))
+    }
+}
+impl Drop for Apartment {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
 }
 
 pub fn known_folder(folder: KnownFolder) -> Option<PathBuf> {

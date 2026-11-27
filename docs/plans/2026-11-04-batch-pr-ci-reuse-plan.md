@@ -1,7 +1,6 @@
 # A batch PR reuses its member PRs' passed results: plan
 
-> Way of working: this plan's Engineer implements it task by task, test first (test-driven-development), in one pull
-> request. No subagents, no execution handoff.
+> Way of working: implemented task by task, test first (test-driven-development), in one pull request. No subagents, no execution handoff.
 
 **Goal:** A batch PR (a branch from main with each member PR merged in) stops rerunning a component a member PR already
 passed, when nothing that component reads changed between the member's tested commit and the batch head. Tony's phone

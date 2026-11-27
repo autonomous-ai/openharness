@@ -485,28 +485,29 @@ const server = {
   daemons: roster.daemons.map(d => ({ id: d.id, n: d.n, drop: d.drop, rarity: d.rarity, ...(d.traits ? { traits: { ...d.traits, extras: d.traits.extras.map(e => e.slice(0, 3)) } } : {}) })),
 }
 output('backend/src/lib/daemonRoster.g.ts', `${header}export const DAEMON_ROSTER = ${JSON.stringify(server, null, 2)} as const\n`)
-// The pair brain's template voice (cli/src/pair/voice.ts): who exists and what each says per mood, and —
-// for the pair harness's instructions (cli/src/pair/pairHarness.ts) — each daemon's lore, first words and
-// family. Also how long an absence makes a finished turn an away turn (cli/src/lib/zooTurns.ts, the night
-// egg). The cli compiles only what is under cli/src, so it gets its own copy rather than reading this folder.
+// The pair brain's template voice (companions/src/companion/voice.ts): who exists and what each says per
+// mood, and — for the pair harness's instructions (companions/src/companion/pairHarness.ts) — each daemon's
+// lore, first words and family. Also how long an absence makes a finished turn an away turn
+// (companions/src/companion/zooTurns.ts, the night egg). The companions package compiles only what is under
+// companions/src, so it gets its own copy rather than reading this folder.
 const pair = {
   lineSlots: rules.lineSlots ?? [],
   awayMinutes: rules.earn.night.awayMinutes,
   daemons: roster.daemons.map(d => ({ id: d.id, lore: d.lore, first: d.first, family: d.family, lines: d.lines })),
 }
-output('cli/src/pair/roster.g.ts', `${header}export const PAIR_ROSTER = ${JSON.stringify(pair, null, 2)} as const\n`)
+output('companions/src/companion/roster.g.ts', `${header}export const PAIR_ROSTER = ${JSON.stringify(pair, null, 2)} as const\n`)
 // harnessd draws each individual on the machine (README, "Individual art"): the shader, every plate
 // species' model and the reference roll, copied as they are (type-checking off: they are the reference
 // JavaScript), with what they read from the roster. PLATE_MODELS[id].model goes to bakeModel with
 // PLATE_ROSTER.rules and rollTraits(PLATE_ROSTER, id, seed).
 const copyHeader = source => `// Generated from ${source} by daemons/tools/generate.mjs. Do not edit.\n// @ts-nocheck\n`
 const plateIds = roster.daemons.filter(d => d.plate).map(d => d.id)
-output('cli/src/pair/plates/plate.g.ts', copyHeader('daemons/tools/plate.mjs') + readFileSync(resolve(root, 'daemons/tools/plate.mjs'), 'utf8'))
-output('cli/src/pair/plates/render.g.ts', copyHeader('daemons/tools/render.mjs') + readFileSync(resolve(root, 'daemons/tools/render.mjs'), 'utf8').replace("from './plate.mjs'", "from './plate.g.js'"))
+output('companions/src/companion/plates/plate.g.ts', copyHeader('daemons/tools/plate.mjs') + readFileSync(resolve(root, 'daemons/tools/plate.mjs'), 'utf8'))
+output('companions/src/companion/plates/render.g.ts', copyHeader('daemons/tools/render.mjs') + readFileSync(resolve(root, 'daemons/tools/render.mjs'), 'utf8').replace("from './plate.mjs'", "from './plate.g.js'"))
 for (const id of plateIds) {
   const src = readFileSync(resolve(root, `daemons/plates/${id}.mjs`), 'utf8')
   if (!src.includes("from '../tools/plate.mjs'")) fail(`daemons/plates/${id}.mjs must import the shader from '../tools/plate.mjs'`)
-  output(`cli/src/pair/plates/${id}.g.ts`, copyHeader(`daemons/plates/${id}.mjs`) + src.replace("from '../tools/plate.mjs'", "from './plate.g.js'"))
+  output(`companions/src/companion/plates/${id}.g.ts`, copyHeader(`daemons/plates/${id}.mjs`) + src.replace("from '../tools/plate.mjs'", "from './plate.g.js'"))
 }
 const plateRoster = {
   rules: { versions: rules.versions, moods: rules.moods, plate: { cols: rules.plate.cols, maxRows: rules.plate.maxRows, frameMs: rules.plate.frameMs, frames: rules.plate.frames } },
@@ -514,7 +515,7 @@ const plateRoster = {
 }
 // PLATE_SOURCE is plates.json's source hash: what the models and shader were when these were copied,
 // so harnessd keys its cache of individual art by it and draws again after a change.
-output('cli/src/pair/plates/models.g.ts', `${header}${plateIds.map(id => `import * as ${id.replace(/-/g, '_')} from './${id}.g.js'`).join('\n')}\n\n` +
+output('companions/src/companion/plates/models.g.ts', `${header}${plateIds.map(id => `import * as ${id.replace(/-/g, '_')} from './${id}.g.js'`).join('\n')}\n\n` +
   `export const PLATE_MODELS = { ${plateIds.map(id => (/^[a-z]+$/.test(id) ? id : `'${id}': ${id.replace(/-/g, '_')}`)).join(', ')} }\n\n` +
   `export const PLATE_SOURCE = '${plates?.source ?? ''}'\n\n` +
   `export const PLATE_ROSTER = ${JSON.stringify(plateRoster, null, 2)}\n`)

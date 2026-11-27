@@ -9,7 +9,7 @@ function harness() {
   const port = {
     session: vi.fn(), request: vi.fn(async () => {}), dropped: vi.fn(), revoked: vi.fn(), resume: vi.fn(async () => {}), card: vi.fn(),
     turnStarted: vi.fn(), turnEnded: vi.fn(), stream: vi.fn(), transcript: vi.fn(), delivery: vi.fn(), dispatched: vi.fn(),
-    inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), receipt: vi.fn(), addon: vi.fn(), stop: vi.fn(),
+    inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), stop: vi.fn(),
   } satisfies WifiPort
   let on: WifiPort | null = port
   const clients = new Map<string, RemoteClient>()
@@ -36,7 +36,6 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     expect(wifi.connected()).toBe(false)
     wifi.started(null)
     expect(wifi.connected()).toBe(true)
-    expect(wifi.directSessions()).toBe(1)
     // A session that became another identity's, or a phone's, is not the device that said hello.
     clients.set('c2', { ...device('id-3') })
     clients.set('c1', { ...device('id-1', true), role: 'web' })
@@ -45,8 +44,11 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     wifi.api.hello('c1', null)
     expect(gateway.deviceClient).toHaveBeenLastCalledWith('c1', null)
     expect(wifi.connected()).toBe(false)
+    // Said hello again, and served: watching until the service goes.
+    wifi.api.hello('c1', 'id-1')
+    expect(wifi.connected()).toBe(true)
     wifi.stopped()
-    expect(wifi.directSessions()).toBe(0)
+    expect(wifi.connected()).toBe(false)
   })
 
   it('seals an answer to a session only while it is still the identity\'s device', () => {

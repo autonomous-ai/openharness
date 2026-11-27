@@ -67,9 +67,10 @@ describe('followWindowsGridPin', () => {
     expect(unreadable.install).not.toHaveBeenCalled()
   })
 
-  it("logs the installer's own sentence when the install fails", async () => {
-    const d = deps({ install: vi.fn(async () => ({ status: 'failed' as const, message: 'grid installer exited 1 · grid is running' })) })
+  it('logs how a failed install ended, never the installer\'s sentence', async () => {
+    // The sentence can quote the installer's output, which names the person's home.
+    const d = deps({ install: vi.fn(async () => ({ status: 'failed' as const, message: 'grid installer exited 1 · C:\\Users\\sentinel\\.local\\bin' })) })
     await followWindowsGridPin(d)
-    expect(d.lines.at(-1)).toBe('grid installer exited 1 · grid is running')
+    expect(d.lines.at(-1)).toBe(`  ✗ grid ${PIN} not installed · failed`)
   })
 })

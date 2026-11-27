@@ -504,7 +504,7 @@ pub fn local_reply(value: &serde_json::Value) -> bool {
     let (Some(token), Some(id), Some(code), Some(text)) = (value["context"].as_str(), value["id"].as_str(), value["code"].as_u64(), value["text"].as_str()) else { return false };
     if uuid::Uuid::parse_str(token).is_err() || token.len() != 36 || id.is_empty() || id.len() > 80 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || code > 1 || text.len() > 2048 { return false }
     let uid = unsafe { libc::geteuid() };
-    let base = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness/shell-requests");
+    let base = crate::harness_home::harness_path(std::env::var("HOME").unwrap_or_default(), crate::harness_home::Entry::ShellRequests);
     for path in [&base, &base.join(token)] {
         if !std::fs::symlink_metadata(path).ok().is_some_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o077 == 0) { return false }
     }
@@ -892,7 +892,7 @@ fn switch_host(app: &mut App, machine: &str) {
         app.shell_context.connecting = false;
         match result {
             Ok(result) => if let Some(agent) = result.pointer("/agent/id").and_then(|a| a.as_str()) {
-                app.fleet.agents.insert((machine.clone(), agent.into()), crate::fleet::agent_from(&machine, &result["agent"], None));
+                app.fleet.merge_row(&machine, &result["agent"]);
                 app.shells.insert((machine.clone(), agent.into()));
                 bind(app, &request.token, &machine, agent);
                 if app.shell_context.pending.as_ref().is_some_and(|r| r.id == request.id && r.token == request.token) {
@@ -1082,23 +1082,6 @@ mod tests {
             crate::input::modal_key(&mut app, crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE));
         }
         assert_eq!(app.session_close.sent.len(), 2, "Close pane sends no stop");
-        assert!(app.modal.is_none());
-        assert_eq!(app.panes[&app.focused().unwrap()].agent_id, "shell");
-        assert!(app.shell_context.contexts[&token].visit.is_none());
-        assert_eq!(app.fleet.agent("local", "chosen").unwrap().status, "active");
-    }
-    #[tokio::test]
-    async fn closing_a_buddy_on_a_picked_session_returns_the_pane_to_its_shell() {
-        // A Swarm Buddy keeps running (the daemon answers keptRunning): no stop is sent, and the pane goes back to its
-        // shell as Close pane after a refused stop does. Before, the close skipped the stop and left the pane as it was.
-        let (mut app, token, pane) = visit_fixture(false);
-        let chosen = app.fleet.agents.get_mut(&("local".into(), "chosen".into())).unwrap();
-        chosen.close_supported = true;
-        chosen.created_at_wire = "2026-10-05T00:00:00.123Z".into();
-        chosen.terminal_available = true;
-        app.session_close.replies.extend([Ok(json!({"activity":"idle", "keptRunning":true}))]);
-        crate::session_close::pane(&mut app, pane);
-        assert_eq!(app.session_close.sent.len(), 1, "only the inspect; no stop");
         assert!(app.modal.is_none());
         assert_eq!(app.panes[&app.focused().unwrap()].agent_id, "shell");
         assert!(app.shell_context.contexts[&token].visit.is_none());

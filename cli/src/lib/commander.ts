@@ -12,21 +12,23 @@
  *                             and handed to the NEXT turn's summariser as its previous recap)
  *   turn_ended (no device)  → local recap + desktop notification when notifyWithoutDevice is on
  *   turn_ended (empty text) → {kind:'done'}                          (clear busy)
+ *   turn_ended (quiet)      → {kind:'done'}, and the apps a silent tier alone (no recap, no notification)
  *
  * Every frame carries top-level `agentId` + `dbSessionId` (= the tmux session id). The recap
  * writer (`summarize`) is injected so it's unit-testable with a stub; the daemon's is an excerpt. Mirrors the hosted runtime's
  * device-gated recap (recap.ts / manager.ts triggerTurnRecap / websocket.ts handleBrainSummaryEvent).
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
 import type { LastTurnText, LiveEvent } from './normalize.js'
 import { AgentNotifications } from './agentNotifications.js'
 import { deriveTurnSummary } from './deviceRecap.js'
 import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, type RecentRecap, type SessionRecaps } from './recapReads.js'
-import { atomicWriteJson } from './registry.js'
+import { atomicWriteJson, jsonObject, readState } from './secureState.js'
 import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
 import { TurnStats } from '../cable/turnStats.js'
+import { errorKind } from './log.js'
 
 export type CommanderFrame = {
   type: 'commander_event'
@@ -141,6 +143,11 @@ interface SessionState {
   /** Backstop: a sub-agent that never reports back must not cost the turn its recap. */
   endDeadline: NodeJS.Timeout | null
   abort: AbortController | null
+  /** The turn's end was said quiet (`ingest`'s `quiet`): set at that end, so a held end keeps it until it is
+   *  let go; cleared by the next turn_started, so it never reaches the turn after. */
+  quiet: boolean
+  /** The person's questions as they were before this turn's own was recorded: what a quiet end puts back. */
+  asksBefore: string[] | undefined
 }
 
 interface TodoInput {
@@ -348,6 +355,10 @@ export class CommanderMirror {
   private historyFile: string
   private fullTextFile: string
   private askFile: string
+  /** The recap files the load could not read: no save goes over them until a save's read of them again succeeds. */
+  private readonly unread = new Set<string>()
+  /** Sessions deleted while a file was unread: once it can be read, its rows for them stay deleted. */
+  private readonly deleted = new Set<string>()
   private saveTimer: NodeJS.Timeout | null = null
 
   constructor(private opts: CommanderMirrorOpts) {
@@ -362,7 +373,7 @@ export class CommanderMirror {
   private stateFor(sessionId: string): SessionState {
     let st = this.states.get(sessionId)
     if (!st) {
-      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, commands: new Map(), startedAt: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
+      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, commands: new Map(), startedAt: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null, quiet: false, asksBefore: undefined }
       this.states.set(sessionId, st)
     }
     return st
@@ -393,13 +404,19 @@ export class CommanderMirror {
     this.opts.send({ type: 'commander_event', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId, dbSessionId: sessionId, ...(name ? { name } : {}), payload: subagent ? { ...payload, subagent: true } : payload })
   }
 
-  /** Recap diagnostics stay in the adapter log; the web only gets summary pending/done state. */
+  /** Recap diagnostics stay in the adapter log; the web only gets summary pending/done state. Lengths and ids
+   *  only, never an ask, an answer or a recap: the log outlives `harness delete`. */
   private trace(_sessionId: string, line: string, isError = false): void {
     ;(isError ? console.error : console.log)(`[recap] ${line}`)
   }
 
-  /** Fold one session's LiveEvents into device commander_event frames (live cards + async recap). */
-  ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean }): void {
+  /**
+   * Fold one session's LiveEvents into device commander_event frames (live cards + async recap).
+   *
+   * `quiet`: the turn that ends in this batch was started by a line typed for the agent alone (a delivery marked
+   * quiet, core/api.ts `DeliveryOptions`): nobody asked for it, so its end makes no recap and no notification.
+   */
+  ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean; quiet?: boolean }): void {
     const st = this.stateFor(sessionId)
     if (!options?.replay && st.turnOpen) this.notifications.continued(sessionId)
     for (const e of events) {
@@ -428,8 +445,10 @@ export class CommanderMirror {
           //
           // The question is a fact about the TURN, not about the recap, so it is kept on its own list
           // and no longer has to wait for, or stay in step with, anything else.
+          st.asksBefore = this.asks.get(sessionId)
           this.rememberAsk(sessionId, e.payload.userMessage || '')
           this.stored(sessionId)
+          st.quiet = false
           st.turnOpen = true
           st.everOpened = true
           st.abandoned = false
@@ -496,7 +515,7 @@ export class CommanderMirror {
             if (!st.agents.some((a) => a.id === id)) st.agents.push({ id, desc, startedAt: Date.now(), doneMs: null })
             this.emit(sessionId, { kind: 'agents', agents: agentRows(st.agents) })
             const running = st.agents.filter((a) => a.doneMs === null).length
-            console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} running · "${desc.slice(0, 40)}"`)
+            console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} running`)
           }
           if (tool === 'TodoWrite') {
             const todos = (e.payload.input as TodoInput | undefined)?.todos
@@ -511,6 +530,9 @@ export class CommanderMirror {
 
         case 'turn_ended':
           if (options?.replay) this.notifications.cancelled(sessionId)
+          // A held end is stamped when the hold lets it go: that is when the person's answer is in.
+          else if (!e.payload.aborted && !st.agents.some(holdsTurn)) this.notifications.ended(sessionId)
+          if (options?.quiet) st.quiet = true
           // A killed turn takes the cancel path, not the recap path: clear the tile and stay silent. There
           // is nothing to summarize, and a beep for output the user just threw away is worse than nothing.
           if (e.payload.aborted) {
@@ -541,7 +563,7 @@ export class CommanderMirror {
           if (ASYNC_LAUNCH_ACK.test(e.payload.output || '')) break
           done.doneMs = e.payload.durationSeconds ? e.payload.durationSeconds * 1000 : Date.now() - done.startedAt
           this.emit(sessionId, { kind: 'agents', agents: agentRows(st.agents) })
-          this.onSubagentDone(sessionId, st, done.desc)
+          this.onSubagentDone(sessionId, st)
           break
         }
 
@@ -550,7 +572,7 @@ export class CommanderMirror {
           if (!done || done.doneMs !== null) break
           done.doneMs = Date.now() - done.startedAt
           this.emit(sessionId, { kind: 'agents', agents: agentRows(st.agents) })
-          this.onSubagentDone(sessionId, st, done.desc)
+          this.onSubagentDone(sessionId, st)
           break
         }
 
@@ -602,8 +624,7 @@ export class CommanderMirror {
         this.armDeadline(sessionId, st, heldAt)
         return
       }
-      const stuck = held.map((a) => a.desc).join(', ')
-      console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end RELEASED by timeout · still running: ${stuck}`)
+      console.log(`[subagents] ${sessionId.slice(0, 8)} turn-end RELEASED by timeout · ${held.length} still running`)
       // Given up on, not done: the person did not get their answer, and a beep for that is the very ring
       // this exists to remove. The tile still gets the recap.
       st.abandoned = true
@@ -630,9 +651,9 @@ export class CommanderMirror {
   }
 
   /** A sub-agent finished: log it, and if it was the last one, let the held turn-end go through. */
-  private onSubagentDone(sessionId: string, st: SessionState, desc: string): void {
+  private onSubagentDone(sessionId: string, st: SessionState): void {
     const running = st.agents.filter(holdsTurn).length
-    console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} still running · done "${desc.slice(0, 40)}"`)
+    console.log(`[subagents] ${sessionId.slice(0, 8)} ${running}/${st.agents.length} still running · one done`)
     if (!st.endPending || running > 0) return
     this.armSettle(sessionId, st)
   }
@@ -647,6 +668,7 @@ export class CommanderMirror {
     if (!st.endPending) return
     this.clearEndTimers(st)
     st.endPending = false
+    this.notifications.ended(sessionId)
     this.onTurnEnded(sessionId, st)
   }
 
@@ -667,6 +689,10 @@ export class CommanderMirror {
           true,
         )
       }
+      return
+    }
+    if (st.quiet) {
+      this.endQuietly(sessionId, st)
       return
     }
     const fallbackText = st.lastAssistantText.trim()
@@ -711,9 +737,32 @@ export class CommanderMirror {
       })
       .catch((err) => {
         if (ac.signal.aborted) return
-        this.trace(sessionId, `${sid} JSON session read failed: ${err instanceof Error ? err.message : String(err)} — no verified final result`, true)
+        this.trace(sessionId, `${sid} JSON session read failed: ${errorKind(err)} — no verified final result`, true)
         this.startSummary(sessionId, st, ac, t0, sid, '', fallbackUserMessage, device, 'session-json', localOnly)
       })
+  }
+
+  /**
+   * The end of a turn a line typed for the agent alone started. Nobody asked for it, so it is nobody's news: the
+   * turn closes and the card clears as an empty turn's end does, and nothing is read, cut or kept, so the agent's
+   * last recap stays its last real turn's. The apps hear one silent tier and no notification: Desktop alerts only
+   * on a notification, and a phone that waits for a tier files nothing for `silent` instead of telling the end by
+   * its own rule. The line is not the person's question either, so the questions a router reads are put back.
+   */
+  private endQuietly(sessionId: string, st: SessionState): void {
+    st.quiet = false
+    st.turnOpen = false
+    st.lastTool = null
+    st.lastTodos = null
+    st.lastAssistantText = ''
+    this.notifications.cancelled(sessionId) // a second close of this turn cannot ring
+    if (st.asksBefore) this.asks.set(sessionId, st.asksBefore)
+    else this.asks.delete(sessionId)
+    this.stored(sessionId)
+    this.trace(sessionId, `${sessionId.slice(0, 8)} turn-end · quiet → done, no recap`)
+    this.emit(sessionId, { kind: 'done', text: 'done' })
+    this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
+      dbSessionId: sessionId, payload: { sessionId, tier: 'silent' } })
   }
 
   /**
@@ -778,18 +827,16 @@ export class CommanderMirror {
       // No assistant TEXT block accumulated this turn (thinking/tools don't count) → nothing to
       // summarize. Happens when: a new prompt closed the turn before any text arrived (back-to-back
       // messages), or a tools/thinking-only turn ended with no final text. Graceful: clear busy, no recap.
-      const ask = userMessage.replace(/\s+/g, ' ').trim().slice(0, 60)
       st.summarizing = false
       this.opts.changed?.(sessionId)
-      this.trace(sessionId, `${sid} turn-end · empty assistant text → done · source=${source}${ask ? ` · ask="${ask}"` : ' · (no user prompt captured this turn)'}`)
+      this.trace(sessionId, `${sid} turn-end · empty assistant text → done · source=${source} · askLen=${userMessage.length}`)
       this.emit(sessionId, { kind: 'done', text: 'done' })
       return
     }
 
-    const ask = userMessage.replace(/\s+/g, ' ').trim().slice(0, 60)
     // Read BEFORE the new summary is stored below, or the "previous" recap is this turn's own.
     const previousRecap = this.summaries.get(sessionId)
-    this.trace(sessionId, `${sid} summarizing · source=${source} · textLen=${text.length} · device=${device}${this.opts.recapForce ? ' · recapForce' : ''}${ask ? ` · ask="${ask}"` : ''} · prev=${previousRecap ? 'yes' : 'none'}`)
+    this.trace(sessionId, `${sid} summarizing · source=${source} · textLen=${text.length} · device=${device}${this.opts.recapForce ? ' · recapForce' : ''} · askLen=${userMessage.length} · prev=${previousRecap ? 'yes' : 'none'}`)
     // Device: busy "Summarizing…" card. Web: the "Summarizing for device…" indicator (mirrors the
     // node's handleBrainSummaryEvent — the web ignores the summary text, only toggles the flag).
     //
@@ -819,26 +866,35 @@ export class CommanderMirror {
           this.stored(sessionId)
           this.saveSoon()
           const { recap, body } = splitSummary(summary)
-          const notification = this.notifications.completed(sessionId, body || recap,
-            (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned)
-          this.trace(sessionId, `${sid} done in ${ms}ms · recap="${recap}" · bodyLen=${body.length}`)
+          this.trace(sessionId, `${sid} done in ${ms}ms · recapLen=${recap.length} · bodyLen=${body.length}`)
           this.emit(sessionId, { kind: 'done', text: 'done' })
-          // One decision feeds both clients. A silent recap still updates the
-          // device's tile; only real completed results create inbox entries.
-          const tell = (tier: Tier | null): void => {
-            this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
-              notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
-            this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
-              dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
-          }
           const durationS = st.startedAt === null ? null : Math.round((Date.now() - st.startedAt) / 1000)
           const stats = this.turnStats.take(sessionId)
-          const decide = this.opts.decideTier
-          if (!decide) tell(null)
-          // Not news (a sub-agent's, a replay, a turn waiting on an answer): silent, and nobody is asked.
-          else if (!notification) tell('silent')
-          // The recap first, as the dial's decision always read it (services/devices.ts).
-          else this.tellOnceDecided(decide, ac, { sessionId, recap: recap || body, durationS, stats }, tell)
+          // The recap waits with its notification out the quiet window. A next turn opening inside it tells null at
+          // once (lib/agentNotifications.ts), so the recap still lands, silent, before that turn's first card.
+          const silent = (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned
+          this.notifications.decide(sessionId, body || recap, silent, (notification, notNews) => {
+            // One decision feeds both clients. A silent recap still updates the
+            // device's tile; only real completed results create inbox entries.
+            // Told from the window's timer or a tier's promise, where a throw would take the whole host down.
+            const tell = (tier: Tier | null): void => {
+              try {
+                this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
+                  notification, ...(!notification ? { subagent: true, notNews } : {}), ...(tier ? { tier } : {}) })
+                this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
+                  dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
+              } catch (err) {
+                this.trace(sessionId, `${sid} recap not sent: ${errorKind(err)}`, true)
+              }
+            }
+            const decide = this.opts.decideTier
+            if (!notification) this.trace(sessionId, `${sid} not news · ${notNews}`)
+            if (!decide) tell(null)
+            // Not news (a sub-agent's, a replay, a question still open at its end): silent, and nobody is asked.
+            else if (!notification) tell('silent')
+            // The recap first, as the dial's decision always read it (services/devices.ts).
+            else this.tellOnceDecided(decide, ac, { sessionId, recap: recap || body, durationS, stats }, tell)
+          })
         } else {
           this.opts.changed?.(sessionId)
           this.trace(sessionId, `${sid} summarizer returned NULL after ${ms}ms → done`)
@@ -853,7 +909,7 @@ export class CommanderMirror {
         if (ac.signal.aborted) return
         st.summarizing = false
         this.opts.changed?.(sessionId)
-        this.trace(sessionId, `${sid} FAILED after ${ms}ms: ${err instanceof Error ? err.message : String(err)}`, true)
+        this.trace(sessionId, `${sid} FAILED after ${ms}ms: ${errorKind(err)}`, true)
         this.emit(sessionId, { kind: 'done', text: 'done' })
         this.opts.sendWeb({ type: 'turn_summary_pending', dbSessionId: sessionId, payload: { sessionId, done: true } })
       })
@@ -892,11 +948,11 @@ export class CommanderMirror {
         this.stored(sessionId)
         this.saveSoon()
         const { recap, body } = splitSummary(summary)
-        this.trace(sessionId, `${sid} caught up a turn that ended unseen · recap="${recap}" · bodyLen=${body.length}`)
+        this.trace(sessionId, `${sid} caught up a turn that ended unseen · recapLen=${recap.length} · bodyLen=${body.length}`)
         this.emit(sessionId, { kind: 'summary', text: body || recap, recap, notification: null, restored: true })
       })
       .catch((err) => {
-        this.trace(sessionId, `${sid} catch-up failed: ${err instanceof Error ? err.message : String(err)}`, true)
+        this.trace(sessionId, `${sid} catch-up failed: ${errorKind(err)}`, true)
       })
       .finally(() => { if (st.abort === ac) st.abort = null })
   }
@@ -1138,35 +1194,53 @@ export class CommanderMirror {
     this.history.delete(sessionId)
     this.fullTexts.delete(sessionId)
     this.asks.delete(sessionId)
-    this.save(true)
+    if (this.unread.size) this.deleted.add(sessionId)
+    // Flushed: a deletion is asked for once, and a power cut after it must not bring the recaps back.
+    this.save({ strict: true, durable: true })
     this.stored(sessionId)
   }
 
-  private load(): void {
-    try {
-      const obj = JSON.parse(readFileSync(this.file, 'utf-8')) as Record<string, string>
-      for (const [k, v] of Object.entries(obj)) if (typeof v === 'string') this.summaries.set(k, v)
-    } catch { /* no file yet */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.historyFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
-      }
-    } catch { /* no history yet — recent() falls back to the latest summary */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.fullTextFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
-        // row is not evidence that it still fits the wire.
-        if (Array.isArray(v)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
-      }
-    } catch { /* no full answers yet — recap simply omits the field */ }
-    try {
-      const obj = JSON.parse(readFileSync(this.askFile, 'utf-8')) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
-      }
-    } catch { /* no questions stored yet — the router falls back to recaps alone */ }
+  /**
+   * The last save, as the process stops cleanly: the one waiting on its timer, now, flushed to the disk. The timer's
+   * saves are not flushed, so without this a power cut after a stop could still cost recaps a restart would have kept.
+   */
+  saveBeforeStop(): void {
+    // Cleared, or its save would put an unflushed file over the flushed one.
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    this.save({ durable: true })
+  }
+
+  /**
+   * The recap files, or only [files]: a save reads again those its load could not, and takes in the rows the run does
+   * not hold already (what it holds is newer) and did not delete.
+   */
+  private load(files?: ReadonlySet<string>): void {
+    // A file that cannot be parsed is set aside, never written over by the next save: its bytes stay for a person. One
+    // that cannot be read now (EACCES, EMFILE, a scanner holding it on Windows) may hold every recap: it is left, and no
+    // save goes over it until one reads it again.
+    const read = (file: string): Array<[string, unknown]> => {
+      if (files && !files.has(file)) return []
+      const state = readState(file, 'cache', jsonObject)
+      if (state.state === 'unreadable') { this.unread.add(file); return [] }
+      this.unread.delete(file)
+      return Object.entries(state.state === 'ok' ? state.value : {}).filter(([k]) => !this.deleted.has(k))
+    }
+    for (const [k, v] of read(this.file)) if (typeof v === 'string' && !this.summaries.has(k)) this.summaries.set(k, v)
+    // No history yet: recent() falls back to the latest summary.
+    for (const [k, v] of read(this.historyFile)) {
+      if (Array.isArray(v) && !this.history.has(k)) this.history.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS))
+    }
+    for (const [k, v] of read(this.fullTextFile)) {
+      // Re-clipped on the way in: the cap may have been lowered since this was written, and a stored
+      // row is not evidence that it still fits the wire.
+      if (Array.isArray(v) && !this.fullTexts.has(k)) this.fullTexts.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map(t => clipBytes(t, FULL_TEXT_MAX_BYTES)))
+    }
+    // No questions stored yet: the router falls back to recaps alone.
+    for (const [k, v] of read(this.askFile)) {
+      if (Array.isArray(v) && !this.asks.has(k)) this.asks.set(k, v.filter((x): x is string => typeof x === 'string').slice(0, RECENT_TURNS).map((t) => t.slice(0, ASK_MAX_CHARS)))
+    }
+    if (!this.unread.size) this.deleted.clear()
   }
 
   private saveSoon(): void {
@@ -1174,25 +1248,22 @@ export class CommanderMirror {
     this.saveTimer = setTimeout(() => this.save(), 200)
   }
 
-  private save(strict = false): void {
+  /**
+   * Each file whole or not at all, so a full disk never truncates another session's recaps. `strict` throws instead
+   * of logging, so a deletion that did not land can be tried again. `durable` flushes each file and the folder, which a
+   * cache write otherwise skips for its cost (lib/secureState.ts): only a deletion and the last save before a stop ask for it.
+   */
+  private save({ strict = false, durable = false } = {}): void {
     try {
+      if (this.unread.size) this.load(new Set(this.unread))
       mkdirSync(this.opts.dataDir, { recursive: true, mode: 0o700 })
-      if (strict) {
-        // Cleanup is often requested on a full disk. Never truncate other sessions' shared
-        // history while rewriting these files; failed atomic writes remain safely retryable.
-        atomicWriteJson(this.file, Object.fromEntries(this.summaries))
-        atomicWriteJson(this.historyFile, Object.fromEntries(this.history))
-        atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts))
-        atomicWriteJson(this.askFile, Object.fromEntries(this.asks))
-        return
-      }
-      writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.summaries), null, 2))
-      writeFileSync(this.historyFile, JSON.stringify(Object.fromEntries(this.history), null, 2))
-      writeFileSync(this.fullTextFile, JSON.stringify(Object.fromEntries(this.fullTexts), null, 2))
-      writeFileSync(this.askFile, JSON.stringify(Object.fromEntries(this.asks), null, 2))
+      const files: Array<[string, Map<string, unknown>]> = [
+        [this.file, this.summaries], [this.historyFile, this.history], [this.fullTextFile, this.fullTexts], [this.askFile, this.asks],
+      ]
+      for (const [file, rows] of files) if (!this.unread.has(file)) atomicWriteJson(file, Object.fromEntries(rows), 'cache', { durable })
     } catch (err) {
       if (strict) throw err
-      console.error('[commander] save summaries failed:', err)
+      console.error('[commander] save summaries failed:', errorKind(err))
     }
   }
 }

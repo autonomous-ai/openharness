@@ -3,10 +3,15 @@
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
 import { ignoreHarnessRuntime } from '../lib/harnessRuntimeIgnore.js'
-import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { AtomicWriteUnconfirmed, atomicWriteFile } from '../lib/secureState.js'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
+// Not `env`: the launch's own environment is named that below.
+import { env as config } from '../config/env.js'
+import { harnessPath, legacyHarnessHome, legacyHarnessPath } from '../config/harnessHome.js'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { instructionFileOf, launchContract } from '../engines/launches.js'
 import { HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
@@ -27,7 +32,37 @@ type RuntimeSnapshot = z.infer<typeof Snapshot>
 
 export function harnessRuntimeDir(workspace: string, key: string): string {
   if (!key) throw new Error('A harness runtime needs a session key')
-  return join(workspace, '.harness', 'runtime', createHash('sha256').update(key).digest('hex'))
+  return join(runtimesOf(workspace), createHash('sha256').update(key).digest('hex'))
+}
+
+/** The home as written and as its links lead (`/home` is a link on some systems), so a real path still finds it. */
+function homeSpellings(): string[] {
+  const home = homedir()
+  try { return [home, realpathSync(home)] } catch { return [home] }
+}
+
+/**
+ * Where a workspace's harness runtimes live: in its own `.harness`. The home's is Harness's own folder, which on Linux
+ * moves to the XDG places and leaves a bridge of links behind: a harness launched in the home then keeps its runtimes in
+ * the state root's `runtime`, where the move put the ones made before it.
+ */
+function runtimesOf(workspace: string): string {
+  const own = join(workspace, '.harness', 'runtime')
+  const moved = harnessPath('runtime')
+  if (moved === legacyHarnessPath('runtime')) return own
+  const dir = resolve(workspace, '.harness')
+  return homeSpellings().some(home => legacyHarnessHome(home) === dir) ? moved : own
+}
+
+/**
+ * The folder a launch makes a runtime's folders from, each checked to be a plain one: the workspace, itself possibly a
+ * link, or for the home after the move Harness's own runtime folder, made whole.
+ */
+function runtimeBase(ws: string): string {
+  const runtimes = runtimesOf(ws)
+  if (runtimes === join(ws, '.harness', 'runtime')) return ws
+  mkdirSync(runtimes, { recursive: true })
+  return runtimes
 }
 
 /** Do not follow user-created links when writing managed files. The project itself may be a link. */
@@ -45,20 +80,46 @@ function ensureRuntimeDir(workspace: string, dir: string): void {
   }
 }
 
+/**
+ * [path] at the dsh folder's new place when it names the old one: on Linux Harness's folder moves from `~/.harness` to the
+ * XDG places, and a workspace's saved runtime and skill links still name the old folder, by the home's real path too. Only
+ * the default folder moves; a DSH_DIR the person named is theirs.
+ */
+function movedDshPath(path: string): string {
+  const now = harnessPath('dsh')
+  if (config.DSH_DIR !== now || now === legacyHarnessPath('dsh')) return path
+  const legacy = homeSpellings().map(home => legacyHarnessPath('dsh', home)).find(old => path.startsWith(old + sep))
+  return legacy ? now + path.slice(legacy.length) : path
+}
+
+function movedSnapshot(data: RuntimeSnapshot): RuntimeSnapshot {
+  return { ...data, env: Object.fromEntries(Object.entries(data.env).map(([name, value]) => [name, movedDshPath(value)])),
+    args: data.args.map(movedDshPath), skills: data.skills.map(skill => ({ ...skill, dir: movedDshPath(skill.dir) })) }
+}
+
+/** A saved runtime with its paths at the dsh folder's new place, and whether that changed any of them. */
+function savedRuntime(path: string): { data: RuntimeSnapshot; moved: boolean } {
+  const saved = Snapshot.parse(JSON.parse(readFileSync(path, 'utf8')))
+  const data = movedSnapshot(saved)
+  return { data, moved: JSON.stringify(data) !== JSON.stringify(saved) }
+}
+
 function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink() } catch { return false }
 }
 
-function writeManagedFile(path: string, body: string): void {
+/** Written whole, so a killed Store never truncates what an already-running agent is reading. `durable` flushes it: a
+ * file written once (runtime.json, the person's instruction file) must survive a power cut. */
+function writeManagedFile(path: string, body: string, durable: boolean): void {
   if (isLink(path)) throw new Error(`Refusing to replace a symlink: ${path}`)
-  // A killed Store must never truncate the context an already-running agent is reading.
-  const temporary = `${path}.${randomUUID()}.tmp`
   const mode = existsSync(path) ? lstatSync(path).mode & 0o777 : 0o600
-  const fd = openSync(temporary, 'wx', mode)
   try {
-    try { writeFileSync(fd, body); fsyncSync(fd) } finally { closeSync(fd) }
-    renameSync(temporary, path)
-  } finally { rmSync(temporary, { force: true }) }
+    atomicWriteFile(path, body, 'cache', { mode, durable })
+  } catch (error) {
+    // The file is whole in place: a file system that refuses a folder's flush leaves only its durability unconfirmed,
+    // and the launch goes on, as it did when only the file was flushed.
+    if (!(error instanceof AtomicWriteUnconfirmed)) throw error
+  }
 }
 
 /** Older versions appended a marker without an end marker. Remove only text that exactly matches
@@ -84,11 +145,14 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
     packages.push(pkg)
   }
   if (after === before) return
-  // Keep the exact pre-migration bytes; never replace somebody's earlier backup.
-  const backup = join(workspace, '.harness', 'legacy-AGENTS.md')
-  ensureRuntimeDir(workspace, join(resolve(workspace), '.harness'))
+  // Keep the exact pre-migration bytes; never replace somebody's earlier backup. In the workspace's own .harness, or for
+  // the home after the move beside its runtimes (runtimesOf): never in the bridge.
+  const base = runtimeBase(workspace)
+  const folder = base === workspace ? join(resolve(workspace), '.harness') : base
+  const backup = join(folder, 'legacy-AGENTS.md')
+  ensureRuntimeDir(base, folder)
   if (!existsSync(backup) && !isLink(backup)) writeFileSync(backup, before, { flag: 'wx', mode: 0o600 })
-  writeManagedFile(path, after)
+  writeManagedFile(path, after, true)
   for (const pkg of packages) {
     for (const root of pkg.manifest.agent?.skills ?? []) {
       for (const skill of skillDirsIn(join(pkg.realDir, root))) {
@@ -117,7 +181,7 @@ function installBootstrap(workspace: string, engine: AgentEngine): void {
   const projectRules = imports && existsSync(join(workspace, imports.file)) && !before.split('\n').some(line => line.trim() === imports.line)
     ? `${imports.line}\n` : ''
   // Preserve all project bytes. Only the generic, env-dispatched bootstrap is shared by sessions.
-  writeManagedFile(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${projectRules}${HARNESS_BOOTSTRAP}`)
+  writeManagedFile(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${projectRules}${HARNESS_BOOTSTRAP}`, true)
 }
 
 function snapshot(dsh: InstalledDsh, workspace: string, engine: AgentEngine): RuntimeSnapshot {
@@ -161,34 +225,46 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
   const adapter = harnessAdapter(engine)
   if (dsh.manifest.kind === 'viewer') throw new Error(`${dsh.id} is a viewer, not a harness`)
   const ws = realpathSync(workspace)
+  const base = runtimeBase(ws)
   const dir = harnessRuntimeDir(ws, key)
-  ensureRuntimeDir(ws, dir)
-  ignoreHarnessRuntime(ws)
+  ensureRuntimeDir(base, dir)
+  // Into the workspace's own .harness only, never Harness's folder in the home.
+  if (base === ws) ignoreHarnessRuntime(ws)
   const file = join(dir, 'runtime.json')
   const from = sourceKey ? join(harnessRuntimeDir(ws, sourceKey), 'runtime.json') : file
   if (sourceKey) {
-    ensureRuntimeDir(ws, harnessRuntimeDir(ws, sourceKey))
+    ensureRuntimeDir(base, harnessRuntimeDir(ws, sourceKey))
     if (!existsSync(from)) throw new Error(`The original harness runtime is missing: ${from}`)
   }
   if (isLink(from)) throw new Error(`Harness runtime snapshot is a symlink: ${from}`)
-  const data = existsSync(from) ? Snapshot.parse(JSON.parse(readFileSync(from, 'utf8'))) : snapshot(dsh, ws, engine)
+  const saved = existsSync(from) ? savedRuntime(from) : null
+  const data = saved?.data ?? snapshot(dsh, ws, engine)
   if (data.engine !== engine || (data.id !== dsh.id && !dsh.manifest.formerly?.includes(data.id))) {
     throw new Error(`Harness runtime belongs to ${data.id} / ${data.engine}, not ${dsh.id} / ${engine}`)
   }
+  // The runtime already at [file]: the one read, or the fork destination's own.
+  let own = sourceKey ? null : saved
   if (sourceKey && (existsSync(file) || isLink(file))) {
     if (isLink(file)) throw new Error(`Harness runtime snapshot is a symlink: ${file}`)
-    const saved = Snapshot.parse(JSON.parse(readFileSync(file, 'utf8')))
-    if (JSON.stringify(saved) !== JSON.stringify(data)) throw new Error(`The fork destination already has a different harness runtime: ${file}`)
+    own = savedRuntime(file)
+    if (JSON.stringify(own.data) !== JSON.stringify(data)) throw new Error(`The fork destination already has a different harness runtime: ${file}`)
   }
   const skillsDir = join(dir, 'skills')
-  ensureRuntimeDir(ws, skillsDir)
+  ensureRuntimeDir(base, skillsDir)
   // Validate before modifying project instructions or committing a snapshot.
   for (const skill of data.skills) {
     if (!existsSync(join(skill.dir, 'SKILL.md'))) throw new Error(`Harness skill is missing: ${skill.dir}; repair the harness installation.`)
     const link = join(skillsDir, skill.name)
     if (existsSync(link) || isLink(link)) {
+      const target = isLink(link) ? readlinkSync(link) : ''
+      const atNewPlace = movedDshPath(target)
       // Compared resolved, so a link that writes the same folder another way (a trailing separator) is still its own.
-      if (!isLink(link) || resolve(readlinkSync(link)) !== resolve(skill.dir)) throw new Error(`Harness skill path is already occupied: ${link}`)
+      if (!target || resolve(atNewPlace) !== resolve(skill.dir)) throw new Error(`Harness skill path is already occupied: ${link}`)
+      // Made before Harness's folder moved: linked again at the new place, so nothing waits on the old folder's bridge.
+      if (atNewPlace !== target) {
+        unlinkSync(link)
+        symlinkSync(skill.dir, link, 'junction')
+      }
     // A junction on Windows: a directory symlink needs Developer Mode or an administrator (EPERM), a junction
     // neither. Other platforms ignore the type.
     } else symlinkSync(skill.dir, link, 'junction')
@@ -215,7 +291,10 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     ...data.skills.map(skill => `- ${skill.name}: ${JSON.stringify(join(skillsDir, skill.name, 'SKILL.md'))}`),
     '',
   ].join('\n')
-  writeManagedFile(env.HARNESS_CONTEXT_FILE!, context)
-  if (!existsSync(file)) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`)
+  // Rebuilt at every launch, restore and fork, so a write a power cut loses is made again by the next one: no flush.
+  writeManagedFile(env.HARNESS_CONTEXT_FILE!, context, false)
+  // Written once, and again only when the move of Harness's folder gave its paths their new place: otherwise a saved
+  // runtime keeps its bytes.
+  if (!own || own.moved) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`, true)
   return { env, args: [...data.args, ...(adapter.contextArgs?.(env.HARNESS_CONTEXT_FILE!) ?? []), ...(adapter.envArgs?.(env) ?? [])] }
 }

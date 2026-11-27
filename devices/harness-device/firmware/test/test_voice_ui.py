@@ -35,9 +35,8 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "form.h"
 #include "draft.h"
 #include "workspace.h"
-#include "supertab.h"
 #define EXT_RAM_BSS_ATTR
-enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX };
+enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, OTA };
 enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL };
 typedef int view_t;
@@ -52,19 +51,21 @@ static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
 #define PANE_PITCH 60
 static struct {
-    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, voice_swarm, touch_down, touch_cancelled;
+    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, touch_down, touch_cancelled;
     int pet_pose, view, voice_return, offset, pressed, active, pane_pos;
     uint32_t error_until;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
-    char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48];
-    struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;
+    char hint[40];
+    char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48], voice_upload[24];
+    struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48],request[64]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
 } s;
 static uint32_t now;
-static bool audio_active, recording, abort_requested, queue_full;
+static bool audio_active, recording, abort_requested, queue_full, start_ignored;
 static int starts, stops, aborts, cancels, confirms, scroll, gesture, reviews;
+static char cancelled[24];
 static action_t queued;
 static agent_t *active(void) { return &s.agents[0]; }
 #define COPY(dst, src) snprintf(dst, sizeof(dst), "%s", (src) ? (src) : "")
@@ -85,48 +86,47 @@ void audio_client_request_review(void) { reviews++; }
 void audio_client_abort(void) { aborts++; abort_requested = true; }
 void audio_client_copy_upload_id(char *dst, size_t cap) { snprintf(dst, cap, "capture-%d", starts); }
 static char started_for[64];
-void audio_client_start_cable(const char *id, int cmd) {
-    (void)cmd; snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
+// start_ignored: the audio client does not take the start (the last clip's sender is still finishing).
+bool audio_client_start_cable(const char *id, int cmd) {
+    (void)cmd; if (start_ignored) return false;
+    snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
+    return true;
 }
-void audio_client_start_search(const char *id, const char *selected, unsigned revision) {
-    assert(!strcmp(selected,"search-test") && revision==3); audio_client_start_cable(id,VOICE_CMD_NONE);
+bool audio_client_start_search(const char *id, const char *selected, unsigned revision) {
+    assert(!strcmp(selected,"search-test") && revision==3); return audio_client_start_cable(id,VOICE_CMD_NONE);
 }
-void audio_client_start_form(const char *id, unsigned revision) {
-    assert(!strcmp(id, "form-test") && revision==3); audio_client_start_cable(NULL, VOICE_CMD_NONE);
+bool audio_client_start_form(const char *id, unsigned revision) {
+    assert(!strcmp(id, "form-test") && revision==3); return audio_client_start_cable(NULL, VOICE_CMD_NONE);
 }
-void audio_client_start_question(const char *id,const char *token,unsigned index) {
-    assert(!strcmp(token,"question-token") && index==0); audio_client_start_cable(id,VOICE_CMD_NONE);
+bool audio_client_start_question(const char *id,const char *token,unsigned index) {
+    assert(!strcmp(token,"question-token") && index==0); return audio_client_start_cable(id,VOICE_CMD_NONE);
 }
-void audio_client_start_draft(const char *id, unsigned revision, bool append) {
-    assert(!strcmp(id,"draft-test") && revision==3); (void)append; audio_client_start_cable(NULL,VOICE_CMD_NONE);
+bool audio_client_start_draft(const char *id, unsigned revision, bool append) {
+    assert(!strcmp(id,"draft-test") && revision==3); (void)append; return audio_client_start_cable(NULL,VOICE_CMD_NONE);
 }
-void cable_client_voice_cancel(const char *id) { assert(id[0]); cancels++; }
-void audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
-    assert(selected && selected[0] && revision); audio_client_start_cable(id, VOICE_CMD_NONE);
+// Each cancel that names an upload reaches the host; the audio client drops "" (test_audio_threads.py).
+void audio_client_cancel(const char *id) { if (id[0]) { cancels++; COPY(cancelled, id); } }
+bool audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
+    assert(selected && selected[0] && revision); return audio_client_start_cable(id, VOICE_CMD_NONE);
 }
-void audio_client_start_carry(const char *id, const char *carried) {
-    assert(!strcmp(carried,"carry-test")); audio_client_start_cable(id, VOICE_CMD_NONE);
+bool audio_client_start_carry(const char *id, const char *carried) {
+    assert(!strcmp(carried,"carry-test")); return audio_client_start_cable(id, VOICE_CMD_NONE);
 }
 void cable_client_voice_confirm(const char *route, const char *id) { (void)route; (void)id; confirms++; }
 int find(const char *id) { return id && !strcmp(id, "agent") ? 0 : -1; }
 bool is_question(const char *id) { (void)id; return false; }
 void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
+void notice_remove_question(const char *id) { assert(id && id[0]); }
+void notice_sync_view(void) {}
 '''
-# The Swarm's data and lookups, for the Lead a face voice turn goes to.
-harness += source[source.index('enum { SUPERTAB_RECAP_GET'):source.index('static const char *swarm_fixed_text(')]
-harness += function('swarm_voice_id')
-harness += function('voice_lead')
-# and whose engine it listens with: the Buddy's on a Swarm's Buddy side.
-for name in ['swarm_side_slot', 'swarm_side_buddy', 'swarm_on_buddy', 'swarm_voice_engine']:
-    harness += function(name)
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
 harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n' + dispatch + '} }\n'
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
-             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort']:
+             'ui_voice_error', 'ui_voice_routed', 'ui_question_close', 'ui_ota_boot_show']:
     harness += function(name)
 harness += r'''
 static void reset(void) {
@@ -135,8 +135,8 @@ static void reset(void) {
     host_features=31; memset(&draft,0,sizeof draft); reviews=0; memset(&s, 0, sizeof(s)); memset(&visit, 0, sizeof(visit)); memset(&carry,0,sizeof(carry)); now = 1000;
     s.ready = s.connected = true; s.view = HOME;
     strcpy(s.agents[0].name, "Agent");
-    audio_active = recording = abort_requested = queue_full = false;
-    starts = stops = aborts = cancels = confirms = 0;
+    audio_active = recording = abort_requested = queue_full = start_ignored = false;
+    starts = stops = aborts = cancels = confirms = 0; cancelled[0] = 0;
 }
 static void speak(void) { dispatch((action_t){.kind = A_VOICE, .id = "agent"}); }
 static void done(void) { dispatch((action_t){.kind = A_VOICE_STOP}); }
@@ -144,80 +144,27 @@ static void discard(void) { dispatch((action_t){.kind = A_VOICE_ABORT}); }
 static void finish_audio(void) { audio_active = recording = false; }
 static void begin(void) { speak(); work(queued); assert(recording && s.view == VOICE); }
 int main(void) {
+    // A discard cancels on the host only the upload its own gesture started, once, even with the action queue full.
+    // Still starting, after a clip that was sent: the previous clip's id is not this gesture's, and nothing starts.
+    reset(); begin(); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
+    speak(); action_t pending = queued; discard(); work(pending); work(queued);
+    assert(!cancels && starts==1 && !recording && s.view==HOME);
+    // Recording, with the queue full: the cancel does not wait for a slot.
+    reset(); begin(); queue_full = true; discard();
+    assert(cancels==1 && !strcmp(cancelled,"capture-1") && aborts==1 && s.view==HOME);
+    // A start the audio client did not take has no upload to cancel.
+    reset(); begin(); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
+    start_ignored = true; speak(); work(queued); assert(!s.voice_start_pending && starts==1);
+    discard(); work(queued); assert(!cancels);
+    // An OTA ends the voice as a discard does: a clip that already sent voice.end is cancelled on the host, once.
+    reset(); begin(); done(); finish_audio(); assert(s.voice_waiting);
+    ui_ota_boot_show("1.0.0"); assert(cancels==1 && !strcmp(cancelled,"capture-1") && !s.voice_open && s.view==OTA);
+    // Still starting: no upload yet, so nothing is cancelled and the queued start records nothing.
+    reset(); speak(); pending = queued; ui_ota_boot_show("1.0.0"); work(pending);
+    assert(!cancels && !starts && !s.voice_open && s.view==OTA);
+
     // The listening scene follows whom the turn is for: an agent's engine, nothing for a draft.
     reset(); strcpy(s.agents[0].engine, "claude"); begin(); assert(!strcmp(s.voice_engine, "claude"));
-    // In a Swarm the face's turn goes to the Lead's harness on this computer, never the Lead id, with the Lead's
-    // engine and project; it comes back to the Swarm's face.
-    {
-        static ht_supertab_t card; static ht_lead_event_t ev[4];
-        assert(ht_supertab_init(&card, "s1", "", "openharness", 2));
-        ht_lead_in_t mobile = {.id = "L1", .project = "mobile", .engine = "codex", .local = "h1", .state = "work", .order = 0, .since = 5};
-        ht_lead_in_t web = {.id = "L2", .project = "web", .engine = "claude", .local = "", .state = "work", .order = 1, .since = -1};
-        assert(ht_supertab_lead_add(&card, &mobile) && ht_supertab_lead_add(&card, &web));
-        const char ids[1][ID_MAX] = {"s1"};
-        reset(); ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
-        ht_supertabs_ids(&swarm, ids, 1, ev, 4); ht_supertabs_put(&swarm, &card, now, ev, 4);
-        strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
-        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
-        assert(recording && s.view == VOICE && !strcmp(started_for, "h1"));
-        assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile") && !sw.voice_buddy);
-        done(); finish_audio(); ui_voice_routed(true, false, "", "h1", "mobile", 1);
-        assert(s.view == AGENT && !s.voice_open && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L1"));
-        // Words for the Swarm chat go as any harness's do (Diego's dial, 2026-10-29: "like the other agents"): a tap sends
-        // them, and only a held stop reviews them, by a daemon that posts a reviewed draft there.
-        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
-        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); done();
-        assert(!reviews && !s.voice_review && s.voice_waiting);
-        discard(); finish_audio();
-        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
-        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
-        assert(reviews == 1 && s.voice_review && s.voice_waiting);
-        discard(); finish_audio();
-        // On the Buddy side the turn is pinned to it when it starts, with the Buddy's engine; a later side change moves neither.
-        {
-            static ht_supertab_t buddy_card;
-            ht_lead_in_t b = {.id = "L1", .project = "mobile", .engine = "codex", .local = "h1", .state = "done", .order = 0, .since = -1,
-                              .buddies = true, .buddy = {.present = true, .chat_id = "b1", .name = "diego's Buddy", .engine = "claude",
-                                                         .color = "#d6a79a", .cells = 25513, .live = true}};
-            assert(ht_supertab_init(&buddy_card, "s1", "", "openharness", 1) && ht_supertab_lead_add(&buddy_card, &b));
-            ht_supertabs_put(&swarm, &buddy_card, now, ev, 4);
-            reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1"); strcpy(sw.side[0].tab, "s1"); sw.side[0].buddy = true;
-            dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
-            assert(s.voice_open && sw.voice_buddy && !strcmp(s.voice_engine, "claude"));
-            sw.side[0].buddy = false;
-            assert(sw.voice_buddy);
-            discard(); finish_audio();
-            reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1"); sw.side[0].buddy = false;
-            dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
-            assert(s.voice_open && !sw.voice_buddy && !strcmp(s.voice_engine, "codex"));
-            discard(); finish_audio();
-            ht_supertabs_put(&swarm, &card, now, ev, 4); memset(sw.side, 0, sizeof sw.side);
-        }
-        // An older daemon would type a reviewed draft into the Lead's terminal: no review on the face, even when held.
-        reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
-        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
-        assert(!reviews && !s.voice_review && s.voice_waiting);
-        discard(); finish_audio();
-        // Diego's dial, 2026-10-29: the openharness Lead ran on another Mac, so the face named no one and a tap did nothing.
-        // A Lead on another machine (web, L2) is named by its Swarm id to a daemon that posts in its chat; an older daemon
-        // would hand that id to the pane focused in the window, so it is named to none.
-        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L2");
-        assert(!swarm_voice_id()[0]);
-        host_features |= CABLE_FEATURE_SWARM_REMOTE;
-        assert(!strcmp(swarm_voice_id(), "L2"));
-        action_t remote = {.kind = A_VOICE}; strcpy(remote.id, swarm_voice_id());
-        dispatch(remote); work(queued);
-        assert(recording && s.view == VOICE && s.voice_swarm && !strcmp(started_for, "L2"));
-        assert(!strcmp(s.voice_engine, "claude") && !strcmp(s.voice_target, "web"));
-        done(); assert(!reviews && !s.voice_review && s.voice_waiting);
-        discard(); finish_audio();
-        // A Lead here is still named by its harness.
-        strcpy(sw.lead, "L1"); assert(!strcmp(swarm_voice_id(), "h1"));
-        // A desk pane's id while a Lead is on the face is no Lead's harness: the pane's own engine.
-        strcpy(s.agents[0].engine, "claude"); begin();
-        assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));
-        ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
-    }
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
     reset(); begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
@@ -248,6 +195,18 @@ int main(void) {
     ui_voice_error("Transcription failed"); assert(!s.voice_open && s.view==QUESTION && s.q.speech_error[0]);
     dispatch(question_voice); work(queued); discard(); finish_audio();
     assert(!s.voice_open && s.view==QUESTION && starts==2); // Discard goes back to the question
+    // The question closes while voice is open over it (answered in the terminal): its alert row is gone, so voice
+    // ends as a discard does, the host's capture with it, and the dial goes home; a late result changes nothing.
+    strcpy(s.q.request,"question-request"); dispatch(question_voice); work(queued);
+    ui_question_close("agent","other-request"); assert(s.voice_open && recording); // another question leaves it
+    ui_question_close("agent","question-request");
+    assert(!s.voice_open && s.view==HOME && abort_requested && cancels==2 && !strcmp(cancelled,"capture-3"));
+    finish_audio(); ui_voice_error("Transcription failed"); assert(s.view==HOME && !s.q.speech_error[0]);
+    // Closed while voice is still starting: the start queued behind it finds its generation gone and records nothing.
+    s.view=QUESTION; s.q.valid=true; question_voice.revision=s.q.revision; dispatch(question_voice);
+    action_t start=queued; assert(s.voice_open && s.voice_start_pending);
+    ui_question_close("agent","question-request"); assert(!s.voice_open && s.view==HOME);
+    work(start); assert(!recording && starts==3);
     reset(); carry.active=true; strcpy(carry.id,"carry-test"); carry.deadline=now+100;
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="wrong"});
     assert(!s.voice_open && !starts);
@@ -303,8 +262,9 @@ int main(void) {
 
     // Empty transcription is a transient hint on the companion, not a modal.
     reset(); begin(); done(); finish_audio(); now=UINT32_MAX-1000;
+    strcpy(s.hint, "See it in Orca");   // a hint left from an agent that cannot hear: the retry line says its own words
     ui_voice_error("Didn't catch that");
-    assert(s.view==HOME && !s.voice_open && !s.voice_waiting && s.voice_retry_until);
+    assert(s.view==HOME && !s.voice_open && !s.voice_waiting && s.voice_retry_until && !s.hint[0]);
     uint32_t retry_deadline=s.voice_retry_until;
     now=retry_deadline-1; habitat_tick(); assert(s.voice_retry_until==retry_deadline);
     now=retry_deadline; habitat_tick(); assert(!s.voice_retry_until && s.view==HOME);
@@ -316,8 +276,6 @@ int main(void) {
     assert(s.voice_retry_until==1); now=1; habitat_tick(); assert(!s.voice_retry_until);
     begin(); done(); finish_audio(); ui_voice_error("Didn't catch that");
     ui_set_connected(false); assert(!s.voice_retry_until);
-    // The daemon a link drops forgets the Swarm Lead open here: the next one is told again (test_touch_ui.py).
-    sw.opened = true; ui_set_connected(false); assert(!sw.opened);
 
     reset(); begin(); now = 601000; habitat_tick();
     assert(stops == 1 && s.voice_waiting);
@@ -373,6 +331,6 @@ with tempfile.TemporaryDirectory(prefix='harness-voice-ui-') as directory:
     (root / 'voice_ui.c').write_text(harness)
     subprocess.run(['cc', '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),
-                    '-I', str(native), str(root / 'voice_ui.c'), str(native / 'selection.c'), str(native / 'carry.c'), str(native / 'visit.c'), str(native / 'form.c'), str(native / 'draft.c'), str(native / 'workspace.c'), str(native / 'supertab.c'),
+                    '-I', str(native), str(root / 'voice_ui.c'), str(native / 'selection.c'), str(native / 'carry.c'), str(native / 'visit.c'), str(native / 'form.c'), str(native / 'draft.c'), str(native / 'workspace.c'),
                     '-o', str(root / 'voice_ui')], check=True)
     subprocess.run([str(root / 'voice_ui')], check=True)

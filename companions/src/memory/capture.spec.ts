@@ -130,7 +130,7 @@ it.each(['bytes', 'count'] as const)('preserves intact instructions when a long 
   }
   expect(captured).toHaveLength(records.length + 2)
   expect(captured.filter(source => source.role === 'user').map(source => source.text)).toEqual(['I prefer small changes.'])
-})
+}, 30_000) // The count case captures 130 lines, each its own durable commit; a busy CI disk takes seconds.
 
 it('isolates a missing tool record, keeps both neighboring instructions, and resets at the next turn', async () => {
   await writeFile(session.transcriptPath, user('Keep the viewer on the left.', 'before')

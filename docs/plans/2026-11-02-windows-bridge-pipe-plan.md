@@ -1,7 +1,7 @@
 # Windows: the connectors bridge off a held port, and over a proven pipe — Implementation Plan
 
-> **For agentic workers:** This plan is implemented by the Engineer task by task, test first (project instructions,
-> Engineer role), not by subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** This plan is implemented task by task, test first, not by
+> subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** On Windows, the bridge moves off a port another account holds, and MCP clients (the stdio shim) and Harness's
 own route (`cloud/bridge.ts` `bridgeRoute`) reach the bridge over a named pipe that proves itself, never the port.
@@ -29,7 +29,7 @@ answer. Where a pipe exists the keys leave the port as on macOS (`rotateHarnessK
 - Anything but a clear yes from Windows is not "mine" for a listener; a lookup that fails says nothing (null), as today.
 - PowerShell inputs go in environment variables, never in the script's text.
 - The shim stays Node built-ins only and holds no key; the pipe token is read from the private record per request.
-- Swarm code stays out of `cli/src/core`. `src/services/connectors.ts` stays at 100% coverage (`npm run test:core`).
+- `src/services/connectors.ts` stays at 100% coverage (`npm run test:core`).
 - PR body starts with "Requested by scholes@autonomous.ai through Harness."; two security reviews (Reed, Quinn 2); a real
   Windows workflow run on the final head.
 
@@ -132,5 +132,5 @@ answer. Where a pipe exists the keys leave the port as on macOS (`rotateHarnessK
 
 - [ ] The report's W1 "Still open" bridge line becomes fixed by this task, stating the false-answers risk before it.
 - [ ] Real Windows spec: the bridge on a real pipe answers the shim, and `portHolderIsThisAccount` on a real listener.
-  The Windows workflow runs `src/lib/windows`; ask the PM for one run on the final head.
+  The Windows workflow runs `src/lib/windows`; run it once on the final head.
 - [ ] Red/green in a PR comment; `npx tsc --noEmit`; affected specs; `npm run test:core`.

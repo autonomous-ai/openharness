@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createRuntimeProfileReader } from './profileReader.js'
+import { applyProfileEvidence } from '../kit/runtime.js'
+import { transcriptEvidence } from './profileReader.js'
 import type { InlineRuntimeContext } from '../facets/inlineRuntime.js'
 
 function context(): InlineRuntimeContext {
@@ -13,10 +14,11 @@ function context(): InlineRuntimeContext {
 
 describe('omp profile reader', () => {
   it('reads the model and thinking level from the session file', () => {
-    const reader = createRuntimeProfileReader()
     const ctx = context()
-    reader.transcript!(ctx, { type: 'model_change', model: 'fixture-model' })
-    reader.transcript!(ctx, { type: 'thinking_level_change', thinkingLevel: 'high' })
+    for (const raw of [{ type: 'model_change', model: 'fixture-model' }, { type: 'thinking_level_change', thinkingLevel: 'high' }, { type: 'message' }]) {
+      const evidence = transcriptEvidence(raw)
+      if (evidence) applyProfileEvidence(ctx, evidence)
+    }
     expect(ctx.state.model).toBe('fixture-model')
     expect(ctx.state.effort).toBe('high')
     expect(ctx.control?.modelConfirmed).toBe(true)

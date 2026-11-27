@@ -79,3 +79,26 @@ export function navigable(url) {
   if (parsed?.protocol === 'http:' || parsed?.protocol === 'https:' || parsed?.href === 'about:blank') return url
   throw new Error('Only http and https URLs open in the Browser')
 }
+
+/**
+ * The answer to one line from the daemon: `tools/call` is `call(params)`, `window` is `window(params)`, anything else
+ * null, which the script answers as an unknown method. There is no MCP handshake: the daemon writes calls only, so a
+ * relay that still runs and sends `initialize`, `tools/list` or `ping` is told the method is unknown.
+ */
+export async function answer(message, { call, window }) {
+  if (message.method === 'tools/call') return await call(message.params ?? {})
+  if (message.method === 'window') return await window(message.params ?? {})
+  return null
+}
+
+/**
+ * Chrome's window at 0,0 with this size, not maximized, through CDP rather than the window manager. Chrome keeps the
+ * window inside the screen, so the answer is the size Chrome reports after, not the one asked for. `send(method,
+ * params)` is the page's CDP session.
+ */
+export async function setWindow(send, { width, height }) {
+  const { windowId } = await send('Browser.getWindowForTarget')
+  await send('Browser.setWindowBounds', { windowId, bounds: { left: 0, top: 0, width, height, windowState: 'normal' } })
+  const { bounds } = await send('Browser.getWindowBounds', { windowId })
+  return { width: bounds.width, height: bounds.height }
+}

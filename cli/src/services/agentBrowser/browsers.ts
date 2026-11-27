@@ -1,14 +1,16 @@
 /**
  * What each agent's browser is doing, and the one place that moves it: setup, start, stop, delete, restarts after an
- * exit, and the daemon start that cleans up after whatever happened while the service was down (spec § Lifecycle).
- * Work for one agent runs in order; different agents run side by side.
+ * exit, the daemon start that cleans up after whatever happened while the service was down (spec § Lifecycle), and the
+ * move of an entry, with the profile its names come from, to the agent that took its pane (decision 19). Work for one
+ * agent runs in order; different agents run side by side, and a move holds both agents' queues.
  */
 import { randomUUID } from 'node:crypto'
+import { errorKind } from '../../lib/log.js'
 import { browserLimit, type Containers } from './containers.js'
 import { PodmanError, type Podman } from './podman.js'
 import { defaultSettings, settingsHash, type BrowserHost, type BrowserSettings } from './settings.js'
 import type { Setup, SetupStep } from './setup.js'
-import type { StateFile } from './stateFile.js'
+import type { BrowserStateData, SavedBrowser, StateFile } from './stateFile.js'
 
 export type BrowserState = { state: 'setup' | 'starting' | 'ready' | 'failed'; step?: SetupStep | 'building'; error?: string }
 
@@ -36,8 +38,7 @@ const BUILDING: BrowserState = { state: 'setup', step: 'building' }
 const failed = (error: string): BrowserState => ({ state: 'failed', error })
 
 /** A failed or timed-out podman call (`podman_failed`), or anything unnamed, is Podman not running. */
-function failedState(error: unknown): string {
-  const state = error instanceof PodmanError ? error.state : ''
+function failedState(state: string): string {
   return FAILED_STATES.has(state) ? state : 'podman_down'
 }
 
@@ -49,10 +50,27 @@ const sleep = (ms: number) => new Promise<void>(done => setTimeout(done, ms))
  */
 type SavedProxy = NonNullable<BrowserSettings['proxy']> & { secretId?: string }
 
-function withoutSecretId(saved: BrowserSettings): BrowserSettings {
-  if (!saved.proxy) return saved
-  const { secretId: _secretId, ...proxy } = saved.proxy as SavedProxy
-  return { ...saved, proxy }
+/** The person's settings, without what only the service keeps: the profile and the proxy's id. */
+function settingsOf(saved: SavedBrowser): BrowserSettings {
+  const { profile: _profile, ...settings } = saved
+  if (!settings.proxy) return settings
+  const { secretId: _secretId, ...proxy } = settings.proxy as SavedProxy
+  return { ...settings, proxy }
+}
+
+/** Whether another entry holds [agentId] as its profile: that agent's browser went with its pane. */
+function heldByAnother(browsers: Record<string, SavedBrowser>, agentId: string): boolean {
+  return Object.values(browsers).some(saved => saved.profile === agentId)
+}
+
+/**
+ * [saved] as [agentId]'s entry: with its entry's profile, or, made new for an agent whose id another entry holds, a
+ * profile of its own, so the volume that went with its pane is never its (call 27). Any other new entry has none.
+ */
+function entryOf(browsers: Record<string, SavedBrowser>, agentId: string, saved: SavedBrowser): SavedBrowser {
+  const own = browsers[agentId]
+  const profile = own ? own.profile : heldByAnother(browsers, agentId) ? randomUUID() : undefined
+  return profile === undefined ? saved : { ...saved, profile }
 }
 
 export class Browsers {
@@ -110,6 +128,12 @@ export class Browsers {
     return this.queue(agentId, () => this.launch(agentId, generation))
   }
 
+  /** A new core lease must recheck the live browser; work from the old lease cannot publish into it. */
+  refresh(agentId: string): Promise<void> {
+    this.forget(agentId)
+    return this.start(agentId)
+  }
+
   /** Runs setup from its recorded step, then starts every browser waiting on it. One run at a time. */
   setUp(): Promise<void> {
     return this.setupRun ??= this.runSetup().finally(() => { this.setupRun = null })
@@ -121,10 +145,75 @@ export class Browsers {
     if (step) this.showSetup({ state: 'setup', step })
   }
 
+  /** A move or Start may be queued before it has a visible browser state. */
+  pending(agentId: string): boolean { return this.queues.has(agentId) }
+
   stop(agentId: string): Promise<void> {
     this.forget(agentId)
     this.deps.closeViewers(agentId)
-    return this.queue(agentId, () => this.deps.containers.stop(agentId))
+    return this.queue(agentId, async () => {
+      const profile = this.profile(agentId)
+      if (profile !== null) await this.deps.containers.stop(profile)
+    })
+  }
+
+  /**
+   * The id [agentId]'s browser is named by: its entry's `profile`, else its own id. Null for an agent with no entry
+   * whose id another entry holds as its profile: its browser went with its pane, and nothing of that name is its.
+   */
+  profile(agentId: string): string | null {
+    const { browsers } = this.deps.state.read()
+    const own = browsers[agentId]
+    if (own) return own.profile ?? agentId
+    return heldByAnother(browsers, agentId) ? null : agentId
+  }
+
+  /**
+   * [from]'s entry, its profile with it, becomes [to]'s (decision 19), and so does its Browser being on: [from]'s browser
+   * is stopped first, in both agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or
+   * [to] has an entry of its own. Rejects when the state file cannot be written: both entries are as they were.
+   */
+  move(from: string, to: string, prepare?: () => Promise<void>): Promise<boolean> {
+    const destinationGeneration = this.generation(to)
+    return this.inQueues([from, to], async () => {
+      await prepare?.()
+      const movable = (s: BrowserStateData) => s.browsers[from] !== undefined && !s.deleting.includes(from) && s.browsers[to] === undefined
+      const saved = this.deps.state.read()
+      if (!movable(saved)) return false
+      const running = this.states.has(from)
+      // A preceding move may have queued this agent's Start behind us without publishing state yet. Cancel it too:
+      // once its profile moves on, that queued Start must not recreate a fresh browser for the previous agent.
+      this.forget(from)
+      if (running) {
+        this.deps.closeViewers(from)
+        // The volume stays: it is what moves.
+        await this.deps.containers.stop(saved.browsers[from]!.profile ?? from).catch((error: unknown) => {
+          this.deps.log(`agent browser ${from}: the browser that moved was not stopped · ${errorKind(error)}`)
+        })
+      }
+      let moved = false
+      this.deps.state.update(s => {
+        // A save for [to] or a delete of [from] while the browser stopped: nothing moves.
+        if (!movable(s)) return
+        const entry = s.browsers[from]!
+        s.browsers[to] = { ...entry, profile: entry.profile ?? from }
+        delete s.browsers[from]
+        // [from]'s mark goes with its entry, and [to] gets none: a new conversation, owed its ready line once its
+        // browser is ready.
+        delete s.told?.[from]
+        if (s.on?.[from]) {
+          // A later Stop of the destination keeps its choice while receiving the profile.
+          if (this.generation(to) === destinationGeneration) s.on[to] = true
+          delete s.on[from]
+        }
+        // Both ends now have Browser's decision: [from] gave it away and [to] received it. A later row or consecutive
+        // move must not replace it with a legacy flag. Delete on or after 2026-12-18, with `adopt`.
+        s.adopted = { ...s.adopted, [from]: true, [to]: true }
+        moved = true
+      })
+      if (moved) this.deps.log(`agent browser ${to}: took the browser of ${from}`)
+      return moved
+    })
   }
 
   /** Recorded before anything is removed, so a delete cut off by a crash is finished at the next service start. */
@@ -134,7 +223,7 @@ export class Browsers {
     try {
       this.deps.state.update(s => { if (!s.deleting.includes(agentId)) s.deleting.push(agentId) })
     } catch (error) {
-      this.deps.log(`agent browser ${agentId}: not deleted: ${(error as Error).message}`)
+      this.deps.log(`agent browser ${agentId}: not deleted · ${errorKind(error)}`)
       return
     }
     await this.queue(agentId, () => this.remove(agentId))
@@ -154,23 +243,21 @@ export class Browsers {
 
   settings(agentId: string): BrowserSettings {
     const saved = this.deps.state.read().browsers[agentId]
-    return saved ? withoutSecretId(saved) : defaultSettings(this.deps.host)
+    return saved ? settingsOf(saved) : defaultSettings(this.deps.host)
   }
 
   /**
    * Human input applies to the next tool call; anything else creates the container again, and the volume stays. A new
-   * password drops the proxy's id, so the next start makes another and the label changes.
+   * password drops the proxy's id, so the next start makes another and the label changes. The entry's profile stays.
    */
   async saveSettings(agentId: string, next: BrowserSettings): Promise<void> {
     const before = this.settings(agentId)
     this.deps.state.update(s => {
       const kept = (s.browsers[agentId]?.proxy as SavedProxy | null | undefined)?.secretId
-      if (!kept || !next.proxy || next.proxy.password !== before.proxy?.password) {
-        s.browsers[agentId] = next
-        return
-      }
-      const proxy: SavedProxy = { ...next.proxy, secretId: kept }
-      s.browsers[agentId] = { ...next, proxy }
+      const saved = !kept || !next.proxy || next.proxy.password !== before.proxy?.password
+        ? next
+        : { ...next, proxy: { ...next.proxy, secretId: kept } satisfies SavedProxy }
+      s.browsers[agentId] = entryOf(s.browsers, agentId, saved)
     })
     const shown = this.states.get(agentId)
     if (shown && shown.state !== 'setup' && settingsHash(before) !== settingsHash(next)) void this.start(agentId)
@@ -185,13 +272,32 @@ export class Browsers {
     if (shown === 'ready') void this.queue(agentId, async () => { await this.exitSeen(agentId) })
   }
 
+  /**
+   * One look at what runs, as the service starts: a browser running for an agent [wanted] does not want (not here, not on)
+   * is stopped, and its profile kept. Its agent ended while the service could not hear it.
+   */
+  async stopAllBut(wanted: (agentId: string) => boolean): Promise<void> {
+    let running: string[]
+    try {
+      running = await this.deps.containers.running()
+    } catch (error) {
+      this.deps.log(`agent browser: could not list running browsers · ${errorKind(error)}`)
+      return
+    }
+    for (const agentId of running) {
+      if (wanted(agentId)) continue
+      this.deps.log(`agent browser ${agentId}: stopped, its agent is not here or its Browser is off`)
+      await this.stop(agentId)
+    }
+  }
+
   /** After the event stream reconnects: one look at what runs, for an exit it missed. */
   async reconcile(): Promise<void> {
     let running: Set<string>
     try {
       running = new Set(await this.deps.containers.running())
     } catch (error) {
-      if (!this.listingFailed) this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      if (!this.listingFailed) this.deps.log(`agent browser: could not list running browsers · ${errorKind(error)}`)
       this.listingFailed = true
       return
     }
@@ -200,27 +306,24 @@ export class Browsers {
   }
 
   /**
-   * At service start. `known` is the core's live and stopped agents, or null when it gave no answer: then only the
-   * deletes already recorded are finished, since a missing answer must never delete a person's login.
+   * At service start, finish only recorded purges. A readable agent list may omit an unreadable archive, so absence
+   * from it is never authority to erase an otherwise intact profile. Unlisted containers can be stopped safely.
    */
-  async resume(known: Set<string> | null): Promise<void> {
+  async resume(): Promise<void> {
     let saved
     try {
       saved = this.deps.state.read()
     } catch (error) {
       // Every browser shows state_unreadable as it starts, until a person fixes or removes the file.
-      this.deps.log(`agent browser: ${(error as Error).message}; nothing is removed or started`)
+      this.deps.log(`agent browser: the state file cannot be read; nothing is removed or started · ${errorKind(error)}`)
       return
     }
     for (const agentId of saved.deleting) await this.queue(agentId, () => this.remove(agentId))
-    if (known) {
-      for (const agentId of Object.keys(saved.browsers)) if (!known.has(agentId)) await this.delete(agentId)
-      try {
-        const swept = await this.deps.containers.sweep(new Set(Object.keys(this.deps.state.read().browsers)))
-        if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
-      } catch (error) {
-        this.deps.log(`agent browser: could not sweep containers: ${(error as Error).message}`)
-      }
+    try {
+      const swept = await this.deps.containers.sweep(agentId => Object.hasOwn(this.deps.state.read().browsers, agentId))
+      if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
+    } catch (error) {
+      this.deps.log(`agent browser: could not sweep containers · ${errorKind(error)}`)
     }
     // An install cut off is never run again by itself: it would raise the password dialog nobody asked for.
     if (saved.setup?.step === 'installing') {
@@ -235,9 +338,9 @@ export class Browsers {
     try {
       await this.deps.setup.run(this.deps.state.read().setup ?? { step: null })
     } catch (error) {
-      const state = failedState(error)
+      const state = failedState(error instanceof PodmanError ? error.state : '')
       this.deps.measure('agent_browser_setup_failed')
-      this.deps.log(`agent browser: setup failed (${state}): ${(error as Error).message}`)
+      this.deps.log(`agent browser: setup failed · ${errorKind(error)}`)
       this.setupShown = failed(state)
       for (const agentId of this.waiting) this.fail(agentId, state)
       return
@@ -263,11 +366,14 @@ export class Browsers {
     try {
       let settings = defaultSettings(this.deps.host)
       let secretId = ''
+      // Resolved once for the whole start: its every name, and its every look at whether it is ready.
+      let profile = agentId
       this.deps.state.update(s => {
-        const saved = s.browsers[agentId] ??= settings
+        const saved = s.browsers[agentId] ??= entryOf(s.browsers, agentId, settings)
         // Made here, the one place a proxy is applied, after a save with a new password dropped the last one.
         if (saved.proxy) secretId = (saved.proxy as SavedProxy).secretId ??= randomUUID()
-        settings = withoutSecretId(saved)
+        profile = saved.profile ?? agentId
+        settings = settingsOf(saved)
       })
       if (!afterSetup) {
         if (this.setupRun) return this.needsSetup(agentId)
@@ -289,12 +395,14 @@ export class Browsers {
       this.set(agentId, STARTING)
       const timeZone = await this.timeZone(agentId, settings)
       this.died.delete(agentId)
-      const { limitsDropped } = await this.deps.containers.start(agentId, image, settings, timeZone, secretId)
+      const { limitsDropped } = await this.deps.containers.start(agentId, profile, image, settings, timeZone, secretId)
       if (limitsDropped.length > 0) this.deps.measure('agent_browser_limit_dropped')
       for (let tries = 0; tries < READY_TRIES; tries++) {
         if (tries > 0) await sleep(READY_EVERY_MS)
         if (!current() || (await this.exitSeen(agentId))) return
-        if (await this.deps.containers.ready(agentId)) {
+        if (await this.deps.containers.ready(profile)) {
+          // A stop while Podman answered: the browser is off, and its queued removal follows.
+          if (!current()) return
           const restart = this.restarts.get(agentId)
           if (restart) restart.readyAt = this.now()
           this.set(agentId, { state: 'ready' })
@@ -303,16 +411,16 @@ export class Browsers {
         }
       }
       // Left up, it would run unseen and count against the limit.
-      await this.deps.containers.stop(agentId).catch((error: unknown) => {
-        this.deps.log(`agent browser ${agentId}: the browser that was not ready was not removed: ${(error as Error).message}`)
+      await this.deps.containers.stop(profile).catch((error: unknown) => {
+        this.deps.log(`agent browser ${agentId}: the browser that was not ready was not removed · ${errorKind(error)}`)
       })
       throw new PodmanError('browser_stopped', `the browser was not ready within ${READY_TRIES} s`)
     } catch (error) {
       if (!current()) return
       this.deps.measure('agent_browser_start_failed')
-      const state = failedState(error)
+      const state = failedState(error instanceof PodmanError ? error.state : '')
       if (state === 'needs_setup') return this.needsSetup(agentId)
-      this.fail(agentId, state, (error as Error).message)
+      this.fail(agentId, state, errorKind(error))
     } finally {
       // Ready, it runs and Podman lists it; anything else, it holds no slot.
       if (claimed) this.starting.delete(agentId)
@@ -346,11 +454,20 @@ export class Browsers {
     return this.deps.host.timeZone
   }
 
-  /** True when an exit was heard and Podman confirms the container stopped; then it is handled here. */
+  /**
+   * True when an exit was heard and Podman confirms the container stopped; then it is handled here. An exit a stop or a
+   * delete came during is theirs: restarted, it started the browser again after the stop removed it, with `starting`
+   * shown on the panel the person had just pressed Stop on (CLI 0.6.40, 2026-11-12).
+   */
   private async exitSeen(agentId: string): Promise<boolean> {
     if (!this.died.delete(agentId)) return false
+    const generation = this.generation(agentId)
     const code = await this.deps.containers.exitCode(agentId)
+    if (this.generation(agentId) !== generation) return true
     if (code === null) return false
+    // Nothing starts it while it is looked at, so an exit heard meanwhile is this one: handled again, it armed a second
+    // restart whose lost first timer started the browser after a stop (review, 2026-11-12).
+    this.died.delete(agentId)
     if (code === EXIT_PROFILE_UNWRITABLE) this.fail(agentId, 'profile_unwritable')
     else if (code === EXIT_PROXY_FAILED) this.fail(agentId, 'proxy_failed')
     else if (code === EXIT_DEVICE_FAILED) this.fail(agentId, 'device_failed')
@@ -361,7 +478,10 @@ export class Browsers {
   private restartLater(agentId: string, code: number): void {
     const restart = this.restarts.get(agentId) ?? { count: 0, readyAt: null }
     if (restart.readyAt !== null && this.now() - restart.readyAt >= STEADY_MS) restart.count = 0
-    if (restart.count >= MAX_RESTARTS) return this.fail(agentId, 'browser_stopped', `it exited ${MAX_RESTARTS + 1} times in a row (last ${code})`)
+    if (restart.count >= MAX_RESTARTS) {
+      this.deps.log(`agent browser ${agentId}: the browser exited (${code}) ${MAX_RESTARTS + 1} times in a row`)
+      return this.fail(agentId, 'browser_stopped')
+    }
     const delay = FIRST_RESTART_MS * 2 ** restart.count
     restart.count += 1
     restart.readyAt = null
@@ -372,10 +492,16 @@ export class Browsers {
     this.restarts.set(agentId, restart)
   }
 
+  /** The volume of the agent's own profile, and no other: none when its id names a browser that went with its pane. */
   private async remove(agentId: string): Promise<void> {
-    await this.deps.containers.remove(agentId)
+    const profile = this.profile(agentId)
+    if (profile !== null) await this.deps.containers.remove(profile)
     this.deps.state.update(s => {
       delete s.browsers[agentId]
+      // The agent is gone: nobody is left owing or owed its ready line (notices.ts), and nothing of it is on.
+      delete s.told?.[agentId]
+      delete s.on?.[agentId]
+      delete s.adopted?.[agentId]
       s.deleting = s.deleting.filter(id => id !== agentId)
     })
   }
@@ -393,10 +519,11 @@ export class Browsers {
     return this.generations.get(agentId) ?? 0
   }
 
-  private fail(agentId: string, error: string, why?: string): void {
+  /** `kind`, a caught error's, is said in place of the state: a PodmanError's kind already names its state. */
+  private fail(agentId: string, error: string, kind?: string): void {
     this.set(agentId, failed(error))
     this.deps.measure(`agent_browser_failed_${error}`)
-    this.deps.log(`agent browser ${agentId}: failed (${error})${why ? `: ${why}` : ''}`)
+    this.deps.log(`agent browser ${agentId}: failed ${kind ? `· ${kind}` : `(${error})`}`)
   }
 
   private set(agentId: string, next: BrowserState): void {
@@ -407,11 +534,23 @@ export class Browsers {
   }
 
   private queue(agentId: string, work: () => Promise<void>): Promise<void> {
-    const next = (this.queues.get(agentId) ?? Promise.resolve()).then(work).catch((error: unknown) => {
-      this.deps.log(`agent browser ${agentId}: ${(error as Error).message}`)
+    return this.inQueues([agentId], work).catch((error: unknown) => {
+      this.deps.log(`agent browser ${agentId}: its queued work failed · ${errorKind(error)}`)
     })
-    this.queues.set(agentId, next)
-    void next.then(() => { if (this.queues.get(agentId) === next) this.queues.delete(agentId) })
-    return next
+  }
+
+  /**
+   * [work] runs once everything already asked for each of [agentIds] has ended, and each one's later work waits for
+   * it; its own outcome is returned. Taken in every queue at once, so two works over the same agents never wait for
+   * each other.
+   */
+  private inQueues<T>(agentIds: string[], work: () => Promise<T>): Promise<T> {
+    const result = Promise.all(agentIds.map(agentId => this.queues.get(agentId))).then(work)
+    const ended = result.then(() => {}, () => {})
+    for (const agentId of agentIds) this.queues.set(agentId, ended)
+    void ended.then(() => {
+      for (const agentId of agentIds) if (this.queues.get(agentId) === ended) this.queues.delete(agentId)
+    })
+    return result
   }
 }

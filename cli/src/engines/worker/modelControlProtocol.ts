@@ -47,7 +47,8 @@ export function modelControlInput(value: unknown, engine: ReaderEngine): ModelCo
   const target = profile(value.target, context.session, engine)
   const current = value.current === null ? null : profile(value.current, context.session, engine)
   if (!target || !modelControlCatalog(value.catalog) || (value.current !== null && !current) || !Array.isArray(value.options) || value.options.length > 4096
-    || !value.options.every(o => record(o) && fields(o, ['id', 'displayName']) && text(o.id, 32768) && text(o.displayName, 32768))) return null
+    || !value.options.every(o => record(o) && fields(o, ['id', 'displayName', 'description']) && text(o.id, 32768) && text(o.displayName, 32768)
+      && (o.description === undefined || text(o.description, 256)))) return null
   return { session: context.session, target, current, catalog: structuredClone(value.catalog), options: value.options.map(o => ({ id: o.id, displayName: o.displayName })) }
 }
 

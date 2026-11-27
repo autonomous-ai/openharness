@@ -1,5 +1,7 @@
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import {
   probeTerminalAgents,
   targetForRuntime,
@@ -7,10 +9,14 @@ import {
   type TerminalAgentProbe,
 } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { mergeTerminalRuntimes, processAmong, processIdentityKey, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
+import { errorKind } from './log.js'
 
 const MISS_LIMIT = 2
+
+/** Why the reconciler retires an agent: fixed words, so the core's discovery lines may print it as it is. */
+export type AbsenceReason = `${'engine process' | 'terminal runtime'} absent after ${number} confirmed scans`
 
 /**
  * How long one reconcile pass may take before the core stops waiting on it.
@@ -45,8 +51,8 @@ export interface TerminalAgentReconcilerDeps {
   backendOrder: readonly string[]
   onDiscovered: (agent: DiscoveredTerminalAgent) => void | Promise<void>
   onObserved: (agent: DiscoveredTerminalAgent, current: RegisteredSession) => void | Promise<void>
-  onDormant: (current: RegisteredSession, reason: string) => void | Promise<void>
-  onRemoved: (current: RegisteredSession, reason: string) => void | Promise<void>
+  onDormant: (current: RegisteredSession, reason: AbsenceReason) => void | Promise<void>
+  onRemoved: (current: RegisteredSession, reason: AbsenceReason) => void | Promise<void>
   onTerminalAvailability?: (current: RegisteredSession, available: boolean) => void | Promise<void>
   onReconciled?: (agents: readonly DiscoveredTerminalAgent[]) => void
   onProbeStatus?: (status: { ready: true; error: string | null }) => void
@@ -115,11 +121,32 @@ function unboundRouteObservation(
   return matches.length === 1 ? matches[0] : undefined
 }
 
+/**
+ * Whether the process the agent was bound to still runs in one of its panes, whatever its name now. A wrapper that
+ * `exec`s keeps its pid and start: the wrapper's pid lived on as `unshare` while Hermes loaded, and two passes with no
+ * engine in the pane archived a running agent (lamp-9adf, 2026-11-13, #4259).
+ */
+function boundProcessRuns(
+  current: Pick<RegisteredSession, 'processIdentity' | 'runtimes'>,
+  probe: Pick<TerminalAgentProbe, 'paneProcesses'>,
+): boolean {
+  return current.runtimes.some((runtime) => processAmong(
+    current.processIdentity,
+    probe.paneProcesses?.get(terminalPlacementKey(runtime)),
+  ))
+}
+
+/** A failed pass, said by its kind only: its message may quote a path (a probe's command, a state file). */
+function passFailed(error: unknown): void {
+  console.warn(`[discovery] a pass failed, the next one tries again · ${errorKind(error)}`)
+}
+
 /** Serialized, failure-isolated reconciliation across every enabled backend instance. */
 export class TerminalAgentReconciler {
   private readonly misses = new Map<string, number>()
   /** Consecutive scans that found no engine for an agent, counted against the process identity they
-   *  missed: an engine identified since is a different engine, and its count starts again. */
+   *  missed: an engine identified since is a different engine, and its count starts again. A scan in
+   *  which the agent's recorded process still runs in its pane is no miss (`boundProcessRuns`). */
   private readonly engineMisses = new Map<string, { processKey: string | null; count: number }>()
   private readonly suppressed = new Set<string>()
   private readonly hints = new Map<string, AgentEngine>()
@@ -151,11 +178,9 @@ export class TerminalAgentReconciler {
    */
   async start(intervalMs: number): Promise<void> {
     this.waitingForStart = false
-    this.timer = setInterval(() => { void this.trigger() }, intervalMs)
+    this.timer = setInterval(() => this.nudge(), intervalMs)
     this.timer.unref?.()
-    await this.trigger().catch((error) => {
-      console.warn(`[discovery] first pass failed, retrying on the interval · ${error instanceof Error ? error.message : error}`)
-    })
+    await this.trigger().catch(passFailed)
   }
 
   stop(): void {
@@ -231,6 +256,15 @@ export class TerminalAgentReconciler {
     return this.waitFor(this.inFlight)
   }
 
+  /**
+   * Asks for a pass nobody waits on. Callers that dropped such a pass left its rejection — an owner that
+   * changed, an identity read that could not be made — unhandled for the fatal guard (e2e/diskfull.e2e.ts).
+   * Logged by its kind only, as its message may quote a path; the next pass tries again.
+   */
+  nudge(): void {
+    this.trigger().catch(passFailed)
+  }
+
   /** A pass, waited for until the pass deadline and no longer: see [RECONCILE_PASS_DEADLINE_MS]. */
   private async waitFor(pass: Promise<void>): Promise<boolean> {
     // Done in time, but on a probe it gave up: it found nothing either.
@@ -246,10 +280,46 @@ export class TerminalAgentReconciler {
   private probeGivenUp = false
   private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
+  /** Passes that looked at the agents: their probe answered with the process table, and what it saw was applied and
+   *  saved. A given-up probe or one with no process table looked at none, and one whose batch storage refused kept
+   *  nothing of its look. A check that something did not happen waits for two more than it read after its change: at
+   *  least one whole pass then began after the change and looked. */
+  get passes(): number { return this.completedPasses }
+  private completedPasses = 0
+
   private async drain(): Promise<void> {
     while (this.pending) {
       this.pending = false
+      this.refused = false
       await this.reconcileOnce()
+      if (!this.refused) this.outageSaid = false
+    }
+  }
+
+  /** A batch of this pass was refused by storage. */
+  private refused = false
+  /** The outage has been said: one line until a pass is refused nothing. Per pass, not per batch: a pass's
+   *  first batch has usually nothing of its own to save, and reset there the line came every 5 s. */
+  private outageSaid = false
+
+  /**
+   * One batch of a pass. Storage that refuses it ends neither the pass nor the hook waiting on it.
+   *
+   * A pass that rejected was an HTTP 500 for the hook that asked for it, before its admission could show its
+   * hold, and an unhandled rejection every 5 s from the timer for as long as the outage lasted
+   * (e2e/hookclient.e2e.ts, e2e/diskfull.e2e.ts, 2026-11-17). What the pass applied stays in the registry's rows
+   * and is saved by a later pass; a callback whose own write was refused ends the batch there, and the next pass
+   * observes the rest again. No "saved again" line: a batch that resolves may have written nothing.
+   * Any other failure, an owner that changed among them, still fails the pass.
+   */
+  private async batch(saved: Promise<void>): Promise<void> {
+    try {
+      await saved
+    } catch (error) {
+      if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
+      this.refused = true
+      if (!this.outageSaid) console.warn(`[discovery] observations not saved, kept for the next pass · ${errorKind(error)}`)
+      this.outageSaid = true
     }
   }
 
@@ -288,11 +358,14 @@ export class TerminalAgentReconciler {
       target.result.state === 'available'
         ? target.result.roots.map((root) => terminalPlacementKey(root.runtime))
         : []))
-    const probeError = !probe.processTableAvailable
-      ? 'process table unavailable'
-      : probe.targets.length > 0 && availableTargets.length === 0
-        ? probe.targets.map((target) => `${target.instanceId}: ${target.result.state === 'available' ? 'available' : target.result.reason}`).join('; ')
-        : null
+    // Why the probe confirmed nothing, in kinds only (`ownershipFailure` is an `errorKind`): it reaches the log.
+    const probeReason = probe.ownershipFailure
+      ? `engine executables could not be resolved (${probe.ownershipFailure})`
+      : !probe.processTableAvailable
+        ? 'process table unavailable'
+        : probe.targets.length > 0 && availableTargets.length === 0
+          ? probe.targets.map((target) => `${target.instanceId}: ${target.result.state === 'available' ? 'available' : target.result.reason}`).join('; ')
+          : null
     // Terminal placement liveness does not depend on finding an engine process. This is what keeps a
     // retained trust/setup/shell pane visible after restart, including when `ps` itself is unavailable.
     const markVerifiedPlacements = async (): Promise<void> => {
@@ -302,11 +375,11 @@ export class TerminalAgentReconciler {
         }
       }
     }
-    if (this.deps.transaction) await this.deps.transaction(markVerifiedPlacements)
+    if (this.deps.transaction) await this.batch(this.deps.transaction(markVerifiedPlacements))
     else await markVerifiedPlacements()
     if (!probe.processTableAvailable) {
-      console.warn('[discovery] process table unavailable; keeping existing terminal agents')
-      this.deps.onProbeStatus?.({ ready: true, error: probeError })
+      console.warn(`[discovery] ${probeReason}; keeping existing terminal agents`)
+      this.deps.onProbeStatus?.({ ready: true, error: probeReason })
       return
     }
     this.hints.clear()
@@ -331,15 +404,21 @@ export class TerminalAgentReconciler {
         // exists to prevent — see the class-level comment on `heldRoutes`.
         if (this.routeHeld(current.runtimes, probeSeq)) continue
         const processKey = currentProcessKey(current)
-        const observed = (processKey ? observedByProcess.get(processKey) : undefined)
+        const sameProcess = (processKey ? observedByProcess.get(processKey) : undefined)
           // A row saved before start ticks is keyed by its marker, the same process observed with them
           // by its ticks: match it here, or the pass takes it for a new process (ProcessIdentity.startTicks).
           ?? probe.agents.find((agent) => agent.engine === current.engine
             && sameProcessIdentity(agent.processIdentity, current.processIdentity))
-          // A row an older build gave Hermes' gateway is the Hermes the gateway runs under: re-recorded, not replaced.
-          ?? probe.agents.find((agent) => agent.engine === current.engine
-            && !!agent.formerProcesses?.some((former) => sameProcessIdentity(former, current.processIdentity)))
-          ?? unboundRouteObservation(current, probe.agents)
+        // A row recorded on a process the engine has since left — an older build's Hermes gateway, or a
+        // wrapper that exec'd into the engine — is the engine's: re-recorded, not replaced.
+        const movedTo = sameProcess ? undefined : probe.agents.find((agent) => agent.engine === current.engine
+          && !!agent.formerProcesses?.some((former) => sameProcessIdentity(former, current.processIdentity)))
+        // Logged so the next report of an agent stopping after a wrapper exec shows whether it was
+        // followed. Once per move: the row now records the new process, so later passes match it above.
+        if (movedTo && current.processIdentity) {
+          console.log(`[discovery] ${current.engine} moved from pid ${current.processIdentity.pid} to pid ${movedTo.processIdentity.pid}; re-recorded`)
+        }
+        const observed = sameProcess ?? movedTo ?? unboundRouteObservation(current, probe.agents)
         if (observed) matchedProcesses.add(processIdentityKey(observed.engine, observed.processIdentity))
 
         let nextRuntimes = current.runtimes
@@ -402,10 +481,13 @@ export class TerminalAgentReconciler {
 
         if (terminalVerified) await this.deps.onTerminalAvailability?.(current, true)
         const probed = probedAs.get(current.agentId)
-        if (observed || (processKey === null && (current.launch?.state === 'starting' || probed?.starting))) {
+        if (observed || boundProcessRuns(current, probe)
+          || (processKey === null && (current.launch?.state === 'starting' || probed?.starting))) {
           // Before the first engine exists, two quick scans prove no exit. The
           // startup watcher owns that decision; discovery still checks the pane.
           // A pre-start snapshot cannot count after readiness changes mid-probe.
+          // Nor does a pane whose bound process runs on under a name no engine
+          // has: two fresh misses are needed once it is gone.
           this.engineMisses.delete(current.agentId)
         } else if (probed && probed.processKey === processKey
           && current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>
@@ -467,11 +549,12 @@ export class TerminalAgentReconciler {
       }
     }
 
-    if (this.deps.transaction) await this.deps.transaction(apply)
+    if (this.deps.transaction) await this.batch(this.deps.transaction(apply))
     else await apply()
     // Readiness is published last: clients must never observe ready=true between the inventory read and
     // the authoritative availability/registry update.
-    this.deps.onProbeStatus?.({ ready: true, error: probeError })
+    this.deps.onProbeStatus?.({ ready: true, error: probeReason })
     this.deps.onReconciled?.(probe.agents.filter(agent => !this.routeHeld(agent.runtimes, probeSeq)))
+    if (!this.refused) this.completedPasses++
   }
 }

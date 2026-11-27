@@ -112,7 +112,7 @@ describe('guarded Redis commands', () => {
   })
 
   // While the circuit is closed a command is sent directly and its outcome counted from its own promise: no `run`, no
-  // async frame and no AbortController per command (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+  // async frame and no AbortController per command (the relay gate of 2026-11-02).
   it('a closed circuit sends without run', async () => {
     const redis = await stuckRedis()
     const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 5, openMs: 5_000, isFailure: isRedisFailure })

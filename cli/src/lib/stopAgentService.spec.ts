@@ -1,6 +1,11 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
+import { CloseAgentService } from './closeAgentService.js'
+import { createOtherStreams } from '../core/engines/otherStreams.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
+import { STREAM_OPEN, STREAM_OP, STREAMS_WAIT, STREAM_VERSION } from '../engines/worker/otherStreamProtocol.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { setAgentSignaller } from './processSignals.js'
 import { stoppedAgents } from './stoppedAgents.js'
@@ -23,32 +28,44 @@ const tmuxKill = vi.fn<NonNullable<ReturnType<StopAgentServiceDeps['backendFor']
 const ptyKill = vi.fn<NonNullable<ReturnType<StopAgentServiceDeps['backendFor']>>['kill']>()
 const withPtyHost = () => { deps.backendFor = runtime => ({ kill: runtime.backend === 'tmux' ? tmuxKill : ptyKill }) }
 const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%1' }
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
   vi.mocked(controlTranscriptEvidence).mockReset().mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(captureResumeIdentity).mockReset().mockImplementation(async session => session)
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%44' }], cwd: '/tmp' })!
+  row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%44' }], cwd: '/tmp' }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, { sessionId: 'saved', processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: runtime => runtime.backend === 'tmux' ? { kill: tmuxKill } : undefined,
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
-    forgetSession: vi.fn(id => registry.removeAgent(id)), markDeleted: vi.fn(), clearDeleted: vi.fn(),
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
+    forgetSession: vi.fn(async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }), markDeleted: vi.fn(), clearDeleted: vi.fn(),
     stopNative: vi.fn(async () => {}),
   }
+  vi.mocked(checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture' })
   vi.mocked(terminateDeletedAgent).mockResolvedValue('gone')
   tmuxKill.mockReset().mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
   ptyKill.mockReset().mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
 })
-afterEach(() => { vi.restoreAllMocks(); for (const entry of registry.list()) registry.removeAgent(entry.agentId) })
+afterEach(async () => { vi.restoreAllMocks(); for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId)); await registry.flush() })
 
 it('saves history before removing the runtime, joins concurrent stops, and clears confirmed reservations', async () => {
   const token = stoppedAgents.beginResume(row.agentId); expect(token).toBeTruthy()
   const original = row.agentId
-  vi.mocked(deps.forgetSession).mockImplementation(id => { expect(stoppedAgents.get(id)?.sessionId).toBe('saved'); registry.removeAgent(id) })
+  vi.mocked(deps.forgetSession).mockImplementation(async (id, options) => { expect(stoppedAgents.get(id)?.sessionId).toBe('saved'); await registry.confirmEngineExit(id, 'remove', options.authority) })
   const stop = createStopAgentService(deps); const one = stop(original); expect(stop(original)).toBe(one); await one
   expect(stoppedAgents.get(original)).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(original)).toBeUndefined(); expect(deps.stopJobs.size).toBe(0)
   expect(stoppedAgents.beginResume(original)).not.toBeNull(); expect(deps.agentReconciler.suppress).toHaveBeenCalledWith(row)
+})
+it('saves a captured Hermes home with its own mark, never the live row\'s', async () => {
+  Object.assign(row, { engine: 'hermes', hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true,
+    processIdentity: { pid: 77, executable: 'hermes', startMarker: 'fixture' } })
+  vi.mocked(captureResumeIdentity).mockImplementation(async ({ hermesHomeDerived: _mark, ...session }) => ({ ...session,
+    hermesHome: '/home/u/.hermes/profiles/work', source: 'stop-repair' }))
+  await createStopAgentService(deps)(row.agentId)
+  const saved = stoppedAgents.get(row.agentId)
+  expect(saved?.hermesHome).toBe('/home/u/.hermes/profiles/work')
+  expect(saved?.hermesHomeDerived).toBeUndefined()
 })
 it('missing identities are harmless and never allocate or signal anything', async () => {
   await createStopAgentService(deps)('missing'); expect(deps.forgetSession).not.toHaveBeenCalled(); expect(terminateDeletedAgent).not.toHaveBeenCalled()
@@ -61,11 +78,10 @@ it.each(['forget', 'checkpoint'] as const)('retains a captured Pi resume path th
   deps.forgetSession = createForgetSession({
     registry, stoppedAgents, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
-    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
-    dataDir: env.ADAPTER_DATA_DIR,
   })
   await createStopAgentService(deps)(row.agentId, { checkpoint: async (_session, phase) => {
     if (stage === 'checkpoint' && phase === 'before') {
@@ -96,6 +112,22 @@ it('storage failure leaves the live process and registry untouched', async () =>
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('disk full')
   expect(registry.byAgent(row.agentId)).toBe(row); expect(tmuxKill).not.toHaveBeenCalled(); expect(deps.markDeleted).not.toHaveBeenCalled()
 })
+it.each(['process alive', 'storage', 'row retained'] as const)('keeps Stop unconfirmed when final retirement finds %s', async failure => {
+  const token = stoppedAgents.beginResume(row.agentId)
+  expect(token).toBeTruthy()
+  const forget = vi.mocked(deps.forgetSession).getMockImplementation()!
+  vi.mocked(deps.forgetSession).mockImplementationOnce(async (id, options) => {
+    expect(options.authority?.current?.()).toBe(true)
+    if (failure === 'row retained') return
+    if (failure === 'process alive') vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    if (failure === 'storage') throw new Error('retirement storage unavailable')
+    await forget(id, options)
+  })
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  expect(stoppedAgents.resumeReservedAt(row.agentId)).not.toBeNull()
+})
 it('preserves an unexpected evidence failure without signalling or hiding its cause', async () => {
   row.transcriptPath = '/fixture/history.jsonl'
   vi.mocked(controlTranscriptEvidence).mockReturnValue({ path: row.transcriptPath,
@@ -117,7 +149,8 @@ it('stops a guest harness by closing its pane, without the native probe or a sig
   expect(deps.stopNative).not.toHaveBeenCalled()
   expect(terminateDeletedAgent).not.toHaveBeenCalled()
   expect(tmuxKill).toHaveBeenCalledOnce()
-  expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+  // Guest exit is checked before retirement and again after the durable image is prepared.
+  expect(checkPidRuntime).toHaveBeenCalledTimes(3)
   expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
@@ -130,26 +163,41 @@ it('keeps a guest harness whose process is still running after its pane closed',
   expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+
+it('waits through the bounded default guest-exit interval before publishing Stop', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    Object.assign(row, { guest: 'guest@example.test' })
+    let first!: () => void
+    const checked = new Promise<void>(resolve => { first = resolve })
+    vi.mocked(checkPidRuntime).mockImplementationOnce(async () => { first(); return { state: 'alive' } })
+    const stopping = createStopAgentService(deps)(row.agentId)
+    await checked
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.forgetSession).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(250)
+    await stopping
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+    expect(checkPidRuntime).toHaveBeenCalledTimes(3)
+  } finally { vi.useRealTimers() }
+})
 it('checks the saved guest process after its pane removes the registry row, without claiming the changed stop completed', async () => {
-  vi.useFakeTimers()
   Object.assign(row, { guest: 'kim@example.com' })
   const identity = { ...row.processIdentity! }
+  deps.wait = vi.fn(async () => {})
   tmuxKill.mockImplementationOnce(async () => {
-    registry.removeAgent(row.agentId)
+    ;(await removeRegistryAgent(registry, row.agentId))
     return { state: 'succeeded', dispatch: 'executed' }
   })
   vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' })
     .mockResolvedValue({ state: 'gone', reason: 'guest exited after its pane closed' })
-  try {
-    const result = expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('The harness changed while pausing')
-    await vi.advanceTimersByTimeAsync(250)
-    await result
-    expect(checkPidRuntime).toHaveBeenCalledTimes(2)
-    for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
-    expect(deps.forgetSession).not.toHaveBeenCalled()
-    expect(terminateDeletedAgent).not.toHaveBeenCalled()
-    expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
-  } finally { vi.useRealTimers() }
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('The harness changed while pausing')
+  expect(deps.wait).toHaveBeenCalledExactlyOnceWith(250)
+  expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+  for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })
 it('waits for the process a starting guest harness gained while it was saved', async () => {
   // Stopped before its engine was seen, which the pane's watcher binds while the screen is saved: an older copy of the
@@ -217,7 +265,7 @@ it.each(['terminal', 'without tmux', 'failed process', 'failed tmux'] as const)(
     expect(deps.forgetSession).not.toHaveBeenCalled()
     expect(deps.agentReconciler.suppress).not.toHaveBeenCalled()
   } else await stopping
-  expect(stoppedAgents.get(row.agentId)).not.toBeNull(); expect(deps.agentReconciler.trigger).toHaveBeenCalledOnce()
+  expect(stoppedAgents.get(row.agentId)).not.toBeNull(); expect(deps.agentReconciler.nudge).toHaveBeenCalledOnce()
   expect(stoppedAgents.beginResume(row.agentId) === null).toBe(mode === 'failed process' || mode === 'failed tmux')
 })
 
@@ -309,17 +357,89 @@ it('holds a conversation whose evidence fails at the pane close, as at every ear
   expect(registry.byAgent(row.agentId)).toBe(row)
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
-it.each(['removed', 'replaced', 'conversation', 'route'] as const)('does not remove a target %s during termination', async mode => {
+it.each(['removed', 'replaced', 'conversation', 'route', 'native hold'] as const)('does not remove a target %s during termination', async mode => {
   vi.mocked(terminateDeletedAgent).mockImplementation(async () => {
-    if (mode === 'removed') registry.removeAgent(row.agentId)
+    if (mode === 'removed') (await removeRegistryAgent(registry, row.agentId))
     else if (mode === 'conversation') row.sessionId = 'different-conversation'
     else if (mode === 'route') row.runtimes = [{ backend: 'tmux', paneId: '%88' }]
+    else if (mode === 'native hold') registry.setIdentityHold(row.agentId, 'The native process evidence changed.')
     else row.processIdentity = { ...row.processIdentity!, pid: 88 }
     return 'terminated'
   })
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('changed while pausing')
   expect(tmuxKill).not.toHaveBeenCalled()
   expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+it('completes Close when the lost live reader recovers while the original process exits', async () => {
+  vi.useFakeTimers()
+  Object.assign(row, { engine: 'hermes', processIdentity: { pid: 77, executable: 'hermes', startMarker: 'fixture' } })
+  const target = () => JSON.stringify([row.agentId, row.sessionId, row.engine, row.registeredAt, row.boundAt,
+    row.transcriptPath, row.cwd, row.hermesHome, row.processIdentity, row.runtimes])
+  const original = target()
+  let token = '', answerWait: ((answer: Record<string, unknown>) => void) | undefined
+  const readerDeps = {
+    call: async (type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (type === STREAM_OPEN) {
+        token = payload.token as string
+        return { version: STREAM_VERSION, answer: { turn: { identity: 'turn', turnOpen: false },
+          historyTurnOpen: false, lastStarted: null, lastEnded: null, initial: [], lines: 0,
+          evidence: [], abandoned: false, frames: [] } }
+      }
+      if (type === STREAM_OP) return { version: STREAM_VERSION, answer: {} }
+      expect(type).toBe(STREAMS_WAIT)
+      return new Promise(resolve => { answerWait = resolve })
+    },
+    bySession: (id: string) => {
+      const current = registry.byAgent(row.agentId)
+      return current?.sessionId === id ? current : undefined
+    },
+    frame: vi.fn(), reattach: vi.fn(), log: vi.fn(), retryMs: 10,
+    // The lifecycle already owns this promise; discovery observes the same reservation in main.ts.
+    stopping: (session: RegisteredSession) => deps.stopJobs.get(session.agentId),
+    held: (session: RegisteredSession, held: boolean, rewritten?: boolean | 'lost') => {
+      const latest = registry.byAgent(session.agentId)
+      const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
+      if (!latest || latest.sessionId !== session.sessionId || (latest.identityHold && !reasons.includes(latest.identityHold))) return
+      registry.setIdentityHold(session.agentId, held
+        ? rewritten === 'lost' ? OTHER_ENGINE_STATES.lost : rewritten ? OTHER_ENGINE_STATES.rewritten : OTHER_ENGINE_STATES.unavailable
+        : undefined)
+    },
+  }
+  const streams = createOtherStreams(readerDeps)
+  const checkpoint = vi.fn(async () => {})
+  const close = new CloseAgentService({ registry, activity: async () => 'idle', checkpoint,
+    changed: vi.fn(), stop: createStopAgentService(deps) })
+  const signal = vi.fn()
+  setAgentSignaller(signal)
+  try {
+    await streams.open(row, { live: false, abandon: false, held: false, store: '/fixture/history.db' })
+    expect(answerWait).toBeDefined()
+    answerWait!({ version: STREAM_VERSION, answer: { pages: [], lost: [token] } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(row.identityHold).toBe(OTHER_ENGINE_STATES.lost)
+    const beforeRevision = row.evidenceRevision
+    let duringRecovery: { revision?: number; held: boolean } | undefined
+    vi.mocked(terminateDeletedAgent).mockImplementation(async (session, actions) => {
+      actions.kill(session.processIdentity!.pid, 'SIGTERM')
+      await vi.advanceTimersByTimeAsync(10)
+      duringRecovery = { revision: row.evidenceRevision, held: !!row.identityHold }
+      expect(target()).toBe(original)
+      return 'terminated'
+    })
+    vi.mocked(deps.forgetSession).mockImplementation(async (id, options) => {
+      await registry.confirmEngineExit(id, 'remove', options.authority)
+      streams.forget(row.sessionId)
+    })
+    const result = await close.request({ agentId: row.agentId, sessionId: row.sessionId,
+      createdAt: new Date(row.registeredAt).toISOString(), mode: 'now' })
+    expect(signal).toHaveBeenCalledExactlyOnceWith(77, 'SIGTERM')
+    expect(result, JSON.stringify({ beforeRevision, duringRecovery, targetUnchanged: target() === original })).toEqual({ closed: true })
+    expect(checkpoint.mock.calls.map((call: unknown[]) => call[1])).toEqual(['before', 'after'])
+    expect(tmuxKill).toHaveBeenCalledOnce()
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  } finally {
+    close.dispose(); streams.stop(); setAgentSignaller(null); vi.useRealTimers()
+  }
 })
 it.each(['capture', 'termination'] as const)('stops an agent still starting when its engine is identified during %s', async stage => {
   // Created, not yet bound to a process: the stop's snapshot has none.
@@ -344,11 +464,12 @@ it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same
     processIdentity: { startMarker: 'fixture', executable: 'codex', pid: 77 },
     runtimes: row.runtimes.map(runtime => ({ ...runtime })),
   }
-  const rebuild = () => { vi.spyOn(registry, 'resolve').mockReturnValue(replacement) }
+  const resolve = registry.resolve.bind(registry)
+  const rebuild = () => { vi.spyOn(registry, 'resolve').mockImplementation(id => resolve(id) ? replacement : undefined) }
   if (stage === 'capture') vi.mocked(captureResumeIdentity).mockImplementation(async session => { rebuild(); return session })
   else vi.mocked(terminateDeletedAgent).mockImplementation(async () => { rebuild(); return 'terminated' })
   await createStopAgentService(deps)(row.agentId)
-  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true, captured: expect.objectContaining({ sessionId: 'saved' }) })
+  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true, captured: expect.objectContaining({ sessionId: 'saved' }), authority: expect.objectContaining({ current: expect.any(Function), refresh: expect.any(Function) }) })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })
@@ -357,6 +478,36 @@ it('routes the stop signal through the agent signaller', async () => {
   vi.mocked(terminateDeletedAgent).mockImplementation(async (entry, actions) => { actions.kill(78, 'SIGKILL'); return 'terminated' })
   try { await createStopAgentService(deps)(row.agentId) } finally { setAgentSignaller(null) }
   expect(injected).toHaveBeenCalledExactlyOnceWith(78, 'SIGKILL')
+})
+// A tool an engine spawned `detached` leaves its group and session: the stop lists the engine's tree and signals it,
+// through the same signaller as the engine (#4173). The real termination runs here, with no grace to wait out.
+const { terminateDeletedAgent: realTerminate } = await vi.importActual<typeof import('./deleteAgentFallback.js')>('./deleteAgentFallback.js')
+it("a stop hands the engine's tree to the termination", async () => {
+  const injected = vi.fn(); setAgentSignaller(injected)
+  vi.mocked(terminateDeletedAgent).mockImplementation((entry, actions) => realTerminate(entry, actions, 0, 0))
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' }).mockResolvedValue({ state: 'gone', reason: 'exited' })
+  const descendants = vi.fn(async () => [{ pid: 90, pgid: 90, startMarker: 'tool' }])
+  deps.processTree = { descendants, survivors: vi.fn(async () => []) }
+  try { await createStopAgentService(deps)(row.agentId) } finally { setAgentSignaller(null) }
+  expect(descendants).toHaveBeenCalledExactlyOnceWith({ pid: 77, executable: 'codex', startMarker: 'fixture' })
+  expect(injected).toHaveBeenCalledWith(77, 'SIGTERM')
+  expect(injected).toHaveBeenCalledWith(-90, 'SIGTERM')
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+it("a terminal and a guest's harness list no tree", async () => {
+  vi.mocked(terminateDeletedAgent).mockImplementation((entry, actions) => realTerminate(entry, actions, 0, 0))
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' }).mockResolvedValue({ state: 'gone', reason: 'exited' })
+  const descendants = vi.fn(async () => [])
+  deps.processTree = { descendants, survivors: vi.fn(async () => []) }
+  deps.wait = vi.fn(async () => {})
+  Object.assign(row, { engine: 'terminal', sessionId: '' })
+  await createStopAgentService(deps)(row.agentId)
+  const guest = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%45' }], cwd: '/tmp' }))!
+  Object.assign(registry.byAgent(guest.agentId)!, { guest: 'kim@example.com', sessionId: 'saved', processIdentity: { pid: 78, executable: 'codex', startMarker: 'fixture' } })
+  await createStopAgentService(deps)(guest.agentId)
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+  expect(registry.byAgent(guest.agentId)).toBeUndefined()
+  expect(descendants).not.toHaveBeenCalled()
 })
 it('only signals through the validated process deleter and does not erase a newer stop job', async () => {
   const signal = vi.spyOn(process, 'kill').mockReturnValue(true)
@@ -383,7 +534,7 @@ it.each(['claude', 'codex'] as const)('captures an unbound %s conversation befor
 })
 it.each(['removed', 'replaced'] as const)('does not stop a process that was %s during identity capture', async mode => {
   vi.mocked(captureResumeIdentity).mockImplementation(async session => {
-    if (mode === 'removed') registry.removeAgent(row.agentId)
+    if (mode === 'removed') (await removeRegistryAgent(registry, row.agentId))
     else row.processIdentity = { ...row.processIdentity!, pid: 88 }
     return session
   })
@@ -433,7 +584,8 @@ it('does not forget a new agent published while its old pane was being retired',
 
 it('cancels an external intent through core without archiving, signalling or waiting for search', async () => {
   Object.assign(row, { sessionId: '', processIdentity: null, launch: { state: 'held', service: 'search', detail: 'Reader unavailable' },
-    externalResume: { phase: 'waiting' } })
+    externalResume: { token: '12345678-1234-1234-1234-123456789012', request: { engine: 'codex', sessionId: 'external' },
+      takeOver: null, phase: 'waiting' } })
   deps.cancelExternal = vi.fn(async (entry, current) => { expect(entry).toBe(row); expect(current()).toBe(true); return true })
   const save = vi.spyOn(stoppedAgents, 'save')
   await createStopAgentService(deps)(row.agentId)
@@ -448,7 +600,8 @@ it('cancels an external intent through core without archiving, signalling or wai
 
 it.each(['missing', 'refused', 'error', 'unknown', 'cancelled'] as const)('keeps an external intent intact when cancellation is %s', async failure => {
   Object.assign(row, { sessionId: '', processIdentity: null, launch: { state: 'held', service: 'search', detail: 'Reader unavailable' },
-    externalResume: { phase: 'waiting' } })
+    externalResume: { token: '12345678-1234-1234-1234-123456789012', request: { engine: 'codex', sessionId: 'external' },
+      takeOver: null, phase: 'waiting' } })
   if (failure !== 'missing') deps.cancelExternal = vi.fn(async (_entry, current) => {
     if (failure === 'error') throw new Error('Journal is unavailable')
     if (failure === 'unknown') throw 'unavailable'

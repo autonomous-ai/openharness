@@ -112,6 +112,53 @@ describe('CursorNormalizer', () => {
     })
   })
 
+  it('recaps a working turn by the text after its last tool call, not the narration before each call', () => {
+    expect(lastCursorTurnText([
+      user('rename it'),
+      assistant(
+        { type: 'text', text: 'Let me look at the file.' },
+        { type: 'tool_use', name: 'Read', input: { path: 'a.ts' } },
+      ),
+      assistant({ type: 'text', text: 'Now I will rename it.' }),
+      assistant({ type: 'tool_use', name: 'Edit', input: { path: 'a.ts' } }),
+      assistant({ type: 'text', text: 'Renamed it.' }),
+      line({ type: 'turn_ended', status: 'success' }),
+    ])).toEqual({ userMessage: 'rename it', assistantText: 'Renamed it.' })
+  })
+
+  it('recaps a turn that ended on a tool call by its narration', () => {
+    expect(lastCursorTurnText([
+      user('rename it'),
+      assistant(
+        { type: 'text', text: 'Let me look at the file.' },
+        { type: 'tool_use', name: 'Read', input: { path: 'a.ts' } },
+      ),
+      assistant({ type: 'text', text: 'Now I will rename it.' }),
+      assistant({ type: 'tool_use', name: 'Edit', input: { path: 'a.ts' } }),
+    ])).toEqual({
+      userMessage: 'rename it',
+      assistantText: 'Let me look at the file.\n\nNow I will rename it.',
+    })
+  })
+
+  it('recaps a turn that ended on a tool call by its own narration, not an earlier turn\'s', () => {
+    expect(lastCursorTurnText([
+      user('look at it'),
+      assistant(
+        { type: 'text', text: 'Let me look at the file.' },
+        { type: 'tool_use', name: 'Read', input: { path: 'a.ts' } },
+      ),
+      assistant({ type: 'text', text: 'It is fine.' }),
+      line({ type: 'turn_ended', status: 'success' }),
+      user('run the tests'),
+      assistant(
+        { type: 'text', text: 'Running the tests.' },
+        { type: 'tool_use', name: 'Shell', input: { command: 'npm test' } },
+      ),
+      line({ type: 'turn_ended', status: 'aborted' }),
+    ])).toEqual({ userMessage: 'run the tests', assistantText: 'Running the tests.' })
+  })
+
   it('deduplicates Task preToolUse from the later transcript block', () => {
     const normalizer = new CursorNormalizer('live', 'session')
     const input = { description: 'Inspect', prompt: 'Inspect it', model: 'inherit' }

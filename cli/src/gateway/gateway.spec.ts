@@ -17,7 +17,8 @@ import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBin
 import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
-import { unknownHelloReader } from './start.js'
+import { unknownHelloReader, unpairedHandler } from './start.js'
+import { StateFileUnreadable } from '../lib/secureState.js'
 import { UI_GATED_EVENTS, UI_QUIET_MS, UI_SNAPSHOT_MAX_MS } from './gateway.js'
 import { env } from '../config/env.js'
 
@@ -52,9 +53,22 @@ it('passes only lifecycle scalars to product reporting and keeps relaying if rep
   gateway.productUsage = { observe: fail, opened: fail, presence: fail, counter: fail, launch: fail }
   expect(() => gateway.usageCounter('create_requests')).not.toThrow()
   expect(() => gateway.usageLaunch({ id: 'synthetic-creation-1', phase: 'start' })).not.toThrow()
+  expect(() => gateway.usage({ kind: 'observed', payload: { measure: 'collector_days' } })).not.toThrow()
   expect(() => gateway.broadcast({ type: 'turn_started', agentId: 'fixture-agent' })).not.toThrow()
   expect(() => gateway.windowOpened('desktop')).not.toThrow()
   expect(() => gateway.localClients({ desktop: 1, tui: 0 })).not.toThrow()
+  await socket.stop()
+})
+
+it('tells product reporting whether a window, and a Desktop window, is connected', async () => {
+  const socket = relaySocket(MACHINE)
+  const gateway = gatewayOf(socket)
+  const presence = vi.fn()
+  gateway.productUsage = { observe: vi.fn(), opened: vi.fn(), presence }
+  gateway.localClients({ desktop: 1, tui: 0 })
+  gateway.localClients({ desktop: 0, tui: 1 })
+  gateway.localClients({ desktop: 0, tui: 0 })
+  expect(presence.mock.calls).toEqual([[true, true], [true, false], [false, false]])
   await socket.stop()
 })
 
@@ -188,7 +202,7 @@ describe('sealing, guarded', () => {
     expect(window.map((frame) => frame.type)).toEqual(['turn_started', 'turn_ended'])
     // Said once, then counted, so a broken seal does not flood the log with one line per event.
     expect(error).toHaveBeenCalledTimes(1)
-    expect(String(error.mock.calls[0][0])).toContain('sealing broke')
+    expect(String(error.mock.calls[0][0])).toBe('[backend] the gateway could not take a web frame · Error')
     // A terminal frame that cannot be sealed is one that was not sent: its stream closes, nothing throws.
     vi.spyOn(e2ee, 'wrapTarget').mockImplementation(() => { throw new Error('sealing broke') })
     vi.spyOn(e2ee, 'wrapTerminalBinary').mockImplementation(() => { throw new Error('sealing broke') })
@@ -407,6 +421,59 @@ describe('ui gate', () => {
     expect(phone.open(targeted[0].frame)).toEqual({ requestId: 'r-1', agents: [] })
     gateway.reply('', 'machine_info', 'r-2', { name: 'm' })
     expect(sent().map(msg => [msg.targetConnId, msg.frame.type])).toEqual([[undefined, 'machine_info_result']])
+    await socket.stop()
+  })
+})
+
+describe('harness_watch: another machine following harnesses here', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+  const noUi = (socket: BackendSocket) => dispatchDown(socket, { type: '__clients', payload: { ui: 0, commander: 0, commanderActive: 0, uiGate: true } }, '')
+  const broadcastTypes = (socket: BackendSocket) => upstreamOf(socket).queue
+    .filter((item) => !(item.msg as { targetConnId?: string }).targetConnId).map((item) => (item.msg as { frame: Frame }).frame.type)
+
+  it('answers sealed to the asker, then seals each change to it alone while the viewer gate holds every live event', async () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    // The relay's link is up: a push to one connection is sent only while it is.
+    vi.spyOn(gateway, 'connected').mockReturnValue(true)
+    gateway.broadcast({ type: 'agent_synced', payload: { agent: { id: 'a1', status: 'active', activity: { state: 'idle' } } } })
+    const home = await pairedClient(socket, 'home', { machineId: 'b2'.repeat(16) })
+    await pairedClient(socket, 'phone')
+    await vi.advanceTimersByTimeAsync(UI_QUIET_MS)
+    await noUi(socket)
+    await dispatchDown(socket, home.seal('harness_watch', { requestId: 'w', agentIds: ['a1'] }), 'home')
+    const [answer] = queuedFor(socket, 'home').filter((frame) => frame.type === 'harness_watch_result')
+    expect(home.open(answer)).toEqual({ requestId: 'w', leaseMs: 300_000, renewMs: 240_000, agents: [{ agentId: 'a1', state: 'idle' }] })
+
+    upstreamOf(socket).queue.length = 0
+    gateway.broadcast({ type: 'turn_heartbeat', agentId: 'a1', payload: { activity: { state: 'working' } } })
+    gateway.broadcast({ type: 'text_delta', agentId: 'a1', payload: { content: 'PRIVATE_CANARY' } })
+    // The watch is no app viewing: the live events stay held, its asking included.
+    expect(broadcastTypes(socket)).toEqual([])
+    const told = queuedFor(socket, 'home')
+    // Only the sealed envelope travels: no agent id or state beside it (a substring check failed on random ciphertext).
+    expect(told).toEqual([{ type: 'harness_event', payload: { __e2e: expect.any(Object) } }])
+    expect(home.open(told[0])).toEqual({ agentId: 'a1', state: 'working' })
+    expect(queuedFor(socket, 'phone')).toEqual([])
+    await socket.stop()
+  })
+
+  it('is refused to a guest and a device, and ends with the asker\'s connection', async () => {
+    const socket = relaySocket(MACHINE), gateway = gatewayOf(socket)
+    const colleague = await pairedClient(socket, 'colleague', { shared: true })
+    const dial = await pairedClient(socket, 'dial', { role: 'device' })
+    for (const [client, connId] of [[colleague, 'colleague'], [dial, 'dial']] as const) {
+      await dispatchDown(socket, client.seal('harness_watch', { requestId: 'w', agentIds: ['a1'] }), connId)
+      const [refused] = queuedFor(socket, connId).filter((frame) => frame.type === 'harness_watch_result')
+      expect(client.open(refused)).toEqual({ requestId: 'w', error: 'NOT_ALLOWED' })
+    }
+    vi.spyOn(gateway, 'connected').mockReturnValue(true)
+    const home = await pairedClient(socket, 'home')
+    await dispatchDown(socket, home.seal('harness_watch', { requestId: 'w', agentIds: ['a1'] }), 'home')
+    await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'home')
+    upstreamOf(socket).queue.length = 0
+    gateway.broadcast({ type: 'turn_heartbeat', agentId: 'a1', payload: { activity: { state: 'working' } } })
+    expect(queuedFor(socket, 'home')).toEqual([])
     await socket.stop()
   })
 })
@@ -831,8 +898,8 @@ describe('a client\'s terminal bytes, on their way to the core', () => {
     into.bytes(phone.sealBinary(key(3)))
     expect(core).toHaveBeenCalledTimes(3)
     await vi.waitFor(() => expect(error.mock.calls).toEqual([
-      ['[backend] binary terminal dispatch failed:', 'core threw'],
-      ['[backend] binary terminal dispatch failed:', 'core gone'],
+      ['[backend] binary terminal dispatch failed:', 'Error'],
+      ['[backend] binary terminal dispatch failed:', 'Error'],
     ]))
     await socket.stop()
   })
@@ -859,6 +926,26 @@ describe('the Wi-Fi device, over the gateway\'s sessions', () => {
     expect(socket.remoteClient('dial-1')).toBeNull()
     await new Promise((done) => setImmediate(done))
     expect(revoked).toHaveBeenCalledWith(dial.pub)
+    await socket.stop()
+  })
+
+  it('counts the sessions on a direct link whose app said hello, each still its identity\'s device: `harness autonomous-device status`', async () => {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
+    const phone = await pairedClient(socket, 'phone-1')
+    gateway.deviceClient('dial-1', dial.pub)
+    // Over the relay, not a direct link.
+    expect(gateway.directDeviceSessions()).toBe(0)
+    gateway.attachDirectDevice('dial-1', () => {})
+    expect(gateway.directDeviceSessions()).toBe(1)
+    // A hello said as another identity, or a phone's session, is not that device's.
+    gateway.deviceClient('dial-1', phone.pub)
+    gateway.attachDirectDevice('phone-1', () => {})
+    gateway.deviceClient('phone-1', phone.pub)
+    expect(gateway.directDeviceSessions()).toBe(0)
+    gateway.deviceClient('dial-1', null)
+    expect(gateway.directDeviceSessions()).toBe(0)
     await socket.stop()
   })
 
@@ -939,5 +1026,16 @@ describe('unknownHelloReader', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect([firstDone, againDone]).toEqual([true, true])
     expect(trustFromLog).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('unpairedHandler', () => {
+  // A block list that cannot be written made the group's side throw, and the device log kept the key: its next read
+  // trusted the unpaired device again.
+  it('takes the key out of the device log even when the group could not keep it out, and hands the throw on', () => {
+    const remove = vi.fn(async () => ({ ok: true as const }))
+    const unpaired = unpairedHandler({ unpaired: () => { throw new StateFileUnreadable('group-blocked.json', 'not valid JSON') } }, () => ({ remove }))
+    expect(() => unpaired('pub-a')).toThrow(StateFileUnreadable)
+    expect(remove).toHaveBeenCalledWith('pub-a')
   })
 })

@@ -36,6 +36,7 @@ const device = (over: Record<string, unknown> = {}): Record<string, unknown> => 
   lastSeenAt: new Date('2026-08-01T00:00:00Z'),
   createdAt: new Date('2026-07-01T00:00:00Z'),
   firmwareVersion: '0.2.8',
+  cliVersion: null,
   chip: 'esp32s3',
   ssid: null,
   rssi: null,
@@ -68,7 +69,7 @@ describe('listDetailedForUser', () => {
     const [row] = await deviceService.listDetailedForUser('u1')
 
     expect(row).toMatchObject({
-      firmwareVersion: '0.2.8', chip: 'esp32s3', ssid: 'Home', rssi: -52, activeMachineId: 'h1',
+      firmwareVersion: '0.2.8', cliVersion: null, chip: 'esp32s3', ssid: 'Home', rssi: -52, activeMachineId: 'h1',
     })
   })
 
@@ -86,6 +87,26 @@ describe('listDetailedForUser', () => {
     const [row] = await deviceService.listDetailedForUser('u1')
     expect(JSON.stringify(row)).not.toContain('tokenHash')
     expect(JSON.stringify(row)).not.toContain('"h"')
+  })
+})
+
+describe('the CLI\'s version on a device', () => {
+  const read = async (over: Record<string, unknown>) => {
+    findMany.mockResolvedValue([device(over)])
+    const [row] = await deviceService.listDetailedForUser('u1')
+    return { cliVersion: row.cliVersion, firmwareVersion: row.firmwareVersion }
+  }
+  it('a harness-cli row reads its stored cliVersion, and no firmware', async () => {
+    expect(await read({ chip: 'harness-cli', cliVersion: '0.6.97', firmwareVersion: '0.6.95' })).toEqual({ cliVersion: '0.6.97', firmwareVersion: null })
+  })
+  it('a harness-cli row with no hello since the release reads its old firmwareVersion as its CLI version', async () => {
+    expect(await read({ chip: 'harness-cli', cliVersion: null, firmwareVersion: '0.6.95' })).toEqual({ cliVersion: '0.6.95', firmwareVersion: null })
+  })
+  it('a dial reads its firmware, and no CLI version', async () => {
+    expect(await read({ chip: 'esp32s3', cliVersion: null, firmwareVersion: '0.2.8' })).toEqual({ cliVersion: null, firmwareVersion: '0.2.8' })
+  })
+  it('a row with no chip and no version reads neither', async () => {
+    expect(await read({ chip: null, cliVersion: null, firmwareVersion: null })).toEqual({ cliVersion: null, firmwareVersion: null })
   })
 })
 
@@ -110,6 +131,11 @@ describe('recordHello', () => {
     })
   })
 
+  it('stores the CLI\'s version as cliVersion', async () => {
+    await deviceService.recordHello({ deviceId: 'dev-1', cliVersion: '0.6.97', chip: 'harness-cli' })
+    expect(updateMany).toHaveBeenCalledWith({ where: { deviceId: 'dev-1' }, data: { cliVersion: '0.6.97', chip: 'harness-cli' } })
+  })
+
   it('drops rssi 0 — the firmware sentinel for unknown/disconnected', async () => {
     await deviceService.recordHello({ deviceId: 'dev-1', ssid: 'Home', rssi: 0 })
 
@@ -122,7 +148,7 @@ describe('recordHello', () => {
   })
 
   it('does not touch the DB when the device reported nothing usable', async () => {
-    await deviceService.recordHello({ deviceId: 'dev-1', firmwareVersion: null, chip: null })
+    await deviceService.recordHello({ deviceId: 'dev-1', cliVersion: null, firmwareVersion: null, chip: null })
     expect(updateMany).not.toHaveBeenCalled()
   })
 

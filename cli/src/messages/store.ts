@@ -7,8 +7,9 @@
  * - the outbox: messages for another machine's agents not yet handed to that machine;
  * - which roster each local agent was last told (the note).
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { atomicWriteFile } from '../lib/secureState.js'
 import { inboxPaneKey } from './inbox.js'
 import { LIMITS, parseMessage, type DeliveryState, type DeliveryStatus, type Message } from './model.js'
 
@@ -96,9 +97,7 @@ export class MessageStore {
   save(): void {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     chmodSync(this.dir, 0o700)
-    const temporary = `${this.file}.${process.pid}.tmp`
-    writeFileSync(temporary, JSON.stringify(this.state), { mode: 0o600 })
-    renameSync(temporary, this.file)
+    atomicWriteFile(this.file, JSON.stringify(this.state), 'cache')
   }
 
   entry(messageId: string): Entry | undefined {

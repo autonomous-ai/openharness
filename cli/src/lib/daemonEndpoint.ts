@@ -3,20 +3,8 @@ import { lstatSync } from 'node:fs'
 import { localCredentialHeaders } from './localCredential.js'
 import { daemonFetch, notThere } from './localTransport.js'
 import { localSocketPath } from './localSocket.js'
-import { readDaemonRecord, writeDaemonRecord, type DaemonPipeRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
 import { pipeAbsent, pipeRequest } from './windows/pipeClient.js'
-
-// The configured port names the private socket. TCP may use another port when a different OS
-// user's daemon already holds that number; remember it in THIS user's data directory (lib/daemonRecord.ts).
-export function savedDaemonPort(dataDir: string, configuredPort: number): number {
-  return readDaemonRecord(dataDir, configuredPort)?.port ?? configuredPort
-}
-
-/** [pipe]: on Windows, the daemon's pipe and the core's pid, which a client cannot derive. */
-export function saveDaemonPort(dataDir: string, configuredPort: number, port: number, pipe?: DaemonPipeRecord): void {
-  writeDaemonRecord(dataDir, configuredPort, port, pipe)
-}
 
 function statusObject(statusCode: number | undefined, text: string): Record<string, unknown> | null {
   try {

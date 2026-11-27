@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { RegisteredSession } from './registry.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { RegistryOwnershipChanged, type RegisteredSession } from './registry.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { DiscoveredTerminalAgent, TerminalAgentProbe } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { TerminalAgentReconciler } from './terminalAgentReconciler.js'
@@ -214,6 +216,7 @@ describe('composite terminal reconciliation', () => {
   })
 
   it('still verifies retained panes when the process table is unavailable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const current = { ...session([tmux]), active: false }
     const onTerminalAvailability = vi.fn()
     const onProbeStatus = vi.fn()
@@ -228,10 +231,46 @@ describe('composite terminal reconciliation', () => {
       }),
     })
 
-    await reconciler.trigger()
+    try {
+      await reconciler.trigger()
 
-    expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
-    expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'process table unavailable' })
+      expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'process table unavailable' })
+      expect(warn).toHaveBeenCalledWith('[discovery] process table unavailable; keeping existing terminal agents')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('names the executables, not the table, when only they could not be resolved, and keeps every agent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const current = session([tmux])
+    const onProbeStatus = vi.fn()
+    const onRemoved = vi.fn()
+    const onDormant = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved, onProbeStatus,
+      probe: async () => ({
+        processTableAvailable: false,
+        ownershipFailure: 'ENGINE_LOOKUP_TIMEOUT',
+        targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }],
+        agents: [], ambiguousPlacements: new Set(),
+      }),
+    })
+
+    try {
+      // Twice: a miss is confirmed on the second pass, so one pass alone would not show an agent kept.
+      await reconciler.trigger()
+      await reconciler.trigger()
+
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'engine executables could not be resolved (ENGINE_LOOKUP_TIMEOUT)' })
+      expect(warn).toHaveBeenCalledWith('[discovery] engine executables could not be resolved (ENGINE_LOOKUP_TIMEOUT); keeping existing terminal agents')
+      expect(onRemoved).not.toHaveBeenCalled()
+      expect(onDormant).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('awaits the initial discovery pass before start resolves', async () => {
@@ -665,6 +704,24 @@ describe('start()', () => {
       vi.useRealTimers()
     }
   })
+
+  it('logs a failed opening pass by its kind, as its message may quote a path', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    class ProbeFailed extends Error {}
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => { throw new ProbeFailed("ps failed reading '/Users/someone/private'") },
+    })
+    try {
+      await reconciler.start(60_000)
+      expect(warn).toHaveBeenCalledWith('[discovery] a pass failed, the next one tries again · ProbeFailed')
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('/Users/someone')
+    } finally {
+      reconciler.stop()
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('a terminal pane (engine `terminal`)', () => {
@@ -782,5 +839,148 @@ describe('a pass with a deadline', () => {
     release()
     await vi.waitFor(() => expect(probed).toHaveBeenCalledTimes(2))
     warn.mockRestore()
+  })
+})
+
+describe('the passes count', () => {
+  const reconciler = (probed: () => Promise<TerminalAgentProbe>, passDeadlineMs?: number) => new TerminalAgentReconciler({
+    current: () => [], backends: [], backendOrder: ['tmux'],
+    onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), probe: probed, passDeadlineMs,
+  })
+
+  it('counts each completed pass once', async () => {
+    const probed = vi.fn(async () => probe([]))
+    const run = reconciler(probed)
+    // The second and third ask while the first runs: they share the one pass that follows it.
+    await Promise.all([run.trigger(), run.trigger(), run.trigger()])
+    expect(probed).toHaveBeenCalledTimes(2)
+    expect(run.passes).toBe(2)
+    await run.trigger()
+    expect(run.passes).toBe(3)
+  })
+
+  it('does not count a pass that gave up on its probe', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const run = reconciler(() => new Promise<TerminalAgentProbe>(() => {}), 10)
+      const asked = run.trigger()
+      await vi.advanceTimersByTimeAsync(10)
+      await expect(asked).resolves.toBe(false)
+      expect(run.passes).toBe(0)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  // It looked at no agent: a check that something did not happen would read it as a look.
+  it('does not count a pass that saw no process table', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const run = reconciler(async () => ({ ...probe([]), processTableAvailable: false }))
+      await expect(run.trigger()).resolves.toBe(true)
+      expect(run.passes).toBe(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not count a pass that throws', async () => {
+    const run = reconciler(async () => { throw new Error('ps timed out') })
+    await expect(run.trigger()).rejects.toThrow('ps timed out')
+    expect(run.passes).toBe(0)
+  })
+})
+
+describe('a pass whose observations cannot be saved', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  const live = (): TerminalAgentProbe => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }])
+  /** `save` is what each batch's durable save answers, in turn; the last entry repeats. */
+  function outage(save: Array<Error | null>) {
+    let batch = 0
+    const onProbeStatus = vi.fn(), onTerminalAvailability = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [session()], backends: [], backendOrder: ['tmux'], probe: async () => live(),
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), onTerminalAvailability, onProbeStatus,
+      transaction: async (apply) => {
+        const result = await apply()
+        const failure = save[Math.min(batch++, save.length - 1)]
+        if (failure) throw failure
+        return result
+      },
+    })
+    return { reconciler, onProbeStatus, onTerminalAvailability }
+  }
+  const full = () => new RegistryPersistenceUnavailable('registry storage has no available space (ENOSPC)')
+  const said = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.filter(([line]) => String(line).startsWith('[discovery] observations not saved'))
+
+  it.each([
+    ['the registry', () => full()],
+    // What a refused rename leaves behind: the next batch tries the names first (e2e/diskfull.e2e.ts).
+    ['the names file', () => new RegistryPersistenceUnavailable('name storage has no available space (ENOSPC)')],
+    ['an unconfirmed write', () => new AtomicWriteUnconfirmed(full())],
+  ])('finishes and answers the hook that asked for it when %s cannot be saved', async (_what, failure) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const run = outage([failure()])
+    await expect(run.reconciler.triggerHint(tmux, 'claude')).resolves.toBe(true)
+    expect(run.onTerminalAvailability).toHaveBeenCalled()
+    expect(run.onProbeStatus).toHaveBeenLastCalledWith({ ready: true, error: null })
+    expect(said(warn)).toHaveLength(1)
+  })
+
+  it('says so once for an outage, and again for the next one', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Two batches a pass. Three passes whose second batch is refused, as a pass with nothing of its own to save
+    // first is; one pass saved; one more refused.
+    const run = outage([null, full(), null, full(), null, full(), null, null, null, full()])
+    for (let pass = 0; pass < 3; pass++) await run.reconciler.trigger()
+    expect(said(warn)).toEqual([['[discovery] observations not saved, kept for the next pass · RegistryPersistenceUnavailable']])
+    await run.reconciler.trigger()
+    await run.reconciler.trigger()
+    expect(said(warn)).toHaveLength(2)
+  })
+
+  // What it saw was not kept: a check that something did not happen would read it as a look (the passes count).
+  it('is not counted as a pass that looked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Two batches a pass: the first pass's second is refused, the next pass saves both.
+    const run = outage([null, full(), null, null])
+    await run.reconciler.trigger()
+    expect(run.reconciler.passes).toBe(0)
+    await run.reconciler.trigger()
+    expect(run.reconciler.passes).toBe(1)
+    expect(said(warn)).toHaveLength(1)
+  })
+
+  it.each([
+    ['an owner that changed', () => new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')],
+    ['any other failure', () => new Error('fixture')],
+  ])('still fails the pass for %s', async (_what, failure) => {
+    const error = failure()
+    await expect(outage([error]).reconciler.trigger()).rejects.toBe(error)
+  })
+
+  // A pass nobody waits on — the interval, a theme change, a session's end, a stop — dropped that rejection, and
+  // the fatal guard logged an unhandled rejection for a rare ownership race (e2e/diskfull.e2e.ts asserts none).
+  it.each([
+    ['asked for', (reconciler: TerminalAgentReconciler) => reconciler.nudge()],
+    ['on the interval', (reconciler: TerminalAgentReconciler) => { void reconciler.start(5) }],
+  ])('logs a failed pass %s by its kind and leaves no rejection unhandled', async (_how, ask) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    const run = outage([new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')])
+    try {
+      ask(run.reconciler)
+      const line = '[discovery] a pass failed, the next one tries again · RegistryOwnershipChanged IDENTITY_UNAVAILABLE'
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(line))
+      // An unhandled rejection is reported after the microtasks of the turn that dropped it.
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      run.reconciler.stop()
+      process.off('unhandledRejection', unhandled)
+    }
   })
 })

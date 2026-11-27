@@ -1,23 +1,27 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
-import { randomBytes } from 'crypto'
-import { createServer } from 'http'
+import { createHash, randomBytes } from 'crypto'
+import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
+import { homedir, tmpdir } from 'os'
+import { dirname, join, win32 } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { runInNewContext } from 'vm'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_BUNDLES } from './cable/hosts/hostDetect.js'
+import { observedTitle } from './cable/hosts/observedTitle.js'
+import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
+import { engineName } from './lib/agentNames.js'
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
 import { hookTokenPath } from './lib/hookAuth.js'
 import { isTrustedLocal, listenLocalSocket, localSocketName, socketPathIn } from './lib/localSocket.js'
+import { writeExecutable } from './testing/executableFixture.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
-// and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
-// takes well over vitest's 5s default, and the failure looks like a product bug rather than what it is.
-// The hook's own budget still bounds it; this only stops the harness from calling time first.
-vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
+// and sqlite3 on top of that: its hooks get the room the suite gives each case (vitest.config.ts).
+vi.setConfig({ hookTimeout: 30_000 })
 
 const HOOK = fileURLToPath(new URL('../hook/notify.mjs', import.meta.url))
 /** A preload that moves `Date` by the milliseconds in a file (e2e/harness/clockShift.mjs). */
@@ -67,6 +71,11 @@ async function daemonSocketFor(port: number, dataDir: string | undefined, home?:
     try { writeFileSync(hookTokenPath(dataDir), `${'b'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     return
   }
+  await proxySocket(path, port)
+}
+
+/** A socket at [path] in front of a test's fake daemon on [port], unless one is there. */
+async function proxySocket(path: string, port: number): Promise<void> {
   if (existsSync(path)) return
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const proxy = createNetServer((client) => {
@@ -100,10 +109,14 @@ interface RunHookOpts {
   /** Kernel birth evidence for the synthetic process; never read an unrelated host pid. */
   nativeProcess?: 'linux' | 'missing' | 'changed' | 'lock-replaced' | 'boot-replaced' | 'registry-replaced'
     | 'zombie' | 'registry-zombie' | 'registry-command' | 'registry-reparented' | 'short' | 'wrong-pid'
-  engine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok'
+  engine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok' | 'copilot' | 'agy'
+  /** More of the installed command line: Copilot's and agy's event flags, agy's home. */
+  args?: string[]
   /** Run as on Windows: the process table comes from `harness-pty ps --json` (a fake), and `ps` fails. */
   windowsProcessTable?: boolean
   env?: Record<string, string>
+  /** The folder the hook runs in: an agent's project. */
+  cwd?: string
   dataDir?: string
   claudeProjectsDir?: string
   codexHome?: string
@@ -118,6 +131,28 @@ interface RunHookOpts {
   grokHome?: string
   devinHome?: string
   input?: Record<string, unknown>
+  /** The hook's stdin as it is, in place of [input]'s JSON. */
+  stdin?: string
+  /** The command lines the hook is run through, outermost first: each hands the rest of the line on as `"$0" "$@"`. */
+  via?: string[][]
+  /** Linux's /proc as the hook's climb reads it, faked on any platform (`process.platform` reads 'linux'): the hook's
+   *  ancestors, nearest first. The first is the hook's real parent; the row at index n > 0 has pid 9000 + n; each one's
+   *  parent is the next, and the last one's is pid 1. null is a process /proc cannot show (ENOENT). Only
+   *  /proc/<pid>/stat and /proc/<pid>/cmdline of these pids are answered; cmdline is argv joined and ended by NUL. */
+  procAncestors?: Array<{ comm: string; argv: string[] } | null>
+  /** Every path under /proc the hook reads is appended here, one a line. The file is not made when it reads none. */
+  procReadLog?: string
+  /** The hook's ancestors on Windows, nearest first, as `procAncestors` is for Linux, listed by a fake `harness-pty`; the
+   *  case sets the platform (the pipe's preload, `windowsData`). The first is the hook's real parent; the row at index
+   *  n > 0 has pid 9000 + n; each one's parent is the next, and the last one's parent is no row at all, a process gone.
+   *  Each started before its child, unless it names its own start marker, and has the image path it names, or none.
+   *  null is a process the host lists but could not open: its name alone, with no start marker (pty/src/ps.rs). */
+  windowsAncestors?: Array<{ executable: string; argv: string[]; startMarker?: string; imagePath?: string } | null>
+  /** Each run of the fake `harness-pty` (windowsProcessTable's or windowsAncestors') appends a line here. The file is not
+   *  made when it never runs. */
+  psRunLog?: string
+  /** Each chunk the hook writes to stderr is pushed here; without it they go to the test's own stderr. */
+  stderr?: string[]
 }
 
 function runHook(opts: RunHookOpts): Promise<string> {
@@ -130,6 +165,20 @@ function runHook(opts: RunHookOpts): Promise<string> {
     // failure in five full-suite runs. Give the child room so these specs test behaviour, not the load
     // on the machine running them.
     env.HARNESS_HOOK_DEADLINE_MS = '30000'
+    // Run inside a named herdr or Herdr Core session, the hook would leave out the HERDR_PANE_ID or HC_TERMINAL_ID a
+    // spec sets.
+    delete env.HERDR_SESSION
+    delete env.HC_SESSION
+    // Run inside a Rex block, the hook would send that block's ids, and leave out the REX_SESSION a spec sets when the
+    // developer's server is not this home's default.
+    delete env.REX_BLOCK
+    delete env.REX_SESSION
+    delete env.REX_SERVER
+    // Run inside VS Code, Cursor or Alacritty, a hook run as on Windows would name that app from these.
+    delete env.VSCODE_GIT_ASKPASS_NODE
+    delete env.VSCODE_PID
+    delete env.VSCODE_IPC_HOOK
+    delete env.ALACRITTY_LOG
     if (opts.env) Object.assign(env, opts.env)
     delete env.TMUX_PANE
     if (opts.tmuxPane) env.TMUX_PANE = opts.tmuxPane
@@ -141,6 +190,22 @@ function runHook(opts: RunHookOpts): Promise<string> {
     tmpDirs.push(env.TMUX_TMPDIR)
     delete env.MACHINE_ID
     if (opts.launcherId !== null) env.MACHINE_ID = opts.launcherId ?? '11111111-2222-4333-8444-555555555555'
+    /** A `harness-pty` in [binDir] whose `ps --json` lists [table], as the hook's helper on Windows, and whose
+     *  `ps --json --ancestors <pid>` lists that pid's row and its parents', nearest first, at most 9 (pty/src/ps.rs). */
+    const fakePtyHost = (binDir: string, table: { rows: Array<{ pid: number; parentPid: number }> }) => {
+      const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+      const runLog = opts.psRunLog ? `echo "$*" >> ${quote(opts.psRunLog)}\n` : ''
+      const byPid = new Map(table.rows.map((row) => [row.pid, row]))
+      const chain = (pid: number) => {
+        const rows: typeof table.rows = []
+        for (let row = byPid.get(pid); row && rows.length < 9 && !rows.includes(row); row = byPid.get(row.parentPid)) rows.push(row)
+        return rows
+      }
+      const chains = table.rows.map((row) => `${row.pid}) printf '%s\\n' ${quote(JSON.stringify({ rows: chain(row.pid) }))} ;;\n`).join('')
+      writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n${runLog}if [ "$*" = "ps --json" ]; then printf '%s\\n' ${quote(JSON.stringify(table))}; exit 0; fi
+[ "$1 $2 $3" = "ps --json --ancestors" ] && [ $# = 4 ] || exit 2\ncase "$4" in\n${chains}*) echo '{"rows":[]}' ;;\nesac\n`)
+      env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+    }
     if (opts.processEngine || opts.paneOwner !== undefined || opts.paneSession !== undefined) {
       const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
       tmpDirs.push(binDir)
@@ -149,7 +214,7 @@ function runHook(opts: RunHookOpts): Promise<string> {
       // is (a Harness session, untagged, unless the test says otherwise).
       const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
       const tmuxDelay = opts.tmuxDelaySeconds ? `sleep ${opts.tmuxDelaySeconds}\n` : ''
-      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\n${tmuxDelay}printf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
+      writeExecutable(join(binDir, 'tmux'), `#!/bin/sh\n${tmuxDelay}printf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`)
       env.PATH = `${binDir}:${env.PATH ?? ''}`
     }
     if (opts.processEngine) {
@@ -166,13 +231,13 @@ function runHook(opts: RunHookOpts): Promise<string> {
           { pid: 7001, parentPid: 7000, executable, startMarker: 'w:133000000000000001', args: processArgs, nativeArgv: processArgs.split(' ') },
           { pid: process.pid, parentPid: 7001, executable: 'node.exe', startMarker: 'w:133000000000000002', args: 'hook-parent', nativeArgv: ['hook-parent'] },
         ] }
-        writeFileSync(join(binDir, 'harness-pty'), `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${shellQuote(JSON.stringify(table))}\n`, { mode: 0o755 })
-        env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
+        fakePtyHost(binDir, table)
         writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       } else {
         // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
         const gateway = opts.viaHermesGateway ? ` '7002 7001 python3 Mon Aug 10 10:00:02 2026 python3 -m hermes_cli.main gateway run --quiet --idle-exit'` : ''
-        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+        // In macOS's legacy mode `ps -e` lists every process's environment; this one answers nothing in it instead.
+        writeExecutable(join(binDir, 'ps'), `#!/bin/sh\n[ "$COMMAND_MODE" = legacy ] && exit 1\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`)
       }
       const nativeFixture = join(binDir, 'native-process.mjs')
       writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
@@ -217,9 +282,53 @@ fs.readFileSync = (path, ...args) => {
           : JSON.stringify([typeof opts.hermesSource === 'object' ? opts.hermesSource : { source: opts.hermesSource }])
         const stepScale = Number(env.HARNESS_HOOK_DEADLINE_MS) / 4500
         const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds * stepScale}\n` : ''
-        writeFileSync(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`, { mode: 0o755 })
+        writeExecutable(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`)
       }
       env.PATH = `${binDir}:${env.PATH ?? ''}`
+    }
+    if (opts.procAncestors) {
+      const fixtureDir = mkdtempSync(join(tmpdir(), 'adapter-hook-proc-'))
+      tmpDirs.push(fixtureDir)
+      const fixture = join(fixtureDir, 'proc-ancestors.mjs')
+      writeFileSync(fixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+Object.defineProperty(process, 'platform', { value: 'linux' });
+const ancestors = ${JSON.stringify(opts.procAncestors)}, original = fs.readFileSync;
+const pidAt = (index) => index === 0 ? process.ppid : 9000 + index;
+const rows = new Map(ancestors.map((row, index) => [pidAt(index), { row, parent: index + 1 < ancestors.length ? pidAt(index + 1) : 1 }]));
+fs.readFileSync = (path, ...args) => {
+  const asked = /^\\/proc\\/(\\d+)\\/(stat|cmdline)$/.exec(String(path)), known = asked && rows.get(Number(asked[1]));
+  if (!known) return original(path, ...args);
+  if (!known.row) throw Object.assign(Error('fixture process unavailable'), { code: 'ENOENT' });
+  if (asked[2] === 'cmdline') return known.row.argv.join('\\0') + '\\0';
+  return asked[1] + ' (' + known.row.comm + ') S ' + known.parent + ' ' + Array(17).fill(0).join(' ') + ' 12345 '
+    + Array(30).fill(0).join(' ') + '\\n';
+}; syncBuiltinESMExports();\n`)
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${fixture}`.trim()
+    }
+    if (opts.windowsAncestors) {
+      const binDir = mkdtempSync(join(tmpdir(), 'adapter-hook-bin-'))
+      tmpDirs.push(binDir)
+      // The hook is this process's child; past the last row, the next pid is in no row.
+      const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
+      fakePtyHost(binDir, { rows: opts.windowsAncestors.map((row, index) => row
+        ? { pid: pidAt(index), parentPid: pidAt(index + 1), executable: row.executable,
+            startMarker: row.startMarker ?? `w:${133000000000000100n - BigInt(index)}`, args: row.argv.join(' '), nativeArgv: row.argv,
+            ...(row.imagePath ? { imagePath: row.imagePath } : {}) }
+        : { pid: pidAt(index), parentPid: pidAt(index + 1), executable: 'elevated.exe', startMarker: '', args: 'elevated.exe',
+            nativeArgv: ['elevated.exe'] }) })
+    }
+    if (opts.procReadLog) {
+      const fixtureDir = mkdtempSync(join(tmpdir(), 'adapter-hook-proc-'))
+      tmpDirs.push(fixtureDir)
+      const fixture = join(fixtureDir, 'proc-reads.mjs')
+      // Imported after proc-ancestors.mjs, so it sees every read the hook makes, faked or not.
+      writeFileSync(fixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const original = fs.readFileSync, log = ${JSON.stringify(opts.procReadLog)};
+fs.readFileSync = (path, ...args) => {
+  if (String(path).startsWith('/proc/')) fs.appendFileSync(log, String(path) + '\\n');
+  return original(path, ...args);
+}; syncBuiltinESMExports();\n`)
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${fixture}`.trim()
     }
     const args = [HOOK, '--port', String(opts.port)]
     if (opts.engine && opts.engine !== 'claude') args.push('--engine', opts.engine)
@@ -230,22 +339,27 @@ fs.readFileSync = (path, ...args) => {
     if (opts.hermesHome) args.push('--hermes-home', opts.hermesHome)
     if (opts.grokHome) args.push('--grok-home', opts.grokHome)
     if (opts.devinHome) args.push('--devin-home', opts.devinHome)
+    if (opts.args) args.push(...opts.args)
     const hookDataDir = opts.dataDir || process.env.ADAPTER_DATA_DIR
     if (hookDataDir) {
       mkdirSync(hookDataDir, { recursive: true, mode: 0o700 })
       try { writeFileSync(join(hookDataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     }
     daemonSocketFor(opts.port, hookDataDir, env.HOME).then(() => {
-    const child = spawn(process.execPath, args, {
+    const [command, ...argv] = [...(opts.via ?? []).flat(), process.execPath, ...args]
+    const child = spawn(command, argv, {
       env,
-      stdio: ['pipe', 'pipe', 'inherit'],
+      cwd: opts.cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => { if (opts.stderr) opts.stderr.push(chunk); else process.stderr.write(chunk) })
     let stdout = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk) => { stdout += chunk })
     child.on('error', reject)
     child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(`notify.mjs exited ${code}`)))
-    child.stdin.end(JSON.stringify(opts.input ?? {
+    child.stdin.end(opts.stdin ?? JSON.stringify(opts.input ?? {
       hook_event_name: 'SessionEnd',
       session_id: 'session-test',
       reason: 'logout',
@@ -255,9 +369,10 @@ fs.readFileSync = (path, ...args) => {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }>; firedAts: Array<string | undefined> }> {
+async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }>; firedAts: Array<string | undefined>; headers: IncomingHttpHeaders[] }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const firedAts: Array<string | undefined> = []
+  const headers: IncomingHttpHeaders[] = []
   const server = createServer((req, res) => {
     // Local service discovery may probe a test port. Only hook POSTs belong to this fixture.
     if (req.method !== 'POST') { res.writeHead(405).end(); return }
@@ -267,6 +382,7 @@ async function collect(response: Record<string, unknown> = {}, credential?: stri
     req.on('end', () => {
       requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> })
       firedAts.push(req.headers['x-harness-hook-fired-at'] as string | undefined)
+      headers.push(req.headers)
       res.end(JSON.stringify(response))
     })
   })
@@ -277,7 +393,16 @@ async function collect(response: Record<string, unknown> = {}, credential?: stri
   })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
-  return { port: address.port, requests, firedAts }
+  return { port: address.port, requests, firedAts, headers }
+}
+
+/**
+ * Until the fake daemon has read [count] requests. A post to /api/hook/observed is written, never waited on: the hook
+ * exits once it is in the socket (notify.mjs postObserved), so the daemon can read it after the hook is gone. On a loaded
+ * machine it did, and a case that read `requests` as the hook exited found none.
+ */
+function received(requests: unknown[], count = 1): Promise<void> {
+  return vi.waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(count), { timeout: 10_000 })
 }
 
 describe('hook notify terminal scope', () => {
@@ -285,7 +410,7 @@ describe('hook notify terminal scope', () => {
     const additionalContext = 'Historical coding memory: keep review changes small.'
     const memoryReceiptId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const { port, requests } = await collect({ ok: true, additionalContext, memoryReceiptId })
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
     expect(stdout).toBe('')
@@ -294,7 +419,7 @@ describe('hook notify terminal scope', () => {
 
   it('never acknowledges a receipt without emitted user-turn context', async () => {
     const { port, requests } = await collect({ ok: true, memoryReceiptId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     expect(await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input })).toBe('')
     expect(requests.map(request => request.url)).toEqual(['/api/hook/session-start'])
   })
@@ -302,17 +427,17 @@ describe('hook notify terminal scope', () => {
   it.each(['claude', 'codex'] as const)('does not inject companion context returned by an older adapter into a %s user turn', async engine => {
     const additionalContext = 'Companions collection context: selected GNU; retain this conversation.'
     const { port, requests } = await collect({ ok: true, additionalContext })
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
     expect(stdout).toBe('')
-    expect(requests[0]?.body.prompt).toBe(input.prompt)
+    expect(requests[0]?.body).not.toHaveProperty('prompt')
     expect(await runHook({ port, engine, tmuxPane: '%42', input: { ...input, hook_event_name: 'SessionStart' } })).toBe('')
   })
   // What tells a late Stop from the turn the next prompt opened (src/hookServer.ts hookFiredAt).
   it('says when its engine ran it: its own start, no later than it sends', async () => {
     const { port, firedAts } = await collect()
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const before = Date.now()
     await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input })
     const firedAt = Number(firedAts[0])
@@ -321,27 +446,45 @@ describe('hook notify terminal scope', () => {
     expect(firedAt).toBeLessThanOrEqual(Date.now())
   })
 
-  it.each(['claude', 'codex', 'grok'] as const)('forwards the actual %s accepted prompt without changing the model input', async engine => {
+  // CI 44381432197 (Linux): the hook paused while it read the time, its fired time came out before its turn's opening
+  // record, and the daemon held that turn's end for 2 minutes. A pause between two clock reads moves nothing: 10 s, longer
+  // than any start of the hook here, so a fired time taken from two reads always lands before the hook was started.
+  it('says when its engine ran it however long the hook pauses while it reads the time', async () => {
+    const { port, firedAts } = await collect()
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-paused-'))
+    tmpDirs.push(dir)
+    const preload = join(dir, 'paused.mjs')
+    writeFileSync(preload, 'const uptime = process.uptime\nprocess.uptime = () => uptime() + 10\n')
+    const before = Date.now()
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input,
+      env: { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` } })
+    expect(Number(firedAts[0])).toBeGreaterThanOrEqual(before)
+  })
+
+  it.each(['claude', 'codex', 'grok'] as const)('announces a %s prompt without its text', async engine => {
     const { port, requests } = await collect()
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const input = recordings[engine].input
     const stdout = await runHook({ port, engine, tmuxPane: '%42', input })
     expect(requests).toContainEqual({ url: '/api/hook/session-start', body: expect.objectContaining({
-      hookEvent: 'UserPromptSubmit', prompt: input.prompt, engine,
+      hookEvent: 'UserPromptSubmit', engine,
     }) })
+    for (const request of requests) expect(request.body).not.toHaveProperty('prompt')
     expect(stdout).toBe('')
   })
   it.each(['claude', 'codex', 'grok'] as const)('still announces an oversized %s prompt so earlier scope is cleared', async engine => {
     const { port, requests } = await collect()
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     for (const prompt of ['x'.repeat(140_000), '\u0000'.repeat(30_000)]) {
       const stdout = await runHook({ port, engine, tmuxPane: '%42', input: { ...recordings[engine].input, prompt } })
       expect(stdout).toBe('')
     }
     expect(requests).toHaveLength(2)
-    for (const request of requests) expect(request).toMatchObject({ url: '/api/hook/session-start', body: {
-      hookEvent: 'UserPromptSubmit', prompt: '', engine,
-    } })
+    for (const request of requests) {
+      expect(request).toMatchObject({ url: '/api/hook/session-start', body: { hookEvent: 'UserPromptSubmit', engine } })
+      expect(request.body).not.toHaveProperty('prompt')
+    }
   })
   it('refuses a symlinked hook credential instead of authenticating with its target', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-credential-link-'))
@@ -489,6 +632,28 @@ describe('hook notify terminal scope', () => {
     expect(tasks()).toHaveLength(1)
   })
 
+  // A session's end that waits behind its admission is not taken yet: it may still be refused once it runs.
+  it('keeps a Cursor session\'s tasks when its end is kept pending', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-pending-'))
+    tmpDirs.push(dir)
+    const dataDir = join(dir, 'data')
+    const cursorHome = join(dir, 'cursor')
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => res.end(req.url === '/api/hook/session-end' ? JSON.stringify({ pending: true }) : '{}'))
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+    const hook = (input: Record<string, unknown>) => runHook({ port: address.port, tmuxPane: '%21', engine: 'cursor', dataDir, cursorHome, input })
+    await hook({ hook_event_name: 'preToolUse', session_id: 'cursor-session', tool_name: 'Task', tool_use_id: 'call-1', tool_input: { description: 'Inspect', prompt: 'Read code' } })
+    const tasks = () => JSON.parse(readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')) as unknown[]
+    expect(tasks()).toHaveLength(1)
+    await hook({ hook_event_name: 'sessionEnd', session_id: 'cursor-session', reason: 'logout' })
+    expect(tasks()).toHaveLength(1)
+  })
+
   it('ignores Cursor background agents without leaking them into the registry', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-background-'))
     tmpDirs.push(dir)
@@ -595,7 +760,7 @@ describe('hook notify terminal scope', () => {
       expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-end'])
     })
 
-  it('drops standalone SessionEnd but forwards tmux SessionEnd', async () => {
+  it('tells a standalone SessionEnd only to the devices, and forwards a tmux SessionEnd', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
       if (req.method !== 'POST') { res.writeHead(405).end(); return }
@@ -612,7 +777,12 @@ describe('hook notify terminal scope', () => {
     if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
 
     await runHook({ port: address.port })
-    expect(requests).toEqual([])
+    await received(requests)
+    expect(requests).toEqual([{
+      url: '/api/hook/observed',
+      body: { engine: 'claude', sessionId: 'session-test', event: 'session-end', callerPid: process.pid, hostHints: expect.any(Object) },
+    }])
+    requests.length = 0
 
     await runHook({ port: address.port, tmuxPane: '%42' })
     expect(requests).toEqual([{
@@ -739,6 +909,25 @@ describe('hook notify terminal scope', () => {
     expect(statSync(join(dataDir, 'registry-boot')).mode & 0o777).toBe(0o600)
   })
 
+  it('runs ps in unix2003 mode whatever mode the person set, so it can never list an environment', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-command-mode-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-mode.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir, env: { COMMAND_MODE: 'legacy' },
+      input: { hook_event_name: 'SessionStart', session_id: 'session-mode', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'session-mode', engine: 'claude', tmuxPane: '%7' }])
+  })
+
   it('reads the process table from harness-pty on Windows, and registers offline with its identity', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-windows-'))
     tmpDirs.push(dir)
@@ -785,6 +974,65 @@ describe('hook notify terminal scope', () => {
       engine: 'claude',
       processIdentity: { pid: 7001, executable: 'claude.exe', startMarker: 'w:133000000000000001' },
     }])
+  })
+
+  describe('on Windows, where every file looks writable by everyone', () => {
+    /** A data folder, a transcript, and the NODE_OPTIONS of a preload that reports modes as NTFS does to Node: a
+     *  folder 0o777 and a file 0o666, whatever was asked (fchmod changes nothing there). */
+    function ntfs() {
+      const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-offline-ntfs-'))
+      tmpDirs.push(dir)
+      const claudeProjectsDir = join(dir, 'claude-projects'), dataDir = join(dir, 'data')
+      mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+      const transcript = (session: string) => {
+        const path = join(claudeProjectsDir, 'demo', `${session}.jsonl`)
+        writeFileSync(path, '{}\n')
+        return path
+      }
+      const preload = join(dir, 'ntfs-modes.mjs')
+      writeFileSync(preload, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const ntfs = (stat) => {
+  if (!stat || !(stat.isFile() || stat.isDirectory())) return stat;
+  const bits = stat.isDirectory() ? 0o777 : 0o666;
+  stat.mode = typeof stat.mode === 'bigint' ? stat.mode | BigInt(bits) : stat.mode | bits;
+  return stat;
+};
+for (const name of ['statSync', 'lstatSync', 'fstatSync']) { const original = fs[name]; fs[name] = (...args) => ntfs(original(...args)); }
+syncBuiltinESMExports();\n`)
+      return { dataDir, claudeProjectsDir, transcript, env: { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` } }
+    }
+
+    it('a hook with no daemon records its session, and a later hook reads it', async () => {
+      const { dataDir, claudeProjectsDir, transcript, env } = ntfs()
+      const start = (session: string) => runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: session, transcript_path: transcript(session), cwd: '/tmp/demo' },
+      })
+      const rows = () => JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+
+      await start('session-a')
+      expect(rows()).toMatchObject([{ sessionId: 'session-a', engine: 'claude', processIdentity: { pid: 7001 } }])
+      const first = rows()[0]
+
+      // The same agent resumed into another session: only a hook that read the row keeps its id.
+      await start('session-b')
+      expect(rows()).toMatchObject([{ sessionId: 'session-b', agentId: first.agentId, registeredAt: first.registeredAt }])
+    })
+
+    it('takes over the lock a dead hook left', async () => {
+      const { dataDir, claudeProjectsDir, transcript, env } = ntfs()
+      const lock = join(dataDir, 'registry.json.lock')
+      mkdirSync(lock, { recursive: true, mode: 0o700 })
+      writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 2_147_483_646, startMarker: '', token: 'gone' }), { mode: 0o600 })
+
+      await runHook({
+        port: 9, tmuxPane: '%7', processEngine: 'claude', windowsProcessTable: true, dataDir, claudeProjectsDir, env,
+        input: { hook_event_name: 'SessionStart', session_id: 'session-a', transcript_path: transcript('session-a'), cwd: '/tmp/demo' },
+      })
+
+      expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: 'session-a' }])
+      expect(existsSync(lock)).toBe(false)
+    })
   })
 
   it('leaves a corrupt offline registry byte-identical instead of replacing it', async () => {
@@ -1022,17 +1270,41 @@ describe('hook notify terminal scope', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('private fixture did not bind')
+    const stderr: string[] = []
     expect(await runHook({ port: address.port, tmuxPane: '%82', engine: 'hermes', processEngine: 'hermes',
       processExecutable: 'python3', processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes',
-      dataDir, hermesHome: join(dir, 'hermes'), hermesSource: 'cli',
+      dataDir, hermesHome: join(dir, 'hermes'), hermesSource: 'cli', stderr,
       input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
     })).toBe('{}\n')
+    if (outcome === 'recovers') expect(stderr.join('')).not.toContain('admission is held')
+    else expect(stderr.join('')).toContain('[harness] Hermes admission is held;')
     expect(attempts).toBe(outcome === 'recovers' ? 3 : outcome === 'disconnects' ? 2 : 4)
     expect(new Set(firedAt).size).toBe(1)
     expect(new Set(deliveryIds).size).toBe(1)
     expect(deliveryIds[0]).toMatch(/^[a-f0-9-]{36}$/)
     expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe('[]')
     expect(() => statSync(join(dataDir, 'registry-boot'))).toThrow()
+  })
+
+  it.each([['codex', 'Codex'], ['claude', 'Claude Code']] as const)('a held %s registration names %s, not Hermes', async (engine, name) => {
+    const dir = mkdtempSync(join(tmpdir(), `adapter-hook-${engine}-held-`))
+    tmpDirs.push(dir)
+    const transcriptPath = join(dir, 'transcript.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => res.writeHead(429).end(JSON.stringify({ pending: false, retry: true, error: 'HOOK_ADMISSION_BUSY' })))
+    })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('private fixture did not bind')
+    const stderr: string[] = []
+    await runHook({ port: address.port, tmuxPane: '%83', engine, processEngine: engine, dataDir: join(dir, 'data'), stderr,
+      input: { hook_event_name: 'SessionStart', session_id: `${engine}-held`, transcript_path: transcriptPath, cwd: dir },
+    })
+    expect(stderr.join('')).toContain(`[harness] ${name} admission is held; this delivery could not be confirmed.`)
+    expect(stderr.join('')).not.toContain('Hermes')
   })
 
   it.each([
@@ -1171,6 +1443,43 @@ describe('hook notify terminal scope', () => {
     expect(received).toContain('/api/hook/session-start')
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([])
   })
+
+  it.each([['SessionStart', 500], ['SessionStart', 503], ['UserPromptSubmit', 500]] as const)(
+    'does not fall back when the daemon answers %s with %i: a daemon that answers is running', async (event, status) => {
+      // A 500 taken for an outage wrote a row of the hook's own in place of the agent's, and the running daemon's next
+      // save took it in: the agent the daemon had created was gone (e2e/scale.e2e.ts, 2026-11-18).
+      const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-refused-'))
+      tmpDirs.push(dir)
+      const claudeProjectsDir = join(dir, 'claude-projects')
+      const dataDir = join(dir, 'data')
+      const transcriptPath = join(claudeProjectsDir, 'demo', 'session-refused.jsonl')
+      mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+      mkdirSync(dataDir, { recursive: true })
+      writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
+      writeFileSync(transcriptPath, '{}\n')
+      const received: string[] = []
+      const server = createServer((req, res) => {
+        received.push(req.url ?? '')
+        req.resume()
+        res.writeHead(status).end(JSON.stringify({ error: 'INTERNAL' }))
+      })
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+
+      await runHook({
+        port: address.port,
+        tmuxPane: '%7',
+        processEngine: 'claude',
+        dataDir,
+        claudeProjectsDir,
+        input: { hook_event_name: event, session_id: 'session-refused', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+      })
+
+      expect(received).toContain('/api/hook/session-start')
+      expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([])
+    })
 
   it('does not write fallback registry entries outside tmux or outside the transcript root', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-invalid-'))
@@ -1351,6 +1660,23 @@ describe('hook notify terminal scope', () => {
     const listed = [...literal!.matchAll(/'([^']+)'/g)].map((match) => match[1])
     expect([...listed].sort()).toEqual([...ENGINES].sort())
     expect(new Set(listed).size).toBe(listed.length)
+  })
+
+  it('names every engine in a sentence as the daemon does', () => {
+    // The hook keeps its own copy of engineName (it runs without the adapter's modules), as with REGISTRY_ENGINES.
+    const literal = /const ENGINE_NAMES = (\{[^}]*\})/.exec(readFileSync(HOOK, 'utf8'))?.[1]
+    expect(literal, 'ENGINE_NAMES in hook/notify.mjs').toBeDefined()
+    expect(runInNewContext(`(${literal})`)).toEqual(Object.fromEntries(ENGINES.map((engine) => [engine, engineName(engine)])))
+  })
+
+  it('answers only engines the daemon names, so a held line never says "undefined"', () => {
+    // The held line reads ENGINE_NAMES[engine] with no fallback: an engine argEngine() answered outside ENGINES would
+    // print "undefined admission is held" to a 429 from whatever holds the port.
+    const body = /function argEngine\(\) \{([^}]*)\}/.exec(readFileSync(HOOK, 'utf8'))?.[1]
+    expect(body, 'argEngine in hook/notify.mjs').toBeDefined()
+    const answered = [...body!.matchAll(/'([a-z]+)'/g)].map((match) => match[1])
+    expect(answered).toContain('claude')
+    expect(answered.filter((engine) => !(ENGINES as readonly string[]).includes(engine!))).toEqual([])
   })
 
   it('registers an agent offline beside a terminal tile, and leaves the tile as it was', async () => {
@@ -2006,16 +2332,220 @@ describe('a hook reaches the daemon that made its pane', () => {
     expect(rows(release.dataDir)?.map((row) => row.sessionId)).toEqual(['session-offline'])
     expect(rows(dev.dataDir)).toBeNull()
   })
+})
 
-  it('looks where the daemons record by default', () => {
-    // lib/hookRoutes.ts writes under env.HARNESS_HOOK_ROUTES_DIR, whose default is the product root's.
-    expect(readFileSync(HOOK, 'utf8')).toContain("process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')")
+/**
+ * On Linux Harness's folders follow the XDG Base Directory paths (docs/plans/2026-11-18-linux-xdg-paths-design.md, The
+ * roots on Linux): the XDG data and state folders once the data one exists, else ~/.harness while that exists. macOS and
+ * Windows keep ~/.harness (Windows with the pipe's cases, below). An installed command names its data folder; these are
+ * the folders behind it: the data folder when it names none, the daemons' route records, and the short folder that holds
+ * the socket of a data folder too long for one. A preload sets the platform, so each case runs on any computer.
+ */
+describe('the hook finds Harness\'s folders by the rule', () => {
+  const everyFallback = { data: true, routes: true, socket: true }
+
+  /** A home short enough for a socket under it, holding [folders]. */
+  function homeWith(...folders: string[]): string {
+    const home = shortHome()
+    for (const folder of folders) mkdirSync(join(home, folder), { recursive: true, mode: 0o700 })
+    return home
+  }
+
+  /** A moved home: ~/.harness (the bridge) and the data root [dataRoot] with the marker the move's commit writes in it. */
+  function movedHome(dataRoot = '.local/share/harness'): string {
+    const home = homeWith('.harness', dataRoot)
+    writeFileSync(join(home, dataRoot, '.harness-root'), '1\n', { mode: 0o600 })
+    return home
+  }
+
+  /** The hook's environment as on [platform], in [home], naming no data or routes folder, nor this computer's runtime folder. */
+  function asOn(platform: NodeJS.Platform, home: string, env: Record<string, string> = {}): Record<string, string> {
+    const preload = join(home, 'platform.mjs')
+    writeFileSync(preload, `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} })\n`)
+    return { HOME: home, ADAPTER_DATA_DIR: '', HARNESS_HOOK_ROUTES_DIR: '', XDG_RUNTIME_DIR: '', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...env }
+  }
+
+  /** A daemon serving [dataDir]: its credential there, its socket beside it or where [socketAt] puts it. */
+  async function daemonIn(dataDir: string, socketAt = (port: number) => join(dataDir, `daemon-${port}.sock`)) {
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    const credential = randomBytes(32).toString('base64url')
+    writeFileSync(join(dataDir, 'hook-credential'), `${credential}\n`, { mode: 0o600 })
+    const daemon = await collect({}, credential)
+    await proxySocket(socketAt(daemon.port), daemon.port)
+    return daemon
+  }
+
+  /** A hook whose command names no data folder reaches the daemon serving [dataDir]. */
+  async function reachesData(dataDir: string, env: Record<string, string>, cwd?: string): Promise<boolean> {
+    const daemon = await daemonIn(dataDir)
+    await runHook({ port: daemon.port, tmuxPane: '%42', env, cwd })
+    return daemon.requests.length === 1
+  }
+
+  /** A hook in another daemon's pane follows that daemon's route record in [routes]. */
+  async function followsRoute(routes: string, home: string, env: Record<string, string>, cwd?: string): Promise<boolean> {
+    const ownerDir = join(home, 'owner'), ownDir = join(home, 'own')
+    const owner = await daemonIn(ownerDir)
+    const own = await daemonIn(ownDir)
+    publishHookRoute(ownerDir, owner.port, routes)
+    await runHook({ port: own.port, dataDir: ownDir, tmuxPane: '%7', paneOwner: harnessPaneOwner(ownerDir), env, cwd })
+    return owner.requests.length === 1 && own.requests.length === 0
+  }
+
+  /** A short folder's name: its data folder's hash (lib/localSocket.ts shortSocketFolder). */
+  const shortName = (dataDir: string): string => createHash('sha256').update(dataDir).digest('hex').slice(0, 16)
+
+  /** A hook whose data folder is too long for a socket reaches its daemon through the short folder in [shortRoot]. */
+  async function reachesShortSocket(shortRoot: string, home: string, env: Record<string, string>): Promise<boolean> {
+    const dataDir = join(home, 'd'.repeat(100))
+    const short = join(shortRoot, shortName(dataDir))
+    const daemon = await daemonIn(dataDir, (port) => join(short, `daemon-${port}.sock`))
+    // Named in args, not dataDir: runHook would put a socket where it thinks the short folder is.
+    await runHook({ port: daemon.port, args: ['--data-dir', dataDir], tmuxPane: '%42', env })
+    return daemon.requests.length === 1
+  }
+
+  /** Whether each fallback is under [roots]. */
+  async function fallbacks(home: string, env: Record<string, string>, roots: { data: string, state: string }) {
+    return {
+      data: await reachesData(join(roots.data, 'cli', 'data'), env),
+      routes: await followsRoute(join(roots.state, 'hook-routes'), home, env),
+      socket: await reachesShortSocket(join(roots.state, 's'), home, env),
+    }
+  }
+
+  const xdgDefaults = (home: string) => ({ data: join(home, '.local', 'share', 'harness'), state: join(home, '.local', 'state', 'harness') })
+
+  it('on a moved Linux home the fallbacks are under the XDG roots', async () => {
+    // ~/.harness is the bridge the move leaves: the XDG data folder's marker is what decides.
+    const home = movedHome()
+    expect(await fallbacks(home, asOn('linux', home), xdgDefaults(home))).toEqual(everyFallback)
+  })
+
+  it.each([
+    ['a legacy Linux home', 'linux', ['.harness']],
+    // Made by something else: the machine stays where its files are.
+    ['a Linux home with a data root that holds no marker', 'linux', ['.harness', '.local/share/harness']],
+    // The marker is a file: a folder of its name is none.
+    ['a Linux home with a folder named as the marker', 'linux', ['.harness', '.local/share/harness/.harness-root']],
+    ['macOS', 'darwin', ['.harness', '.local/share/harness']],
+  ] as const)('on %s the fallbacks are under ~/.harness, as before', async (_name, platform, folders) => {
+    const home = homeWith(...folders)
+    const legacy = join(home, '.harness')
+    expect(await fallbacks(home, asOn(platform, home), { data: legacy, state: legacy })).toEqual(everyFallback)
+  })
+
+  it('takes XDG_DATA_HOME and XDG_STATE_HOME only when each is an absolute path', async () => {
+    for (const value of ['', 'xdg']) {
+      const home = movedHome()
+      const env = asOn('linux', home, { XDG_DATA_HOME: value, XDG_STATE_HOME: value })
+      expect(await fallbacks(home, env, xdgDefaults(home)), `XDG_*_HOME=${JSON.stringify(value)}`).toEqual(everyFallback)
+    }
+    const home = movedHome('xd/harness')
+    const env = asOn('linux', home, { XDG_DATA_HOME: join(home, 'xd'), XDG_STATE_HOME: join(home, 'xs') })
+    expect(await fallbacks(home, env, { data: join(home, 'xd', 'harness'), state: join(home, 'xs', 'harness') })).toEqual(everyFallback)
+  })
+
+  // An agent from before the move runs the command it started with: --data-dir ~/.harness/cli/data, which the bridge's
+  // `cli` link turns into the moved folder, and in a pane the move retagged with that folder's tag.
+  it('an old command reaches a moved daemon', async () => {
+    const home = movedHome()
+    const moved = join(xdgDefaults(home).data, 'cli', 'data')
+    const daemon = await daemonIn(moved)
+    symlinkSync(join(xdgDefaults(home).data, 'cli'), join(home, '.harness', 'cli'))
+    const command = { args: ['--data-dir', join(home, '.harness', 'cli', 'data')], tmuxPane: '%7', paneSession: 'mine', paneOwner: harnessPaneOwner(moved) }
+
+    // Up: the credential read through the link, the event posted on the socket beside the moved folder.
+    await runHook({ port: daemon.port, ...command, env: asOn('linux', home) })
+    expect(daemon.requests.map((request) => request.url)).toEqual(['/api/hook/session-end'])
+
+    // Down: the pane is this command's daemon's, so its offline row is written, in the moved folder.
+    const claudeProjectsDir = join(home, 'claude-projects')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-old.jsonl')
+    mkdirSync(dirname(transcriptPath), { recursive: true })
+    writeFileSync(transcriptPath, '{}\n')
+    await runHook({
+      port: 9, ...command, processEngine: 'claude', nativeProcess: 'linux', claudeProjectsDir, env: asOn('linux', home),
+      input: { hook_event_name: 'SessionStart', session_id: 'session-old', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+    expect(JSON.parse(readFileSync(join(moved, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: 'session-old' }])
+  })
+
+  // The account's own runtime folder (XDG Base Directory), as the daemon finds it (lib/localSocket.ts): a link there, or
+  // a folder another account could reach, is not one, and the short folder stays in the state root.
+  describe('a data folder too long for a socket', () => {
+    let runtime: string
+    beforeEach(() => { runtime = mkdtempSync('/tmp/hr-'); tmpDirs.push(runtime); chmodSync(runtime, 0o700) })
+
+    it('has its short folder under XDG_RUNTIME_DIR when that is the account\'s own', async () => {
+      // The example every client pins (lib/localSocket.spec.ts, Desktop, hn, the store's local-daemon.mjs).
+      expect(shortName(`/home/${'u'.repeat(80)}/.local/share/harness/cli/data`)).toBe('410894cc1bc77e10')
+      const home = movedHome()
+      expect(await reachesShortSocket(join(runtime, 'harness'), home, asOn('linux', home, { XDG_RUNTIME_DIR: runtime }))).toBe(true)
+    })
+
+    it('has it in the state root\'s s when XDG_RUNTIME_DIR is a link, open to others, or not absolute', async () => {
+      const linked = `${runtime}-link`
+      symlinkSync(runtime, linked)
+      const looser = mkdtempSync('/tmp/hr-')
+      tmpDirs.push(looser)
+      chmodSync(looser, 0o755)
+      try {
+        for (const value of [linked, looser, 'run/user']) {
+          const home = movedHome()
+          expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+        }
+      } finally {
+        // Removed here, not with the folders: once its folder is gone the link dangles, which rmSync leaves on Node 23-24.3.
+        unlinkSync(linked)
+      }
+    })
+
+    it('on macOS keeps it in ~/.harness/s, whatever XDG_RUNTIME_DIR says', async () => {
+      const home = homeWith('.harness')
+      expect(await reachesShortSocket(join(home, '.harness', 's'), home, asOn('darwin', home, { XDG_RUNTIME_DIR: runtime }))).toBe(true)
+    })
+  })
+
+  it('HARNESS_HOOK_ROUTES_DIR and ADAPTER_DATA_DIR still win on a moved home', async () => {
+    const home = movedHome()
+    const env = asOn('linux', home, { ADAPTER_DATA_DIR: join(home, 'mine', 'data'), HARNESS_HOOK_ROUTES_DIR: join(home, 'mine', 'routes') })
+    expect(await reachesData(join(home, 'mine', 'data'), env)).toBe(true)
+    expect(await followsRoute(join(home, 'mine', 'routes'), home, env)).toBe(true)
+  })
+
+  // As every other process reads them (config/envFields.ts homePath): the hook runs in the agent's project.
+  it('a relative HARNESS_HOOK_ROUTES_DIR is the home\'s, not the project\'s', async () => {
+    const home = homeWith('.harness')
+    const env = asOn('linux', home, { HARNESS_HOOK_ROUTES_DIR: 'routes' })
+    expect(await followsRoute(join(home, 'routes'), home, env, shortHome())).toBe(true)
+  })
+
+  it('a relative ADAPTER_DATA_DIR is the home\'s, not the project\'s', async () => {
+    const home = homeWith('.harness')
+    const env = asOn('linux', home, { ADAPTER_DATA_DIR: 'data' })
+    expect(await reachesData(join(home, 'data'), env, shortHome())).toBe(true)
+  })
+})
+
+// Node picks its path rules as it starts, so a hook run with a preload's win32 platform still joins as POSIX does: the
+// hook's own homePath is run here, from its text, with Windows paths and a Windows home.
+describe('the hook\'s Harness folder override, with Windows paths', () => {
+  const hookHomePath = (): ((value: string) => string) => {
+    const source = /^function homePath\(value\) \{\n[\s\S]*?\n\}$/m.exec(readFileSync(HOOK, 'utf8'))?.[0]
+    if (!source) throw new Error('hook/notify.mjs has no homePath')
+    return runInNewContext(`(${source})`, { ...win32, homedir: () => 'C:\\Users\\me' }) as (value: string) => string
+  }
+
+  it('is under the home: relative, root-relative on its drive and drive-relative; absolute as given; empty as it is', () => {
+    expect(['data', '\\data', 'C:data', 'D:\\data', 'D:\\data\\', ''].map(hookHomePath()))
+      .toEqual(['C:\\Users\\me\\data', 'C:\\data', 'C:\\Users\\me\\data', 'D:\\data', 'D:\\data\\', ''])
   })
 })
 
 describe('hook notify in a Harness pty host pane (Windows)', () => {
   const sessionStart = () => {
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
   }
 
@@ -2037,17 +2567,69 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     const { port, requests } = await collect()
     await runHook({ port, tmuxPane: '%42', env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
     expect(requests[0].body.runtimeHints).toEqual([{ backend: 'tmux', paneId: '%42' }])
+    // Not a pane: the session is told to the devices only, as one outside a pane.
     const bad = await collect()
     await runHook({ port: bad.port, env: { HARNESS_PANE: 'p3:1007' }, input: sessionStart() })
-    expect(bad.requests).toEqual([])
+    await received(bad.requests)
+    expect(bad.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     const odd = await collect()
     await runHook({ port: odd.port, env: { HARNESS_PANE: 'p2-0.4.21 x:%7' }, input: sessionStart() })
-    expect(odd.requests).toEqual([])
+    await received(odd.requests)
+    expect(odd.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     const empty = await collect()
     await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
-    expect(empty.requests).toEqual([])
+    await received(empty.requests)
+    expect(empty.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
   })
 })
+
+/** [dataDir], by default a new one short enough for a socket, with the daemon's token, and a preload that runs the hook
+ *  as on Windows. */
+function windowsData(dataDir = mkdtempSync('/tmp/hkp-')): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
+  tmpDirs.push(dataDir)
+  const token = randomBytes(32), id = randomBytes(16).toString('hex')
+  writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
+  const preload = join(dataDir, 'win32-pipe.mjs')
+  writeFileSync(preload, [
+    "import http from 'node:http'",
+    "Object.defineProperty(process, 'platform', { value: 'win32' })",
+    'const dial = http.Agent.prototype.createConnection',
+    'http.Agent.prototype.createConnection = function (options, ...rest) {',
+    // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
+    '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
+    `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
+    '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
+    '}',
+  ].join('\n') + '\n')
+  return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
+}
+
+function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
+  writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
+}
+
+/** What a hook run as on Windows posts over the daemon's pipe (a Unix socket named for it, as the W1 cases reach one): a
+ *  Codex Stop from a pty host's pane, in a new data folder, unless [opts] or [pane] say otherwise. It waits for [posts]
+ *  of them. */
+async function onWindows(opts: Partial<RunHookOpts>, pane = true, posts = 1): Promise<Array<{ url: string; body: Record<string, unknown> }>> {
+  const { dataDir, token, id, socket, preload } = windowsData(opts.dataDir)
+  record(dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+  const server = await listenLocalSocket((req, res) => {
+    let raw = ''
+    req.on('data', (chunk) => { raw += chunk })
+    req.on('end', () => { requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> }); res.end('{}') })
+  }, socket, { token })
+  pipeServers.push(server.close)
+  const env = { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...(pane ? { HARNESS_PANE: 'p1:%1' } : {}) }
+  await runHook({
+    port: 9, engine: 'codex', input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' }, ...opts, dataDir,
+    env: { ...env, ...opts.env },
+  })
+  // A paneless post is not waited for (postObserved).
+  await received(requests, posts)
+  return requests
+}
 
 /**
  * Audit W1 (docs/security/2026-11-02-team-account-windows.md): on Windows the hook posted the full local credential to
@@ -2057,41 +2639,18 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
  */
 describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
   const sessionStart = () => {
-    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
-  }
-
-  /** A data folder short enough for a socket, with the daemon's token, and a preload that runs the hook as on Windows. */
-  function windowsData(): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
-    const dataDir = mkdtempSync('/tmp/hkp-'); tmpDirs.push(dataDir)
-    const token = randomBytes(32), id = randomBytes(16).toString('hex')
-    writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
-    const preload = join(dataDir, 'win32-pipe.mjs')
-    writeFileSync(preload, [
-      "import http from 'node:http'",
-      "Object.defineProperty(process, 'platform', { value: 'win32' })",
-      'const dial = http.Agent.prototype.createConnection',
-      'http.Agent.prototype.createConnection = function (options, ...rest) {',
-      // Any name ending in harness-<id>, local pipe or not: the hook's own check is what refuses one.
-      '  const id = /harness-([0-9a-f]{32})$/.exec(options.socketPath ?? "")?.[1]',
-      `  const socket = id && ${JSON.stringify(dataDir)} + '/harness-' + id`,
-      '  return dial.call(this, socket ? { ...options, socketPath: socket, path: socket } : options, ...rest)',
-      '}',
-    ].join('\n') + '\n')
-    return { dataDir, token, id, socket: join(dataDir, `harness-${id}`), preload }
-  }
-
-  function record(dataDir: string, port: number, fields: Record<string, unknown>): void {
-    writeFileSync(join(dataDir, `daemon-${port}.json`), JSON.stringify({ port, ...fields }) + '\n', { mode: 0o644 })
   }
 
   /** The daemon's pipe server, as the daemon serves it (lib/localSocket.ts): every request proves the token. */
   async function pipeDaemon(socket: string, token: Buffer, answer: (res: import('http').ServerResponse) => void = (res) => res.end('{}')) {
-    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown }> = []
+    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown; codexHome: unknown }> = []
     const server = await listenLocalSocket((req, res) => {
       req.resume()
       req.on('end', () => {
-        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'] })
+        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'],
+          codexHome: req.headers['x-harness-hook-codex-home'] })
         answer(res)
       })
     }, socket, { token })
@@ -2111,6 +2670,59 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     expect(requests).toEqual([{ url: '/api/hook/session-start', trusted: true, hookToken: undefined, credential: undefined }])
     expect(tcp.requests).toEqual([])
   })
+
+  // Windows keeps ~/.harness, whatever is at the XDG folders (the hook finds Harness's folders by the rule, above). It has
+  // no tmux pane to route and no socket, so the data folder is its one fallback.
+  it('finds its data folder under ~/.harness when its command names none', async () => {
+    const home = shortHome()
+    mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+    const dataDir = join(home, '.harness', 'cli', 'data')
+    mkdirSync(dataDir, { recursive: true })
+    const { token, id, socket, preload } = windowsData(dataDir)
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests = await pipeDaemon(socket, token)
+    await runHook({ port: tcp.port, env: { HOME: home, ADAPTER_DATA_DIR: '', HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` },
+      input: sessionStart() })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+  })
+
+  // A Codex home on a share or a device would have the core open another computer's folder on every registration
+  // (src/hookServer.ts hookFacts): the hook says only a drive's path, as the core takes one.
+  it('sends a Codex home on a drive, and none on a share, a device or no drive', async () => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests = await pipeDaemon(socket, token)
+    const codex = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8')).codex.input
+    const homes = ['C:\\Users\\u\\.codex-work', '\\\\host\\share\\.codex', '//host/share/.codex', '\\\\?\\C:\\x', '\\foo', '/foo']
+    for (const home of homes) {
+      await run(tcp.port, dataDir, preload, { engine: 'codex', input: codex,
+        env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, CODEX_HOME: home } })
+    }
+    expect(requests.map((request) => request.url)).toEqual(homes.map(() => '/api/hook/session-start'))
+    expect(requests.map((request) => request.codexHome === undefined ? undefined : decodeURIComponent(String(request.codexHome))))
+      .toEqual([homes[0], undefined, undefined, undefined, undefined, undefined])
+  })
+
+  // NTFS gives the hook no owner to check (secureStateDirectory): a route record is read from inside the profile or the
+  // hook's data folder alone, never from a folder the environment names elsewhere (HARNESS_HOOK_ROUTES_DIR).
+  it.each([['inside its data folder', true], ['outside the profile and its data folder', false]] as const)(
+    'follows a pane\'s route record %s: %s', async (_case, follows) => {
+      const own = windowsData(), release = windowsData()
+      record(own.dataDir, 9, { pipe: `\\\\.\\pipe\\harness-${own.id}`, pid: process.pid })
+      record(release.dataDir, 10, { pipe: `\\\\.\\pipe\\harness-${release.id}`, pid: process.pid })
+      const atOwn = await pipeDaemon(own.socket, own.token)
+      // Where the preload of the hook's own folder dials the release daemon's pipe.
+      const atRelease = await pipeDaemon(join(own.dataDir, `harness-${release.id}`), release.token)
+      const elsewhere = mkdtempSync('/tmp/hkp-')
+      tmpDirs.push(elsewhere)
+      const routes = join(follows ? own.dataDir : elsewhere, 'hook-routes')
+      publishHookRoute(release.dataDir, 10, routes)
+      await run(9, own.dataDir, own.preload, { tmuxPane: '%7', paneOwner: harnessPaneOwner(release.dataDir),
+        env: { NODE_OPTIONS: `--import ${pathToFileURL(own.preload).href}`, HOME: shortHome(), HARNESS_HOOK_ROUTES_DIR: routes } })
+      expect([atRelease.length, atOwn.length]).toEqual(follows ? [1, 0] : [0, 1])
+    })
 
   it('finds the daemon by its record when the hook was given the port it bound, not the one it was configured with', async () => {
     const { dataDir, token, id, socket, preload } = windowsData()
@@ -2187,5 +2799,1558 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     })
     expect(attempts).toBe(posts)
     expect(tcp.requests).toEqual([])
+  })
+})
+
+describe('hook notify: a session outside a pane', () => {
+  /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'REX_SESSION', 'ZELLIJ',
+    'ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID',
+    'KITTY_WINDOW_ID', 'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID',
+    'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+  /** The hints a cut would turn into another value: left out whole over 64 characters. The Claude app's session id
+   *  may be longer (claudeApp.ts CLAUDE_SESSION), and cut, it would still pass as another session's. */
+  const WHOLE = ['REX_SESSION', 'ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON', 'CLAUDE_CODE_HOST_SESSION_ID']
+  /** The hints sent on macOS alone: the one platform the devices try Herdr's window on, though hc runs on Linux too
+   *  (spec Q5), the one cmux runs on, and the one the Rex app runs on (docs/specs/2026-11-25-dial-rex.md). */
+  const CMUX_IDS = ['CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID']
+  const MAC_ONLY = ['HC_TERMINAL_ID', 'REX_SESSION', ...CMUX_IDS]
+  /** HINTS as this platform's hook sends them. */
+  const SENT = HINTS.filter((name) => !MAC_ONLY.includes(name) || process.platform === 'darwin')
+  /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane, in
+   *  a herdr pane the hook sends no hc address and none of cmux's ids, and a run as on Windows sends no REX_SESSION. */
+  const panelessHints = SENT.filter((name) => !['TMUX_PANE', 'HC_TERMINAL_ID', 'REX_SESSION', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS)
+  /** A cmux terminal's surface and workspace. */
+  const SURFACE = '0f7c1e52-3a8b-4d2e-9c61-5b2a7e4d9f10'
+  const WORKSPACE = '6d2b9a4e-1c7f-4e85-b3a0-8f1d2c6e7b54'
+  /** The hint names unset, so the environment this test runs in sends none of its own. */
+  const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
+  const folder = (prefix: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), prefix))
+    tmpDirs.push(dir)
+    return dir
+  }
+
+  it('paneless claude Stop posts turn-stop to /api/hook/observed with callerPid and transcriptPath', async () => {
+    const { port, requests } = await collect()
+    const transcriptPath = '/home/u/.claude/projects/-work-app/sess-1.jsonl'
+    await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app', transcript_path: transcriptPath } })
+    await received(requests)
+    expect(requests).toEqual([{
+      url: '/api/hook/observed',
+      body: {
+        engine: 'claude', sessionId: 'sess-1', event: 'turn-stop', cwd: '/work/app', callerPid: process.pid, transcriptPath,
+        hostHints: expect.any(Object),
+      },
+    }])
+  })
+
+  // Each waits for the person: a permission, an MCP server's question or link, or a resume after the quota.
+  it.each(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale'])(
+    'paneless claude Notification %s posts needs-input', async (type) => {
+      const { port, requests } = await collect()
+      await runHook({ port, input: { hook_event_name: 'Notification', notification_type: type, session_id: 'sess-1', cwd: '/w' } })
+      await received(requests)
+      expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
+    })
+
+  // An old Claude Code names no type, and says so a minute after every finished turn too: it would flip each done agent.
+  it('a Notification with no type posts nothing', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Notification', message: 'Claude is waiting for your input', session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
+  })
+
+  // Claude Code also sends Notification a minute after a finished turn (idle_prompt) and after a sign-in: neither is a
+  // wait for the person's answer, and a done agent must not turn into one that needs them.
+  it.each(['idle_prompt', 'auth_success'])('paneless claude Notification %s posts nothing', async (type) => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Notification', notification_type: type, session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
+  })
+
+  it('claude Notification inside a tmux pane posts nothing', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%42', input: {
+      hook_event_name: 'Notification', notification_type: 'permission_prompt', session_id: 'sess-1', cwd: '/w',
+    } })
+    expect(requests).toEqual([])
+  })
+
+  const own = { tmuxPane: '%7', paneSession: 'mine' }
+  const typed = { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' }
+  const waits = { hook_event_name: 'Notification', notification_type: 'permission_prompt', session_id: 'sess-1', cwd: '/w' }
+  const urls = (requests: Array<{ url: string }>) => requests.map((request) => request.url)
+
+  it.each(['claude', 'codex'] as const)('%s in a tmux pane the person opened posts to /api/hook/observed with TMUX_PANE, and registers nothing', async (engine) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, ...own, env: noHints, codexHome: folder('adapter-hook-own-codex-'), input: typed })
+    await received(requests)
+    expect(urls(requests)).toEqual(['/api/hook/observed'])
+    expect(requests[0].body).toMatchObject({ engine, sessionId: 'sess-1', event: 'turn-start', callerPid: process.pid })
+    expect(requests[0].body.hostHints).toEqual({ TMUX_PANE: '%7' })
+    expect(JSON.stringify(requests[0].body)).not.toContain('prompt-secret')
+  })
+
+  it('its Notification is told, as a paneless session\'s is', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, ...own, env: noHints, input: waits })
+    await received(requests)
+    expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
+  })
+
+  // The recorded prompt, as 'hook notify terminal scope' sends it.
+  it.each([
+    ['a Harness pane', { paneSession: 'harness-claude-1790000000000' }],
+    ['a pane another daemon tagged', { paneSession: 'mine', paneOwner: 'abcdef0123456789' }],
+    ['a pane in a session an older build named', { paneSession: 'claude-1790000000000' }],
+    ['a pane tmux cannot describe', {}],
+  ])('%s is in a pane, as before: its prompt goes to the daemon, its Notification nowhere', async (_what, pane) => {
+    const { port, requests } = await collect()
+    const recorded = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8')).claude.input
+    await runHook({ port, tmuxPane: '%7', ...pane, input: recorded })
+    await runHook({ port, tmuxPane: '%7', ...pane, input: waits })
+    expect(urls(requests)).toEqual(['/api/hook/session-start'])
+  })
+
+  // The shipped budget, so tmux's step limit is its 2 s: the shim answers after 3.
+  it('tmux too slow to answer: a Notification in a pane is still told to nobody', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, ...own, tmuxDelaySeconds: 3, env: { HARNESS_HOOK_DEADLINE_MS: '4500' }, input: waits })
+    expect(requests).toEqual([])
+  })
+
+  // herdr's pane is the nearer host: the hc address and cmux's ids beside it are left out.
+  it('sends the first MAX_HINTS of the names set, in the list\'s order', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, ...own, env: set, input: typed })
+    await received(requests)
+    expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(SENT.filter((name) => !['HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  it('says how Claude Code was started, beside the app it runs in', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' },
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'hi' } })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual({ __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
+  })
+
+  it('paneless codex subagent posts nothing', async () => {
+    const codexHome = folder('adapter-hook-observed-codex-')
+    const { port, requests } = await collect()
+    const start = { hook_event_name: 'SessionStart', cwd: '/w' }
+    await runHook({ port, engine: 'codex', codexHome, input: {
+      ...start, session_id: 'child', source: { subagent: { thread_spawn: { parent_thread_id: 'parent', depth: 1 } } },
+    } })
+    await runHook({ port, engine: 'codex', codexHome, input: { ...start, session_id: 'parent', source: 'startup' } })
+    await received(requests)
+    expect(requests.map((request) => request.body.sessionId)).toEqual(['parent'])
+  })
+
+  it('paneless cursor background agent posts nothing', async () => {
+    const cursorHome = folder('adapter-hook-observed-cursor-')
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'cursor', cursorHome, input: { hook_event_name: 'sessionStart', session_id: 'background', is_background_agent: true } })
+    await runHook({ port, engine: 'cursor', cursorHome, input: { hook_event_name: 'sessionStart', session_id: 'foreground', is_background_agent: false } })
+    await received(requests)
+    expect(requests.map((request) => request.body.sessionId)).toEqual(['foreground'])
+  })
+
+  // agy gives each sub-agent a conversation and hooks of its own; only a top-level one has a presence lock.
+  it('paneless agy sub-agent posts nothing', async () => {
+    const agyHome = folder('adapter-hook-observed-agy-')
+    mkdirSync(join(agyHome, 'presence'))
+    writeFileSync(join(agyHome, 'presence', 'top.lock'), '')
+    const { port, requests } = await collect()
+    for (const conversationId of ['child', 'top']) {
+      await runHook({ port, engine: 'agy', args: ['--agy-event', 'PreInvocation', '--agy-home', agyHome], input: { conversationId } })
+    }
+    await received(requests)
+    expect(requests.map((request) => request.body.sessionId)).toEqual(['top'])
+  })
+
+  // Each engine's own names for the same moments (main() tells them apart for a pane), in its own session id field.
+  it.each([
+    ['claude', 'SessionStart', [], { hook_event_name: 'SessionStart' }, { event: 'session-start' }],
+    ['claude', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, { event: 'turn-start' }],
+    ['claude', 'StopFailure', [], { hook_event_name: 'StopFailure' }, { event: 'turn-error' }],
+    ['claude', 'SessionEnd', [], { hook_event_name: 'SessionEnd' }, { event: 'session-end' }],
+    ['codex', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit' }, { event: 'turn-start' }],
+    // Devin's payload has no cwd: the hook runs in the session's folder.
+    ['devin', 'Stop', [], { hook_event_name: 'Stop' }, { event: 'turn-stop', cwd: process.cwd() }],
+    ['commandcode', 'PreToolUse', [], { hook_event_name: 'PreToolUse' }, { event: 'turn-start' }],
+    ['commandcode', 'Stop', [], { hook_event_name: 'Stop' }, { event: 'turn-stop' }],
+    ['cursor', 'beforeSubmitPrompt', [], { hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/w'] }, { event: 'turn-start', cwd: '/w' }],
+    ['cursor', 'preToolUse', [], { hook_event_name: 'preToolUse', tool_name: 'Task' }, null],
+    ['cursor', 'stop completed', [], { hook_event_name: 'stop', status: 'completed' }, { event: 'turn-stop' }],
+    ['cursor', 'stop error', [], { hook_event_name: 'stop', status: 'error' }, { event: 'turn-error' }],
+    ['cursor', 'sessionEnd', [], { hook_event_name: 'sessionEnd' }, { event: 'session-end' }],
+    ['grok', 'session_start', [], { hookEventName: 'session_start', workspaceRoot: '/w' }, { event: 'session-start', cwd: '/w' }],
+    ['grok', 'userPromptSubmit', [], { hookEventName: 'userPromptSubmit' }, { event: 'turn-start' }],
+    // Grok writes its Stop before the turn's last words, which is why it is not installed (main()).
+    ['grok', 'stop', [], { hookEventName: 'stop' }, null],
+    ['grok', 'stopFailure', [], { hookEventName: 'stopFailure' }, { event: 'turn-error' }],
+    ['grok', 'session_end', [], { hookEventName: 'session_end' }, { event: 'session-end' }],
+    ['copilot', 'sessionStart', ['--copilot-event', 'sessionStart'], {}, { event: 'session-start' }],
+    ['copilot', 'userPromptSubmitted', ['--copilot-event', 'userPromptSubmitted'], {}, { event: 'turn-start' }],
+    ['copilot', 'agentStop end_turn', ['--copilot-event', 'agentStop'], { stopReason: 'end_turn' }, { event: 'turn-stop' }],
+    ['copilot', 'agentStop max_turns', ['--copilot-event', 'agentStop'], { stopReason: 'max_turns' }, { event: 'turn-error' }],
+    ['copilot', 'sessionEnd', ['--copilot-event', 'sessionEnd'], {}, { event: 'session-end' }],
+    ['agy', 'PreInvocation', ['--agy-event', 'PreInvocation'], { workspacePaths: ['/w'] }, { event: 'turn-start', cwd: '/w' }],
+    ['agy', 'Stop idle', ['--agy-event', 'Stop'], { fullyIdle: true }, { event: 'turn-stop' }],
+    // Waiting for its sub-agents: the turn goes on.
+    ['agy', 'Stop waiting', ['--agy-event', 'Stop'], { fullyIdle: false }, null],
+    ['agy', 'Stop failed', ['--agy-event', 'Stop'], { terminationReason: 'ERROR' }, { event: 'turn-error' }],
+  ] as const)('paneless %s %s', async (engine, _name, args, payload, expected) => {
+    const sessionField = engine === 'agy' ? 'conversationId' : engine === 'copilot' || engine === 'grok' ? 'sessionId' : 'session_id'
+    const agyHome = folder('adapter-hook-observed-agy-')
+    mkdirSync(join(agyHome, 'presence'))
+    writeFileSync(join(agyHome, 'presence', 'sess-1.lock'), '')
+    const { port, requests } = await collect()
+    await runHook({
+      port, engine, args: engine === 'agy' ? [...args, '--agy-home', agyHome] : [...args],
+      input: { ...payload, [sessionField]: 'sess-1' },
+    })
+    if (expected !== null) await received(requests)
+    expect(requests).toEqual(expected === null ? [] : [{
+      url: '/api/hook/observed', body: expect.objectContaining({ engine, sessionId: 'sess-1', ...expected }),
+    }])
+  })
+
+  it('hostHints carries only the allowlist, ORCA_TERMINAL_HANDLE and CLAUDE_CODE_HOST_SESSION_ID among it: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
+    const { port, requests } = await collect()
+    const allowed: Record<string, string> = Object.fromEntries(panelessHints.map((name, index) => [name, `hint-${index}`]))
+    await runHook({
+      port,
+      env: { ...allowed, ORCA_PAIRING_CODE: 'pairing-secret', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-secret', ORCA_OTHER: 'other-secret' },
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
+    })
+    await received(requests)
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+    // Every name a session outside a pane sets, all at once: the hook sends no more than the core takes
+    // (core/observedHook.ts), so none is cut.
+    expect(requests[0].body.hostHints).toEqual(allowed)
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/PAIRING|SPAWN|ORCA_OTHER|secret/)
+  })
+
+  // The core reads 4096 bytes of a body at most (hookServer.ts): with every field at its bound, nothing is left out.
+  // The core refuses an event with more hints than it takes (core/observedHook.ts): the hook's list holds more names,
+  // and it sends the first that number of those set.
+  it('lists its hint names in this order, and sends no more than the core takes', () => {
+    const literal = /const HOST_HINTS = \[([^\]]*)\]/.exec(readFileSync(HOOK, 'utf8'))?.[1]
+    expect(literal, 'HOST_HINTS in hook/notify.mjs').toBeDefined()
+    const listed = [...literal!.matchAll(/'([^']+)'/g)].map((match) => match[1])
+    expect(listed).toEqual(HINTS)
+    expect(Number(/const MAX_HINTS = (\d+)/.exec(readFileSync(HOOK, 'utf8'))?.[1])).toBe(MAX_HINTS)
+  })
+
+  it('the largest body the hook can build is under 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
+    const path = `/${'d'.repeat(1023)}`
+    await runHook({ port, env: hints, input: { hook_event_name: 'Stop', session_id: 's'.repeat(128), cwd: path, transcript_path: path } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({ sessionId: 's'.repeat(128), cwd: path, transcriptPath: path, hostHints: hints })
+    expect(Buffer.byteLength(JSON.stringify(requests[0].body))).toBeLessThan(4096)
+  })
+
+  // Claude Code types another session's message in as a prompt that starts so; the devices must not move the dial for it.
+  // Its gateway and Codex home are the registration's facts (src/hookServer.ts hookFacts); the devices take neither.
+  it('a prompt another session sent posts turn-start with relayed: true, and never the prompt or the facts', async () => {
+    const { port, requests, headers } = await collect()
+    await runHook({ port, env: { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', CODEX_HOME: '/x' }, input: {
+      hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w',
+      prompt: '<cross-session-message from="a1">prompt-secret</cross-session-message>',
+    } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/cross-session|prompt-secret/)
+    expect(headers[0]).not.toHaveProperty('x-harness-hook-gateway')
+    expect(headers[0]).not.toHaveProperty('x-harness-hook-codex-home')
+  })
+
+  it('leading whitespace before it is still relayed', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: {
+      hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', prompt: '\n \t<cross-session-message from="a1">x',
+    } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
+  })
+
+  it.each([
+    ['typed', { prompt: 'hi' }],
+    ['quoting one', { prompt: 'see <cross-session-message from="a1">' }],
+    ['another tag', { prompt: '<cross-session-messages>' }],
+    ['an object', { prompt: { text: '<cross-session-message from="a1">' } }],
+    ['no prompt', {}],
+  ])('a %s prompt posts no relayed', async (_name, prompt) => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', ...prompt } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.event).toBe('turn-start')
+    expect(requests[0].body).not.toHaveProperty('relayed')
+  })
+
+  it.each([
+    ['cursor', 'beforeSubmitPrompt', [], { hook_event_name: 'beforeSubmitPrompt', session_id: 'sess-1' }],
+    ['copilot', 'userPromptSubmitted', ['--copilot-event', 'userPromptSubmitted'], { sessionId: 'sess-1' }],
+    ['claude', 'Stop', [], { hook_event_name: 'Stop', session_id: 'sess-1' }],
+    // Their prompt event has Claude Code's name, but only Claude Code types another session's message in so.
+    ['codex', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1' }],
+    ['grok', 'user_prompt_submit', [], { hookEventName: 'user_prompt_submit', sessionId: 'sess-1' }],
+    ['devin', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1' }],
+  ] as const)('only Claude Code\'s UserPromptSubmit says it: %s %s posts no relayed', async (engine, _name, args, payload) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, args: [...args], input: { ...payload, prompt: '<cross-session-message from="a1">x' } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('relayed')
+  })
+
+  it('a relayed body with every field at its bound keeps relayed and is under 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
+    const path = `/${'d'.repeat(1023)}`
+    await runHook({ port, env: hints, input: {
+      hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
+      prompt: '<cross-session-message from="a1">x',
+    } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({
+      sessionId: 's'.repeat(128), event: 'turn-start', relayed: true, cwd: path, transcriptPath: path, hostHints: hints,
+    })
+    expect(Buffer.byteLength(JSON.stringify(requests[0].body))).toBeLessThan(4096)
+  })
+
+  // Which Orca build it is says nothing about where the session runs.
+  it('never sends ORCA_APP_VERSION', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, ORCA_APP_VERSION: '1.4.256' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
+  })
+
+  it('a hint value of 200 chars is cut to 64', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { TERM_PROGRAM: 'x'.repeat(200) }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect((requests[0].body.hostHints as Record<string, string>).TERM_PROGRAM).toBe('x'.repeat(64))
+  })
+
+  // Zellij is the nearer host: its pane and session come before kitty's window and socket, so the cap drops kitty's first.
+  it('a session in Zellij inside kitty sends Zellij\'s three and kitty\'s two', async () => {
+    const { port, requests } = await collect()
+    const sent = { ZELLIJ: '0', ZELLIJ_PANE_ID: '3', ZELLIJ_SESSION_NAME: 's1', KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: 'unix:/tmp/kitty-1234' }
+    await runHook({ port, env: { ...noHints, ...sent }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual(sent)
+  })
+
+  // An Orca session id with no terminal handle is a chat's (cable/hosts/orcaChat.ts orcaChatId): the cap drops an Orca
+  // terminal's session id before its handle, so it is never taken for a chat.
+  it('an Orca terminal past nine other hints keeps its handle, and the cap drops its session id', async () => {
+    const { port, requests } = await collect()
+    const before = { TERM_PROGRAM: 't', __CFBundleIdentifier: 'b', REX_BLOCK: 'r', ZELLIJ: '0', ZELLIJ_PANE_ID: '3',
+      ZELLIJ_SESSION_NAME: 's1', KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: 'unix:/tmp/kitty-1', WEZTERM_PANE: '2' }
+    await runHook({ port, env: { ...noHints, ...before, ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: 'h-1' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual({ ...before, ORCA_TERMINAL_HANDLE: 'h-1' })
+  })
+
+  // A cut pane id, session name or socket would name another pane, session or socket: such a value is left out instead,
+  // before the cap counts it, so it costs no other hint its place.
+  it('a socket or a session name over 64 characters is left out, not cut, and takes none of the MAX_HINTS', async () => {
+    // REX_SESSION goes only on macOS, for this home's own Rex server (notify.mjs onOwnRexServer).
+    for (const name of WHOLE.filter((whole) => SENT.includes(whole))) {
+      for (const [value, sent] of [['x'.repeat(65), {}], ['x'.repeat(64), { [name]: 'x'.repeat(64) }]] as const) {
+        const { port, requests } = await collect()
+        await runHook({ port, env: { ...noHints, [name]: value }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+        await received(requests)
+        expect(requests[0].body.hostHints, `${name} of ${value.length}`).toEqual(sent)
+      }
+    }
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE')
+      .map((name, index) => [name, WHOLE.includes(name) ? 'x'.repeat(65) : `hint-${index}`]))
+    await runHook({ port, ...own, env: set, input: typed })
+    await received(requests)
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(SENT.filter((name) => !['HC_TERMINAL_ID', ...CMUX_IDS, ...WHOLE].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  // The core refuses the whole event for a path over its bound (core/observedHook.ts): the path goes, the event stays.
+  it('leaves out a cwd the core would refuse, and still posts the event', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: `/${'d'.repeat(1024)}`, transcript_path: '/t.jsonl' } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('cwd')
+    expect(requests[0].body.transcriptPath).toBe('/t.jsonl')
+  })
+
+  // The core refuses the whole event for a hint with a control character (core/observedHook.ts): the hint goes.
+  it('leaves out a hint value with a control character, and still posts the event', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, TERM_PROGRAM: 'ghost\u0007ty', ZELLIJ: '0' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({ ZELLIJ: '0' })
+  })
+
+  // A named herdr session (`herdr --session <name>`) is a server of its own, its pane ids starting again at w1:p1, and
+  // herdr 0.8.0 sets HERDR_SESSION in its panes alone: the devices follow the default session, where that id is another
+  // pane. The rest of the event still posts, and neither the session's name nor its socket's path is sent.
+  it('leaves out HERDR_PANE_ID in a pane of a named herdr session', async () => {
+    const { port, requests } = await collect()
+    await runHook({
+      port,
+      env: { ...noHints, HERDR_PANE_ID: 'w1:p1', HERDR_SESSION: 'side', HERDR_SOCKET_PATH: '/h/.config/herdr/sessions/side/herdr.sock' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+    })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
+  })
+
+  // REX_SERVER is too long to send, and a Rex session of another server (shared, remote, a login server) is not one the
+  // devices' `rex` reaches: the hook sends REX_SESSION for this home's own server alone (docs/specs/2026-11-25-dial-rex.md).
+  it.runIf(process.platform === 'darwin')("sends REX_SESSION for this home's own Rex server only, and never REX_SERVER", async () => {
+    const session = 'session:01a210ed-5a96-7e9a-a458-5e14e5bf854a'
+    const block = 'block:01a210ed-5a96-7f3e-a907-8aa1ac357dcf'
+    const own = `unix://${encodeURI(join(homedir(), 'Library', 'Application Support', 'rex', 'server.sock'))}`
+    for (const [server, sent] of [[undefined, true], [own, true], ['unix:///tmp/rex-shared/server.sock', false], ['tcp://studio:7501', false]] as const) {
+      const { port, requests } = await collect()
+      await runHook({
+        port,
+        env: { ...noHints, TERM_PROGRAM: 'rex', REX_BLOCK: block, REX_SESSION: session, ...(server === undefined ? {} : { REX_SERVER: server }) },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      await received(requests)
+      expect(requests[0].body.hostHints, String(server)).toEqual({ TERM_PROGRAM: 'rex', REX_BLOCK: block, ...(sent ? { REX_SESSION: session } : {}) })
+      expect(JSON.stringify(requests[0].body)).not.toMatch(/server\.sock|studio/)
+    }
+  })
+
+  // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place, and so would the hc
+  // address and cmux's ids beside it.
+  it('a named herdr session\'s pane id, and the hc address and cmux\'s ids beside it, take none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(SENT.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  // herdr started in an hc terminal keeps that terminal's HC_TERMINAL_ID, and is the nearer host. A named herdr session
+  // sends no HERDR_PANE_ID, so the address alone would read as Herdr's own terminal (hostDetect.ts inHerdr).
+  it.runIf(process.platform === 'darwin')('leaves out HC_TERMINAL_ID in a herdr pane, its session named or not', async () => {
+    const panes: Array<[Record<string, string>, Record<string, string>]> = [
+      [{ HERDR_PANE_ID: 'w1:p2' }, { TERM_PROGRAM: 'ghostty', HERDR_PANE_ID: 'w1:p2' }],
+      [{ HERDR_PANE_ID: 'w1:p2', HERDR_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+      [{ HERDR_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+    ]
+    for (const [herdr, sent] of panes) {
+      const { port, requests } = await collect()
+      await runHook({
+        port, env: { ...noHints, ...herdr, HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      await received(requests)
+      expect(requests[0].body.hostHints, JSON.stringify(herdr)).toEqual(sent)
+    }
+  })
+
+  // HC_TERMINAL_ID is Herdr Core's address of the terminal the agent runs in (t1, t2… per session): an id, no credential.
+  it.runIf(process.platform === 'darwin')('sends HC_TERMINAL_ID from an hc terminal', async () => {
+    const sessions: Record<string, string>[] = [{}, { HC_SESSION: 'default' }]
+    for (const session of sessions) {
+      const { port, requests } = await collect()
+      await runHook({
+        port, env: { ...noHints, ...session, HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      await received(requests)
+      expect(requests[0].body.hostHints).toEqual({ TERM_PROGRAM: 'ghostty', HC_TERMINAL_ID: 't7' })
+    }
+  })
+
+  // A named hc session's terminal addresses start again at t1, and the devices follow the default session, where that
+  // address is another terminal. The rest of the event still posts, and neither the session's name nor its socket is sent.
+  it.runIf(process.platform === 'darwin')('leaves out HC_TERMINAL_ID in a terminal of a named hc session', async () => {
+    const { port, requests } = await collect()
+    await runHook({
+      port,
+      env: { ...noHints, HC_TERMINAL_ID: 't1', HC_SESSION: 'side', HC_SOCKET: '/h/.local/state/herdr-core/side/side.sock' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+    })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
+  })
+
+  // Left out before the cap counts it: an address never sent would cost the farthest hint its place, and so would cmux's
+  // ids beside it. No herdr pane in either: a herdr pane leaves the address out of its own.
+  it.runIf(process.platform === 'darwin')('a named hc session\'s address, and cmux\'s ids beside it, take none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: { ...set, HC_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(SENT.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  it.runIf(process.platform !== 'darwin')('off macOS HC_TERMINAL_ID and cmux\'s ids are left out, and take none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: set, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', ...MAC_ONLY].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  // cmux sets TERM_PROGRAM=ghostty: its surface and workspace ids (UUIDs, no credential) tell its terminal from Ghostty's.
+  // The rest of its variables stay in this process, CMUX_SOCKET_PASSWORD first of all.
+  it.runIf(process.platform === 'darwin')('sends cmux\'s surface and workspace from a cmux terminal, and no other CMUX_ name', async () => {
+    const { port, requests } = await collect()
+    await runHook({
+      port,
+      env: {
+        ...noHints, TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE, CMUX_TAB_ID: SURFACE,
+        CMUX_PANEL_ID: SURFACE, CMUX_SOCKET_PATH: '/x/cmux.sock', CMUX_SOCKET_PASSWORD: 'secret',
+      },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+    })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual({ TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE })
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/TAB_ID|PANEL_ID|SOCKET|secret/)
+  })
+
+  // herdr or hc started in a cmux terminal keeps cmux's ids, and is the nearer host. A named session of either sends no
+  // pane id or address, and cmux's ids alone would read as cmux's own terminal (hostDetect.ts inCmux): the dial's words
+  // would be pasted into herdr's screen, or a shell.
+  it.runIf(process.platform === 'darwin')('leaves out cmux\'s ids under herdr or hc, its session named or not', async () => {
+    const nearer: Array<[Record<string, string>, Record<string, string>]> = [
+      [{ HERDR_PANE_ID: 'w1:p2' }, { TERM_PROGRAM: 'ghostty', HERDR_PANE_ID: 'w1:p2' }],
+      [{ HERDR_PANE_ID: 'w1:p2', HERDR_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+      [{ HC_TERMINAL_ID: 't7' }, { TERM_PROGRAM: 'ghostty', HC_TERMINAL_ID: 't7' }],
+      [{ HC_TERMINAL_ID: 't1', HC_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+    ]
+    for (const [host, sent] of nearer) {
+      const { port, requests } = await collect()
+      await runHook({
+        port, env: { ...noHints, TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE, ...host },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      await received(requests)
+      expect(requests[0].body.hostHints, JSON.stringify(host)).toEqual(sent)
+    }
+  })
+
+  // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.
+  it('leaves out transcriptPath when the body is over 4096 bytes, and keeps cwd', async () => {
+    const { port, requests } = await collect()
+    const long = `/${'日'.repeat(1000)}`
+    await runHook({ port, env: noHints, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('transcriptPath')
+    expect(requests[0].body.cwd).toBe(long)
+  })
+
+  it('leaves out cwd too when the body is still over 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const long = `/${'日'.repeat(1000)}`
+    const wide = Object.fromEntries(panelessHints.map((name) => [name, '日'.repeat(64)]))
+    await runHook({ port, env: wide, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    await received(requests)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('transcriptPath')
+    expect(requests[0].body).not.toHaveProperty('cwd')
+    expect(requests[0].body.hostHints).toEqual(wide)
+  })
+
+  /** The one body a paneless hook posts for this input. */
+  const posted = async (input: Record<string, unknown>, env: Record<string, string> = noHints, engine?: 'codex'): Promise<Record<string, unknown>> => {
+    const { port, requests } = await collect()
+    await runHook({ port, env, engine, input: { session_id: 'sess-1', cwd: '/w', ...input } })
+    await received(requests)
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+    return requests[0].body
+  }
+  /** Session names and the title each is posted as. */
+  const POSTED_TITLES: Array<[string, string]> = [
+    ['  Fix \t\n login   screen ', 'Fix login screen'],
+    ['x'.repeat(70), 'x'.repeat(64)],
+    // A cut inside a surrogate pair drops its first half.
+    [`${'x'.repeat(63)}😀tail`, 'x'.repeat(63)],
+    [`${'x'.repeat(62)}😀tail`, `${'x'.repeat(62)}😀`],
+    // A cut just after a space trims it.
+    [`${'x'.repeat(63)} yz`, 'x'.repeat(63)],
+    ['Thơ "gà" \\ 数学 🙂', 'Thơ "gà" \\ 数学 🙂'],
+  ]
+  /** Session names the core would refuse, or none at all: the title is left out. */
+  const LEFT_OUT_TITLES: unknown[] = ['', ' \t\n ', 'Th\u0007o', 'Th\u007fo', 7, { text: 'Tho' }, undefined]
+  const titled = (title: unknown) => ({ hook_event_name: 'UserPromptSubmit', ...(title === undefined ? {} : { session_title: title }) })
+
+  it.each([['SessionStart', 'session-start'], ['UserPromptSubmit', 'turn-start']])('a Claude %s with session_title posts title', async (name, event) => {
+    expect(await posted({ hook_event_name: name, session_title: 'Tho' })).toMatchObject({ event, title: 'Tho' })
+  })
+
+  it.each(POSTED_TITLES)('a title %j is posted as %j', async (title, expected) => {
+    expect((await posted(titled(title))).title).toBe(expected)
+  })
+
+  it.each(LEFT_OUT_TITLES.map((title) => [title]))('a title %j is left out, and the event is still posted', async (title) => {
+    const body = await posted(titled(title))
+    expect(body.event).toBe('turn-start')
+    expect(body).not.toHaveProperty('title')
+  })
+
+  it.each([
+    ['Stop', {}],
+    ['StopFailure', {}],
+    ['SessionEnd', {}],
+    ['Notification', { notification_type: 'permission_prompt' }],
+  ])('no title on %s', async (name, extra) => {
+    expect(await posted({ hook_event_name: name, session_title: 'Tho', ...extra })).not.toHaveProperty('title')
+  })
+
+  it('another engine\'s hook that sends session_title posts it too', async () => {
+    expect(await posted({ hook_event_name: 'UserPromptSubmit', session_title: 'Tho' }, noHints, 'codex'))
+      .toMatchObject({ engine: 'codex', event: 'turn-start', title: 'Tho' })
+  })
+
+  it('with an oversized body, transcriptPath goes, then cwd, and title stays', async () => {
+    const long = `/${'日'.repeat(1000)}`
+    const input = { hook_event_name: 'UserPromptSubmit', cwd: long, transcript_path: long, session_title: '日'.repeat(64) }
+    const narrow = await posted(input)
+    expect(narrow).not.toHaveProperty('transcriptPath')
+    expect(narrow).toMatchObject({ cwd: long, title: '日'.repeat(64) })
+    const wide = Object.fromEntries(panelessHints.map((name) => [name, '日'.repeat(64)]))
+    const body = await posted(input, wide)
+    expect(body).not.toHaveProperty('transcriptPath')
+    expect(body).not.toHaveProperty('cwd')
+    expect(body).toMatchObject({ title: '日'.repeat(64), hostHints: wide })
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThanOrEqual(4096)
+  })
+
+  it('a body with every field at its bound keeps its title and both paths', async () => {
+    const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
+    const path = `/${'d'.repeat(1023)}`
+    const body = await posted({
+      hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
+      session_title: 'x'.repeat(64), prompt: '<cross-session-message from="a1">x',
+    }, hints)
+    expect(body).toMatchObject({ relayed: true, title: 'x'.repeat(64), cwd: path, transcriptPath: path, hostHints: hints })
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThan(4096)
+  })
+
+  // A title the hook cut that the core then refused would cost the named session its session-start and turn-start.
+  it('the hook cuts a title at the core\'s bound, and the core takes what it cut', async () => {
+    expect(Number(/const MAX_TITLE = (\d+)/.exec(readFileSync(HOOK, 'utf8'))?.[1])).toBe(MAX_TITLE)
+    const emoji = await posted(titled('😀'.repeat(40)))
+    expect(emoji.title).toBe('😀'.repeat(32))
+    const typed = await posted(titled('Thơ "gà" \\ 数学 🙂'))
+    for (const body of [emoji, typed]) expect(parseObservedHook(body)).toEqual(body)
+  })
+
+  // The hook cannot import the devices' cleaner (cable/hosts/observedTitle.ts): this keeps its copy of the rule the same.
+  it.each([...POSTED_TITLES.map(([title]) => title), ...LEFT_OUT_TITLES].map((title) => [title]))(
+    'the hook cleans a title %j as the devices\' cleaner does', async (title) => {
+      expect((await posted(titled(title))).title).toBe(observedTitle(title))
+    })
+
+  it('the hook exits within 300 ms when the daemon never answers', async () => {
+    const urls: string[] = []
+    let arrived: (at: number) => void = () => {}
+    const arrival = new Promise<number>((resolve) => { arrived = resolve })
+    // Takes the request in and never answers it.
+    const server = createServer((req) => { urls.push(req.url ?? ''); arrived(Date.now()); req.resume() })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+    await runHook({ port: address.port, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    const exited = Date.now()
+    const at = await Promise.race([arrival, new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000))])
+    server.closeAllConnections()
+    expect(urls).toEqual(['/api/hook/observed'])
+    expect(exited - (at ?? 0)).toBeLessThan(300)
+  })
+
+  it('paneless never calls fallbackRegister or routeToPaneOwner', async () => {
+    const dir = folder('adapter-hook-observed-')
+    // A tmux that leaves a mark when asked: the pane's routing and the offline fallback both ask it about the pane.
+    const bin = join(dir, 'bin')
+    mkdirSync(bin)
+    const mark = join(dir, 'tmux-asked')
+    writeFileSync(join(bin, 'tmux'), `#!/bin/sh\ntouch '${mark}'\n`, { mode: 0o755 })
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-offline.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const input = { hook_event_name: 'SessionStart', session_id: 'session-offline', transcript_path: transcriptPath, cwd: '/tmp/demo', source: 'startup' }
+    const env = { PATH: `${bin}:${process.env.PATH ?? ''}` }
+    const live = await collect()
+    await runHook({ port: live.port, dataDir: join(dir, 'live'), claudeProjectsDir, env, input })
+    await received(live.requests)
+    expect(live.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+    // The daemon down (nothing on port 9): no registry row is written behind it.
+    await runHook({ port: 9, dataDir: join(dir, 'down'), claudeProjectsDir, env, input })
+    expect(existsSync(join(dir, 'down', 'registry.json'))).toBe(false)
+    expect(existsSync(mark)).toBe(false)
+  })
+
+  // Cursor and VS Code both set TERM_PROGRAM=vscode, and no app sets __CFBundleIdentifier on Windows: the hook names the
+  // editor from its own environment, or from the image name of VSCODE_PID's row in the pty host's table, and Alacritty
+  // by ALACRITTY_LOG (spec part C, "What tells the apps apart").
+  describe('which editor or terminal, on Windows', () => {
+    const VSCODE = 'com.microsoft.VSCode'
+    const CURSOR = 'com.todesktop.230313mzl4w4u92'
+    const CODE_EXE = 'C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe'
+    const CURSOR_EXE = 'C:\\Users\\u\\AppData\\Local\\Programs\\cursor\\Cursor.exe'
+    const LOG = 'C:\\Users\\u\\AppData\\Local\\Temp\\Alacritty-4242.log'
+    const win = (executable: string) => ({ executable, argv: [executable] })
+    const powershell = { executable: 'powershell.exe', argv: ['powershell.exe', '-NoProfile', '-Command', '& x'] }
+    /** Claude Code under its editor, which is pid 9001 (windowsAncestors). */
+    const underCode = [win('claude.exe'), win('Code.exe')]
+    /** Claude Code started from the VS Code extension's panel. */
+    const panel = { CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+    const runLog = () => join(folder('adapter-hook-editor-'), 'ps-runs')
+    /** How many times the fake `harness-pty` ran. */
+    const runs = (log: string) => existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0
+    /** A `harness-pty` that fails. */
+    const failingHelper = () => {
+      const file = join(folder('adapter-hook-editor-'), 'harness-pty')
+      writeExecutable(file, '#!/bin/sh\nexit 1\n')
+      return file
+    }
+    /** The body a paneless Claude Code Stop posts on Windows. */
+    const body = async (opts: Partial<RunHookOpts>) => {
+      const requests = await onWindows({ engine: 'claude', ...opts, env: { ...noHints, ...opts.env } }, false)
+      expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+      return requests[0].body
+    }
+    const hints = async (opts: Partial<RunHookOpts>) => (await body(opts)).hostHints as Record<string, string>
+
+    it.each<[string, Record<string, string>]>([
+      [CODE_EXE, { __CFBundleIdentifier: VSCODE }],
+      [CURSOR_EXE, { __CFBundleIdentifier: CURSOR }],
+      ['C:\\Users\\u\\AppData\\Local\\Programs\\cursor\\CURSOR.EXE', { __CFBundleIdentifier: CURSOR }],
+      ['C:\\Users\\u\\AppData\\Local\\Programs\\Windsurf\\Windsurf.exe', {}],
+      ['', {}],
+    ])('in an editor\'s terminal, VSCODE_GIT_ASKPASS_NODE %j names it, and no table is read', async (askpass, named) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log,
+        env: { TERM_PROGRAM: 'vscode', VSCODE_GIT_ASKPASS_NODE: askpass, VSCODE_PID: '9001' } }))
+        .toEqual({ TERM_PROGRAM: 'vscode', ...named })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    /** The one read of the hook's own chain: its parent's row and that one's parents'. */
+    const ownChain = `ps --json --ancestors ${process.pid}\n`
+
+    it.each<[string, string, Record<string, string>, boolean]>([
+      ['9001', 'Code.exe', { __CFBundleIdentifier: VSCODE }, true],
+      ['9001', 'Cursor.exe', { __CFBundleIdentifier: CURSOR }, true],
+      ['9007', 'Code.exe', {}, true],
+      ['abc', 'Code.exe', {}, false],
+      ['0', 'Code.exe', {}, false],
+    ])('from the extension\'s panel, VSCODE_PID %s with %s at 9001 names %j, reading the hook\'s own chain: %s', async (pid, editor, named, reads) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: [win('claude.exe'), win(editor)], psRunLog: log, env: { ...panel, VSCODE_PID: pid } }))
+        .toEqual({ ...named, ...panel })
+      expect(existsSync(log) ? readFileSync(log, 'utf8') : '').toBe(reads ? ownChain : '')
+    })
+
+    it('from the panel, a VSCODE_PID past the 9 rows of the hook\'s chain names no editor', async () => {
+      const log = runLog()
+      // Code.exe is pid 9009, the tenth row: the host lists the hook's parent and 8 of its parents.
+      const far = [win('claude.exe'), ...Array.from({ length: 8 }, () => win('bash.exe')), win('Code.exe')]
+      expect(await hints({ windowsAncestors: far, psRunLog: log, env: { ...panel, VSCODE_PID: '9009' } })).toEqual(panel)
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('from the panel, a helper that fails names no editor', async () => {
+      expect(await hints({ env: { ...panel, VSCODE_PID: '9001', HARNESS_PTY_BIN: failingHelper() } })).toEqual(panel)
+    })
+
+    it('Codex in the panel: one read of its own chain names the caller and the editor', async () => {
+      const log = runLog()
+      const requests = await onWindows({ psRunLog: log, windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')],
+        env: { ...noHints, VSCODE_PID: '9002' } }, false)
+      expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
+        engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('Codex in the panel, with a host that takes no --ancestors and lists the whole table (0.6.22): the same caller and editor', async () => {
+      const helper = join(folder('adapter-hook-editor-'), 'harness-pty')
+      // The hook's PowerShell under codex.exe (9001), under VS Code (9002), each started after its parent.
+      const row = (pid: number, parentPid: number, nativeArgv: string[], started: number) =>
+        ({ pid, parentPid, executable: nativeArgv[0], startMarker: `w:${started}`, args: nativeArgv.join(' '), nativeArgv })
+      const table = { rows: [{ pid: 4, parentPid: 0, executable: 'System', startMarker: '', args: 'System', nativeArgv: ['System'] },
+        row(process.pid, 9001, powershell.argv, 3), row(9001, 9002, ['codex.exe'], 2), row(9002, 9003, ['Code.exe'], 1)] }
+      writeExecutable(helper, `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
+      const requests = await onWindows({ env: { ...noHints, VSCODE_PID: '9002', HARNESS_PTY_BIN: helper } }, false)
+      expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({
+        engine: 'codex', callerPid: 9001, hostHints: { __CFBundleIdentifier: VSCODE } }) }])
+    })
+
+    // The Claude app starts Claude Code with CLAUDE_CODE_ENTRYPOINT=claude-desktop (cable/hosts/record.ts): the hook's
+    // own environment, read before an editor's variables the app may have inherited.
+    it.each<[string, Record<string, string>]>([
+      ['alone', {}],
+      ['beside an editor\'s variables', { VSCODE_GIT_ASKPASS_NODE: CODE_EXE, VSCODE_PID: '9001', ALACRITTY_LOG: LOG }],
+    ])('in the Claude app, its own CLAUDE_CODE_ENTRYPOINT names the app %s, and no table is read', async (_case, env) => {
+      const log = runLog()
+      const app = { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log, env: { ...app, ...env } }))
+        .toEqual({ __CFBundleIdentifier: APP_BUNDLES.claude, ...app })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    /** The ChatGPT app's Store package (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 37 §2). */
+    const PACKAGE = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1117.3838.0_arm64__2p2nqsd0c76g0'
+    /** Codex in the ChatGPT app: its hook under PowerShell, under the app's own codex.exe (9001), under ChatGPT.exe (9002)
+     *  at [imagePath]. */
+    const inChatGPT = (imagePath?: string) => [powershell, { ...win('codex.exe'), imagePath: `${PACKAGE}\\app\\resources\\codex.exe` },
+      { ...win('ChatGPT.exe'), imagePath }]
+
+    it.each<[string, Record<string, string>, string | undefined]>([
+      ['the app\'s', { __CFBundleIdentifier: APP_BUNDLES.codex }, `${PACKAGE}\\app\\ChatGPT.exe`],
+      ['the beta app\'s', {}, 'C:\\Program Files\\WindowsApps\\OpenAI.CodexBeta_26.1117.3838.0_arm64__2p2nqsd0c76g0\\app\\ChatGPT.exe'],
+      ['one outside a Store package', {}, 'C:\\Users\\u\\Downloads\\OpenAI.Codex_1\\ChatGPT.exe'],
+      ['one the host could not read the path of', {}, undefined],
+    ])('a Codex hook under %s ChatGPT.exe names %j, from the one read of its own chain', async (_case, named, imagePath) => {
+      const log = runLog()
+      const requests = await onWindows({ psRunLog: log, windowsAncestors: inChatGPT(imagePath), env: noHints }, false)
+      expect(requests.map((request) => [request.body.callerPid, request.body.hostHints])).toEqual([[9001, named]])
+      expect(readFileSync(log, 'utf8')).toBe(ownChain)
+    })
+
+    it('a Claude Code hook under the ChatGPT app\'s program reads no table for it', async () => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: inChatGPT(`${PACKAGE}\\app\\ChatGPT.exe`), psRunLog: log })).toEqual({})
+      expect(existsSync(log)).toBe(false)
+    })
+
+    // A herdr pane inside WezTerm or Warp: herdr's own bundle names no window a tap can raise on Windows, the terminal's
+    // does (cable/hosts/windowsRaise.ts WINDOWS_APPS).
+    it.each<[string, Record<string, string>, string]>([
+      ['WezTerm', { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' }, APP_BUNDLES.wezterm],
+      ['Warp', { TERM_PROGRAM: 'WarpTerminal' }, APP_BUNDLES.warp],
+      ['herdr inside WezTerm', { HERDR_PANE_ID: 'w1:p2', WEZTERM_PANE: '3' }, APP_BUNDLES.wezterm],
+      ['herdr inside Warp', { HERDR_PANE_ID: 'w1:p2', TERM_PROGRAM: 'WarpTerminal' }, APP_BUNDLES.warp],
+    ])('in %s, the terminal\'s own variable names it, and no table is read', async (_case, env, bundle) => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log, env })).toEqual({ ...env, __CFBundleIdentifier: bundle })
+      expect(existsSync(log)).toBe(false)
+    })
+
+    it('a Claude Code hook with none of the three names no app and reads no table', async () => {
+      const log = runLog()
+      expect(await hints({ windowsAncestors: underCode, psRunLog: log })).toEqual({})
+      expect(existsSync(log)).toBe(false)
+    })
+
+    it('ALACRITTY_LOG names Alacritty, its value is never sent, and no table is read', async () => {
+      const log = runLog()
+      const sent = await body({ windowsAncestors: underCode, psRunLog: log, env: { ALACRITTY_LOG: LOG } })
+      expect(sent.hostHints).toEqual({ __CFBundleIdentifier: 'org.alacritty' })
+      expect(JSON.stringify(sent)).not.toMatch(/Alacritty-4242|Temp/)
+      expect(existsSync(log)).toBe(false)
+    })
+
+    it.each<[string, Record<string, string>, Record<string, string>]>([
+      ['an editor\'s terminal', { VSCODE_GIT_ASKPASS_NODE: CODE_EXE }, { __CFBundleIdentifier: VSCODE }],
+      ['the panel', { VSCODE_PID: '9001' }, { __CFBundleIdentifier: VSCODE }],
+      ['a VSCODE_PID no row has', { VSCODE_PID: '9007' }, {}],
+    ])('ALACRITTY_LOG beside %s: the editor\'s names are read first', async (_case, editor, named) => {
+      expect(await hints({ windowsAncestors: underCode, env: { ALACRITTY_LOG: LOG, ...editor } })).toEqual(named)
+    })
+
+    it('never sends the environment\'s own __CFBundleIdentifier', async () => {
+      expect(await hints({ env: { __CFBundleIdentifier: VSCODE } })).toEqual({})
+      expect(await hints({ env: { __CFBundleIdentifier: 'com.apple.Terminal', VSCODE_GIT_ASKPASS_NODE: CURSOR_EXE } }))
+        .toEqual({ __CFBundleIdentifier: CURSOR })
+    })
+
+    it('sends the id alone: no askpass path, pid or log path', async () => {
+      const envs: Array<Record<string, string>> = [
+        { VSCODE_GIT_ASKPASS_NODE: CODE_EXE, ALACRITTY_LOG: LOG }, { ...panel, VSCODE_PID: '9001', ALACRITTY_LOG: LOG },
+      ]
+      for (const env of envs) {
+        const sent = await body({ windowsAncestors: underCode, env })
+        expect((sent.hostHints as Record<string, string>).__CFBundleIdentifier).toBe(VSCODE)
+        expect(Object.values(sent.hostHints as object)).not.toContain('9001')
+        expect(JSON.stringify(sent)).not.toMatch(/Microsoft VS Code|Code\.exe|Alacritty-4242/)
+      }
+    })
+
+    it('sends at most MAX_HINTS, the editor\'s id in its place among them', async () => {
+      const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+      expect(await hints({ env: { ...set, VSCODE_GIT_ASKPASS_NODE: CURSOR_EXE } }))
+        .toEqual(Object.fromEntries(panelessHints.map((name) => [name, name === '__CFBundleIdentifier' ? CURSOR : set[name]])))
+    })
+
+    describe('the panel hint kept per editor', () => {
+      const IPC = '\\\\.\\pipe\\0a1b2c3d-1.106.0-main-sock'
+      /** How the hook keys an editor's pipe: the first 16 hex digits of its SHA-256. */
+      const key = (pipe: string) => createHash('sha256').update(pipe).digest('hex').slice(0, 16)
+      /** A data folder kept across hooks, as an installed hook's is. */
+      const data = () => {
+        const dir = mkdtempSync('/tmp/hkp-')
+        tmpDirs.push(dir)
+        return dir
+      }
+      const kept = (dataDir: string) => join(dataDir, 'hook-editors.json')
+      /** A kept answer naming Cursor for pid 9001 and the editor's pipe. */
+      const keptCursor = JSON.stringify({ editors: [{ pid: 9001, ipc: key(IPC), app: CURSOR }] })
+      /** The editor a panel hook names: Claude Code under VS Code at pid 9001, with the editor's pipe, unless [opts] say
+       *  otherwise. */
+      const named = async (opts: Partial<RunHookOpts>) => (await hints({
+        windowsAncestors: underCode, ...opts, env: { ...panel, VSCODE_PID: '9001', VSCODE_IPC_HOOK: IPC, ...opts.env },
+      })).__CFBundleIdentifier
+
+      it('a second hook reads no table', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(runs(log)).toBe(1)
+        expect(statSync(kept(dataDir)).mode & 0o777).toBe(0o600)
+        const text = readFileSync(kept(dataDir), 'utf8')
+        expect(text).not.toContain(IPC)
+        expect(text).not.toMatch(/[\\/]|pipe|sock/)
+      })
+
+      it('reads the answer it keeps', async () => {
+        const dataDir = data(), log = runLog()
+        writeFileSync(kept(dataDir), keptCursor, { mode: 0o600 })
+        expect(await named({ dataDir, psRunLog: log })).toBe(CURSOR)
+        expect(existsSync(log)).toBe(false)
+      })
+
+      it('another editor on the same pid misses', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(await named({ dataDir, psRunLog: log, windowsAncestors: [win('claude.exe'), win('Cursor.exe')],
+          env: { VSCODE_IPC_HOOK: '\\\\.\\pipe\\9f8e7d6c-3.30.14-main-sock' } })).toBe(CURSOR)
+        expect(runs(log)).toBe(2)
+      })
+
+      it('keeps nothing without the editor\'s pipe', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log, env: { VSCODE_IPC_HOOK: '' } })).toBe(VSCODE)
+        expect(await named({ dataDir, psRunLog: log, env: { VSCODE_IPC_HOOK: '' } })).toBe(VSCODE)
+        expect(runs(log)).toBe(2)
+        expect(existsSync(kept(dataDir))).toBe(false)
+      })
+
+      it('keeps no failure', async () => {
+        const dataDir = data(), log = runLog()
+        expect(await named({ dataDir, psRunLog: log, env: { VSCODE_PID: '9007' } })).toBeUndefined()
+        expect(await named({ dataDir, windowsAncestors: undefined, env: { HARNESS_PTY_BIN: failingHelper() } })).toBeUndefined()
+        expect(existsSync(kept(dataDir))).toBe(false)
+        expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+        expect(runs(log)).toBe(2)
+      })
+
+      it('holds sixteen', async () => {
+        const dataDir = data()
+        // Twenty editors' pipes, each a new key for the pid.
+        const pipes = Array.from({ length: 20 }, (_, index) => `\\\\.\\pipe\\${index}a1b2c3d-1.106.0-main-sock`)
+        for (const pipe of pipes) expect(await named({ dataDir, env: { VSCODE_IPC_HOOK: pipe } })).toBe(VSCODE)
+        expect(JSON.parse(readFileSync(kept(dataDir), 'utf8')).editors.map((editor: { ipc: string }) => editor.ipc))
+          .toEqual(pipes.slice(4).reverse().map(key))
+      })
+
+      // Each file would name Cursor if it were read.
+      it('replaces a file it cannot read', async () => {
+        for (const text of [keptCursor.padEnd(5000), 'not json']) {
+          const dataDir = data(), log = runLog()
+          writeFileSync(kept(dataDir), text, { mode: 0o600 })
+          expect(await named({ dataDir, psRunLog: log })).toBe(VSCODE)
+          expect(runs(log)).toBe(1)
+          expect(JSON.parse(readFileSync(kept(dataDir), 'utf8'))).toEqual({ editors: [{ pid: 9001, ipc: key(IPC), app: VSCODE }] })
+        }
+        const dataDir = data(), target = join(data(), 'elsewhere.json')
+        writeFileSync(target, keptCursor, { mode: 0o600 })
+        symlinkSync(target, kept(dataDir))
+        expect(await named({ dataDir })).toBe(VSCODE)
+        expect(readFileSync(target, 'utf8')).toBe(keptCursor)
+      })
+
+      it('serves only the hint: a Codex hook whose answer is kept still reads its own chain for its caller', async () => {
+        const dataDir = data(), log = runLog()
+        writeFileSync(kept(dataDir), JSON.stringify({ editors: [{ pid: 9002, ipc: key(IPC), app: CURSOR }] }), { mode: 0o600 })
+        const requests = await onWindows({ dataDir, psRunLog: log, env: { ...noHints, VSCODE_PID: '9002', VSCODE_IPC_HOOK: IPC },
+          windowsAncestors: [powershell, win('codex.exe'), win('Code.exe')] }, false)
+        expect(requests[0].body).toMatchObject({ callerPid: 9001, hostHints: { __CFBundleIdentifier: CURSOR } })
+        expect(readFileSync(log, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\n`)
+      })
+
+      it.runIf(process.platform !== 'win32')('off Windows none of the three is read, no table either, and no file is read or written', async () => {
+        const { port, requests } = await collect()
+        const dataDir = data(), log = runLog()
+        writeFileSync(kept(dataDir), keptCursor, { mode: 0o600 })
+        await runHook({
+          port, dataDir, windowsAncestors: underCode, psRunLog: log, input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+          env: { ...noHints, ...panel, __CFBundleIdentifier: VSCODE, VSCODE_PID: '9001', VSCODE_IPC_HOOK: IPC,
+            VSCODE_GIT_ASKPASS_NODE: CURSOR_EXE, ALACRITTY_LOG: LOG },
+        })
+        await received(requests)
+        expect(requests[0].body.hostHints).toEqual({ __CFBundleIdentifier: VSCODE, ...panel })
+        expect(existsSync(log)).toBe(false)
+        expect(readFileSync(kept(dataDir), 'utf8')).toBe(keptCursor)
+      })
+    })
+  })
+})
+
+describe('hook notify: the caller a hook names', () => {
+  /** Keeps a shell as the hook's parent: `; exit $?` stops bash and dash alike from exec'ing the hook. */
+  const STAYS = '"$0" "$@"; exit $?'
+  const SH = ['/bin/sh', '-c', STAYS]
+  type Ancestor = NonNullable<RunHookOpts['procAncestors']>[number]
+  /** The pid `procAncestors` gives its row at [index]. */
+  const pidAt = (index: number) => index === 0 ? process.pid : 9000 + index
+  const sh: Ancestor = { comm: 'sh', argv: ['/bin/sh', '-c', 'hook'] }
+  const engine: Ancestor = { comm: 'claude', argv: ['claude'] }
+  const bash = (...argv: string[]): Ancestor => ({ comm: 'bash', argv: ['bash', ...argv] })
+  const stop = { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' }
+  const linux = process.platform === 'linux'
+  /** The pid a pane's Stop names. A pane post is waited for, so the request is in when the hook exits. */
+  const paneCaller = async (opts: Partial<RunHookOpts>) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: stop, ...opts })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/turn-stop'])
+    return requests[0].body.callerPid
+  }
+
+  it.each<[string, Ancestor[], number]>([
+    ['a command shell: its parent', [sh, engine], 1],
+    ['each of the five shells, in a row: the process above them all', [sh, { comm: 'dash', argv: ['dash', '-c', 'hook'] }, bash('-ec', 'hook'),
+      { comm: 'zsh', argv: ['zsh', '-lc', 'hook'] }, { comm: 'fish', argv: ['fish', '-c', 'hook'] }, engine], 5],
+    ['a shell that runs a script (bash run.sh): that shell, not the pane shell above it', [sh, bash('/opt/engine/run.sh'), { comm: 'zsh', argv: ['-zsh'] }], 1],
+    ['an engine under a wrapper script that did not exec: the engine program, not the wrapper',
+      [sh, { comm: 'node', argv: ['node', '/opt/claude/cli.js'] }, { comm: 'bash', argv: ['/bin/bash', '/usr/local/bin/claude'] }], 1],
+    ['a command shell whose parent is init: the shell itself', [sh], 0],
+    ['ten command shells in a row: the one 8 steps up', Array<Ancestor>(10).fill(sh), 8],
+    ['a process /proc cannot show: the last one reached', [sh, null], 1],
+    ['a long option holding a c (bash --norc run.sh): the shell itself', [bash('--norc', 'run.sh'), engine], 0],
+    ['a long option, then -c: its parent', [bash('--norc', '-c', 'hook'), engine], 1],
+    ['-c after the script (bash run.sh -c): the shell itself', [bash('run.sh', '-c'), engine], 0],
+    ['an option\'s own argument before -c (bash -o pipefail -c): its parent', [bash('-o', 'pipefail', '-c', 'hook'), engine], 1],
+    ['a shopt option\'s argument before -c (bash -O extglob -ec): its parent', [bash('-O', 'extglob', '-ec', 'hook'), engine], 1],
+    ['a + option\'s own argument before -c (bash +o posix -c): its parent', [bash('+o', 'posix', '-c', 'hook'), engine], 1],
+    ['an option\'s own argument, then a script (bash -o pipefail run.sh): the shell itself', [bash('-o', 'pipefail', 'run.sh'), engine], 0],
+    ['a program that is no shell, whatever its options (node -c): itself', [{ comm: 'node', argv: ['node', '-c', 'x.js'] }, engine], 0],
+    ['a person\'s interactive shell: itself', [{ comm: 'zsh', argv: ['-zsh'] }, engine], 0],
+  ])('a pane hook names, past %s', async (_case, procAncestors, named) => {
+    expect(await paneCaller({ procAncestors })).toBe(pidAt(named))
+  })
+
+  it('a paneless hook names by the same rule: past two command shells, the process above both', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: stop, procAncestors: [sh, bash('-ec', 'hook'), engine] })
+    await received(requests)
+    expect(requests[0]).toMatchObject({ url: '/api/hook/observed', body: { callerPid: pidAt(2) } })
+  })
+
+  // GitHub run 43721656615: Linux's dash keeps an engine's `sh -c` as the hook's parent, and it exits with the hook, so
+  // the devices kept a pid already gone, refused a tap on the agent's tmux pane and dropped the agent. The hook sees
+  // past it through /proc, which only Linux has; macOS's /bin/sh execs the hook, so its parent is the engine already.
+  it.runIf(linux)('a hook run through a shell that stays its parent names the shell\'s parent', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, via: [SH], input: stop })
+    await received(requests)
+    expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({ callerPid: process.pid }) }])
+  })
+
+  // Real processes, the kernel's own /proc: dash keeps `sh -c` as the hook's parent, and it exits with the hook.
+  it.runIf(linux)('a pane hook run through a shell that stays its parent names the shell\'s parent', async () => {
+    expect(await paneCaller({ via: [SH] })).toBe(process.pid)
+  })
+  it.runIf(linux)('a pane hook run through two shells in a row names the process above both', async () => {
+    expect(await paneCaller({ via: [SH, ['bash', '-ec', STAYS]] })).toBe(process.pid)
+  })
+  it.runIf(linux)('a script bash runs (bash wrapper.sh) is named itself, never what started it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    writeFileSync(join(dir, 'wrapper.sh'), `echo $$ > '${join(dir, 'pid')}'\n"$@"\nexit $?\n`)
+    const named = await paneCaller({ via: [['bash', join(dir, 'wrapper.sh')], SH] })
+    expect(named).toBe(Number(readFileSync(join(dir, 'pid'), 'utf8')))
+    expect(named).not.toBe(process.pid)
+  })
+  // macOS's /bin/sh is a bash that execs the hook (no `; exit $?` here, as an engine runs it): nothing to climb.
+  it.runIf(process.platform === 'darwin')('on macOS a hook names its parent, the engine, and reads nothing under /proc', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    expect(await paneCaller({ via: [['/bin/sh', '-c', '"$0" "$@"']], procReadLog: join(dir, 'proc-reads') })).toBe(process.pid)
+    expect(existsSync(join(dir, 'proc-reads'))).toBe(false)
+  })
+
+  // Codex and Copilot run a hook through PowerShell, Command Code through cmd, and that shell exits with the hook, as dash's
+  // `sh -c` does on Linux. Windows has no /proc: the climb reads the hook's chain from the pty host
+  // (`harness-pty ps --json --ancestors`).
+  type WindowsAncestor = NonNullable<RunHookOpts['windowsAncestors']>[number]
+  const win = (...argv: string[]): WindowsAncestor => ({ executable: argv[0], argv })
+  const codexExe = win('codex.exe')
+  const powershell = win('powershell.exe', '-NoProfile', '-Command', '& x')
+  const cmd = win('cmd.exe', '/d', '/s', '/c', 'x')
+  /** A file the fake `harness-pty` notes each run in. */
+  const psRunLog = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    return join(dir, 'ps-runs')
+  }
+
+  it.each<[string, WindowsAncestor[], number]>([
+    ['powershell -Command: its parent', [powershell, codexExe], 1],
+    ['an option\'s own value before -Command (-ExecutionPolicy Bypass): its parent',
+      [win('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '& x'), codexExe], 1],
+    ['pwsh -c: its parent', [win('pwsh.exe', '-NoLogo', '-NoProfile', '-c', '& x'), codexExe], 1],
+    ['PowerShell and -Command in capitals: its parent', [win('PowerShell.EXE', '-COMMAND', '& x'), codexExe], 1],
+    ['cmd /d /s /c: its parent', [cmd, codexExe], 1],
+    ['CMD /C in capitals: its parent', [win('CMD.EXE', '/C', 'x'), codexExe], 1],
+    ['cmd /c, then powershell -Command: the process above both', [cmd, powershell, codexExe], 2],
+    ['ten cmd /c in a row: the one 8 steps up', Array<WindowsAncestor>(10).fill(cmd), 8],
+    ['an interactive PowerShell: itself', [win('powershell.exe'), codexExe], 0],
+    ['PowerShell running a script (-File run.ps1): itself', [win('powershell.exe', '-File', 'run.ps1'), codexExe], 0],
+    ['-c after the script (-File run.ps1 -c): itself',
+      [win('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'run.ps1', '-c'), codexExe], 0],
+    ['-Command after a script (pwsh run.ps1 -Command): itself', [win('pwsh.exe', 'run.ps1', '-Command', 'x'), codexExe], 0],
+    ['an encoded command (-EncodedCommand): itself', [win('powershell.exe', '-EncodedCommand', 'AAAA'), codexExe], 0],
+    ['cmd /k: itself', [win('cmd.exe', '/k', 'x'), codexExe], 0],
+    ['an interactive cmd: itself', [win('cmd.exe'), codexExe], 0],
+    ['a program that is no shell, whatever its options (node -c): itself', [win('node.exe', '-c', 'x.js'), codexExe], 0],
+    ['a process the host could not open: the last one reached', [cmd, null], 1],
+    ['a command shell whose parent is gone: the shell itself', [cmd], 0],
+    // Windows reuses pids: the engine is gone, and a process started since holds its pid.
+    ['a command shell whose parent\'s pid a later process took: the shell itself',
+      [cmd, { executable: 'codex.exe', argv: ['codex.exe'], startMarker: 'w:133000000000000200' }], 0],
+  ])('on Windows a Codex pane hook names, past %s', async (_case, windowsAncestors, named) => {
+    expect(await onWindows({ windowsAncestors })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(named) }) },
+    ])
+  })
+
+  it.each<['commandcode' | 'copilot', WindowsAncestor, string[], string[]]>([
+    ['commandcode', cmd, [], ['/api/hook/session-start', '/api/hook/turn-stop']],
+    ['copilot', powershell, ['--copilot-event', 'agentStop'], ['/api/hook/turn-stop']],
+  ])('on Windows a %s pane hook climbs the same way', async (engine, shell, args, urls) => {
+    const requests = await onWindows({ engine, args, windowsAncestors: [shell, win(`${engine}.exe`)] })
+    expect(requests.map(({ url, body }) => [url, body.callerPid])).toEqual(urls.map((url) => [url, pidAt(1)]))
+  })
+
+  it('on Windows a paneless hook names by the same rule: past cmd and PowerShell, the process above both', async () => {
+    expect(await onWindows({ windowsAncestors: [cmd, powershell, codexExe] }, false)).toEqual([
+      { url: '/api/hook/observed', body: expect.objectContaining({ callerPid: pidAt(2) }) },
+    ])
+  })
+
+  it('on Windows Claude Code\'s hook, run with no shell, names its parent and starts no helper', async () => {
+    const runs = psRunLog()
+    expect(await onWindows({ engine: 'claude', windowsAncestors: [powershell, win('claude.exe')], psRunLog: runs })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+    expect(existsSync(runs)).toBe(false)
+  })
+
+  // An event the hook drops is told to no one: it starts no pty host for a caller it would never name.
+  it.each<[string, Partial<RunHookOpts>]>([
+    ['a PermissionRequest outside a pane', { input: { hook_event_name: 'PermissionRequest', session_id: 'sess-1', tool_name: 'shell' } }],
+    ['a subagent\'s Stop', { input: { hook_event_name: 'Stop', session_id: 'sess-1', source: { subagent: 'review' } } }],
+    ['input that is not JSON', { stdin: '{"hook_event_name":' }],
+  ])('on Windows a Codex hook that drops %s starts no pty host', async (_case, opts) => {
+    const runs = psRunLog()
+    expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs, ...opts }, false, 0)).toEqual([])
+    expect(existsSync(runs)).toBe(false)
+  })
+
+  // As every other process reads it (config/envFields.ts homePath): the hook runs in the agent's project.
+  it('on Windows a relative ADAPTER_RUNTIME_DIR finds the installed pty host under the home, not the project', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'adapter-hook-home-')), project = mkdtempSync(join(tmpdir(), 'adapter-hook-project-'))
+    tmpDirs.push(home, project)
+    const pty = join(home, 'rt', 'pty')
+    mkdirSync(join(pty, '1.2.3'), { recursive: true })
+    writeFileSync(join(pty, 'current-pty'), '1.2.3\n')
+    // The hook's PowerShell under codex.exe (9001), each started after its parent.
+    const shell = ['powershell.exe', '-NoProfile', '-Command', '& x']
+    const rows = [
+      { pid: process.pid, parentPid: 9001, executable: shell[0], startMarker: 'w:2', args: shell.join(' '), nativeArgv: shell },
+      { pid: 9001, parentPid: 9002, executable: 'codex.exe', startMarker: 'w:1', args: 'codex.exe', nativeArgv: ['codex.exe'] },
+    ]
+    writeExecutable(join(pty, '1.2.3', 'harness-pty.exe'), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ rows })}'\n`)
+    expect(await onWindows({ cwd: project, env: { HOME: home, HARNESS_PTY_BIN: '', ADAPTER_RUNTIME_DIR: 'rt' } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: 9001 }) },
+    ])
+  })
+
+  it('on Windows a helper that fails names the hook\'s parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    writeExecutable(join(dir, 'harness-pty'), '#!/bin/sh\nexit 1\n')
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(dir, 'harness-pty') } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+  })
+
+  // A helper path Node refuses to start (ENOTDIR) throws rather than fails: no chain, as a failed read is. The caller's
+  // climb and the app's lookup read the one chain, so a Codex outside a pane is told all the same.
+  it('on Windows a Codex hook outside a pane whose helper Node refuses to start names its parent, and is told', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    const file = join(dir, 'file')
+    writeFileSync(file, '')
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(file, 'harness-pty') } }, false)).toEqual([
+      { url: '/api/hook/observed', body: expect.objectContaining({ engine: 'codex', callerPid: pidAt(0) }) },
+    ])
+  })
+
+  it('on Windows a Codex hook reads only its own chain: `ps --json --ancestors` of its parent, once', async () => {
+    const runs = psRunLog()
+    expect(await onWindows({ windowsAncestors: [powershell, codexExe], psRunLog: runs })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(1) }) },
+    ])
+    expect(readFileSync(runs, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\n`)
+  })
+
+  it('on Windows a helper that refuses --ancestors (exit 2) names the hook\'s parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    // Its whole table would take the climb past the shell: the hook reads its chain alone.
+    const shell = ['powershell.exe', '-NoProfile', '-Command', '& x']
+    const table = { rows: [
+      { pid: process.pid, parentPid: 9001, executable: shell[0], startMarker: 'w:1', args: shell.join(' '), nativeArgv: shell },
+      { pid: 9001, parentPid: 9002, executable: 'codex.exe', startMarker: 'w:2', args: 'codex.exe', nativeArgv: ['codex.exe'] },
+    ] }
+    writeExecutable(join(dir, 'harness-pty'), `#!/bin/sh\n[ "$*" = "ps --json" ] || exit 2\nprintf '%s\\n' '${JSON.stringify(table)}'\n`)
+    expect(await onWindows({ env: { HARNESS_PTY_BIN: join(dir, 'harness-pty') } })).toEqual([
+      { url: '/api/hook/turn-stop', body: expect.objectContaining({ callerPid: pidAt(0) }) },
+    ])
+  })
+
+  it('on Windows a Codex pane hook registered offline reads its chain for the climb, and the whole table for the engine', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-caller-'))
+    tmpDirs.push(dir)
+    const codexHome = join(dir, 'codex'), dataDir = join(dir, 'data'), runs = psRunLog()
+    const transcriptPath = join(codexHome, 'sessions', '2026', 'rollout.jsonl')
+    mkdirSync(join(codexHome, 'sessions', '2026'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+    // No daemon: the offline registration reads the table for the engine's process, below the pane's shell and off the
+    // hook's chain, and for the caller's descent.
+    await runHook({
+      port: 9, tmuxPane: '%8', engine: 'codex', processEngine: 'codex', windowsProcessTable: true, dataDir, codexHome, psRunLog: runs,
+      input: { hook_event_name: 'SessionStart', session_id: 'codex-session', transcript_path: transcriptPath, cwd: '/tmp/codex' },
+    })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'codex-session', engine: 'codex' }])
+    expect(readFileSync(runs, 'utf8')).toBe(`ps --json --ancestors ${process.pid}\nps --json\n`)
+  })
+})
+
+// The gateway and the Codex home are the hook's to say, from its own environment: the daemon reads no other process's
+// (src/hookServer.ts hookFacts).
+describe('hook notify: what the hook says of its own environment', () => {
+  const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-hook-codex-home'
+  const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
+  /** What registers each engine's session in a pane: its UserPromptSubmit, and Hermes's session start. */
+  const registration = (engine: 'claude' | 'codex' | 'hermes') => engine === 'hermes'
+    ? { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' }
+    : recordings[engine].input
+  /** Only what a case sets: the endpoints and the Codex home of the machine running the specs never reach the hook. */
+  const own = (env: Record<string, string> = {}) => ({ ANTHROPIC_BASE_URL: '', OPENAI_BASE_URL: '', OPENAI_API_BASE: '', CODEX_HOME: '', ...env })
+
+  it.each<['claude' | 'hermes', Record<string, string>, string]>([
+    ['claude', { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' }, 'ori'],
+    ['claude', { OPENAI_API_BASE: 'https://eu.openrouter.ai/api/v1' }, 'ori'],
+    ['hermes', { OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' }, 'ori'],
+    ['claude', {}, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'https://grid.example/relay' }, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'https://openrouter.ai.example.com/api' }, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'https://example.com/openrouter.ai' }, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'not a url' }, 'none'],
+  ])('%s with %j says gateway %s', async (engine, env, gateway) => {
+    const { port, headers } = await collect()
+    await runHook({ port, engine, tmuxPane: '%42', env: own(env), input: registration(engine) })
+    expect(headers).toHaveLength(1)
+    expect(headers[0][GATEWAY_HEADER]).toBe(gateway)
+  })
+
+  it('says nothing of the gateway for Codex, whose argv says it', async () => {
+    const { port, requests, headers } = await collect()
+    await runHook({ port, engine: 'codex', tmuxPane: '%42', env: own({ OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' }), input: registration('codex') })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+    expect(headers[0][GATEWAY_HEADER]).toBeUndefined()
+  })
+
+  it('sends a Codex home of its own, whole, and none for its default, a relative one, one over 1,024 characters or one with a control character', async () => {
+    const home = shortHome()
+    // Past Latin-1, which Node refuses in a header value, and would end the hook.
+    const codexHome = join(home, 'nhà コード', '.codex-work')
+    const { port, requests, headers } = await collect()
+    await runHook({ port, engine: 'codex', tmuxPane: '%42', env: own({ HOME: home, CODEX_HOME: codexHome }), input: registration('codex') })
+    expect(decodeURIComponent(String(headers[0][CODEX_HOME_HEADER]))).toBe(codexHome)
+    for (const value of [join(home, '.codex'), 'relative', `/${'x'.repeat(1024)}`, '/bad\u0007x', '']) {
+      await runHook({ port, engine: 'codex', tmuxPane: '%42', env: own({ HOME: home, CODEX_HOME: value }), input: registration('codex') })
+    }
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', env: own({ HOME: home, CODEX_HOME: codexHome }), input: registration('claude') })
+    expect(requests).toHaveLength(7)
+    expect(headers.slice(1).map((sent) => sent[CODEX_HOME_HEADER])).toEqual(Array(6).fill(undefined))
+  })
+
+  it('sends no value of a key or an endpoint, and no fact in the body', async () => {
+    const secret = 'sk-or-v1-secret'
+    const { port, requests, headers } = await collect()
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', input: registration('claude'), env: own({
+      OPENROUTER_API_KEY: secret, ANTHROPIC_AUTH_TOKEN: secret, ANTHROPIC_API_KEY: secret, OPENAI_API_KEY: secret,
+      ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+    }) })
+    expect(headers[0][GATEWAY_HEADER]).toBe('ori')
+    const sent = JSON.stringify([requests, headers])
+    expect(sent).not.toContain(secret)
+    expect(sent).not.toContain('openrouter.ai')
+    expect(requests[0].body).not.toHaveProperty('gateway')
+    expect(requests[0].body).not.toHaveProperty('codexHome')
+  })
+
+  it('says them on the registration alone', async () => {
+    const { port, requests, headers } = await collect()
+    const env = own({ ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' })
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', env, input: registration('claude') })
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', env, input: { ...registration('claude'), hook_event_name: 'Stop' } })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start', '/api/hook/turn-stop'])
+    expect(headers[0][GATEWAY_HEADER]).toBe('ori')
+    expect([headers[1][GATEWAY_HEADER], headers[1][CODEX_HOME_HEADER]]).toEqual([undefined, undefined])
+  })
+})
+
+// The engine's own word, from a Harness pane, that it waits on the person, ended a turn, or runs a subagent.
+describe('hook notify: waits, turn ends and subagents from a pane', () => {
+  const urls = (requests: Array<{ url: string }>) => requests.map((request) => request.url)
+  // Claude Code's hook payload names no version.
+  const subagent = (event: 'SubagentStart' | 'SubagentStop', fields: Record<string, unknown> = {}) => ({
+    hook_event_name: event, session_id: 'lead-1', agent_id: 'agent-7', agent_type: 'Explore', ...fields,
+  })
+  /** Every event this change installs, engine by engine. */
+  const NEW_EVENTS = [
+    ['claude', 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' }],
+    ['claude', 'PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: 'Bash' }],
+    ['claude', 'Elicitation', { hook_event_name: 'Elicitation', mcp_server_name: 'docs' }],
+    ['claude', 'SubagentStart', subagent('SubagentStart')],
+    ['claude', 'SubagentStop', subagent('SubagentStop')],
+    ['codex', 'PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: 'exec_command' }],
+    ['codex', 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'request_user_input' }],
+    ['codex', 'Stop', { hook_event_name: 'Stop', turn_id: 't1' }],
+    ['codex', 'Interrupt', { hook_event_name: 'Interrupt', turn_id: 't1' }],
+  ] as const
+
+  it.each([
+    ['claude', 'PreToolUse', 'AskUserQuestion'], ['codex', 'PermissionRequest', 'exec_command'], ['codex', 'PreToolUse', 'request_user_input'],
+  ] as const)('%s %s in a pane posts a wait with the event and the tool\'s name, and none of its input', async (engine, event, tool) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, tmuxPane: '%4', input: { hook_event_name: event, session_id: 'sess-1', tool_name: tool, tool_input: { command: 'input-secret' } } })
+    expect(urls(requests)).toEqual(['/api/hook/wait'])
+    expect(requests[0].body).toMatchObject({ engine, sessionId: 'sess-1', hookEvent: event, toolName: tool })
+    expect(JSON.stringify(requests[0].body)).not.toContain('input-secret')
+  })
+
+  // A matcher edited by hand must not turn each tool call into a request to the daemon.
+  it.each(['claude', 'codex'] as const)('%s PreToolUse for any other tool posts nothing', async (engine) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, tmuxPane: '%4', input: { hook_event_name: 'PreToolUse', session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'ls' } } })
+    expect(requests).toEqual([])
+  })
+
+  // Variant P (facts-claude §1): PermissionRequest and Elicitation fire as the dialog opens; Notification only after 6 s.
+  it.each([
+    ['PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'input-secret' } }, { toolName: 'Bash' }],
+    ['Elicitation', { hook_event_name: 'Elicitation', mcp_server_name: 'docs', message: 'input-secret', requested_schema: {} }, {}],
+  ] as const)('claude %s posts a wait, and none of what it asks', async (_event, input, tool) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: { ...input, session_id: 'sess-1' } })
+    expect(urls(requests)).toEqual(['/api/hook/wait'])
+    expect(requests[0].body).toMatchObject({ engine: 'claude', sessionId: 'sess-1', hookEvent: input.hook_event_name, ...tool })
+    expect(JSON.stringify(requests[0].body)).not.toContain('input-secret')
+  })
+
+  // Claude Code runs both for one AskUserQuestion dialog (facts-claude §5): two waits on the same session open one.
+  it('claude AskUserQuestion\'s PreToolUse and its PermissionRequest each post the same wait', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['PreToolUse', 'PermissionRequest']) {
+      await runHook({ port, tmuxPane: '%4', input: { hook_event_name: event, session_id: 'sess-1', tool_name: 'AskUserQuestion' } })
+    }
+    expect(requests.map((request) => [request.url, request.body.sessionId, request.body.toolName])).toEqual([
+      ['/api/hook/wait', 'sess-1', 'AskUserQuestion'], ['/api/hook/wait', 'sess-1', 'AskUserQuestion'],
+    ])
+  })
+
+  it('codex Stop in a pane posts turn-stop; codex Interrupt posts turn-stop with status interrupted', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['Stop', 'Interrupt']) {
+      await runHook({ port, engine: 'codex', tmuxPane: '%4', input: { hook_event_name: event, session_id: 'sess-1', turn_id: 't1', last_assistant_message: 'text-secret' } })
+    }
+    expect(urls(requests)).toEqual(['/api/hook/turn-stop', '/api/hook/turn-stop'])
+    expect(requests[0].body).toMatchObject({ engine: 'codex', sessionId: 'sess-1', hookEvent: 'Stop' })
+    expect(requests[0].body.status).toBeUndefined()
+    expect(requests[1].body).toMatchObject({ engine: 'codex', sessionId: 'sess-1', hookEvent: 'Interrupt', status: 'interrupted' })
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  it('claude SubagentStart and SubagentStop post /api/hook/subagent with the lead\'s session', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStart') })
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStop', { last_assistant_message: 'text-secret' }) })
+    expect(requests.map((request) => [request.url, request.body.sessionId, request.body.hookEvent])).toEqual([
+      ['/api/hook/subagent', 'lead-1', 'SubagentStart'], ['/api/hook/subagent', 'lead-1', 'SubagentStop'],
+    ])
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  // Claude Code's own helpers (prompt suggestions, /btw) end with a SubagentStop of no type, after no SubagentStart.
+  it.each([[''], [undefined]])('claude SubagentStop with agent_type %j posts nothing', async (agentType) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStop', { agent_type: agentType }) })
+    expect(requests).toEqual([])
+  })
+
+  // The hook cannot tell which Claude Code sent it, so no version gates its subagent events.
+  it.each([[{}], [{ version: '2.1.300' }]])('claude %j: its subagent events post', async (fields) => {
+    const { port, requests } = await collect()
+    for (const event of ['SubagentStart', 'SubagentStop'] as const) {
+      await runHook({ port, tmuxPane: '%4', input: subagent(event, fields) })
+    }
+    expect(urls(requests)).toEqual(['/api/hook/subagent', '/api/hook/subagent'])
+  })
+
+  // A resumed subagent, or a teammate taking a new message, sends a start with its own stop: the count stays even.
+  it('a subagent resumed sends its start and then its stop', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['SubagentStart', 'SubagentStop', 'SubagentStart', 'SubagentStop'] as const) {
+      await runHook({ port, tmuxPane: '%4', input: subagent(event) })
+    }
+    expect(requests.map((request) => [request.url, request.body.hookEvent])).toEqual([
+      ['/api/hook/subagent', 'SubagentStart'], ['/api/hook/subagent', 'SubagentStop'],
+      ['/api/hook/subagent', 'SubagentStart'], ['/api/hook/subagent', 'SubagentStop'],
+    ])
+  })
+
+  // Codex's SubagentStop fires per child turn and never for a failed one (facts-codex §2): its subagents are not counted.
+  it.each(['SubagentStart', 'SubagentStop'] as const)('codex %s posts no subagent event', async (event) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'codex', tmuxPane: '%4', input: subagent(event) })
+    expect(urls(requests)).not.toContain('/api/hook/subagent')
+  })
+
+  // Claude Code and Codex read any stdout of these as a decision; an empty one with exit 0 leaves it to the person.
+  it.each(NEW_EVENTS)('%s %s writes nothing on stdout and exits 0', async (engine, _event, input) => {
+    const { port, requests } = await collect()
+    expect(await runHook({ port, engine, tmuxPane: '%4', input: { ...input, session_id: 'sess-1' } })).toBe('')
+    expect(requests).toHaveLength(1)
+  })
+
+  // Codex runs these before its dialog and waits for them: whatever the daemon answers, they decide nothing.
+  it.each(['PermissionRequest', 'PreToolUse'] as const)('codex %s: nothing on stdout and exit 0 when the daemon answers 403, 500 or never', async (event) => {
+    for (const answer of [403, 500, 'never'] as const) {
+      const seen: string[] = []
+      const server = createServer((req, res) => {
+        seen.push(req.url ?? '')
+        req.resume()
+        if (answer !== 'never') res.writeHead(answer).end('{}')
+      })
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+      const stdout = await runHook({ port: address.port, engine: 'codex', tmuxPane: '%4', input: {
+        hook_event_name: event, session_id: 'sess-1', tool_name: event === 'PreToolUse' ? 'request_user_input' : 'exec_command',
+      } })
+      server.closeAllConnections()
+      expect([answer, stdout, seen]).toEqual([answer, '', ['/api/hook/wait']])
+    }
+  })
+
+  // Outside a pane the devices hear Codex's own turn end and interrupt as Claude Code's Stop, and none of its words.
+  it('outside a pane, a codex Stop tells the devices turn-stop, and its Interrupt turn-aborted', async () => {
+    const { port, requests } = await collect()
+    for (const [index, event] of ['Stop', 'Interrupt'].entries()) {
+      expect(await runHook({ port, engine: 'codex', input: {   // no tmuxPane
+        hook_event_name: event, session_id: 'sess-1', turn_id: 't1', cwd: '/w', last_assistant_message: 'text-secret',
+      } })).toBe('')
+      await received(requests, index + 1)
+    }
+    expect(requests.map((request) => [request.url, request.body.engine, request.body.sessionId, request.body.event])).toEqual([
+      ['/api/hook/observed', 'codex', 'sess-1', 'turn-stop'], ['/api/hook/observed', 'codex', 'sess-1', 'turn-aborted'],
+    ])
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  // A lead outside a pane stays working while its subagents run: each event carries the lead's session_id.
+  it('outside a pane, claude SubagentStart and a typed SubagentStop tell the devices, with the lead\'s session and no title', async () => {
+    const { port, requests } = await collect()
+    for (const [index, event] of (['SubagentStart', 'SubagentStop'] as const).entries()) {
+      expect(await runHook({ port, input: subagent(event, { cwd: '/w', session_title: 'Tho', last_assistant_message: 'text-secret' }) })).toBe('')
+      await received(requests, index + 1)
+    }
+    expect(requests.map((request) => [request.url, request.body.sessionId, request.body.event])).toEqual([
+      ['/api/hook/observed', 'lead-1', 'subagent-start'], ['/api/hook/observed', 'lead-1', 'subagent-stop'],
+    ])
+    for (const { body } of requests) expect([body.title, body.relayed]).toEqual([undefined, undefined])
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  it.each([[''], [undefined]])('outside a pane, claude SubagentStop with agent_type %j posts nothing', async (agentType) => {
+    const { port, requests } = await collect()
+    expect(await runHook({ port, input: subagent('SubagentStop', { agent_type: agentType, cwd: '/w' }) })).toBe('')
+    expect(requests).toEqual([])
+  })
+
+  // Codex's subagents are not counted outside a pane either (facts-codex §2).
+  it.each(['SubagentStart', 'SubagentStop'] as const)('outside a pane, codex %s posts nothing', async (event) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'codex', input: subagent(event, { cwd: '/w' }) })
+    expect(requests).toEqual([])
+  })
+
+  /** What a session outside a pane tells the devices of NEW_EVENTS: the waits are its Notification's to say. */
+  const TOLD_OUTSIDE = ['SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']
+  it.each(NEW_EVENTS.filter(([, event]) => !TOLD_OUTSIDE.includes(event)))('outside a pane, %s %s posts nothing', async (engine, _event, input) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, input: { ...input, session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
+  })
+
+  it('outside a pane, claude Stop still tells the devices turn-stop', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/w' } })
+    await received(requests)
+    expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'turn-stop']])
+  })
+
+  it('a Codex child thread\'s hooks still post nothing', async () => {
+    const { port, requests } = await collect()
+    const child = { session_id: 'sess-1', source: { subagent: { thread_spawn: { parent_thread_id: 'sess-1', depth: 1 } } } }
+    await runHook({ port, engine: 'codex', tmuxPane: '%4', input: { ...child, hook_event_name: 'PermissionRequest', tool_name: 'exec_command' } })
+    await runHook({ port, engine: 'codex', tmuxPane: '%4', input: { ...child, hook_event_name: 'PreToolUse', tool_name: 'request_user_input' } })
+    expect(requests).toEqual([])
   })
 })

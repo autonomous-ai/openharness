@@ -78,7 +78,7 @@ describe('namedNode', () => {
     expect(namedNode(node, 'harnessd-messages', runtime, { fs: readOnly.fs, platform: 'darwin' })).toBe(node)
     expect(log.mock.calls.map(([line]) => line)).toEqual([
       '[harnessd] harnessd runs as node (no node binary)',
-      '[harnessd] harnessd-core runs as node (EXDEV)',
+      '[harnessd] harnessd-core runs as node (Error)',
     ])
   })
 
@@ -104,9 +104,7 @@ describe('namedNode', () => {
   it('makes a real hard link the kernel names the process by', () => {
     const dir = mkdtempSync(join(tmpdir(), 'harnessd-name-'))
     try {
-      const bin = join(dir, 'node-v1', 'bin')
-      mkdirSync(bin, { recursive: true })
-      const fakeNode = join(bin, 'node')
+      const fakeNode = join(dir, 'node-v1', 'bin', 'node')
       placeNode(fakeNode)
       const link = namedNode(fakeNode, 'harnessd-search', dir)
       expect(link).toBe(join(dir, 'node-v1', 'libexec', 'harnessd', 'harnessd-search'))

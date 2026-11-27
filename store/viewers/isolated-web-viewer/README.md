@@ -8,7 +8,9 @@ HTML artifact named by the verdict, or the newest matching file; an empty file s
 back to `index.html`. A harness can still override the viewer URL for a fixed entry point.
 
 The toolbar includes fitted, mobile, tablet and desktop widths, manual reload, and a Live/Pause
-switch so file changes do not interrupt an interaction you are inspecting.
+switch so file changes do not interrupt an interaction you are inspecting. In a Harness pane that
+draws its own browser bar (Web Studio), the app sets `data-harness-browser-bar` on the page's root and
+this toolbar is hidden: that bar has the widths and reload, and file changes still reload the page.
 
 ## Isolation and asset loading
 

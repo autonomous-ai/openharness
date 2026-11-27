@@ -16,6 +16,7 @@ import { createHomeAdopter, readAdoptedHomes } from '../../engines/kit/homeAdopt
 import { NativeEvidenceBudget } from '../../engines/kit/nativeEvidence.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from '../../engines/kit/nativeHookFiles.js'
 import { NativePaths } from '../../engines/kit/nativePaths.js'
+import { fileTag } from '../log.js'
 import { HOOK_SCRIPT, hookArgv, isOurs, quoteHookCommand } from '../../engines/kit/notifyHooks.js'
 import { installCommandCodeHooks, installCopilotHooks } from '../../engines/nativeHooks.js'
 
@@ -99,8 +100,8 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(await engineHooks.claude.installIn(PORT, claudeHome, { environment })).toBe(true)
     expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
     expect(files.map(stamp)).toEqual(before)
-    expect(log).toHaveBeenCalledWith('[hooks] Claude session + turn (Stop/StopFailure) hooks already installed')
-    expect(log).toHaveBeenCalledWith(codexContract.settings.messages.current.replace('{file}', join(codexHome, 'hooks.json')))
+    expect(log).toHaveBeenCalledWith('[hooks] Claude Code session, turn, wait and subagent hooks already installed')
+    expect(log).toHaveBeenCalledWith(codexContract.settings.messages.current.replace('{file}', fileTag(join(codexHome, 'hooks.json'))))
   })
 
   it('installs Copilot\'s PowerShell lines and Command Code\'s nested cmd.exe line, and leaves both alone the second time', async () => {
@@ -153,7 +154,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(await installCommandCodeHooks(PORT, { environment })).toBe(false)
     // One line, no stack.
     expect(error.mock.calls).toEqual([
-      ['[hooks] Command Code hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
+      ['[hooks] Command Code hooks are not installed · a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
     ])
     expect(existsSync(join(home, '.commandcode'))).toBe(false)
     // Inside PowerShell's single quotes these are text: Copilot's line, and Codex's.

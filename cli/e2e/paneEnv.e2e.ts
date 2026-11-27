@@ -6,6 +6,9 @@
  * 2026-10-11: `env` in an agent's pane listed every one). The core now takes them out of its
  * environment before it starts anything (lib/harnessdEnv.ts), and a tmux server an earlier boot started
  * with them is told to forget them as the core takes it over (TmuxBackend `unsetServerEnvironment`).
+ * And a start from a shell keeps only an allowlist of that shell's environment, then what HARNESS_ENV_FILE names
+ * (lib/startEnvironment.ts): another program's token in that shell never reaches a pane
+ * (docs/plans/2026-11-17-daemon-minimal-env-design.md).
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
@@ -29,10 +32,10 @@ const row = async (client: LocalClient, agentId: string): Promise<Row | undefine
   (await client.request<{ agents: Row[] }>('agents_list', { includeStopped: true }, 30_000)).agents.find((agent) => agent.id === agentId)
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
 
-async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine | 'terminal', folder: string): Promise<Row> {
+async function create(d: IsolatedDaemon, client: LocalClient, engine: Engine | 'terminal', folder: string, over: Record<string, unknown> = {}): Promise<Row> {
   const cwd = join(d.projectsDir, folder)
   mkdirSync(cwd, { recursive: true })
-  const created = await client.request('agent_create', { engine, cwd, ...(engine === 'terminal' ? {} : { bypassPermission: true }) }, 90_000)
+  const created = await client.request('agent_create', { engine, cwd, ...(engine === 'terminal' ? {} : { bypassPermission: true }), ...over }, 90_000)
   expect(created.error, `${folder}: ${JSON.stringify(created)}`).toBeUndefined()
   return until(`${folder} to start`, async () => {
     const agent = await row(client, created.agent.id)
@@ -48,30 +51,37 @@ const AGENT_SESSION = {
 }
 const HARNESSD = 'HARNESSD_'
 const SESSION = 'AI_AGENT,CLAUDECODE,CLAUDE_CODE_MESSAGING,CLAUDE_CODE_SESSION,CODEX_THREAD'
+/** What the core says as it takes a server over: how many names it unset, never which the server had. */
+const UNSET = /\[terminal\] tmux: unset \d+ harnessd and agent session names in the environment new panes start with/
 
-/** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
-async function engineHas(client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> {
-  const ended = client.next(isTurn('turn_ended', agentId), 45_000, 'turn_ended (!env)')
-  client.send('message', { agentId, content: `!env ${prefixes}` })
+/** What an agent's engine answers to [directive] (fakeEngine), read from its thread by the answer's [lead]. */
+async function engineAnswer(client: LocalClient, agentId: string, directive: string, lead: string): Promise<string> {
+  const ended = client.next(isTurn('turn_ended', agentId), 45_000, `turn_ended (${directive})`)
+  client.send('message', { agentId, content: directive })
   await ended
   const { sessionId } = (await row(client, agentId))!
-  return until('the !env answer in the thread', async () => {
+  return until(`the ${directive} answer in the thread`, async () => {
     const page = await client.request<{ events?: Array<{ type: string; payload: Record<string, any> }> }>('session_get', { sessionId, limit: 200 }, 30_000)
     const answer = (page.events ?? []).filter((event) => event.type === 'text_delta').map((event) => String(event.payload.content))
-      .find((text) => text.startsWith(`env ${prefixes}: `))
-    return answer?.slice(`env ${prefixes}: `.length) ?? null
+      .find((text) => text.startsWith(lead))
+    return answer?.slice(lead.length) ?? null
   }, 15_000, 250)
 }
 
-/** The names starting with [prefixes] in the environment of the shell a pane runs, written to a file by that shell. */
-async function shellHas(d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> {
-  const file = join(d.root, `${name}.env`)
-  await d.tmux.run('send-keys', '-t', pane, `env > ${file}.tmp && mv ${file}.tmp ${file}`, 'Enter')
-  await until(`${name}'s shell to write its environment`, () => existsSync(file) || null, 20_000, 100)
-  return names(readFileSync(file, 'utf8'), prefixes)
-}
-const names = (env: string, prefixes = HARNESSD): string[] =>
-  env.split('\n').map((line) => line.split('=')[0]).filter((name) => prefixes.split(',').some((prefix) => name.startsWith(prefix))).sort()
+/** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
+const engineHas = (client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> =>
+  engineAnswer(client, agentId, `!env ${prefixes}`, `env ${prefixes}: `)
+
+/** The names starting with [prefixes] in the environment of the shell a pane runs, as that shell sees it. */
+const shellHas = async (d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> =>
+  withPrefix(Object.keys(await d.paneEnvironment(pane, name)), prefixes)
+const names = (env: string, prefixes = HARNESSD): string[] => withPrefix(env.split('\n').map((line) => line.split('=')[0]), prefixes)
+const withPrefix = (all: string[], prefixes: string): string[] =>
+  all.filter((name) => prefixes.split(',').some((prefix) => name.startsWith(prefix))).sort()
+
+/** What the shell that runs `harness start -f` may hold beside the daemon's own: another program's token, an agent's
+ *  session, a provider key. Made-up values (docs/plans/2026-11-17-daemon-minimal-env-design.md). */
+const SHELL_SESSION = { SENTINEL_TOKEN: 'sentinel-from-the-shell', CLAUDE_CODE_MESSAGING_TOKEN: 'agent-token', ANTHROPIC_API_KEY: 'kept-sentinel' }
 
 describe('a pane\'s environment', () => {
   let daemon: IsolatedDaemon | undefined
@@ -109,12 +119,14 @@ describe('a pane\'s environment', () => {
     // The server as an earlier core left it: started from an environment with that boot's HARNESSD_*, and a
     // pane of that boot's still in it, which keeps what it was started with.
     const earlier = join(d.root, 'earlier.env')
-    await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'earlier-boot', '/bin/sh', '-c', `env > ${earlier}; sleep 600`],
+    // The shell creates the file before env writes it, so the file shows up empty first (CI run 43672659842 read
+    // it then): write it aside and move it into place whole.
+    await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'earlier-boot', '/bin/sh', '-c', `env > ${earlier}.tmp && mv ${earlier}.tmp ${earlier}; sleep 600`],
       { env: { ...d.env, ...EARLIER_BOOT }, timeout: 10_000 })
     await until('the earlier boot\'s pane to write its environment', () => existsSync(earlier) || null, 10_000, 50)
     expect(names(readFileSync(earlier, 'utf8'))).toEqual(Object.keys(EARLIER_BOOT).sort())
     await d.start()
-    expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(EARLIER_BOOT).sort().join(', ')} from the environment new panes start with`)
+    expect(d.log()).toMatch(UNSET)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client)
     client.close()
@@ -128,9 +140,31 @@ describe('a pane\'s environment', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'agent-shell', '/bin/sh', '-c', 'sleep 600'], { env: d.env, timeout: 10_000 })
     await d.start()
-    expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(AGENT_SESSION).sort().join(', ')} from the environment new panes start with`)
+    expect(d.log()).toMatch(UNSET)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client, SESSION)
     client.close()
+  }, 300_000)
+
+  it.each([
+    ['the master', {}],
+    // The core in the CLI's own process, as Harness OS's unit runs it: the env file is read again after the narrowing.
+    ['the core alone', { HARNESS_NO_MASTER: '1' }],
+  ])('harness start -f gives %s only the allowlist of its shell, and the env file\'s variables', async (_what, more) => {
+    const d = await IsolatedDaemon.create({ foreground: true, env: { ...SHELL_SESSION, ...more }, envFile: { E2E_FROM_ENV_FILE: 'reaches-the-pane' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const tile = await create(d, client, 'terminal', 'pane-foreground')
+    const env = await d.paneEnvironment(tile.tmuxPane, 'foreground')
+    client.close()
+    expect(env.SENTINEL_TOKEN).toBeUndefined()
+    expect(env.CLAUDE_CODE_MESSAGING_TOKEN).toBeUndefined()
+    expect(env.ANTHROPIC_API_KEY).toBe('kept-sentinel')
+    expect(env.PATH).toContain(join(d.root, 'bin'))
+    expect(env.E2E_FROM_ENV_FILE).toBe('reaches-the-pane')
+    expect(d.log()).toMatch(/\[env\] started with \d+ variables; [1-9]\d* left out \(docs\/cli\.md#the-daemons-environment\)/)
+    expect(d.log().includes('SENTINEL_TOKEN') || d.log().includes('sentinel-from-the-shell'), 'the log names no variable').toBe(false)
   }, 300_000)
 })

@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Poller } from '../lib/selfUpdate.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 let updater: Poller | undefined
 const server = createServer()
@@ -23,7 +24,7 @@ it('follows an hn-only release over HTTP, preserves the old binary on failure an
   const target = join(home, '.harness', 'bin', 'harness-tui')
   const binary = (version: string): Buffer => Buffer.from(`#!/bin/sh\nprintf 'hn ${version} (tmux 3.5a)\\n'\n`)
   mkdirSync(dirname(target), { recursive: true })
-  writeFileSync(target, binary('0.1.1'), { mode: 0o755 })
+  writeExecutable(target, binary('0.1.1').toString())
   let version = '0.1.2'
   let corrupt = false
   let downloads = 0

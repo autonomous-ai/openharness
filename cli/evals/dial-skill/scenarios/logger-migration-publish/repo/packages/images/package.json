@@ -1,0 +1,6 @@
+{
+  "name": "@acme/images",
+  "version": "1.5.3",
+  "type": "module",
+  "main": "src/index.js"
+}

@@ -22,8 +22,11 @@ import { currentUserShell } from './userShell.js'
 /** Printed before the dump so anything a chatty rc file writes to stdout is skipped, not parsed. */
 const SENTINEL = '__HARNESS_ENV_BEGIN__'
 const CAPTURE_TIMEOUT_MS = 5_000
+const CAPTURE_MAX_BYTES = 1024 * 1024
 
 let cached: NodeJS.ProcessEnv | null = null
+let capturedKey = ''
+let flightKey = ''
 // The in-flight capture, not just its resolved value — two overlapping warm-up calls (there is only
 // ever one production caller today, but this keeps it true regardless) must join the same spawn
 // rather than each starting their own shell.
@@ -48,46 +51,54 @@ function parse(stdout: string): NodeJS.ProcessEnv {
 
 async function capture(shell: string): Promise<NodeJS.ProcessEnv> {
   return await new Promise<NodeJS.ProcessEnv>((resolve) => {
-    let child
+    let child: ReturnType<typeof spawn>
+    let settled = false, bytes = 0
+    const chunks: Buffer[] = []
+    const finish = (value: NodeJS.ProcessEnv, failure?: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (failure) {
+        console.error(`[env] ${failure}: login shell environment unavailable; using daemon environment`)
+        child?.kill('SIGKILL')
+      }
+      child?.stdout?.destroy()
+      resolve(value)
+    }
+    // A descendant can inherit stdout after the shell dies. The deadline ends our wait independently of close.
+    const timer = setTimeout(() => finish({}, 'LOGIN_SHELL_TIMEOUT'), CAPTURE_TIMEOUT_MS)
     try {
       child = spawn(shell, ['-lic', `printf %s ${SENTINEL}; env -0`], {
-        timeout: CAPTURE_TIMEOUT_MS, // spawn (Node ≥15.14) SIGTERMs the child once this elapses
-        // An interactive shell with no tty still runs rc files; keep its stdin closed so nothing waits.
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
       })
     } catch {
-      resolve({})
+      finish({}, 'LOGIN_SHELL_FAILED')
       return
     }
-    const chunks: Buffer[] = []
-    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
-    child.once('error', () => resolve({}))
-    child.once('close', (code) => resolve(code === 0 ? parse(Buffer.concat(chunks).toString('utf8')) : {}))
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return
+      bytes += chunk.length
+      if (bytes > CAPTURE_MAX_BYTES) { finish({}, 'LOGIN_SHELL_OUTPUT_LIMIT'); return }
+      chunks.push(chunk)
+    })
+    child.once('error', () => finish({}, 'LOGIN_SHELL_FAILED'))
+    child.once('close', (code) => {
+      if (code !== 0) { finish({}, 'LOGIN_SHELL_FAILED'); return }
+      const value = parse(Buffer.concat(chunks).toString('utf8'))
+      finish(value, Object.keys(value).length ? undefined : 'LOGIN_SHELL_FAILED')
+    })
   })
 }
 
-/**
- * Perform the capture. Best-effort and once per process; a shell that is missing, slow, or broken
- * yields `{}` and the caller still gets `process.env`, i.e. exactly today's behaviour.
- *
- * Async (not `spawnSync`) so the daemon can run this alongside other independent startup work
- * (e.g. `ensureTmuxOnPath`'s own login-shell probe) instead of paying for both back to back. It is
- * deliberately not called lazily from the one-shot path. It was, and it cost ~1s inside
- * `runDevinOneShot`, which raced that suite's 200ms timeout into a flaky failure — a live turn would
- * have paid the same stall. The daemon warms it during startup instead, where blocking work already
- * happens, and tests never spawn a shell at all.
- */
+/** Capture once for this shell/PATH. Overlapping readers share one bounded asynchronous shell. */
 export function warmLoginShellEnvironment(): Promise<NodeJS.ProcessEnv> {
-  if (inFlight) return inFlight
-  if (cached) return Promise.resolve(cached)
-  inFlight = (async (): Promise<NodeJS.ProcessEnv> => {
-    if (process.platform === 'win32') return (cached = {})
-    // The account's shell when the daemon was given no `SHELL` (userShell.ts): read only from the environment, a
-    // daemon started from `docker exec` or a bare service captured nothing, and said so in its log.
-    const shell = currentUserShell()
-    if (!shell) return (cached = {})
-    return (cached = await capture(shell))
-  })().finally(() => {
+  const shell = process.platform === 'win32' ? undefined : currentUserShell()
+  const key = `${shell ?? ''}\0${process.env.PATH ?? ''}`
+  if (inFlight) return flightKey === key ? inFlight : inFlight.then(() => warmLoginShellEnvironment())
+  if (cached && capturedKey === key) return Promise.resolve(cached)
+  cached = null
+  capturedKey = flightKey = key
+  inFlight = (shell ? capture(shell) : Promise.resolve({})).then(value => (cached = value)).finally(() => {
     inFlight = null
   })
   return inFlight
@@ -107,6 +118,7 @@ export function oneShotParentEnv(): NodeJS.ProcessEnv {
 /** Test seam. */
 export function resetLoginShellEnvironmentCache(): void {
   cached = null
+  capturedKey = flightKey = ''
   inFlight = null
 }
 

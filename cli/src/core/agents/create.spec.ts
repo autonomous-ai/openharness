@@ -1,16 +1,15 @@
-import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, opendirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpLaunch } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
@@ -18,30 +17,27 @@ import { engineHooks } from '../../engines/hooks.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
+import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
-import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites } from '../../scm/launch.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
+import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { HookPreparationHeld } from '../../engines/kit/hookHeld.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
-import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
-import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
-// Real native preparation asks a real `/bin/sh` engine for its help. On a loaded machine its 5 s deadline, not the code,
-// decided (5155 ms at load 60): a creation held, and the DSH launch it left queued answered the next test. What a deadline
-// does is patientExec.spec.ts's to test.
-vi.mock('../../lib/patientExec.js', async (real) => ({ ...await real<object>(), patientDeadline: () => () => {} }))
-vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
+// Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
+vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
   return { ...actual, projectsRoot: vi.fn(actual.projectsRoot) }
 })
 
-vi.mock('../../scm/scmProjects.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
+vi.mock('../../scm/launch.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
 vi.mock('node:fs', async real => {
   const actual = await real<typeof import('node:fs')>()
   return { ...actual, opendirSync: vi.fn(actual.opendirSync) }
@@ -62,6 +58,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
+vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
 vi.mock('../../engines/kit/nativePlugin.js', () => ({
   prepareNativePlugin: vi.fn(() => ({ verify: () => {}, commit: async () => ({ verify: () => {} }) })),
@@ -80,9 +77,6 @@ const { preTrustClaudeProject, preTrustCodexProject } = trust
 vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
-// The connections an agent on a profile home is given (lib/connectors/agents.ts): never written into a real folder here.
-const syncProfileHome = vi.hoisted(() => vi.fn((_vault: unknown, _engine: string, _home: string): string[] => []))
-vi.mock('../../lib/connectors/agents.js', () => ({ syncProfileHome }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 // The pull request line (lib/agentAttribution.ts) reads the person's engine settings: never this machine's here.
 vi.mock('../../lib/agentAttribution.js', () => ({
@@ -96,6 +90,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
   engineLaunchEnv: vi.fn(() => undefined),
+  launchAttempts: vi.fn((first: string[]) => () => first),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   permissionModeApproves: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--permission-mode']),
@@ -117,7 +112,6 @@ vi.mock('../../engines/hooks.js', async (real) => {
   const actual = await real<typeof import('../../engines/hooks.js')>()
   return { ...actual, engineHooks: { ...actual.engineHooks, codex: { ...actual.engineHooks.codex, installIn: vi.fn(async () => true) } } }
 })
-vi.mock('../../lib/sessionSearch/external.js', async (real) => ({ ...await real<object>(), stopSessionOwner: vi.fn(async () => true) }))
 // What the backend new panes are made on can do; every test's backend can give a session its own environment.
 const capabilities = vi.fn(async () => ({ sessionEnv: true }))
 
@@ -148,7 +142,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     externalResume: vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending })),
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
-    attachDsh: vi.fn(),
+    attach: vi.fn(),
     prepareApiTools: vi.fn(),
     hookPort: 4242,
     hooksDisabled: false,
@@ -160,7 +154,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
     privateGridName: vi.fn(async () => 'grid-me'),
     dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
-    swarmLaunch: SWARM_LAUNCH,
+    syncProfileHome: vi.fn(async () => []),
     ...over,
   }
   return { deps, create: createAgentCreator(deps) }
@@ -176,116 +170,10 @@ describe('creating an agent', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
   })
-  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+  // A launch or an installed harness one test queued and never used answers no other test.
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
-  // Swarm v4: no skill file and no skill mode; each Swarm role starts with the team's basics as its launch line.
-  it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
-    for (const role of ['coordinator', 'agent'] as const) {
-      const cwd = folder()
-      await setup().create(request({ cwd, engine, swarmRole: role }))
-      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
-      const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone, byte for byte.
-      expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(role === 'coordinator'))
-      expect(place.swarmInstructions?.includes('You are your project\'s PM')).toBe(role === 'coordinator')
-    }
-  })
-
-  // anh Dee, 2026-11-11: Alba never read the rules its person wrote in agents/Alba.md; its launch line carries them now.
-  it('starts a Swarm agent with its own agents/<name>.md after the basics, by the name it is started under', async () => {
-    const cwd = folder()
-    mkdirSync(join(cwd, 'agents'))
-    writeFileSync(join(cwd, 'agents', 'Faye.md'), 'Never push to main.\n')
-    await setup().create(request({ cwd, engine: 'claude', swarmRole: 'agent', name: 'Faye' }))
-    const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-    expect(place.swarmInstructions).toBe(SWARM_LAUNCH.basics(false, { cwd, name: 'Faye' }))
-    expect(place.swarmInstructions).toMatch(/\nYour own instructions, from agents\/Faye\.md, [^\n]*:\nNever push to main\.$/)
-  })
-
-  // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its kind, and a launch an older CLI
-  // saved to finish later (a pending intent) names its role in the wire's values.
-  it('registers a Reviewer as an agent that keeps its Reviewer kind, from this CLI\'s launch or an older one\'s saved intent', async () => {
-    for (const over of [{ swarmRole: 'agent', swarmFallback: 'review' }, { swarmRole: 'review' }]) {
-      await setup().create(request({ cwd: folder(), ...over }))
-      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never read your own or merge')
-    }
-    // A fallback is an agent's alone.
-    for (const [over, role] of [[{ swarmRole: 'lead' }, 'coordinator'], [{ swarmRole: 'coordinator', swarmFallback: 'review' }, 'coordinator'],
-      [{ swarmRole: 'dev' }, 'agent']] as const) {
-      await setup().create(request({ cwd: folder(), ...over }))
-      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
-    }
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'pm' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
-  })
-
-  // Codex's "Update available" screen held a Swarm agent's task with no one at its terminal (Studio Codex, 2026-10-29).
-  it('starts a Swarm Codex without its startup update check, and every other Codex and Swarm engine as it was', async () => {
-    const extraArgsOf = async (over: Record<string, unknown>) => {
-      await setup().create(request({ cwd: folder(), ...over }))
-      return (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
-    }
-    for (const role of ['coordinator', 'agent'] as const) expect(await extraArgsOf({ engine: 'codex', swarmRole: role })).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']))
-    expect(await extraArgsOf({ engine: 'codex' })).not.toContain('check_for_update_on_startup=false')
-    expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
-  })
-
-  // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
-  // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
-  it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
-    mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
-    const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
-    try {
-      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }]) {
-        for (const swarmRole of ['coordinator', 'agent']) {
-          expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole, ...over }))).toMatchObject({ ok: true })
-        }
-      }
-      expect(readFileSync(settings, 'utf8')).toBe('{"theme":"dark"}\n')
-    } finally { rmSync(home, { recursive: true, force: true }) }
-  })
-
-  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and is added to the engine's working
-  // directories, so its owner's own settings ask nothing for its mktemp files; the launch's own variables win.
-  it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
-    const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }
-    const extraArgs = () => (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
-    vi.mocked(agentTmpLaunch).mockReturnValueOnce({ env: { TMPDIR: '/data/agent-tmp' }, args: [] })
-    expect(await setup().create(request({}))).toMatchObject({ ok: true })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined)
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data/agent-tmp' })
-    expect(extraArgs().some(arg => arg.startsWith('--add-dir'))).toBe(false)
-    vi.mocked(agentTmpLaunch).mockReturnValueOnce({ ...tmp, env: { HARNESS_DSH: 'mine', ...tmp.env } })
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', expect.objectContaining({ role: 'agent', key: expect.any(String) }))
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp/one' })
-    expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
-  })
-
-  // On a shared model a Swarm session keeps the grid's web tools.
-  it('builds a Swarm agent\'s grid launch with the grid\'s web MCP, as any session\'s', async () => {
-    const grid = { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm', mcpUrl: 'https://grid.example/v1/grid/web-mcp' }
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent', grid }))).toMatchObject({ ok: true })
-    expect(buildGridLaunch.mock.calls.at(-1)![0].override).toMatchObject({ mcpUrl: grid.mcpUrl })
-  })
-
-  it('keeps a selected Store harness when attaching a Swarm skill', async () => {
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]).toMatchObject({
-      dsh: 'blender', swarmSkill: { role: 'agent' }, env: expect.objectContaining({ HARNESS_DSH: 'blender' }),
-    })
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toContain('--dsh')
-  })
-
-  // No owner subscription relay (task #4137): Claude Code and Codex, a Product Manager's Codex home among them, launch on their
+  // No owner subscription relay (task #4137): Claude Code and Codex, a profile's own Codex home among them, launch on their
   // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
   it('launches every engine on its own settings: no relay variables or provider', async () => {
     for (const over of [{ engine: 'claude' }, { engine: 'codex' }, { engine: 'codex', codexHome: '/fixture/pm-home/codex' }]) {
@@ -294,27 +182,6 @@ describe('creating an agent', () => {
       for (const name of ['HARNESS_RELAY_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']) expect(env).not.toHaveProperty(name)
       expect((vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs ?? []).join(' ')).not.toMatch(/harness_owner/)
     }
-  })
-
-  // The Harness GitHub App is gone: a request that still names it launches as any other Swarm session, on this machine's own git and gh.
-  it('launches a session that still asks for the GitHub App on its own git and gh', async () => {
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true } as never))).toMatchObject({ ok: true })
-    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel })
-    expect(pane.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
-    expect(pane.env).not.toHaveProperty('GH_CONFIG_DIR')
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv ?? []).not.toContain('GH_TOKEN')
-  })
-
-  // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
-  // refused before anything is written or launched, and every other start is as it was.
-  it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
-    const off = setup({ swarmLaunch: undefined })
-    expect(await off.create(request({ cwd: folder(), swarmRole: 'agent' })))
-      .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
-    expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
-    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
 
   it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
@@ -366,39 +233,20 @@ describe('creating an agent', () => {
       else expect(result.ok).toBe(true)
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
+      if (mode === 'error' || mode === 'thrown text') expect(console.warn).toHaveBeenCalledWith(`[agent] pre-trust skipped · codex · ${mode === 'error' ? 'Error' : 'string'}`)
     })
 
-  // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
-  // trust question, which no Swarm view shows.
-  // Its owner's own mode since task #4215: the trust follows the Swarm's checkout, not full mode.
-  it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
-    vi.mocked(projectsRoot).mockReturnValue(root)
-    try {
-      const clone = folder(), plain = folder(['README.md']), worktree = join(folder(), 'worktree')
-      mkdirSync(join(clone, '.git'))
-      mkdirSync(worktree)
-      vi.mocked(harnessMadeWorktree).mockImplementation(async path => path === worktree)
-      const authority = { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }
-      const prepare = (over: Record<string, unknown>, local = true) =>
-        setup().create.prepare(request({ swarmRole: 'coordinator', ...over }), authority, { local })
-      expect((await prepare({ cwd: clone })).ok).toBe(true)
-      expect(preTrustClaudeProject).toHaveBeenCalledWith(clone)
-      await prepare({ cwd: worktree, permissionMode: 'full', bypassPermission: true })
-      expect(preTrustClaudeProject).toHaveBeenLastCalledWith(worktree)
-      expect(harnessMadeWorktree).toHaveBeenCalledWith(worktree, root)
-      await prepare({ cwd: clone, permissionMode: 'ask' })
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
-      // Not the person's own folder, not relayed, not outside a Swarm, not for Codex.
-      await prepare({ cwd: plain })
-      await prepare({ cwd: clone }, false)
-      await prepare({ cwd: clone, swarmRole: null, permissionMode: 'full', bypassPermission: true })
-      await prepare({ cwd: clone, engine: 'codex' })
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
-      expect(preTrustCodexProject).not.toHaveBeenCalled()
-    } finally {
-      vi.mocked(projectsRoot).mockReset()
-      vi.mocked(harnessMadeWorktree).mockReset().mockResolvedValue(false)
-    }
+  // A Claude Code agent in an empty project here is trusted as a Codex one is, in the profile it reads.
+  it('trusts a Claude Code agent\'s empty local project before its launch', async () => {
+    vi.mocked(projectsRoot).mockReturnValueOnce(root)
+    const cwd = folder([])
+    const launch = { current: () => true, environment: { HOME: '/fixture/home' }, permission: async () => 'supported',
+      prepareHooks: vi.fn(async () => true) } as unknown as NativeLaunch
+    const run = setup({ native: async () => ({ ok: true, launch }) })
+    const result = await run.create.prepare(request({ cwd, engine: 'claude' }),
+      { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }, { local: true })
+    expect(result.ok).toBe(true)
+    expect(preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(cwd)
   })
 
   it.each(['folder inspection', 'tmux capabilities', 'config publication'] as const)('holds a create revoked during %s before launch side effects', async stage => {
@@ -477,6 +325,54 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
+  describe('a --local OpenClaw run', () => {
+    const authority = { id: 'local', label: 'harness-openclaw-local', current: () => true, hold: () => {} }
+    const prepared = (openclawLocal?: string) => ({ ok: true as const, launch: { current: () => true, environment: { HOME: root },
+      prepareHooks: async () => true, opencodeMajor: null, ...(openclawLocal ? { openclawLocal } : {}) } as unknown as NativeLaunch })
+
+    it('a local create hands its folder to the native launch and to the row', async () => {
+      const local = folder()
+      const native = vi.fn<NonNullable<CreateAgentDeps['native']>>(async (_engine, source) => prepared(source.openclawLocal ?? undefined))
+      expect(await setup({ native }).create(request({ engine: 'openclaw', openclawLocal: local }))).toMatchObject({ ok: true })
+      expect(native.mock.calls[0][1]).toMatchObject({ openclawLocal: local })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ engine: 'openclaw', openclawLocal: local })
+      await setup({ native }).create(request({ engine: 'openclaw' }))
+      expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).not.toHaveProperty('openclawLocal')
+    })
+
+    it('a folder gone by the time a saved launch runs is refused, and nothing is launched', async () => {
+      const local = folder()
+      rmSync(local, { recursive: true })
+      const native = vi.fn<NonNullable<CreateAgentDeps['native']>>(async (_engine, source) => prepared(source.openclawLocal ?? undefined))
+      expect(await setup({ native }).create.prepare(request({ engine: 'openclaw', openclawLocal: local }), authority))
+        .toEqual({ ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: "This run's OpenClaw folder is gone." })
+      expect(native).not.toHaveBeenCalled()
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    })
+
+    it('a local create never starts on a launch that was not prepared for its folder', async () => {
+      const local = folder()
+      const unprepared = { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: 'This Harness could not prepare the --local folder. Nothing was started.' }
+      for (const native of [async () => prepared(), async () => prepared(folder()), undefined]) {
+        expect(await setup({ native }).create.prepare(request({ engine: 'openclaw', openclawLocal: local }), authority)).toEqual(unprepared)
+      }
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    })
+  })
+
+  // #3954: every install refuses while notify.mjs is missing, and the create said only "Waiting to confirm the engine's
+  // native hooks", which waiting never changes.
+  it('names a missing notify.mjs, and what to do, where a held create says why', async () => {
+    vi.mocked(missingHookScript).mockReturnValue('/opt/harness/hook/notify.mjs')
+    try {
+      const launch = { current: () => true, environment: { HOME: root }, prepareHooks: async () => false } as unknown as NativeLaunch
+      expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request())).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD',
+        unavailable: 'native', detail: 'Harness’s hook script is missing (/opt/harness/hook/notify.mjs). Reinstall Harness, then start the agent again.' })
+      expect(missingHookScript).toHaveBeenLastCalledWith('claude')
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    } finally { vi.mocked(missingHookScript).mockReturnValue(null) }
+  })
+
   it('refuses, with the engine\'s own reason, an engine that ran and failed instead of holding the creation', async () => {
     const detail = 'Codex is installed but cannot run: /usr/bin/env: ‘node’: No such file or directory'
     const broken = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail, refusal: 'ENGINE_CANNOT_RUN' } as const
@@ -508,11 +404,9 @@ describe('creating an agent', () => {
 
   it('records the final harness-selected Codex home used by real native preparation', async () => {
     const executable = await import('../../engines/kit/launchExecutable.js')
-    // An engine that runs: a launch that names no mode still asks for its help (nativeLaunch.ts).
-    const engine = join(root, 'engine')
-    writeFileSync(engine, '#!/bin/sh\necho "Usage: engine"\n', { mode: 0o755 })
+    // An engine that runs (the child_process mock above): a launch that names no mode still asks for its help.
     vi.spyOn(executable, 'captureLaunchExecutable').mockResolvedValue({ state: 'ready',
-      executable: { command: engine, identity: 'fixture', current: () => true },
+      executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
@@ -542,11 +436,12 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
   })
 
-  it('gives an agent on a Claude or Codex profile home the connections there, and one on the default home none', async () => {
-    const { create } = setup()
+  it('asks connected services for the connections of an agent on a Claude or Codex profile home, and none for the default home', async () => {
+    const syncProfileHome = vi.fn<CreateAgentDeps['syncProfileHome']>(async () => [])
+    const { create } = setup({ syncProfileHome })
     expect(await create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
     expect(await create(request({ engine: 'codex', codexHome: '/profiles/codex-work' }))).toMatchObject({ ok: true })
-    expect(syncProfileHome.mock.calls.map(([, engine, home]) => [engine, home])).toEqual([['claude', '/profiles/claude-work'], ['codex', '/profiles/codex-work']])
+    expect(syncProfileHome.mock.calls).toEqual([['claude', '/profiles/claude-work'], ['codex', '/profiles/codex-work']])
     syncProfileHome.mockClear()
     expect(await create(request({ engine: 'claude' }))).toMatchObject({ ok: true })
     expect(await create(request({ engine: 'codex' }))).toMatchObject({ ok: true })
@@ -554,17 +449,15 @@ describe('creating an agent', () => {
     expect(syncProfileHome).not.toHaveBeenCalled()
   })
 
-  it('still launches when the connections cannot be written into a profile home', async () => {
-    syncProfileHome.mockImplementationOnce(() => { throw new Error('read-only') })
-    expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
-  })
-
-  it('says what went wrong when that failure is not an Error, and still launches', async () => {
-    syncProfileHome.mockImplementationOnce(() => { throw 'plain reason' })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(await setup().create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('connections for /profiles/claude-work · plain reason'))
-    warn.mockRestore()
+  it('starts an agent on a profile home once its connections are there, which the engine reads as it starts', async () => {
+    let written!: (names: string[]) => void
+    const syncProfileHome = vi.fn<CreateAgentDeps['syncProfileHome']>(() => new Promise((resolve) => { written = resolve }))
+    const launch = setup({ syncProfileHome }).create(request({ engine: 'claude', claudeHome: '/profiles/claude-work' }))
+    await vi.waitFor(() => expect(syncProfileHome).toHaveBeenCalledTimes(1))
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    written(['gmail'])
+    expect(await launch).toMatchObject({ ok: true })
+    expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
   })
 
   it('reaches the existing first-install pane route when OpenCode is absent', async () => {
@@ -632,6 +525,7 @@ describe('creating an agent', () => {
     it('for a permission flag the engine does not take', async () => {
       vi.mocked(refusePermissionFlagIfUnsupported).mockResolvedValueOnce({ error: 'PERMISSION_MODE_UNSUPPORTED', detail: 'opencode has no --auto' } as never)
       expect(await setup().create(request({ engine: 'opencode', permissionMode: 'auto' }))).toEqual({ ok: false, error: 'PERMISSION_MODE_UNSUPPORTED', detail: 'opencode has no --auto' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create refused · opencode · PERMISSION_MODE_UNSUPPORTED')
     })
 
     it('for a DSH that is missing, a viewer, the wrong engine, or on a tmux too old to pass it on', async () => {
@@ -644,6 +538,7 @@ describe('creating an agent', () => {
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'INVALID_DSH', detail: 'Blender runs on codex' })
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_DSH' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create blender refused · TMUX_TOO_OLD_FOR_DSH')
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
@@ -653,6 +548,11 @@ describe('creating an agent', () => {
       vi.mocked(materializeWorkspace).mockRejectedValueOnce(new Error('disk full')).mockRejectedValueOnce('worse')
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'DSH_MATERIALIZE_FAILED', detail: 'could not prepare the workspace for blender · disk full' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ detail: 'could not prepare the workspace for blender · worse' })
+      // The reply keeps the words; the log names the kind alone.
+      expect(vi.mocked(console.warn).mock.calls.map(([line]) => String(line))).toEqual([
+        '[agent] create blender refused · could not prepare the workspace for blender · Error',
+        '[agent] create blender refused · could not prepare the workspace for blender · string',
+      ])
       launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime', thrown: 'Error: no runtime' })
       expect(await create(request({ dsh: 'blender' }))).toEqual({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' })
       launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' })
@@ -678,13 +578,21 @@ describe('creating an agent', () => {
       const { create } = setup()
       buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
       expect(await create(request({ grid }))).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create claude refused · GRID_ENGINE_UNSUPPORTED')
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create claude refused · TMUX_TOO_OLD_FOR_GRID')
       const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
-      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
+      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
+        .mockRejectedValueOnce(new HookPreparationHeld('the generated configuration directory is not private'))
       expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED', detail: "could not write claude's grid configuration · read-only" })
       expect(await create(request({ grid }))).toMatchObject({ detail: "could not write claude's grid configuration · worse" })
+      expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED' })
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · Error")
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · string")
+      // A held publication says what holds it, in the fixed words of its reason.
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · the generated configuration directory is not private")
     })
 
 
@@ -702,10 +610,49 @@ describe('creating an agent', () => {
       expect(result).toEqual({ ok: true, session: pending })
       expect(deps.prepareApiTools).toHaveBeenCalled()
       expect(deps.announceSession).toHaveBeenCalledWith(pending)
-      expect(deps.attachDsh).not.toHaveBeenCalled()
+      // Every new agent is looked at for the services that follow agents, a harness or not (core/agentLife.ts).
+      expect(deps.attach).toHaveBeenCalledWith(pending)
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%1' } }, ['claude'], { install: 'recipe' }, undefined)
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
+    })
+
+    // The id a held first launch is rebuilt from (registry.ts `creationId`): the caller's intent names it, never the authority.
+    it('records the creation intent\'s id on the row it registers, as the caller names it', async () => {
+      const prepared = await setup().create.prepare(request(),
+        { id: 'harness-claude-fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} },
+        { local: true, creationId: 'intent-0123456789abcdef' })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].creationId).toBe('intent-0123456789abcdef')
+    })
+
+    it('records none for a create made without an intent, whatever its authority is called', async () => {
+      const run = setup()
+      expect(await run.create(request())).toMatchObject({ ok: true })
+      const prepared = await run.create.prepare(request(),
+        { id: 'intent-0123456789abcdef', label: 'harness-claude-fixture', current: () => true, hold: () => {} }, { local: true })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true })
+      for (const [pane] of vi.mocked(createAndRegisterPane).mock.calls) expect(pane).not.toHaveProperty('creationId')
+    })
+
+    // A terminal is ready at once, with no first launch to rebuild: a creation id on its row would outlive that.
+    it('records none for a terminal made through an intent', async () => {
+      vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
+      const prepared = await setup().create.prepare(request({ engine: 'terminal' }),
+        { id: 'harness-terminal-fixture', label: 'harness-terminal-fixture', current: () => true, hold: () => {} },
+        { local: true, creationId: 'intent-0123456789abcdef' })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('creationId')
+    })
+
+    it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
+      expect(await setup().create(request())).toMatchObject({ ok: true })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)
+      const [first, build] = vi.mocked(launchAttempts).mock.calls.at(-1)!
+      const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
+      expect(first).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
+      expect(build()).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
+      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
     })
 
     it('sends the launch\'s Windows variables (no /usr/bin/env there) with the pane env, after its own', async () => {
@@ -735,6 +682,28 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ bypassPermission: true, permissionMode: null })
     })
 
+    // The argv the pane really gets, so the task's absence from it is the launch's, not this spec's mock's (without
+    // the install step, whose recipe this spec stubs).
+    const launchedFor = async (over: Record<string, unknown>) => {
+      const real = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+      expect(await setup().create(request(over))).toMatchObject({ ok: true })
+      return vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    }
+
+    it('an OpenClaw first task is kept for typing, not launched with', async () => {
+      const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser' })
+      expect(pane.firstTask).toBe('Fix the parser')
+      expect(pane.argv(1).join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv(1).join(' ')).not.toContain('--message')
+    })
+
+    it('an engine that takes its first prompt in argv keeps none', async () => {
+      const pane = await launchedFor({ engine: 'claude', prompt: 'Fix the parser' })
+      expect(pane).not.toHaveProperty('firstTask')
+      expect(pane.argv(1).join(' ')).toContain('Fix the parser')
+    })
+
     it('opens a terminal ready at once, with nothing to watch', async () => {
       vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
       const { deps, create } = setup()
@@ -760,17 +729,16 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
-    it('with Browser ticked, the row says so and its browser is attached; without, neither', async () => {
-      const attachBrowser = vi.fn()
+    it('with an older Desktop\'s browser: true, the row says so, which the agent browser takes in; without, it does not', async () => {
       vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, browser: true } } as never)
-      const { create } = setup({ attachBrowser })
+      const { deps, create } = setup()
       await create(request({ browser: true }))
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ browser: true })
-      expect(attachBrowser).toHaveBeenCalledWith({ ...pending, browser: true })
+      expect(deps.attach).toHaveBeenCalledWith({ ...pending, browser: true })
       vi.mocked(createAndRegisterPane).mockClear().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
       await create(request())
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('browser')
-      expect(attachBrowser).toHaveBeenCalledTimes(1)
+      expect(deps.attach).toHaveBeenLastCalledWith(pending)
     })
 
     it('as a DSH: its workspace prepared, trusted when it went into an empty folder, and its launch layered on', async () => {
@@ -780,7 +748,7 @@ describe('creating an agent', () => {
       const { deps, create } = setup()
       await create(request({ dsh: 'blender' }))
       expect(preTrustClaudeProject).toHaveBeenCalled()
-      expect(deps.attachDsh).toHaveBeenCalled()
+      expect(deps.attach).toHaveBeenCalledWith(expect.objectContaining({ dsh: 'blender' }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ dsh: 'blender', dshRuntime: expect.any(String), label: 'Blender', env: expect.objectContaining({ HARNESS_DSH: 'blender' }) })
       await create(request({ dsh: 'blender', engine: 'codex' }))
@@ -795,6 +763,8 @@ describe('creating an agent', () => {
       vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
+      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · claude · Error')
+      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · claude · string')
       vi.mocked(materializeWorkspace).mockResolvedValueOnce({ warnings: [], created: ['AGENTS.md'], kept: [] } as never)
       await create(request({ dsh: 'blender' }))
       expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
@@ -807,6 +777,21 @@ describe('creating an agent', () => {
       expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
       vi.mocked(materializeWorkspace).mockReset().mockResolvedValue({ warnings: [], created: [], kept: [] } as never)
+    })
+
+    // A warning names the template's folder (dsh/materialize.ts), and so does the workspace: the log counts the one and
+    // names neither.
+    it('the materializer\'s warnings are counted', async () => {
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      vi.mocked(materializeWorkspace).mockResolvedValueOnce({ warnings: ['template /Users/sentinel/t is missing'], created: ['AGENTS.md'], kept: [] } as never)
+      const cwd = folder()
+      expect(await setup().create(request({ dsh: 'blender', cwd }))).toMatchObject({ ok: true })
+      const lines = [...vi.mocked(console.warn).mock.calls, ...vi.mocked(console.log).mock.calls].map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).not.toContain(cwd)
+      expect(lines).toContain('[dsh] blender materialize · 1 warnings')
+      expect(lines).toContain('[dsh] blender materialized · created 1 · kept 0')
+      vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
     it('as the Model Manager: grid is set up first, waiting a while for it', async () => {
@@ -884,7 +869,7 @@ describe('creating an agent', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const t = setup({ installOpencodePlugin: vi.fn(async () => false) })
       expect(await t.create(request({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s plugin installer could not be loaded' })
-      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s plugin installer could not be loaded')
+      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · ENGINE_UNAVAILABLE')
       expect(createAndRegisterPane).not.toHaveBeenCalled()
       warn.mockRestore()
     })
@@ -957,27 +942,19 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
-    it('browser:true adds the args; absent adds nothing', async () => {
+    it('no launch carries a browser argument: Claude Code, Codex and OpenCode, with browser:true and without', async () => {
       const { create } = setup()
-      await create(request({ browser: true }))
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
-        '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'])
-      vi.mocked(buildEngineLaunchArgv).mockClear()
-      await create(request())
-      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
+      for (const engine of ['claude', 'codex', 'opencode'] as const) {
+        for (const browser of [true, undefined]) {
+          vi.mocked(buildEngineLaunchArgv).mockClear()
+          await create(request({ engine, ...(browser ? { browser } : {}) }))
+          const argv = ((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as { extraArgs?: string[] }).extraArgs ?? []).join(' ')
+          for (const word of ['browser-mcp', 'mcp_servers.browser', '"browser"']) expect(argv).not.toContain(word)
+        }
+      }
     })
 
-    it('browser:true gives Codex its own args, and an engine with no browser MCP form nothing', async () => {
-      const { create } = setup()
-      await create(request({ engine: 'codex', browser: true }))
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(expect.arrayContaining([
-        '-c', 'mcp_servers.browser.command="harness"', '-c', 'mcp_servers.browser.args=["browser-mcp"]']))
-      vi.mocked(buildEngineLaunchArgv).mockClear()
-      await create(request({ engine: 'opencode', browser: true }))
-      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
-    })
-
-    it('gives a Swarm agent the machine MCP servers, as its owner\'s own session has them', async () => {
+    it('gives an agent the machine MCP servers, as its owner\'s own session has them', async () => {
       const { writeMachineMcp } = await import('../../lib/machineMcp.js')
       const { rmSync } = await import('node:fs')
       const { env } = await import('../../config/env.js')
@@ -985,7 +962,7 @@ describe('creating an agent', () => {
       try {
         const { create } = setup()
         vi.mocked(buildEngineLaunchArgv).mockClear()
-        expect(await create(request({ cwd: folder(), swarmRole: 'agent' }))).toMatchObject({ ok: true })
+        expect(await create(request({ cwd: folder() }))).toMatchObject({ ok: true })
         expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])).toContain('lamp-mcp')
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })

@@ -364,6 +364,18 @@ describe('grokProvider.owners', () => {
     expect(claims.map((claim) => claim.pid)).toEqual([50])
   })
 
+  // macOS `ps` cuts `comm` at 16 bytes and `args` is split at a space: under such a folder neither says `agent`.
+  it('knows a Grok that runs as `agent` under a folder with a space, by its whole path', async () => {
+    const root = home()
+    session(root, ID)
+    writeFileSync(join(root, 'active_sessions.json'), JSON.stringify([{ session_id: ID, pid: 51, cwd: '/work/app' }]))
+    const path = '/Users/someone/Library/Application Support/Grok/bin/agent'
+    const cut: RunningProcess = { pid: 51, ppid: 1, executable: path.slice(0, 16), args: path }
+    expect(await grokProvider({ home: root }).owners!(view([cut]))).toEqual([])
+    const claims = await grokProvider({ home: root }).owners!(view([{ ...cut, commandPath: path }]))
+    expect(claims.map((claim) => claim.pid)).toEqual([51])
+  })
+
   it('never offers to stop a shared backend (the leader, a server, a relay, an editor\'s stdio agent) or a leader\'s client', async () => {
     const root = home()
     session(root, ID)

@@ -6,7 +6,6 @@
  */
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import type { DiscoveryContract } from '../facets/discovery.js'
 
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -23,14 +22,17 @@ function canonical(path: string): string {
   try { return realpathSync(path) } catch { return path }
 }
 
+/** Whether a path could be an engine's home: absolute, at most 1,024 characters, no control character. */
+export function homeShaped(home: string): boolean {
+  return isAbsolute(home) && home.length <= 1_024 && !/[\x00-\x1f\x7f]/.test(home)
+}
+
 /**
- * The profile home a process carries in its environment, when it is not the machine's default: a path,
- * or `null` for the default, an unset variable, or one that is relative, too long or holds a control
- * character (never a guess). Compared through real paths, as the same folder may be named two ways.
+ * A reported profile home, when it could be one (`homeShaped`) and is not the machine's default, compared through real
+ * paths, as the same folder may be named two ways. `null` for the default and for a value that could not be a home
+ * (never a guess).
  */
-export function profileFromEnv(profile: NonNullable<DiscoveryContract['profile']>, processEnv: Record<string, string>, defaultHome: string): string | null {
-  const home = processEnv[profile.variable]
-  if (!home || !isAbsolute(home) || home.length > 4096 || /[\x00-\x1f\x7f]/.test(home)) return null
-  const compared = (path: string) => canonical(profile.trimTrailingSlashes ? path.replace(/\/+$/, '') : path)
-  return compared(home) === compared(defaultHome) ? null : home
+export function profileHome(home: string, defaultHome: string): string | null {
+  if (!homeShaped(home)) return null
+  return canonical(home) === canonical(defaultHome) ? null : home
 }

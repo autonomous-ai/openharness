@@ -58,8 +58,8 @@ export interface MailboxDeps {
   store: MessageStore
   inbox: PaneInbox
   agent(agentId: string): MailboxAgent | null
-  /** Hand a typed attempt to the core (`core.turns.deliver`). */
-  deliver(agentId: string, text: string, deliveryId: string): void
+  /** Hand a typed attempt to the core (`core.turns.deliver`), with the message it types. */
+  deliver(agentId: string, text: string, deliveryId: string, message: Message): void
   /** Null while a delivery may still be made; otherwise why it can no longer be (it left the tab, the tab
    *  turned Agent Messages off). */
   refused(delivery: LocalDelivery): string | null
@@ -271,7 +271,7 @@ export class Mailbox {
       delivery.tries += 1
       delivery.attempt = { id: `team:msg:${delivery.key}:${delivery.tries}`, at: this.now() }
       this.save()
-      this.deps.deliver(delivery.agentId, this.deps.text(delivery, message), delivery.attempt.id)
+      this.deps.deliver(delivery.agentId, this.deps.text(delivery, message), delivery.attempt.id, message)
     }
   }
 

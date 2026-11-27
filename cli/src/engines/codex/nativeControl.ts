@@ -5,11 +5,11 @@
  * Moved from lib/codexSessionLifecycle.ts and lib/runtimeActivity.ts into the Codex worker. Core establishes
  * from its own evidence and the launch contract that a conversation is on the server (core/engines/
  * nativeControls.ts); this speaks the server's protocol for it (engines/facets/nativeControl.ts). */
-import { spawn } from 'node:child_process'
 import { Duplex } from 'node:stream'
 import { realpath } from 'node:fs/promises'
 import WebSocket from 'ws'
 import { engineBin } from '../../lib/engineBin.js'
+import { spawnTied } from '../../lib/tied.js'
 import type { EngineNativeControl, NativeConversation } from '../facets/nativeControl.js'
 
 export interface CodexControl {
@@ -20,7 +20,8 @@ export interface CodexControl {
 /** The CLI resolves its own socket location. It does not start a server. `proxy`
  * carries raw WebSocket bytes (not JSONL), as documented by Codex app-server. */
 export async function connectCodexControl(home: string): Promise<CodexControl> {
-  const child = spawn(engineBin('codex'), ['app-server', 'proxy'], {
+  // Tied: each crash of the Codex worker left its proxy running, one more per crash.
+  const child = spawnTied(engineBin('codex'), ['app-server', 'proxy'], {
     env: { ...process.env, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'ignore'],
   })
   const pipe = Duplex.from({ readable: child.stdout, writable: child.stdin })

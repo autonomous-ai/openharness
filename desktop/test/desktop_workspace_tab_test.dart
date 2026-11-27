@@ -439,6 +439,47 @@ void main() {
     }
   });
 
+  testWidgets('Hachi\'s fixed tab: no × on hover, its name keeps its place, '
+      'and its menu has no Rename or Close', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(640, 100);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 180,
+              height: 40,
+              child: DesktopWorkspaceTab(
+                id: 'hachi',
+                label: 'Hachi',
+                selected: true,
+                fixed: true,
+                showShortcuts: const AlwaysStoppedAnimation(false),
+                onSelect: () {},
+                onClose: null,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final title = tester.getRect(_label('hachi'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: title.center);
+    await tester.pump();
+    expect(_close('hachi'), findsNothing);
+    expect(tester.getRect(_label('hachi')), title);
+    await tester.tapAt(title.center, buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Rename Tab…'), findsNothing);
+    expect(find.text('Close Tab'), findsNothing);
+    await mouse.removePointer();
+  });
+
   testWidgets('a disabled tab reveals nothing', (tester) async {
     await tester.pumpWidget(
       _host(

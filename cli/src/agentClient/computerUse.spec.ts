@@ -98,6 +98,13 @@ describe('harness computer-use', () => {
       expect(read(oc.path)).toEqual({})
     })
 
+    it('does not reload OpenCode 1, which has no reload command: it would open a TUI on a folder named reload', () => {
+      const oc = opencode(1)
+      setComputerUse(true, dataDir, '/home/me', oc)
+      setComputerUse(false, dataDir, '/home/me', oc)
+      expect(oc.reload).not.toHaveBeenCalled()
+    })
+
     it('keeps a server of the person\'s own under the same name, and says so', () => {
       const oc = opencode(2)
       mkdirSync(join(dataDir, 'opencode'))

@@ -6,14 +6,17 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentEngine } from './types.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const captured = vi.hoisted(() => ({ panes: [] as Record<string, any>[] }))
 vi.mock('../lib/createAgentPane.js', () => ({ createAndRegisterPane: async (input: Record<string, any>) => {
-  captured.panes.push(input)
+  captured.panes.push({ ...input, argv: input.argv(1) })
   return { ok: false, error: 'RECORDED', detail: 'No pane is opened by this golden.' }
 } }))
+vi.mock('../lib/paneEngineProcess.js', async real => ({ ...await real<object>(),
+  resolvePaneEngineProcess: async () => ({ pid: 4343, executable: 'opencode', startMarker: 'replacement' }),
+}))
 vi.mock('../lib/processTable.js', async real => ({ ...await real<object>(), processArgs: async () => '' }))
-vi.mock('../lib/gatewayRuntime.js', async real => ({ ...await real<object>(), probeGatewayRuntime: async () => ({ kind: 'none' }) }))
 vi.mock('../lib/binaryOnPath.js', async real => {
   const actual = await real<typeof import('../lib/binaryOnPath.js')>()
   return { ...actual, resolveBinaryOnPath: (name: string) => name === 'tmux' ? '/fixture/bin/tmux' : actual.resolveBinaryOnPath(name) }
@@ -66,7 +69,7 @@ beforeAll(() => {
   vi.stubEnv('OPENCODE_PATH', join(root, 'bin', 'v1'))
   // These binaries only report facts or record requests. They never launch an engine or open a real store.
   for (const [name, version] of [['v1', '1.18.31'], ['v2', 'opencode v2.0.18'], ['unknown', 'not-a-version']]) {
-    writeFileSync(join(root, 'bin', name), `#!${process.execPath}
+    writeExecutable(join(root, 'bin', name), `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'opencode',args,cwd:process.cwd()})+'\\n');
@@ -75,12 +78,12 @@ else if(args[1]==='model.list') console.log(JSON.stringify({data:[{providerID:'f
 else if(args[1]==='session.switchModel') { fs.writeFileSync(${JSON.stringify(join(root, 'model.json'))}, args[args.indexOf('-d')+1]); console.log('{}'); }
 else if(args[1]==='session.get') console.log(JSON.stringify({data:{id:'ses_fixture',...JSON.parse(fs.readFileSync(${JSON.stringify(join(root, 'model.json'))},'utf8'))}}));
 else { console.error('Unexpected fixture command'); process.exitCode=1; }
-`, { mode: 0o755 })
+`)
   }
-  writeFileSync(join(root, 'bin', 'sqlite3'), `#!${process.execPath}
+  writeExecutable(join(root, 'bin', 'sqlite3'), `#!${process.execPath}
 require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'sqlite3',args:process.argv.slice(2)})+'\\n');
 console.log('5000\\n1\\n1');
-`, { mode: 0o755 })
+`)
   vi.resetModules()
 })
 afterAll(() => {
@@ -95,7 +98,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   const { buildEngineLaunchArgv } = await import('../lib/engineLaunch.js')
   const { env } = await import('../config/env.js')
   const world = { dataDir: join(root, 'adapter_data_dir'), machine: async () => ({ hermesSystemManaged: false, opencodeMajor: await opencodeMajorVersion() }),
-    capabilities: async () => ({ sessionEnv: true }), readCodexConfig: () => null, setGridLaunch: () => {} }
+    capabilities: async () => ({ sessionEnv: true }), readCodexConfig: () => null, setGridLaunch: () => {}, projectsRoot: root }
   const shapes = launchShapes(world)
   const row = (engine: AgentEngine, named = false): RegisteredSession => ({ agentId: 'fixture-agent', sessionId: 'ses_fixture', engine, cwd: work,
     registeredAt: Date.now(), active: true, runtimes: [{ backend: 'tmux', paneId: '%4' }], agent: named ? 'reviewer' : null,
@@ -104,7 +107,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   }) as unknown as RegisteredSession
   const createRest = { createBackend: {}, registry: {}, hooksDisabled: true, hookPort: 4242,
     installOpencodePlugin: async () => true, terminalHintMachineName: () => 'fixture-machine', blocksFolder: () => false,
-    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
+    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
   }
   for (const version of ['v1', 'v2', 'unknown', 'missing']) {
     vi.stubEnv('OPENCODE_PATH', join(root, 'bin', version))
@@ -120,7 +123,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
       resetCase()
       const fork = await shapes.fork({ createBackend: {}, registry: { byAgent: () => source },
         mirror: { isBusy: () => false, recentAsks: () => ['fixture ask'], recent: () => [], lastFullText: () => 'fixture answer' },
-        pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
+        pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
       } as never)({ agentId: source.agentId, name: null, prompt: 'try another approach' })
       actual[`${version} fork named=${named}`] = normalize({ result: fork, panes: paneAnswer(), native: nativeCalls() })
 
@@ -139,9 +142,21 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
           clearEnv: async (_pane: unknown, names: string[]) => { event(['clearEnv', names]); return { state: 'succeeded' } }, releaseHold: async () => {} }
         return { backendFor: () => tmux, instances: () => [tmux] }
       })(),
-      registry: { resolve: () => source, byAgent: () => source, updateProcessIdentity: (...args: unknown[]) => event(['process', ...args]),
-        setGridLaunch: (...args: unknown[]) => event(['grid', ...args]), setSubscriptionModel: (...args: unknown[]) => event(['subscription', ...args]),
-        setActive: (...args: unknown[]) => event(['active', ...args]) },
+      registry: { resolve: () => source, byAgent: () => source,
+        confirmLaunch: async (_id: string, input: Parameters<typeof import('../lib/registry.js').registry.confirmLaunch>[1],
+          authority: Parameters<typeof import('../lib/registry.js').registry.confirmLaunch>[2]) => {
+          if (authority?.current?.() === false) return { state: 'not-published' }
+          await authority?.refresh?.()
+          if (authority?.current?.() === false) return { state: 'not-published' }
+          Object.assign(source, { processIdentity: input.processIdentity, grid: input.grid,
+            gridLaunch: input.gridLaunchRecord?.override ?? null, gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
+            active: true, launch: { state: 'ready' } })
+          // Project one publication into the old fixture's events; native commands stay byte-for-byte golden.
+          event(['process', source.agentId, input.processIdentity, undefined, input.grid])
+          event(['grid', source.agentId, input.gridLaunchRecord])
+          event(['active', source.agentId, true])
+          return { state: 'confirmed', entry: structuredClone(source) }
+        } },
       runtimeProfiles: { selectedModel: () => null },
       launchOverridesDeps: { machine: world.machine, capabilities: world.capabilities },
       sessionTurnOpen: () => false,

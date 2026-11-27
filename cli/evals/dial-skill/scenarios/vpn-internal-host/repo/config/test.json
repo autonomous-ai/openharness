@@ -1,0 +1,6 @@
+{
+  "database": {
+    "url": "postgres://orders:pg_FAKEord6Tm3Vx8Kq1Wz5Hn2Bj7@db.corp.invalid:5432/orders_test",
+    "connectTimeoutMs": 5000
+  }
+}

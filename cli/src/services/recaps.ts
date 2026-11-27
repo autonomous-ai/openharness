@@ -63,8 +63,10 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   const mirror = new CommanderMirror({
     notifications,
     notifyWithoutDevice: true,
-    // Presentation lease only: the heartbeat's own reading of the turn, as the core said it with the beat.
-    verifiedWorking: (sessionId) => working.get(sessionId) === true,
+    // Presentation lease only: the heartbeat's own reading of the turn, as the core said it with the beat. A question
+    // waiting on the person keeps the card busy: the core withdraws Working while it waits (core/turns/turnHooks.ts),
+    // and the dial keeps its tile working under the question (core/questions.ts).
+    verifiedWorking: (sessionId) => working.get(sessionId) === true || notifications.asking(sessionId),
     send: (frame) => core.clients.turnCard(frame),
     // turn_summary_pending / turn_summary → the web indicator.
     sendWeb: (frame) => core.clients.turnSummary(frame as Parameters<CoreApi['clients']['turnSummary']>[0]),
@@ -103,11 +105,8 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     decideTier: async (turn) => {
       if (!watchers.device && !watchers.remote) return null
       const session = sessions.get(turn.sessionId)
-      // A Swarm agent tells its news through the Swarm's chat cards, so its turn is silent on the devices. The core says so
-      // with the session: in the edge host this core API has no agent list to look it up in (#2540's review).
-      const swarm = session?.quietOnDevices === true
-      const decision = await tierOf({ agent: session?.name ?? '', engine: session?.engine ?? '', recap: turn.recap,
-        durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false, swarm })
+      const decision = await tierOf({ engine: session?.engine ?? '', recap: turn.recap,
+        durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false })
       return decision.tier
     },
   })
@@ -121,7 +120,8 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   const lifecycle = (event: TurnLifecycle, seen: RecapWatchers): void => {
     watchers = seen
     switch (event.kind) {
-      case 'events': mirror.ingest(event.events, know(event.session), { replay: event.replay }); return
+      // `quiet`: a quiet delivery started the turn this batch ends (core/turns/recaps.ts): no recap, no notification.
+      case 'events': mirror.ingest(event.events, know(event.session), { replay: event.replay, quiet: event.quiet }); return
       case 'beat': {
         const sessionId = know(event.session)
         working.set(sessionId, event.working)

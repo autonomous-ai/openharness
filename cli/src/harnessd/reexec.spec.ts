@@ -41,6 +41,30 @@ describe('which bundle', () => {
     writeFileSync(file, '')
     expect(sha256File(file)).toBe(createHash('sha256').update('').digest('hex'))
   })
+
+  it('reads every file through one piece: no buffer per file, and nothing of one file hashed into the next', () => {
+    // A lean folder in small: many files, the longest first, so every one after it is read into a piece that
+    // still holds the end of a longer file.
+    const files = Array.from({ length: 40 }, (_, index) => {
+      const path = join(dir, `chunk-${index}.mjs`)
+      const bytes = randomBytes(index === 0 ? 2 * 64 * 1024 + 5 : index * 97)
+      writeFileSync(path, bytes)
+      return { path, sha256: createHash('sha256').update(bytes).digest('hex') }
+    })
+    // Watched from here on: the one piece the module holds was made as it loaded.
+    const allocators = (['alloc', 'allocUnsafe', 'allocUnsafeSlow'] as const).map((name) => vi.spyOn(Buffer, name))
+    let hashes: string[]
+    let allocations: number
+    try {
+      hashes = files.map(({ path }) => sha256File(path))
+      // Counted before the spies are restored: restoring one clears its calls.
+      allocations = allocators.reduce((sum, allocator) => sum + allocator.mock.calls.length, 0)
+    } finally {
+      for (const allocator of allocators) allocator.mockRestore()
+    }
+    expect(allocations, 'buffers allocated while hashing 40 files').toBe(0)
+    expect(hashes).toEqual(files.map(({ sha256 }) => sha256))
+  })
 })
 
 describe('the state a master hands on', () => {
@@ -152,31 +176,33 @@ describe('the probe', () => {
     return file
   }
 
-  it('passes a bundle whose master answers, and says why one that does not fails', async () => {
+  it('passes a bundle whose master answers, and says how one that does not ended, never what it printed', async () => {
     const ok = await runProbe(process.execPath, [script(`console.log('loading'); console.log(${JSON.stringify(PROBE_ANSWER)} + ' · protocol 2')`), PROBE_COMMAND], process.env).result
-    expect(ok).toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 2` })
+    expect(ok).toEqual({ ok: true, ended: 'exit 0' })
     // One that takes a handover (Windows) says so.
     expect(await runProbe(process.execPath, [script(`console.log(${JSON.stringify(`${PROBE_ANSWER} · protocol 6 · ${PROBE_HANDOVER}`)})`), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 6 · ${PROBE_HANDOVER}`, handover: true })
-    // A bundle from before probes: its usage on stdout, the reason on stderr, which is what is said.
-    expect(await runProbe(process.execPath, [script(`console.error('Unknown command: ' + process.argv[2]); console.log('Usage: harness …\\n  harness --help'); process.exit(1)`), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: false, detail: `Unknown command: ${PROBE_COMMAND}` })
+      .toEqual({ ok: true, ended: 'exit 0', handover: true })
+    // A bundle from before probes: its usage on stdout, the reason on stderr, which can name a path: only its size is said.
+    const unknown = `Unknown command: ${PROBE_COMMAND} /Users/sentinel/x\n`
+    expect(await runProbe(process.execPath, [script(`process.stderr.write(${JSON.stringify(unknown)}); console.log('Usage: harness …\\n  harness --help'); process.exit(1)`), PROBE_COMMAND], process.env).result)
+      .toEqual({ ok: false, ended: `exit 1 · stderr ${Buffer.byteLength(unknown)} B` })
     // An answer on stderr is no answer.
     expect(await runProbe(process.execPath, [script(`console.error(${JSON.stringify(PROBE_ANSWER)})`), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: false, detail: PROBE_ANSWER })
-    expect(await runProbe(process.execPath, [script('console.log("something else")'), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: false, detail: 'something else' })
-    expect(await runProbe(process.execPath, [script('process.exit(4)')], process.env).result).toEqual({ ok: false, detail: 'exit 4' })
-    expect(await runProbe(process.execPath, [script('process.kill(process.pid, "SIGKILL")')], process.env).result).toEqual({ ok: false, detail: 'signal SIGKILL' })
-    expect(await runProbe(join(dir, 'no-node'), [], process.env).result).toEqual({ ok: false, detail: expect.stringContaining('ENOENT') })
+      .toEqual({ ok: false, ended: `exit 0 · stderr ${Buffer.byteLength(`${PROBE_ANSWER}\n`)} B` })
+    expect(await runProbe(process.execPath, [script('console.log("something else /Users/sentinel/x")'), PROBE_COMMAND], process.env).result)
+      .toEqual({ ok: false, ended: 'exit 0' })
+    expect(await runProbe(process.execPath, [script('process.exit(4)')], process.env).result).toEqual({ ok: false, ended: 'exit 4' })
+    expect(await runProbe(process.execPath, [script('process.kill(process.pid, "SIGKILL")')], process.env).result).toEqual({ ok: false, ended: 'signal SIGKILL' })
+    // The spawn error's kind, never its message, which names the Node's path.
+    expect(await runProbe(join(dir, 'no-node'), [], process.env).result).toEqual({ ok: false, ended: 'ENOENT' })
   })
 
   it('gives up on one that does not answer in time, and can be abandoned', async () => {
     const hung = script('setInterval(() => {}, 1000)')
-    expect(await runProbe(process.execPath, [hung], process.env, 300).result).toEqual({ ok: false, detail: 'no answer within 300 ms' })
+    expect(await runProbe(process.execPath, [hung], process.env, 300).result).toEqual({ ok: false, ended: 'no answer within 300 ms' })
     const running = runProbe(process.execPath, [hung], process.env)
     running.cancel()
-    expect(await running.result).toEqual({ ok: false, detail: 'signal SIGKILL' })
+    expect(await running.result).toEqual({ ok: false, ended: 'signal SIGKILL' })
     expect(PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000)
   })
 
@@ -187,7 +213,7 @@ describe('the probe', () => {
       const running = runProbe('node', [], {}, 100, () => child)
       running.cancel()
       vi.advanceTimersByTime(100)
-      expect(await running.result).toEqual({ ok: false, detail: 'no answer within 100 ms' })
+      expect(await running.result).toEqual({ ok: false, ended: 'no answer within 100 ms' })
       child.emit('close', 0, null)
     } finally { vi.useRealTimers() }
   })
@@ -268,7 +294,7 @@ describe('re-executing', () => {
     expect(probes[0].args).toEqual(['--flag', '/opt/cli.js', PROBE_COMMAND])
     expect(decodeResume(probes[0].env[RESUME_ENV])).toEqual(state({ reexecs: 3, unproven: 2 }))
     expect(probes[0].env.KEEP).toBe('1')
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(calls.at(-1)).toBe(`marker ${JSON.stringify({ pid: 4242, from: 'old', to: 'new', at: 1_000 })}`)
     expect(execs).toEqual([{ file: '/opt/node', args: ['/opt/node', '--flag', '/opt/cli.js', '__harnessd'], env: probes[0].env }])
     expect(outcomes).toEqual([])
@@ -284,7 +310,7 @@ describe('re-executing', () => {
     expect(replacing()).toBe(true)
     stopped[0]()
     expect(replacing()).toBe(true)
-    await settle({ ok: false, detail: 'no' })
+    await settle({ ok: false, ended: 'exit 1' })
     expect(replacing()).toBe(false)
     expect(outcomes).toEqual(['same', 'refused'])
   })
@@ -293,24 +319,24 @@ describe('re-executing', () => {
     const refused = make()
     refused.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[0]()
-    await settle({ ok: false, detail: 'Unknown command: __harnessd-probe' })
+    await settle({ ok: false, ended: 'exit 1 · stderr 33 B' })
     expect(outcomes).toEqual(['refused'])
-    expect(calls.slice(-2)).toEqual(['[harnessd] the new bundle\'s master did not answer its probe (Unknown command: __harnessd-probe) — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] the new bundle\'s master did not answer its probe (exit 1 · stderr 33 B) — keeping this master', 'start children'])
     expect(execs).toEqual([])
 
     calls = []
     const failing = make({ execve: () => { throw new Error('E2BIG') } })
     failing.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[1]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(outcomes).toEqual(['refused', 'kept'])
-    expect(calls.slice(-3)).toEqual(['remove marker', '[harnessd] could not re-execute this master (E2BIG) — keeping it', 'start children'])
+    expect(calls.slice(-3)).toEqual(['remove marker', '[harnessd] could not re-execute this master (Error) — keeping it', 'start children'])
 
     const odd = make({ execve: () => { throw 'odd' } })
     odd.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[2]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
-    expect(calls).toContain('[harnessd] could not re-execute this master (odd) — keeping it')
+    await settle({ ok: true, ended: 'exit 0' })
+    expect(calls).toContain('[harnessd] could not re-execute this master (string) — keeping it')
   })
 
   it('never execs onto a node binary or a bundle that is not there: that exec could not be caught', async () => {
@@ -321,7 +347,7 @@ describe('re-executing', () => {
       const missing = make({ exists: (path) => path !== gone })
       missing.reexec(state(), (outcome) => outcomes.push(outcome))
       stopped.at(-1)!()
-      await settle({ ok: true, detail: PROBE_ANSWER })
+      await settle({ ok: true, ended: 'exit 0' })
       expect(execs).toEqual([])
       expect(calls.slice(-3)).toEqual(['remove marker', `[harnessd] ${said} is not there to re-execute on — keeping this master`, 'start children'])
     }
@@ -329,20 +355,20 @@ describe('re-executing', () => {
   })
 
   it('carries on as itself, and does not end, when its marker cannot be written (a full disk)', async () => {
-    const full = make({ writeMarker: () => { throw new Error('ENOSPC: no space left on device, write') } })
+    const full = make({ writeMarker: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } })
     full.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[0]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(execs).toEqual([])
     expect(outcomes).toEqual(['kept'])
-    expect(calls.slice(-2)).toEqual(['[harnessd] could not leave the re-execution marker (ENOSPC: no space left on device, write) — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] could not leave the re-execution marker (ENOSPC) — keeping this master', 'start children'])
 
     const odd = make({ writeMarker: () => { throw 'read-only' } })
     odd.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[1]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(outcomes).toEqual(['kept', 'kept'])
-    expect(calls).toContain('[harnessd] could not leave the re-execution marker (read-only) — keeping this master')
+    expect(calls).toContain('[harnessd] could not leave the re-execution marker (string) — keeping this master')
   })
 
   it('does nothing more once the master is stopping, at any step, and abandons its probe', async () => {
@@ -359,7 +385,7 @@ describe('re-executing', () => {
     stopping = true
     second.cancel()
     expect(probes[0].cancelled).toBe(true)
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(execs).toEqual([])
 
     stopping = false
@@ -367,7 +393,7 @@ describe('re-executing', () => {
     third.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[2]()
     stopping = true
-    await settle({ ok: false, detail: 'no' })
+    await settle({ ok: false, ended: 'exit 1' })
     expect(outcomes).toEqual([])
     expect(calls).not.toContain('start children')
     third.cancel()
@@ -503,7 +529,7 @@ describe('handing over, where there is no exec (Windows)', () => {
   const make = (over: Partial<HandOverDeps> = {}, more: Partial<ReexecDeps> = {}) => createReexec({
     own: 'old', current: () => 'new', nodePath: '/opt/node', execArgv: [], scriptPath: 'C:\\h\\cli\\0.5.1\\cli.js', env: { KEEP: '1' }, pid: 4242,
     execve: null, exists: () => true,
-    probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER, handover: true }), cancel: () => {} }),
+    probe: () => ({ result: Promise.resolve({ ok: true, ended: 'exit 0', handover: true }), cancel: () => {} }),
     stopChildren: (done) => { calls.push('stop children'); done() },
     startChildren: () => calls.push('start children'),
     writeMarker: (marker) => calls.push(`marker ${JSON.stringify(marker)}`),
@@ -533,7 +559,7 @@ describe('handing over, where there is no exec (Windows)', () => {
   const NO_CLAIM = '[harnessd] the new master took over but never claimed the pid file — keeping this master'
   const BOUND = 1_000 + HANDOVER_CUTOFF_MS + HANDOVER_CUTOFF_MARGIN_MS
   const HANDED = '[harnessd] handed over to the new master (pid 5151) — leaving'
-  const NOT_YET = '[harnessd] could not take the handover back yet (EBUSY) — trying again'
+  const NOT_YET = '[harnessd] could not take the handover back yet (Error) — trying again'
   const EXIT_3 = '[harnessd] could not start the new master (exit 3) — keeping this master'
   const busy = (times = Infinity) => { let n = 0; return () => { if (n++ < times) throw new Error('EBUSY'); calls.push('take back'); return true } }
 
@@ -624,7 +650,7 @@ describe('handing over, where there is no exec (Windows)', () => {
     calls = []
     // A pid file that cannot be read.
     await run(make({ takeBack: tookIt, readPid: () => { throw new Error('EBUSY') } }).reexec)
-    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file cannot be read (EBUSY) — leaving', 'unlock', 'leave'])
+    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file cannot be read (Error) — leaving', 'unlock', 'leave'])
     expect(outcomes).toEqual([])
   })
 
@@ -659,23 +685,23 @@ describe('handing over, where there is no exec (Windows)', () => {
     calls = []
     // lib/daemonSpawnLock.ts's acquireSpawnLock rejects when it is busy (`SpawnLockBusyError`).
     await run(make({ lock: () => Promise.reject(new Error('held by pid 77')) }).reexec)
-    expect(calls.slice(-2)).toEqual(['[harnessd] could not take the daemon spawn lock (held by pid 77) — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] could not take the daemon spawn lock (Error) — keeping this master', 'start children'])
     calls = []
     await run(make({}, { exists: () => false }).reexec)
-    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] C:\\h\\cli\\0.5.1\\cli.js is not there to hand over to — keeping this master', 'start children'])
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] the bundle is not there to hand over to — keeping this master', 'start children'])
     calls = []
     await run(make({ token: () => '../tok' }).reexec)
     expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] the handover token "../tok" is not one a file can be named by — keeping this master', 'start children'])
     calls = []
     await run(make({ claim: () => { throw new Error('EACCES') } }).reexec)
-    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not claim the pid file (EACCES) — keeping this master', 'start children'])
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not claim the pid file (Error) — keeping this master', 'start children'])
     calls = []
-    await run(make({}, { writeMarker: () => { throw new Error('ENOSPC') } }).reexec)
+    await run(make({}, { writeMarker: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } }).reexec)
     expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (ENOSPC) — keeping this master', 'start children'])
     calls = []
-    // A throw that is not an Error still names itself in the log (the String(error) branch).
+    // A throw that is not an Error still names its kind in the log.
     await run(make({}, { writeMarker: () => { throw 'EROFS' } }).reexec)
-    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (EROFS) — keeping this master', 'start children'])
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (string) — keeping this master', 'start children'])
     expect(launched).toEqual([])
     expect(outcomes).toEqual(['kept', 'kept', 'kept', 'kept', 'kept', 'kept', 'kept'])
   })
@@ -685,10 +711,10 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(calls.slice(-6)).toEqual(['take back', 'remove marker', 'claim', 'unlock', EXIT_3, 'start children'])
     calls = []
     await run(make({ launch: () => Promise.reject(new Error('spawn EACCES')) }).reexec)
-    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (spawn EACCES) — keeping this master', 'start children'])
+    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (Error) — keeping this master', 'start children'])
     calls = []
     await run(make({ sleep: () => Promise.reject(new Error('gone')) }).reexec)
-    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (gone) — keeping this master', 'start children'])
+    expect(calls.slice(-5)).toEqual(['take back', 'remove marker', 'unlock', '[harnessd] the handover failed (Error) — keeping this master', 'start children'])
     expect(outcomes).toEqual(['kept', 'kept', 'kept'])
   })
 
@@ -725,12 +751,12 @@ describe('handing over, where there is no exec (Windows)', () => {
     calls = []; outcomes = []; clock.now = 1_000
     // A sleep that fails is only a pause cut short: still bounded by the clock.
     await run(make({ takeBack: busy(), sleep: async (ms) => { clock.now += ms; throw new Error('gone') } }).reexec)
-    expect(calls.slice(-2)).toEqual(['[harnessd] the handover failed (gone), and no new master can take over any more — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] the handover failed (Error), and no new master can take over any more — keeping this master', 'start children'])
   })
 
   it('stays when it cannot claim the pid file back, saying so', async () => {
     await run(make({ launch: async () => 'exit 3', readPid: () => { throw new Error('EBUSY') } }).reexec)
-    expect(calls.slice(-5)).toEqual(['remove marker', '[harnessd] could not claim the pid file back (EBUSY)', 'unlock', EXIT_3, 'start children'])
+    expect(calls.slice(-5)).toEqual(['remove marker', '[harnessd] could not claim the pid file back (Error)', 'unlock', EXIT_3, 'start children'])
     expect(outcomes).toEqual(['kept'])
   })
 
@@ -788,7 +814,7 @@ describe('handing over, where there is no exec (Windows)', () => {
 
   it('keeps this master, handing over to nothing, when the new bundle\'s master does not say it takes a handover', async () => {
     // A bundle from before handovers would be handed the state, never take the handover, and run beside this master.
-    await run(make({}, { probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER }), cancel: () => {} }) }).reexec)
+    await run(make({}, { probe: () => ({ result: Promise.resolve({ ok: true, ended: 'exit 0' }), cancel: () => {} }) }).reexec)
     expect(calls).toEqual([REEXECUTING, 'stop children', '[harnessd] the new bundle\'s master cannot take a handover — keeping this master', 'start children'])
     expect(launched).toEqual([])
     expect(outcomes).toEqual(['kept'])

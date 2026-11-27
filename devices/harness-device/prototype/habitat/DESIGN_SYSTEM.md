@@ -56,19 +56,30 @@ glyph atlas. No runtime font engine, extra font family, gradients, or shadows.
   use a 162 px portrait and three rows; long results use 108 px and six tapered
   rows ending above the footer. The prose remains primary text, even while a
   notification is pressed. The action responds.
+- In the machine view, each face names the app its agent runs in under the name,
+  in secondary text on the inner arc: "Orca", "Ghostty", "kitty". An app the
+  dial does not know reads "Terminal".
+- An agent in another app cannot hear the dial. A tap on its face shows
+  "See it in Orca" for 2 s in the status line "Try again" uses; its resting
+  face invites no talking, and Stop current turn and Model are disabled.
 - Lists use ordinary primary text and one flat lilac selection. Back remains
   readable and neutral. Disabled choices use secondary text.
 - Quiet mode stops motion without adding another layer of dimming.
+- Not connected, the "Harness" wordmark has one hint under it in secondary text,
+  centred, at most two lines: "No computer found. Check the USB cable." with no
+  USB host, or "Open Harness Device on your computer." after 5 s on a host with
+  no daemon. While loading or updating, the wordmark stands alone.
 
 ## Behavior belongs to the same system
 
 Reading a notification does not switch the desktop. Opening it explicitly focuses
-that pane and returns to the large companion after the host acknowledges it. Its
-already-read recap stays dismissed across tab/history refreshes; a new live result
-can appear when the next turn finishes. Opening a question does not answer it.
+that pane and, once the host acknowledges it, returns to that pane's face with the
+turn's recap, even when its history arrives later. The next turn hides it.
+Opening a question does not answer it.
+A notification from an agent with no window to open goes to that agent's face,
+its recap still there.
 
 The theme uses constant color tokens and the existing bounded text compositor.
 It adds no allocated theme objects, animation tasks, or artwork frames. The
 working layout, gesture thresholds, and approved octopus poses remain the same.
-Reading touch regions follow the lowered content, keeping voice on the portrait
-and local dismissal on the summary.
+The whole face below the name starts voice, the summary included.

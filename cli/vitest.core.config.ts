@@ -7,9 +7,6 @@ import base from './vitest.config.js'
 export default defineConfig({
   test: {
     ...base.test,
-    // The gate runs under v8 coverage, and these specs do real fsyncs and renames: 5.2-5.7 s each on a loaded Intel Mac, over the
-    // default 5 s (handoffPublication, then its native sibling). 30 s changes no assertion.
-    testTimeout: 30_000,
     include: ['src/core/**/*.spec.ts', 'src/services/**/*.spec.ts'],
     coverage: {
       enabled: true,

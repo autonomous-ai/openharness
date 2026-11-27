@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readRuntimeText } from '../kit/runtimeReader.js'
 import {
   hermesStatusModel,
   parseHermesConfig,
@@ -43,6 +47,16 @@ describe('hermes model catalog', () => {
     expect(parseHermesConfig('model:\n  default: x\nagent:\n  reasoning_effort: nonsense'))
       .toEqual({ model: 'x', effort: null })
     expect(parseHermesConfig('')).toEqual({ model: null, effort: null })
+  })
+
+  // PowerShell 5's `Set-Content -Encoding utf8` saves it with a BOM, which JavaScript's `\s` matches: kept, the
+  // first line's `model:` read as indented.
+  it('reads a config.yaml saved with a BOM', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'hermes-config-'))
+    try {
+      writeFileSync(join(home, 'config.yaml'), '\uFEFFmodel:\n  default: minimax/minimax-m3\n')
+      expect(parseHermesConfig(await readRuntimeText(join(home, 'config.yaml')))).toEqual({ model: 'minimax/minimax-m3', effort: null })
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   it('reads the model out of the status line', () => {

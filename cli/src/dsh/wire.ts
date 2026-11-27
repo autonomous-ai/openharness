@@ -57,6 +57,7 @@ export function dshListRows(
       tier: dshTier(entry.manifest),
       ...facts(entry.id),
       ...dshUpdateInfo(entry, byId.get(entry.id)),
+      ...(entry.setup === 'needs-setup' ? { needsSetup: true } : {}),
     })
   }
   for (const entry of registry) {

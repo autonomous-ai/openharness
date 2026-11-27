@@ -7,6 +7,7 @@
 //! questions, agents appearing — goes to the app as an event, as do binary terminal frames.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
@@ -47,8 +48,62 @@ type Pending = Arc<Mutex<HashMap<String, (String, oneshot::Sender<(String, Value
 /// by every OS user, so the process holding a port may belong to a completely different account.
 pub fn socket_path(port: u16) -> PathBuf {
     let dir = std::env::var_os("ADAPTER_DATA_DIR").filter(|s| !s.is_empty()).map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".harness/cli/data"));
-    dir.join(format!("daemon-{port}.sock"))
+        .unwrap_or_else(default_data_dir);
+    socket_in(&dir, port, || {
+        short_sockets(cfg!(target_os = "linux"), std::env::var_os("XDG_RUNTIME_DIR"), || {
+            crate::harness_home::harness_path(std::env::var_os("HOME").unwrap_or_default(), crate::harness_home::Entry::S)
+        })
+    })
+}
+
+/// Where a data folder too long for a socket keeps it (cli/src/lib/localSocket.ts): on Linux in
+/// `$XDG_RUNTIME_DIR/harness` while that variable names this account's own folder (no link) of mode 0700, else in
+/// `state_sockets`, the state root's `s`.
+fn short_sockets(linux: bool, runtime: Option<OsString>, state_sockets: impl FnOnce() -> PathBuf) -> PathBuf {
+    let runtime = runtime.map(PathBuf::from).filter(|folder| linux && folder.is_absolute() && own_private_folder(folder));
+    runtime.map_or_else(state_sockets, |folder| folder.join("harness"))
+}
+
+#[cfg(unix)]
+fn own_private_folder(folder: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(folder).is_ok_and(|metadata| {
+        metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o7777 == 0o700
+    })
+}
+
+#[cfg(not(unix))]
+fn own_private_folder(_: &Path) -> bool { false }
+
+/// The longest socket path the daemon opens (cli/src/lib/localSocket.ts MAX_SOCKET_PATH_BYTES).
+const MAX_SOCKET_PATH_BYTES: usize = 96;
+
+/// `daemon-<port>.sock` where the CLI's `socketPathIn` (cli/src/lib/localSocket.ts) puts it: in [dir], or, when that
+/// path is too long for a socket, in `<sockets>/<the first 16 hex of sha256(dir)>`. Windows keeps it in [dir], where
+/// the pipe's record is read from.
+fn socket_in(dir: &Path, port: u16, sockets: impl FnOnce() -> PathBuf) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let name = format!("daemon-{port}.sock");
+    let beside = dir.join(&name);
+    if cfg!(windows) || beside.as_os_str().len() <= MAX_SOCKET_PATH_BYTES {
+        return beside;
+    }
+    let hash = Sha256::digest(dir.as_os_str().as_encoded_bytes());
+    let folder: String = hash[..8].iter().map(|byte| format!("{byte:02x}")).collect();
+    sockets().join(folder).join(name)
+}
+
+/// The CLI's data folder when ADAPTER_DATA_DIR is unset: on Linux where the XDG rule puts it.
+#[cfg(target_os = "linux")]
+fn default_data_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    crate::harness_home::harness_path(home, crate::harness_home::Entry::Cli).join("data")
+}
+
+/// Elsewhere joined in one piece, so its Windows text stays today's.
+#[cfg(not(target_os = "linux"))]
+fn default_data_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".harness/cli/data")
 }
 
 /// What a request on the daemon's socket proves, and what it asks the answer to prove: nothing on a socket only its owner
@@ -456,6 +511,71 @@ mod recovery_tests {
         let listener = tokio::net::UnixListener::bind(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         (listener, TestSocket(path))
+    }
+
+    #[test]
+    fn the_socket_is_in_the_data_folder_while_its_path_fits() {
+        let sockets = || -> PathBuf { panic!("a short data folder needs no short socket folder") };
+        assert_eq!(socket_in(Path::new("/h/.harness/cli/data"), 18473, sockets), PathBuf::from("/h/.harness/cli/data/daemon-18473.sock"));
+    }
+
+    #[test]
+    fn a_data_folder_too_long_for_a_socket_has_it_in_the_short_folder_the_cli_names() {
+        // The CLI's socketPathIn and Desktop's defaultDaemonSocketPath name this folder for this data folder.
+        let long = format!("/{}", "x".repeat(100));
+        let path = socket_in(Path::new(&long), 1, || PathBuf::from("/h/.local/state/harness/s"));
+        assert_eq!(path.to_str().unwrap(), "/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock");
+    }
+
+    /// A folder of this account's under /tmp, short so a socket fits under it, removed on drop.
+    struct Runtime(PathBuf);
+    impl Drop for Runtime { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+    fn runtime(mode: u32) -> Runtime {
+        let path = PathBuf::from(format!("/tmp/hn-rt-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        Runtime(path)
+    }
+
+    fn state_sockets() -> PathBuf { PathBuf::from("/h/.local/state/harness/s") }
+
+    #[test]
+    fn a_long_folders_socket_is_in_xdg_runtime_dir_while_it_is_the_accounts_own_0700_folder() {
+        let run = runtime(0o700);
+        // The example store/'s and Desktop's tests pin too.
+        let data = format!("/home/{}/.local/share/harness/cli/data", "u".repeat(80));
+        let path = socket_in(Path::new(&data), 18473, || short_sockets(true, Some(run.0.clone().into()), state_sockets));
+        assert_eq!(path, run.0.join("harness/410894cc1bc77e10/daemon-18473.sock"));
+        let long = format!("/{}", "x".repeat(100));
+        let slashed = format!("{}/", run.0.display());
+        let path = socket_in(Path::new(&long), 1, || short_sockets(true, Some(slashed.into()), state_sockets));
+        assert_eq!(path.to_str().unwrap(), format!("{}/harness/e50e7828cbafcbee/daemon-1.sock", run.0.display()));
+    }
+
+    #[test]
+    fn a_long_folders_socket_is_in_the_state_root_when_xdg_runtime_dir_is_unset_relative_open_or_a_link() {
+        let state = PathBuf::from("/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock");
+        let long = format!("/{}", "x".repeat(100));
+        let at = |runtime: Option<OsString>| socket_in(Path::new(&long), 1, || short_sockets(true, runtime, state_sockets));
+        assert_eq!(at(None), state);
+        assert_eq!(at(Some("run".into())), state);
+        let open = runtime(0o750);
+        assert_eq!(at(Some(open.0.clone().into())), state);
+        assert_eq!(at(Some(open.0.join("none").into())), state);
+        let own = runtime(0o700);
+        let link = PathBuf::from(format!("{}-link", own.0.display()));
+        std::os::unix::fs::symlink(&own.0, &link).unwrap();
+        let linked = at(Some(link.clone().into()));
+        std::fs::remove_file(&link).unwrap();
+        assert_eq!(linked, state);
+    }
+
+    #[test]
+    fn off_linux_a_long_folders_socket_is_never_in_xdg_runtime_dir() {
+        let run = runtime(0o700);
+        let long = format!("/{}", "x".repeat(100));
+        let path = socket_in(Path::new(&long), 1, || short_sockets(false, Some(run.0.clone().into()), state_sockets));
+        assert_eq!(path, PathBuf::from("/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock"));
     }
 
     #[tokio::test]

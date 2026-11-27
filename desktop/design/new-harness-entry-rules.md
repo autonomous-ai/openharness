@@ -47,6 +47,10 @@ path available in the Repo tooltip.
 
 Opening, searching, and cancelling never send input to an existing harness.
 
+A task with files waits until the harness can take input. After a Codex startup
+update, the launcher gets two minutes to reopen the prompt. If Codex still
+cannot take input, the desktop asks the person to restart Codex and try again.
+
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
 | Cmd-T, then Cmd-N | Last successful setup and last focused real project with its machine | The blank tab opened by Cmd-T |
@@ -163,8 +167,7 @@ A repository with no commit yet — or a folder inside one, as `git init` in the
 home folder makes `~/Downloads` — starts in the folder itself, as Claude Code's
 app does: Branch and Worktree are hidden (the row form says "No commits yet"),
 nothing blocks Start, and the remembered Worktree choice is left for the next
-repository (`hasNoCommits`). A Swarm's Product Manager is the exception: it
-never works in the person's checkout, so such a project is refused for it.
+repository (`hasNoCommits`).
 Folders without Git keep both rows disabled. Discovery runs on the selected machine
 without fetching, switching branches, or creating a worktree. A failed
 discovery offers Retry and blocks starting until the result is known.

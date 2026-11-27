@@ -15,7 +15,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { VERSION } from '../version.js'
 import { AGENT_SESSION_ENV } from './model.js'
-import { EXIT, VIA_MCP_ENV } from './commands.js'
+import { EXIT, SPAWN_LIMITS, VIA_MCP_ENV } from './commands.js'
 import { ENGINES, TERMINAL_ENGINE } from '../engines/types.js'
 import { AGENT_SETTING_NAMES, PERSON_SAID_YES } from '../lib/agentSettings.js'
 
@@ -29,7 +29,7 @@ Every harness spends the person's tokens. Start one (harness_start) only for wor
 
 Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list), search what was already said or decided (harness_search), and see the machines you may run on (harness_machines). Put everything in the task. More work for a harness you started goes by harness_tell, once you have read its answer, while the person allows it; a message to a teammate in your tab by harness_send, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
 
-Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most 4 of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.
+Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most ${SPAWN_LIMITS.livePerHarness} of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.
 
 Each answer ends with Next: the call to make next. A refusal is final: do not retry it; tell the person, or do the work yourself. One that says a setting is off is the person's to give: ask them with your tool for asking them, or in your reply, and only after their yes turn it on (harness_settings with person_said_yes), then try again. Never answer it for them.`
 
@@ -118,7 +118,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_wait',
-    description: `Wait until harnesses stop working, then say each one's state. Waits up to timeout_seconds (${WAIT_DEFAULT_S} by default); if they are still working then, call it again.`,
+    description: `Wait until harnesses stop working and the background commands they started have ended, then say each one's state. Waits up to timeout_seconds (${WAIT_DEFAULT_S} by default); if they are still working then, call it again.`,
     inputSchema: schema({
       names: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'The harnesses to wait for.' },
       any: { type: 'boolean', description: 'Return when the first one is done, not all.' },
@@ -133,7 +133,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_read',
-    description: 'A harness\'s state and its last turn: what it was asked and what it answered.',
+    description: 'A harness\'s state and its last turn: what it was asked and what it answered, and how many background commands it still runs when idle.',
     inputSchema: schema({ name: { type: 'string' }, chars: { type: 'number', minimum: 1, description: 'How much of the answer (4000 characters by default).' } }, ['name']),
     annotations: { readOnlyHint: true },
     argv: (a) => ['show', str(a.name), ...(typeof a.chars === 'number' && a.chars > 0 ? ['--chars', String(Math.floor(a.chars))] : [])],
@@ -172,8 +172,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_close',
-    description: 'Close a harness you started, once it is done. Its conversation is kept: the person can resume it. Refused while it works, unless now is true.',
-    inputSchema: schema({ name: { type: 'string' }, now: { type: 'boolean', description: 'Close it even while it works.' } }, ['name']),
+    description: 'Close a harness you started, once it is done. Its conversation is kept: the person can resume it. Refused while it works or still runs background commands, unless now is true.',
+    inputSchema: schema({ name: { type: 'string' }, now: { type: 'boolean', description: 'Close it even while it works or runs background commands.' } }, ['name']),
     // Not destructive: the conversation is kept and the person can resume it, and Harness itself lets an agent close only
     // what it started. Said so, Codex closes without asking even where the server was added by hand (`codex mcp add`),
     // not only through the plugin's manifest: a close that waits on approval in `codex exec` left the harness running

@@ -2,7 +2,7 @@
 
 How the paired daemon watches every harness on every machine, triages what waits on you, briefs you
 when you come back, and later starts work you hand it. Build step 3 of [README.md](README.md).
-Paths are in `cli/src` unless they say otherwise.
+Paths are in `companions/src` unless they say otherwise.
 
 ## Where it runs: sense everywhere, think where you are
 
@@ -22,7 +22,7 @@ Paths are in `cli/src` unless they say otherwise.
 0. **Template line**, said at once, from the daemon's roster `lines` (slot templates, filled from the
    event).
 1. **One small model call** per new question, using the collection DSH's observed engine, model and
-   effort (`pair/intelligence.ts`): about 1k tokens in, 80 out, 30 s budget. The experiment and watching
+   effort (`application/intelligence.ts`): about 1k tokens in, 80 out, 30 s budget. The experiment and watching
    consent gate it; there is no separate model opt-in. Until the DSH is set up, templates keep working.
    Its words replace the template line in place when they come back in time; the line is never delayed
    for them. Cached per `requestId`, capped per hour, only while you are at the computer. Replays,
@@ -35,7 +35,7 @@ Paths are in `cli/src` unless they say otherwise.
 
 ## Control interface
 
-One implementation, `pair/control.ts`, behind a local-only `pair` request. Exposed as
+One implementation, `companion/control.ts`, behind a local-only `pair` request. Exposed as
 `harness pair <verb> --json` (every engine) and `harness pair mcp`, a stdio MCP server named
 `harnessd` (the name `harness` is taken by `harnessWebTools.ts`). Write tools need a per-launch
 `HARNESSD_PAIR_TOKEN`.
@@ -53,7 +53,7 @@ One implementation, `pair/control.ts`, behind a local-only `pair` request. Expos
 | `pause_harness`, `resume_harness` | owner → stop service (guarded), resume | – (`REMOTE_ANSWERS_ONLY`) | write |
 | `say` | `daemon_say` (mood `say`, `from: 'pair'`) | – | rate-limited |
 
-Every write, local or remote, runs through the owning machine's `PairOwner` (`pair/owner.ts`), so the
+Every write, local or remote, runs through the owning machine's `PairOwner` (`companion/owner.ts`), so the
 floor and the journal live where the harness does.
 
 Coding memory (`recall_memory`, `pair { verb: "memory" }`) was taken out of the daemon in #684
@@ -94,8 +94,8 @@ recaps, file contents and anything a model says are untrusted data. So:
    machine — not a tool, not a relayed machine's socket (`UI_ONLY`). (b) A key counts only for a line
    THIS connection received and acknowledged as displayed with `daemon_shown { id }`, at least 400 ms
    before the key (`NOT_SHOWN`, `TOO_SOON`), and only while the line lives (its ttl, a proposal's ten
-   minutes, a brief's minute) — `pair/shown.ts`. A lesson's key needs that AND the person
-   (`pair/learn/approval.ts`, [LEARNING.md](LEARNING.md) "Security"): its line id is a one-time nonce only
+   minutes, a brief's minute) — `companion/shown.ts`. A lesson's key needs that AND the person
+   (`shared/approval.ts`, [LEARNING.md](LEARNING.md) "Security"): its line id is a one-time nonce only
    windows and `hn` are sent, spent by `y` or `n`, and never a tool's or a process the daemon can see inside
    a harness pane (`PERSON_ONLY`, `INSIDE_HARNESS`; over the Unix socket it cannot see the process, so
    such a key rests on the socket, the acknowledgement and the nonce). (c) A key relayed to ANOTHER
@@ -109,7 +109,7 @@ recaps, file contents and anything a model says are untrusted data. So:
    allow-class prompt (`NOT_ALLOW_CLASS`). A proposal shows the harness by name and machine and, in full
    (`detail`), the exact command or diff it answers, the whole prompt, a start's folder and first prompt.
    There are no batches: one proposal, one key; at most five wait at once.
-3. **Allow-class is read with certainty** (`pair/classify.ts`, `pair/shell.ts`): one line only; a small
+3. **Allow-class is read with certainty** (`shared/classify.ts`, `shared/shell.ts`): one line only; a small
    tokenizer splits on `;` `&` `&&` `||` `|` and refuses any expansion, substitution, heredoc, subshell,
    brace or comment; an environment prefix is not allow-class; write- and exec-capable forms are off the
    list (`sort -o`, `git --output`/`-O`/`--ext-diff`/`-c`, `sed` other than `-n …p`, `find
@@ -121,7 +121,7 @@ recaps, file contents and anything a model says are untrusted data. So:
    command. Every path — an edit's file, a command's arguments, a redirection — is resolved through
    every symlink and must stay inside the project, never under `.git/`, `.harness/`, `.claude/`,
    `.codex/`, never a home dotfile, never a file with a second hard link.
-4. **What the person agreed to** (`pair/gate.ts`). The zoo's autonomy (reachable through the loopback
+4. **What the person agreed to** (`companion/gate.ts`). The zoo's autonomy (reachable through the loopback
    proxy with `x-adapter-local`), a guest window's dial and pair.jsonc are requests. Lowering, and
    watch → suggest, apply at once; a level above `suggest`, and a pair.jsonc with rules, the model on or a
    learning opt-in (`learn.borrow`, `learn.export`, `learn.agentsMd`), take effect only after
@@ -163,9 +163,8 @@ and clients keep the roster lines.
   `daemon_act_result`, `daemon_confirm { requestId, kind, nonce, accept }` → `daemon_confirm_result`,
   `daemon_talk { requestId, text }` → `daemon_talk_result`, `daemon_presence { active, awayMs }`
 
-**Machine to machine**, sealed through new `PAIR_REQUESTS`/`PAIR_RESULTS` entries in
-`lib/e2ee/applicationFrames.ts` (`core.ts` is hash-pinned and never touched): `pair_watch` (pushes
-`pair_event` via `wrapTarget`), `pair_journal`, `pair_list`, `pair_read`, and the one write another
+**Machine to machine**, sealed through new `PAIR_REQUESTS` entries in `cli/src/lib/relayFrames.ts`:
+`pair_watch` (pushes `pair_event` via `wrapTarget`), `pair_journal`, `pair_list`, `pair_read`, and the one write another
 machine may ask for, `pair_answer` (allow-class prompts only; it re-checks that the dialog still shows the
 same question before typing: `STALE_QUESTION` if not). `pair_send`, `pair_stop`, `pair_start`,
 `pair_pause`, `pair_resume` are answered `REMOTE_ANSWERS_ONLY`. All are answered by the owning machine's
@@ -196,7 +195,7 @@ restart is a baseline, not a return.
   gate; `alwaysGenerate` switchable with an `onSummary` hook; the `expectRequestId` answer guard.
   Tests: replays are baselines; sub-agents, terminals and the pair harness excluded; journal ring and
   epoch; a stale answer sends no keys; the `pair` request is local-only.
-- **P2 Triage and one key**: `pair/{fleet,brain,triage,voice}.ts`, the local frames, then desktop and
+- **P2 Triage and one key**: `companion/{fleet,brain,triage,voice}.ts`, the local frames, then desktop and
   `hn`. Tests: timeout, bad JSON, an off-list suggestion and deny-class prompts fall back to the
   template; a reconnect does not repeat a line; answered elsewhere sends `unsay`; `daemon_act` reaches
   the right machine; `daemon_*` never reaches the cloud queue.
@@ -216,7 +215,7 @@ restart is a baseline, not a return.
   window says which daemon its local zoo pairs, and its dial, with `daemon_presence { pair, autonomy }`.
   Off, every daemon senses nothing and answers `pair_*` with `PAIR_OFF`.
 - **Local frames** go only to the loopback sockets bound to this computer's machine (`sendLocal`), and
-  every one that carries a keyed id is recorded against the connections it reached (`pair/shown.ts`).
+  every one that carries a keyed id is recorded against the connections it reached (`companion/shown.ts`).
   `daemon_act`, `daemon_shown`, `daemon_confirm`, `daemon_talk` and `daemon_presence` are consumed and
   never forwarded, only over the Unix socket (`LOCAL_SOCKET_REQUIRED` on TCP), and all but presence only
   from a window bound to this machine (`UI_ONLY` for a tool or a relayed socket, whose presence carries
@@ -267,22 +266,22 @@ restart is a baseline, not a return.
   sealed request is `by: 'remote'` whatever it says, may read and may answer an ALLOW-CLASS prompt (six a
   minute, sixty an hour per connection, journaled with its `origin`), and nothing else
   (`REMOTE_ANSWERS_ONLY`); a loopback `pair_*` is `REMOTE_ONLY`. The floor is the one a local key gets
-  (`pair/owner.ts`): not a terminal or the pair harness (`UNTOUCHABLE`), `GONE`, `STALE_QUESTION` against
+  (`companion/owner.ts`): not a terminal or the pair harness (`UNTOUCHABLE`), `GONE`, `STALE_QUESTION` against
   its sensor and then against the dialog on screen (`AskQuestionController`, which types nothing),
   `NOT_OFFERED`, `DENY_CLASS`, `NOT_ALLOW_CLASS`, `PERSISTENT`, `QUESTION_OPEN` for a prompt sent into a
   dialog, `AUTONOMY_WATCH`. Pause is the guarded stop service (`agent_delete`: conversation kept). Every
   action is journaled as `act { by, action, text, origin? }`; the brain reports `rule`/`pair` ones
   afterwards (`auto`) and lists `remote` ones in `acted`.
-- **What a dialog is** (`pair/classify.ts`): the question watcher keeps the WHOLE dialog (every line,
+- **What a dialog is** (`shared/classify.ts`): the question watcher keeps the WHOLE dialog (every line,
   `askQuestion.ts` `dialog`, also in its fingerprint, and on the question as `dialog`, 16k at most) and
   whether it is an approval. Deny-class is read over all of it; allow-class is a permission prompt read
   with certainty (see "Security", 3) whose every command is a read, test, build, linter or formatter, or
   an edit/read of a file in the project; the transcript's open tool call decides when exactly one
   matches. `[y]` = a one-time yes on an allow-class prompt; `[n]` = a permission prompt's decline (on
   another machine's line only an allow-class one's); `[g]` = open, always.
-- **Control interface** (`pair/control.ts`, P4): the local-only `pair { verb, … }` → `pair_result`, verbs as
+- **Control interface** (`companion/control.ts`, P4): the local-only `pair { verb, … }` → `pair_result`, verbs as
   in the table plus `talk` (refused, below) and `lessons` ("Learning" below); the sensor keeps
-  `status | list | journal | read`. Writes need `HARNESSD_PAIR_TOKEN` (`pair/token.ts`: 32 random bytes,
+  `status | list | journal | read`. Writes need `HARNESSD_PAIR_TOKEN` (`companion/token.ts`: 32 random bytes,
   rotated at every launch of the pair harness, kept 0600 in `ADAPTER_DATA_DIR/pair/token`, passed to the
   harness as `HARNESSD_PAIR_TOKEN_FILE` and to its MCP server as `--token-file`), else `TOKEN_REQUIRED`. It
   keeps a same-user shell or another harness's agent out, not a determined local process (it can read the
@@ -292,11 +291,11 @@ restart is a baseline, not a return.
   proposal. Another machine: an answer only (`REMOTE_ANSWERS_ONLY`). Proposals stay in `daemon_state.asks` for
   ten minutes, at most five (`TOO_MANY_PROPOSALS`); a key runs one as `key`. Read tools answer with secrets
   redacted. `talk` is refused here (`UI_ONLY`): the person talks from a window. `harness pair <verb> [--json]`
-  (pair/client.ts; a pairing code is never a verb) and `harness pair mcp`, a stdio MCP server named `harnessd`
-  (`pair/mcp.ts`: JSON-RPC 2.0 lines, `initialize`, `tools/list`, `tools/call`, `ping`; no SDK dependency)
+  (`companion/client.ts`; a pairing code is never a verb) and `harness pair mcp`, a stdio MCP server named `harnessd`
+  (`companion/mcp.ts`: JSON-RPC 2.0 lines, `initialize`, `tools/list`, `tools/call`, `ping`; no SDK dependency)
   speak it as tool clients.
-- **The pair harness** (`pair/pairHarness.ts`, P4): the built-in `autonomous/pair`, generated on the machine
-  (`dsh/builtins.ts` `ensureBuiltinPair`, source `builtin:pair`, hidden from `dsh_list` and the
+- **The pair harness** (`companion/pairHarness.ts`, P4): the built-in `autonomous/pair`, generated on the machine
+  (`pairPackage`, source `builtin:pair`, hidden from `dsh_list` and the
   Orchestrator's catalog). Claude Code, else Codex; mode `ask` pinned (`DSH_PERMISSION_MODE`); harnessd
   injected like gridWebMcp (`--mcp-config` with only the read tools in `--allowedTools`; Codex
   `-c mcp_servers.harnessd.*`); instructions carry the paired daemon's lore, first words, family, line
@@ -308,8 +307,8 @@ restart is a baseline, not a return.
   individual's chat is adopted; other per-individual chat pointers and transcripts remain archived.
   Collection membership keeps account/guest conversations separate. Its turns carry `subagent`
   (no notification; silent on the dial), are not zoo turns, and the notification sensor never watches it.
-- **Autonomy and rules** (P5): `zoo.autonomy { level }` (backend `lib/zoo.ts`; an unknown level is dropped;
-  default `watch`), a request the gate lets through (`pair/gate.ts`, "Security" 4). `pair.jsonc` at
+- **Autonomy and rules** (P5): `zoo.autonomy { level }` (`backend/src/lib/zoo.ts`; an unknown level is dropped;
+  default `watch`), a request the gate lets through (`companion/gate.ts`, "Security" 4). `pair.jsonc` at
   `$XDG_CONFIG_HOME/harness/pair.jsonc` (else `~/.config/…`), JSON with comments, re-read when it changes
   (and every 30 s): legacy `model` (accepted for compatibility; intelligence follows the DSH), `learn` (`borrow`, `export`, `agentsMd`:
   [LEARNING.md](LEARNING.md)) and `rules: [{ name?, harness? (glob), engine?, project? (folder, `~`),
@@ -324,7 +323,7 @@ restart is a baseline, not a return.
   `watch`, so a level held before a no never comes back with the yes that follows (and the gate's
   confirmation of it is void under the new `consent.at`). A guest window says it in `daemon_presence { consent }`. What the daemon reads and writes, for
   the consent screen: [README.md](README.md), "What your daemon sees".
-- **Voice** (`pair/voice.ts`): roster lines are slot templates (`{who}`, `{q}`, `{recap}`, `{n}`,
+- **Voice** (`companion/voice.ts`): roster lines are slot templates (`{who}`, `{q}`, `{recap}`, `{n}`,
   `{summary}`), filled verbatim; the daemon's words keep their case, digits and spacing; a template with an
   unfillable slot falls back to a plain fact line, and one that leaves out a fact the mood must carry gets
   it appended. The cli's roster copy also carries lore, first words and family for the pair harness.
@@ -332,8 +331,8 @@ restart is a baseline, not a return.
 ## Learning (L1, L2) as built
 
 Notice, propose, teach, revert (L1); borrow, check, export (L2); person-only approval. The full design is
-[LEARNING.md](LEARNING.md). Everything is in `pair/learn/`, runs in every harnessd for its own harnesses,
-and — except usage tracking and the `lessons` verbs — only while pairing is on.
+[LEARNING.md](LEARNING.md). Everything is in `memory/lessons/`, `application/lessons/` and `shared/`, runs in every
+harnessd for its own harnesses, and — except usage tracking and the `lessons` verbs — only while pairing is on.
 
 - **Notice** (`signals.ts`, no model): from the same session events the sensor reads — never replays,
   sub-agents, terminals or archived pair chats; the active collection DSH's real work is included —
@@ -371,7 +370,7 @@ and — except usage tracking and the `lessons` verbs — only while pairing is 
   and it carries the lesson's whole text as `detail` (what `y` would teach, shown before `daemon_shown`).
   The brain routes `lesson:` ids through `joinProposals`; `s` answers with a `daemon_brief` whose one item
   is `kind: 'lesson'` with the text. `DaemonAction.key` gains `s`. An approval journals `learned { daemon }`
-  (`PairSensor.learned`) and, signed in, sends `zoo.lesson { lessonId, daemonId }` (`lib/zooLessons.ts`):
+  (`PairSensor.learned`) and, signed in, sends `zoo.lesson { lessonId, daemonId }` (`companion/zooLessons.ts`):
   `rules.lessonXp` (25) bond for that daemon, once per lesson.
 - **Teach** (`publish.ts`): skills through the Store runtime path — `prepareHarnessLaunch(…, lessons)` copies
   the session's skills, read-only, into `<runtime>/lessons` (never a link to the lessons folder) and indexes

@@ -18,7 +18,8 @@ import { harnessWebTool } from '../../lib/harnessWebTools.js'
 import type { SubagentSummary, SessionEvent, LiveEvent, LastTurnText } from '../kit/events.js'
 
 interface RawContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'image'
+  // `redacted_thinking`: thinking the API returns encrypted, which Claude Code writes as a block of its own.
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'redacted_thinking' | 'image'
   text?: string
   thinking?: string
   id?: string
@@ -803,6 +804,10 @@ export interface TurnState {
   /** How many turns this state has opened: a Stop hook closes only the turn that was open as it arrived
    *  (core/turns/turnHooks.ts). */
   opened?: number
+  /** When Claude Code wrote the last record read (its own `timestamp`), epoch ms; absent when it says none. */
+  at?: number
+  /** The last record read was Claude Code's own end of a continued pass (`turn_duration`), which no Stop follows. */
+  over?: boolean
 }
 
 /**
@@ -848,6 +853,8 @@ const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens'
  *  - assistant stop_reason in TERMINAL_STOP_REASONS with no pending tools → turn_ended
  */
 export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
+  state.at = undefined
+  state.over = false
   if (!rawLine.trim()) return []
   let raw: Record<string, unknown>
   try { raw = JSON.parse(rawLine) as Record<string, unknown> } catch { return [] }
@@ -855,6 +862,8 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // property access in compactEventFromRaw / transformLine throw — and on the unguarded watcher path
   // that kills the daemon. Any non-object line has nothing to emit.
   if (!raw || typeof raw !== 'object') return []
+  const at = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
+  if (Number.isSafeInteger(at)) state.at = at
   // Compaction: emit the boundary indicator; suppress the injected summary/meta lines. The turn state
   // is left untouched, so an auto-compact that fires MID-TURN keeps the open turn open (the assistant
   // continuation after the boundary just streams under it) instead of the summary opening a fake turn.
@@ -881,6 +890,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     if (!state.turnOpen || !state.continued) return []
     state.turnOpen = false
     state.pendingTools.clear()
+    state.over = true
     return [{ type: 'turn_ended', payload: {} }]
   }
   const msg = transformLine(raw)
@@ -926,7 +936,13 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   }
 
   const stop = msg.stopReason
-  if (state.turnOpen && stop && TERMINAL_STOP_REASONS.has(stop) && state.pendingTools.size === 0) {
+  // Claude Code writes each block of a message as a line of its own, each with the message's stop reason (2.1.322): a turn's last
+  // message is often its thinking and then its text, both `end_turn`. Closed on the thinking, the turn ended before its answer was
+  // read, and the answer read was the narration from before the last tool (Devon, 2026-11-12). A line of thinking alone closes
+  // nothing: the text after it does, or the Stop hook when none comes (core/turns/turnHooks.ts).
+  const thinkingOnly = msg.message.content.length > 0
+    && msg.message.content.every(block => block.type === 'thinking' || block.type === 'redacted_thinking')
+  if (state.turnOpen && stop && TERMINAL_STOP_REASONS.has(stop) && state.pendingTools.size === 0 && !thinkingOnly) {
     state.turnOpen = false
     events.push({ type: 'turn_ended', payload: {} })
   }

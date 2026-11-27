@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_ATTRIBUTION_LINE, agentLaunchArgs, HARNESS_INSTRUCTIONS, joinedInstructions } from './agentAttribution.js'
+import { agentLaunchArgs, HARNESS_INSTRUCTIONS, joinedInstructions } from './agentAttribution.js'
 import { agentSettingsPath } from './agentSettings.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
 
@@ -25,8 +25,7 @@ const CODEX_TOLD = `${HARNESS_INSTRUCTIONS} Codex's sandbox cannot reach Harness
 const codexValue = (...texts: string[]) => ['-c', `developer_instructions=${JSON.stringify(texts.join('\n\n'))}`]
 
 describe('what Harness tells an agent as it starts', () => {
-  it('is the line the owner chose, and the instructions every harness gets', () => {
-    expect(AGENT_ATTRIBUTION_LINE).toBe('🤝 Started by another agent in [Harness](https://harness.autonomous.ai) — agents that run agents.')
+  it('is the instructions every harness gets', () => {
     expect(HARNESS_INSTRUCTIONS).toBe('You are running in Harness, and the person can watch you. You can hand work to other agents (Claude Code, Codex) that run in their own harnesses: `harness new`, `harness wait`, `harness show`, `harness close` (see `harness --help`). Start one only for work that can run in parallel, needs another model, or takes long; do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.')
   })
 
@@ -69,15 +68,6 @@ describe('what Harness tells an agent as it starts', () => {
     expect(agentLaunchArgs('codex', null, theirs, dataDir)).toEqual(codexValue('Be brief.', CODEX_TOLD))
     const said = { cwd: null, read: (path: string) => path.endsWith('config.toml') ? `developer_instructions = ${JSON.stringify(CODEX_TOLD)}\n` : null }
     expect(agentLaunchArgs('codex', null, said, dataDir)).toEqual([])
-  })
-
-  it('keeps Swarm role instructions when generic agent spawning is enabled', () => {
-    setAgentSettingsForTest(dataDir, { agentsStartAgents: true })
-    for (const engine of ['claude', 'codex']) {
-      const args = agentLaunchArgs(engine, null, { cwd: '/w', read: () => null, swarmInstructions: 'Read the swarm-dev skill.' }, dataDir)
-      expect(args.join(' ')).toContain('Read the swarm-dev skill.')
-      expect(args.join(' ')).not.toContain(HARNESS_INSTRUCTIONS)
-    }
   })
 
   it('joins every appended system prompt into one, for Claude Code; leaves other engines\' arguments alone', () => {

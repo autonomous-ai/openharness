@@ -10,6 +10,7 @@
  * - its Directors' frames, which the core sends it, and what became of its deliveries.
  */
 import { emptyPorts, type DaemonAddress } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 import { startOrchestrator } from './orchestrator.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
@@ -65,7 +66,7 @@ export function runOrchestratorService(options: OrchestratorServiceOptions): Ser
         await ask('roles', { roles }).catch(() => {})
       } while (again)
     } catch (error) {
-      console.warn(`[service orchestrator] could not report its agents' roles · ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`[service orchestrator] could not report its agents' roles · ${errorKind(error)}`)
     } finally {
       reporting = false
     }

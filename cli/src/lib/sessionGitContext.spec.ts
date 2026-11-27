@@ -52,6 +52,7 @@ describe('Git context from observed session work', () => {
       registeredAt: 1, boundAt: 1, lastHookAt: 1, transcriptPath: null, runtimes: [],
       active: true, title: 'hn' } as unknown as RegisteredSession
     const frame = await agentFrame(session, { selectedModel: null, terminalAvailable: false,
+      parts: () => ({ project: { kind: 'git', ...launch }, gitContext: context }),
       tokenUsage: { totalTokens: null, updatedAt: at, work: observation } })
     expect(frame.project?.branch).toBe('original')
     expect(frame.gitContext.checkouts?.map(p => p.branch)).toEqual(['original', 'hn/preview-fix'])

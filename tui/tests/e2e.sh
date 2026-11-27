@@ -8,12 +8,14 @@ here="$(cd "$(dirname "$0")" && pwd)"
 bin="${HARNESS_TUI_BIN:-$here/../target/release/harness-tui}"
 port="${E2E_PORT:-19297}"
 [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 19000 && port <= 19999 )) || { echo "E2E_PORT must be in the isolated test range 19000–19999" >&2; exit 2; }
-unset TMUX TMUX_PANE HN_SOCKET
+# A data or XDG folder of yours would lead hn out of this fixture's HOME.
+unset TMUX TMUX_PANE HN_SOCKET ADAPTER_DATA_DIR XDG_DATA_HOME XDG_STATE_HOME
 client="${HN_SOCKET_NAME:-e2e}-$$"
 sock="harness-tui-e2e-$$"
 home="$(mktemp -d /tmp/hn-e2e.XXXXXX)"
 export HN_TMPDIR="$home"
-export ADAPTER_DATA_DIR="$home/.harness/cli/data"
+# The mock's socket goes where a daemon on this computer puts it; hn finds it by its own rule.
+data="$(python3 "$here/harness_home.py" "$home" cli)/data"
 tmux_() { tmux -L "$sock" "$@"; }
 screen() { tmux_ capture-pane -p -t t; }
 fail() { echo "✗ $1"; echo "--- screen ---"; screen || true; hn show-messages || true; hn display -p 'key-table=#{client_key_table} prefix=#{client_prefix} mode=#{pane_mode}' || true; exit 1; }
@@ -56,7 +58,7 @@ PY
 }
 trap cleanup EXIT
 
-HOME="$home" node "$here/mock-daemon.mjs" "$port" >/dev/null &
+HOME="$home" ADAPTER_DATA_DIR="$data" node "$here/mock-daemon.mjs" "$port" >/dev/null &
 mock=$!
 sleep 0.5
 # Its own client socket, named: the test's shell calls must never reach a client of yours

@@ -11,7 +11,12 @@ export interface ActivityFrame {
   /** Remaining lease, not a remote wall clock. Zero for idle/unknown. */
   validForMs: number
 }
-export interface ActivityRuntime { key: string; turnOpen: boolean }
+export interface ActivityRuntime {
+  key: string
+  turnOpen: boolean
+  /** Working is withheld: the turn waits on the person, or the session's turns end by hook and none is open. */
+  withheld?: boolean
+}
 interface Entry {
   runtime: string
   state: ActivityState
@@ -35,11 +40,14 @@ export class TurnActivity {
     runtime(sessionId: string): ActivityRuntime | undefined
     probe(sessionId: string): Promise<ActivityState>
     drain(sessionId: string): Promise<void>
+    /** A turn ended: what its runtime showed until then is not compared with what it shows next. */
+    ended?(sessionId: string): void
+    /** The session turned working with no turn open: no turn's heartbeat tells this claim's end (core/turns/heartbeats.ts). */
+    claimed?(sessionId: string): void
     now?: () => number
   }) {}
   private now(): number { return this.deps.now?.() ?? performance.now() }
-  private entry(sessionId: string): Entry | undefined {
-    const runtime = this.deps.runtime(sessionId)
+  private entry(sessionId: string, expire = false, runtime = this.deps.runtime(sessionId)): Entry | undefined {
     if (!runtime) { this.entries.delete(sessionId); return undefined }
     let entry = this.entries.get(sessionId)
     if (!entry || entry.runtime !== runtime.key) {
@@ -51,8 +59,16 @@ export class TurnActivity {
     // next prompt. That is what a cancel left when the aborted tool's output landed after it and read as
     // work (a real Codex 0.160, found by daemon QA). The transcript says no turn is open and nothing
     // renewed the claim: idle.
-    if (entry.state === 'working' && this.now() >= entry.until) this.set(entry, runtime.turnOpen ? 'unknown' : 'idle')
+    if (entry.state === 'working' && (expire || this.now() >= entry.until)) this.set(entry, runtime.turnOpen ? 'unknown' : 'idle')
     return entry
+  }
+  /** A Working claim reads as an expired one does, now: unknown while a turn is open, idle with none. */
+  withdraw(sessionId: string): void { this.entry(sessionId, true) }
+  /** A claim with no turn open is told [deps.claimed] as it starts; a renewal tells nothing. */
+  private work(sessionId: string, entry: Entry): void {
+    const claim = entry.state !== 'working' && !this.deps.runtime(sessionId)?.turnOpen
+    this.set(entry, 'working')
+    if (claim) this.deps.claimed?.(sessionId)
   }
   private set(entry: Entry, state: ActivityState): void {
     entry.state = state
@@ -60,7 +76,8 @@ export class TurnActivity {
     entry.revision = ++this.revision
   }
   observe(sessionId: string, type: string, replay = false): void {
-    const entry = this.entry(sessionId)
+    const runtime = this.deps.runtime(sessionId)
+    const entry = this.entry(sessionId, false, runtime)
     if (!entry) return
     if (replay) {
       // A completed history is a baseline. An unfinished history has no live
@@ -69,8 +86,9 @@ export class TurnActivity {
       if (type === 'turn_ended' && entry.state !== 'working') this.set(entry, 'idle')
       return
     }
-    if (type === 'turn_ended') this.set(entry, 'idle')
-    else if (PROGRESS.has(type)) this.set(entry, 'working')
+    if (type === 'turn_ended') { this.set(entry, 'idle'); this.deps.ended?.(sessionId) }
+    // While withheld, records still land (a tool's output, a late reply after the Stop) with no work behind them.
+    else if (type === 'turn_started' || (PROGRESS.has(type) && !runtime?.withheld)) this.work(sessionId, entry)
   }
   snapshot(sessionId: string): ActivityFrame | undefined {
     const entry = this.entry(sessionId)
@@ -79,19 +97,25 @@ export class TurnActivity {
       validForMs: entry.state === 'working' ? Math.max(0, Math.min(WORK_HEARTBEAT_LEASE_MS, entry.until - this.now())) : 0 }
   }
   forget(sessionId: string): void { this.entries.delete(sessionId) }
-  async check(sessionId: string): Promise<void> {
+  /**
+   * [probe], when given, reads the runtime for this check in place of the one this was built with. [since], when given,
+   * is the revision read before [probe]'s evidence was taken (a capture made before this check): a change since then is
+   * newer than that evidence and wins over it.
+   */
+  async check(sessionId: string, probe = () => this.deps.probe(sessionId), since?: number): Promise<void> {
     const entry = this.entry(sessionId)
     if (!entry || entry.pending) return entry?.pending
     const run = async () => {
       await this.deps.drain(sessionId)
       if (this.entry(sessionId) !== entry) return
-      const revision = entry.revision
-      const result = await this.deps.probe(sessionId)
+      const revision = since ?? entry.revision
+      const result = await probe()
       await this.deps.drain(sessionId)
       // A completion, a new prompt, or a replaced process wins over a probe
       // started before it. Failed reads never mean idle.
       if (this.entry(sessionId) !== entry || entry.revision !== revision) return
-      if (result === 'working' || (result === 'idle' && entry.state !== 'working')) this.set(entry, result)
+      if (result === 'working') this.work(sessionId, entry)
+      else if (result === 'idle' && entry.state !== 'working') this.set(entry, result)
     }
     entry.pending = run().catch(() => {}).finally(() => { entry.pending = undefined })
     await entry.pending

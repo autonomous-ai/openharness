@@ -8,11 +8,11 @@ import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
 import { agentProject } from '../lib/agentProject.js'
 import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { readGitProject } from '../lib/gitProject.js'
-import { sweepWorktrees } from '../lib/worktreeSweep.js'
 import { GitScmProject } from './gitScmProject.js'
 import {
-  describeScmProject, detectScmProject, forgetScmProject, prepareInstructionWrites, prepareScmWrite, renameScmProject, scmByKind, scmLaunchEnv, scmProjects, sweepScmProjects,
+  describeScmProject, detectScmProject, forgetScmProject, renameScmProject, scmByKind, scmProjects,
 } from './scmProjects.js'
+import { prepareInstructionWrites, prepareScmWrite, scmLaunchEnv } from './launch.js'
 import { parseScmLaunchRecord, type ScmDetectResult, type ScmProject } from './types.js'
 
 const exec = promisify(execFile)
@@ -86,19 +86,6 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     expect(await renameScmProject(repo, 'A title')).toBeNull()
   })
 
-  it('sweeps what sweepWorktrees sweeps, reading a one-shot iterable of in-use folders only once', async () => {
-    const harnesses = join(root, 'harnesses')
-    const worktrees = join(harnesses, 'worktrees', 'app')
-    await mkdir(worktrees, { recursive: true })
-    await git(repo, 'worktree', 'add', '--quiet', '-b', 'harness/idle', join(worktrees, 'idle'), 'main')
-    await git(repo, 'worktree', 'add', '--quiet', '-b', 'harness/busy', join(worktrees, 'busy'), 'main')
-    const later = Date.now() + 8 * 24 * 3600_000
-    function* inUse() { yield join(worktrees, 'busy'); yield null }
-    expect(await sweepScmProjects({ root: harnesses, inUse: inUse(), now: later })).toEqual([join(worktrees, 'idle')])
-    expect(await sweepWorktrees({ root: harnesses, inUse: [join(worktrees, 'busy')], now: later })).toEqual([])
-    expect(await sweepScmProjects({ root: join(root, 'nowhere'), inUse: [] })).toEqual([])
-  })
-
   it('has no launch environment for git, and nothing for a missing record', () => {
     expect(scmLaunchEnv({ kind: 'git' })).toBeUndefined()
     expect(scmLaunchEnv(null)).toBeUndefined()
@@ -124,7 +111,7 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     try {
       const failing = { kind: 'git', prepareWrite: async () => { throw new Error('locked') } }
       await expect(prepareInstructionWrites(repo, [failing as unknown as ScmProject])).resolves.toBeUndefined()
-      expect(warn).toHaveBeenCalledWith('[scm] could not prepare instruction files for writing · locked')
+      expect(warn).toHaveBeenCalledWith('[scm] could not prepare instruction files for writing · Error')
     } finally { warn.mockRestore() }
   })
 

@@ -66,6 +66,11 @@ export function routeInput(payload: Record<string, unknown>): RouteInput | null 
 
 export type Router = RouteDeps
 
+/** A session's id as the log names it: its harness's, the id's last line, as the core's logs cut an agent's id. The
+ *  desktop sends `<computer>\n<harness>`, whose first characters are the same for every session on one computer. A
+ *  client's id is its own, so only id characters reach the log. */
+const shortId = (id: string): string => id.slice(id.lastIndexOf('\n') + 1).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 8)
+
 /** Jev, on the person's key or on Harness's through the account's backend, which the core signs; and the
  *  router's log. */
 export function defaultRouter(core: CoreApi): Router {
@@ -95,7 +100,9 @@ export function startRouter(core: CoreApi, router: Router = defaultRouter(core))
       try {
         // The asker gone frees its slot at once rather than when Jev answers (up to eight seconds later).
         const verdict = await decideRoute(input, router, closed)
-        router.log?.(`${verdict.kind === 'session' ? 'session' : verdict.kind === 'new' ? `new (${verdict.why})` : `nothing decided (${verdict.why})`} — ${verdict.trace}`)
+        // Not the trace: it names the sessions Jev weighed, and a session's name is the person's own words. The pick
+        // by its id and odds, and how many it was weighed against, are what a wrong route is traced from here.
+        router.log?.(`${verdict.kind === 'session' ? `session ${shortId(verdict.id)} p=${verdict.p.toFixed(2)}` : verdict.kind === 'new' ? `new (${verdict.why})` : `nothing decided (${verdict.why})`} — ${verdict.weighed} sessions`)
         if (verdict.kind === 'unavailable') return { error: 'JEV_UNAVAILABLE', detail: verdict.why }
         return verdict.kind === 'session'
           // `p` and `trace` for a caller that shows or logs why (`harness route`): names and odds only, never the words.

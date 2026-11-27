@@ -13,18 +13,22 @@
  */
 import { existsSync, lstatSync, readdirSync } from 'node:fs'
 import { request } from 'node:http'
+import type { Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders, PEER_LOOKUP_UNANSWERED } from './localCredential.js'
 import { unixSocketPath } from './localSocket.js'
+import { ownProcessRuns } from './ownProcess.js'
 import { NOT_RUNNING } from './unreachable.js'
 import { daemonPipe } from './windows/daemonPipe.js'
 import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven, readDaemonToken } from './windows/pipeAuth.js'
 import { pipeWebSocket, PipeUnproven, type PipeTarget } from './windows/pipeClient.js'
 
 const LOCAL_WS_PATH = '/api/local-ws'
+/** The sockets that carry overSocket's no-op 'error' listener. */
+const tolerated = new WeakSet<Socket>()
 
 /**
  * The daemon's socket for [port], or null where it has none. A socket is named for the port the daemon was configured
@@ -88,8 +92,13 @@ async function overSocket(socketPath: string, input: Request, pipe?: PipeTarget)
     // As fetch fails: a TypeError with the reason as its cause, which the callers' "is it running" texts read.
     req.on('error', (error) => { reject(input.signal.aborted ? error : Object.assign(new TypeError('fetch failed'), { cause: error })) })
     // A write the socket finishes after the answer was refused and the request destroyed fails with EPIPE on Linux, when
-    // nothing listens on the socket any more: the request has settled by then (Linux CI on #2605).
-    req.on('socket', (socket) => { socket.on('error', () => {}) })
+    // nothing listens on the socket any more: the request has settled by then (Linux CI on #2605). Once per socket, which
+    // a kept-alive one serves many requests on.
+    req.on('socket', (socket) => {
+      if (tolerated.has(socket)) return
+      tolerated.add(socket)
+      socket.on('error', () => {})
+    })
     req.end(body ?? undefined)
   })
 }
@@ -163,19 +172,6 @@ async function askedAgainWhenUnanswered(send: () => Promise<Response>): Promise<
     const said = await reply.clone().json().catch(() => null) as { error?: unknown } | null
     if (said?.error !== PEER_LOOKUP_UNANSWERED) return reply
     await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
-  }
-}
-
-/**
- * Whether this account's process [pid] runs. The daemon is this account's, so EPERM is another account's process, one
- * that took the pid since the daemon exited (processProof.ts `pidAlive` counts it alive): not the daemon.
- */
-function ownProcessRuns(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
   }
 }
 

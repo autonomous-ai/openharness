@@ -9,7 +9,7 @@ import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../widgets/web_pane_panel.dart';
 import 'orchestrator_controller.dart';
 import 'orchestrator_launcher.dart';

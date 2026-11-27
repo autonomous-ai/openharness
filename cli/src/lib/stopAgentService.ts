@@ -4,7 +4,7 @@ import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
 import { controlTranscriptEvidence, engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
-import type { registry as liveRegistry, RegisteredSession } from './registry.js'
+import { withHermesHome, type registry as liveRegistry, type RegisteredSession, type RegistryAuthority } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -12,6 +12,7 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 import { signalAgentProcess } from './processSignals.js'
+import { engineDescendants, treeSurvivors } from './processTree.js'
 
 export interface StopAgentServiceDeps {
   settlePane?: (agentId: string) => Promise<void>
@@ -27,9 +28,9 @@ export interface StopAgentServiceDeps {
     suppress(session: RegisteredSession): void
     holdRoute(route: string): void
     releaseRoute(route: string): void
-    trigger(): Promise<unknown>
+    nudge(): void
   }
-  forgetSession(agentId: string, options: { force: true; captured?: RegisteredSession }): void
+  forgetSession(agentId: string, options: { force: true; captured?: RegisteredSession; authority?: RegistryAuthority }): Promise<void>
   markDeleted(agentId: string): void
   clearDeleted(agentId: string): void
   /**
@@ -39,6 +40,8 @@ export interface StopAgentServiceDeps {
   stopNative(session: RegisteredSession, current: () => boolean, confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void>
   /** The pause between reads of a guest's process while it leaves (tests pass one that returns at once). */
   wait?(ms: number): Promise<void>
+  /** Reads the engine's descendants, which the stop ends with it (processTree.ts); the real two by default. */
+  processTree?: { descendants: typeof engineDescendants; survivors: typeof treeSurvivors }
 }
 /** How long a guest's engine has to leave once its pane closed, read every GUEST_EXIT_STEP_MS. */
 const GUEST_EXIT_WAIT_MS = 5_000
@@ -61,9 +64,6 @@ export interface StopAgentOptions {
    * conversation cannot be read, it is stopped without one, and this is called. Never for a conversation once bound.
    */
   withoutConversation?(): void
-  /** The Change agent switch this stop is the close of (closeAgentService.ts): a Swarm Product Manager's stop guard lets only
-   *  that switch's own stop through (superTabs/leadSwitch.ts). No other stop carries it: Stop Harness, a delete or a purge. */
-  leadSwitch?: string
 }
 
 // Hooks rebuild registry objects. Compare stable values, never JavaScript object
@@ -82,6 +82,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
   const { registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler,
     forgetSession, markDeleted, clearDeleted, stopNative } = deps
   const wait = deps.wait ?? (ms => new Promise<void>(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }))
+  const processTree = deps.processTree ?? { descendants: engineDescendants, survivors: treeSurvivors }
   /** A guest's engine, its pane closed, has left: read from the process table, which shows every user's processes. An
    *  unreadable table is not proof that it left. The process is the row's latest: one still starting gains it while its
    *  screen is saved, and an older copy without one would read as gone at once. */
@@ -141,8 +142,8 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
       const current = registry.resolve(sessionId)!
-      const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
-        transcriptPath: captured.transcriptPath, hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source }
+      const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : withHermesHome({ ...current, sessionId: captured.sessionId,
+        transcriptPath: captured.transcriptPath, boundAt: captured.boundAt, source: captured.source }, captured)
       binding = bindingIdentity(current)
       const transcript = !guest && s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
         ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined, s.cwd) : undefined
@@ -188,6 +189,9 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
             },
             sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
             log: message => console.log(message),
+            // A tool spawned detached is in neither the engine's group nor the pane's: only its own signal ends it.
+            descendants: () => processTree.descendants(s.processIdentity!),
+            survivors: processTree.survivors,
           }, 0)).catch(() => 'failed' as const)
         // The process helper catches signal failures. Preserve native evidence holds
         // so a queued Close retries instead of becoming a permanently failed plan.
@@ -228,16 +232,33 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
-        stoppedAgents.finishResume(sessionId)
         if (s.processIdentity) agentReconciler.suppress(s)
         // This publishes agent_deleted. It must follow confirmed termination, or a
         // desktop can display Paused and allow Resume while the old process runs.
-        forgetSession(sessionId, { force: true, captured: s })
+        try {
+          await forgetSession(sessionId, { force: true, captured: s, authority: {
+            current: () => { verifyTranscript(); return sameTarget() && options.current?.() !== false },
+            refresh: async () => {
+              verifyTranscript()
+              const selected = registry.resolve(sessionId)
+              if (selected?.processIdentity && !isTerminalEngine(selected.engine) && (await checkPidRuntime(selected)).state !== 'gone') {
+                throw new AgentStopError('The stopped process could not be confirmed before publication.')
+              }
+              verifyTranscript()
+            },
+          } })
+          if (registry.resolve(sessionId)) throw new AgentStopError('The harness changed while its stop was being published.')
+        } catch {
+          // This verifier refuses before publication; storage uncertainty still keeps the generic Stop failure.
+          if (nativeIdentityError) throw nativeIdentityError
+          throw new AgentStopError('The stopped harness could not be durably retired. Its saved conversation is safe. Try stopping again.')
+        }
+        stoppedAgents.finishResume(sessionId)
       } finally {
         clearDeleted(sessionId)
         if (s.sessionId) clearDeleted(s.sessionId)
         for (const route of routes) agentReconciler.releaseRoute(route)
-        void agentReconciler.trigger()
+        agentReconciler.nudge()
       }
     }).finally(() => {
       if (stopJobs.get(sessionId) === job) stopJobs.delete(sessionId)

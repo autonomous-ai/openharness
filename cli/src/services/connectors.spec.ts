@@ -7,18 +7,25 @@ import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fakeCore } from '../testing/fakeCore.js'
-import type { BackendNotice } from '../core/api.js'
-import { CONNECTORS_REQUESTS, startConnectors } from './connectors.js'
+import { emptyPorts, type BackendNotice } from '../core/api.js'
+import { CONNECTORS_REQUESTS, startConnectors, type ConnectorsOverrides } from './connectors.js'
 import { Store } from '../lib/connectors/store.js'
 import * as gateway from '../lib/connectors/gateway.js'
 import { FakeGateway } from '../testing/connectorServers.js'
 import { serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { LSOF_MS } from '../lib/peerAccount.js'
+import { keepAlive } from '../lib/connectors/renew.js'
 
 // The real socket, but for a failure with no Error to say why, which nothing here can provoke.
 vi.mock('../lib/connectors/bridge.js', async (original) => {
   const real = await original<typeof import('../lib/connectors/bridge.js')>()
   return { ...real, serveBridgeSocket: vi.fn(real.serveBridgeSocket) }
+})
+
+// The real renewal, but for a round that fails outright, which nothing here can provoke.
+vi.mock('../lib/connectors/renew.js', async (original) => {
+  const real = await original<typeof import('../lib/connectors/renew.js')>()
+  return { ...real, keepAlive: vi.fn(real.keepAlive) }
 })
 
 const OWNER = { local: true, owner: true }
@@ -50,13 +57,9 @@ describe('the connectors service', () => {
     await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
     return holder
   }
-  /** A loopback port free a moment ago. */
-  const freePort = async (): Promise<number> => {
-    const free = await holdPort()
-    const { port } = free.address() as { port: number }
-    await new Promise(done => free.close(done))
-    return port
-  }
+  /** The service started on a port of its bridge's own choosing, and that port once the bridge listens on it. */
+  const startedOnAnyPort = (overrides: ConnectorsOverrides): Promise<number> =>
+    new Promise(listening => { startConnectors(fakeCore(), emptyPorts(), { ...overrides, port: 0, listening }) })
   /** What a request answered, or 0 when it was not answered in ANSWER_MS. */
   const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(ANSWER_MS) }).then(reply => reply.status, () => 0)
 
@@ -81,14 +84,55 @@ describe('the connectors service', () => {
   const shortHomes: string[] = []
   const shortHome = () => { const made = mkdtempSync('/tmp/hc-'); shortHomes.push(made); return made }
 
+  it('keeps connections signed in from soon after it starts, then hourly, and says which could not be', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const vault = new Store(join(home, 'connections'), env)
+      const stale = Math.floor(Date.now() / 1000) - 10
+      // Signed in by this computer, but its OAuth client is gone: the renewal is refused.
+      vault.save('linear', { access_token: 'a', refresh_token: 'r', source: 'dcr', issuer: 'https://gone.example',
+        obtained_at: stale, expires_at: stale + 3600, mcp_entry: { url: 'https://gone.example/mcp', headers: {} } })
+      startConnectors(fakeCore(), emptyPorts(), { env, vault, keepAliveAfter: 5 })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(vi.mocked(keepAlive)).toHaveBeenCalledWith(vault, 5)
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] could not keep linear signed in: This account needs to be connected again in Connections.'))
+      vi.mocked(keepAlive).mockRejectedValueOnce(new Error('disk gone'))
+      await vi.advanceTimersByTimeAsync(3_600_000)
+      await vi.waitFor(() => expect(warn.mock.calls.map(([line]) => String(line))).toContain('[connections] keeping connections signed in failed: Error'))
+    } finally { warn.mockRestore(); vi.useRealTimers() }
+  })
+
+  it('connects Gmail, Calendar and Drive through this computer\'s Claude Code or Codex, and says what each holds', async () => {
+    const asked: string[] = []
+    const requests = startConnectors(fakeCore(), emptyPorts(), {
+      env,
+      elsewhere: {
+        binary: (name) => (name === 'codex' ? '/bin/codex' : null),
+        run: async (_command, args) => { asked.push(args.join(' ')); return '{"installed": []}' },
+      },
+    })
+    const status = await requests.connectors({ action: 'elsewhere' }, OWNER)
+    expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'not_connected' } } })
+    expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'codex' }, OWNER))
+      .toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    // Removed here, and nothing to open.
+    expect(await requests.connectors({ action: 'disconnect_via', connector: 'gmail', via: 'codex' }, OWNER)).toEqual({})
+    // Connecting reads the list again for the plugin's own page; this Codex names none, so ChatGPT's list opens.
+    const list = 'plugin list --json --marketplace openai-curated-remote'
+    expect(asked).toEqual([list, 'plugin add gmail@openai-curated-remote', list, 'plugin remove gmail@openai-curated-remote'])
+    expect(await requests.connectors({ action: 'connect_via', connector: 'gmail', via: 'claude' }, OWNER))
+      .toEqual({ error: 'CONNECTORS_FAILED', detail: 'Claude Code is not installed on this computer.' })
+  })
+
   it('answers exactly the request it declares, and only for the owner', async () => {
-    const requests = startConnectors(fakeCore(), { env })
+    const requests = startConnectors(fakeCore(), emptyPorts(), { env })
     expect(Object.keys(requests)).toEqual([...CONNECTORS_REQUESTS])
     expect(await requests.connectors!({ action: 'list' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
     // Signed out, the gateway's list is empty and nothing reaches the network.
     // The core is signed in to the account, so a connection made here is shared with its computers.
     expect(await requests.connectors!({ action: 'list' }, OWNER)).toMatchObject({ signed_in: false, shared: true })
-    expect(await startConnectors(fakeCore(), { env, vaultPort: null }).connectors!({ action: 'list' }, OWNER))
+    expect(await startConnectors(fakeCore(), emptyPorts(), { env, vaultPort: null }).connectors!({ action: 'list' }, OWNER))
       .toMatchObject({ shared: false })
   })
 
@@ -96,7 +140,7 @@ describe('the connectors service', () => {
     const backend = vi.fn(async (_method: string, _path: string) => ({ status: 200, body: { success: true, data: { revision: 0, envelope: null } } }))
     let hear: (notice: BackendNotice) => void = () => {}
     const core = fakeCore({ account: { backend, onNotice: vi.fn((listener: (notice: BackendNotice) => void) => { hear = listener; return () => {} }) } as never })
-    startConnectors(core, { env, port: 0 })
+    startConnectors(core, emptyPorts(), { env, port: 0 })
     await vi.waitFor(() => expect(backend).toHaveBeenCalledWith('GET', '/api/connector-vault'))
     const reads = () => backend.mock.calls.filter(([, path]) => path === '/api/connector-vault').length
     const before = reads()
@@ -109,9 +153,24 @@ describe('the connectors service', () => {
     expect(reads()).toBe(before + 2)
   })
 
+  it('exchanges the account\'s connections before a Refresh lists them, and lists at once without one', async () => {
+    const backend = vi.fn(async (_method: string, _path: string) => ({ status: 200, body: { success: true, data: { revision: 0, envelope: null } } }))
+    const requests = startConnectors(fakeCore({ account: { backend } as never }), emptyPorts(), { env, port: 0 })
+    await vi.waitFor(() => expect(backend).toHaveBeenCalledWith('GET', '/api/connector-vault'))
+    const reads = () => backend.mock.calls.filter(([, path]) => path === '/api/connector-vault').length
+    const before = reads()
+    await requests.connectors!({ action: 'list' }, OWNER)
+    expect(reads()).toBe(before)
+    expect(await requests.connectors!({ action: 'list', sync: true }, OWNER)).toMatchObject({ shared: true })
+    expect(reads()).toBe(before + 1)
+    // Kept to this computer: nothing to exchange, the list all the same.
+    expect(await startConnectors(fakeCore(), emptyPorts(), { env, vaultPort: null }).connectors!({ action: 'list', sync: true }, OWNER))
+      .toMatchObject({ shared: false })
+  })
+
   it('keeps them on this computer alone while signed out', async () => {
     const backend = vi.fn(async () => ({ status: 200, body: {} }))
-    startConnectors(fakeCore({ account: { backend, signedIn: () => false } as never }), { env, port: 0 })
+    startConnectors(fakeCore({ account: { backend, signedIn: () => false } as never }), emptyPorts(), { env, port: 0 })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(backend).not.toHaveBeenCalled()
   })
@@ -120,14 +179,14 @@ describe('the connectors service', () => {
     vi.stubEnv('HOME', home)
     vi.stubEnv('HARNESS_CONNECTIONS_PORT', '0')
     vi.stubEnv('PATH', '')
-    try { expect(Object.keys(startConnectors(fakeCore()))).toEqual(['connectors']) } finally { vi.unstubAllEnvs() }
+    try { expect(Object.keys(startConnectors(fakeCore(), emptyPorts()))).toEqual(['connectors']) } finally { vi.unstubAllEnvs() }
   })
 
   it('lists, refuses what it cannot do, and disconnects, never answering with a token', async () => {
     const vault = new Store(join(home, 'store'), env)
     vault.save('linear', { access_token: 'secret', source: 'dcr', mcp_entry: { url: 'https://mcp.linear.app/mcp', headers: {} } })
     const offered = vi.fn(async () => ({}))
-    const requests = startConnectors(fakeCore(), { vault, env, port: 0, offered })
+    const requests = startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered })
     const listed = await requests.connectors!({ action: 'list' }, OWNER) as { connections: { connector: string, state: string }[] }
     expect(listed.connections.find(card => card.connector === 'linear')!.state).toBe('connected')
     expect(JSON.stringify(listed)).not.toContain('secret')
@@ -153,7 +212,7 @@ describe('the connectors service', () => {
 
   it('starts a sign-in and says how it goes', async () => {
     const vault = new Store(join(home, 'store'), env)
-    const requests = startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => ({ newsvc: { code: 'newsvc', auth_type: 'dcr', mcp_url: 'http://127.0.0.1:9/mcp' } }) })
+    const requests = startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({ newsvc: { code: 'newsvc', auth_type: 'dcr', mcp_url: 'http://127.0.0.1:9/mcp' } }) })
     const started = await requests.connectors!({ action: 'connect', connector: 'newsvc' }, OWNER)
     expect(started).toMatchObject({ error: 'CONNECTORS_FAILED', detail: expect.stringContaining('reach') })
   })
@@ -164,7 +223,7 @@ describe('the connectors service', () => {
     Object.assign(gateway.backend, { signedIn: () => true, base: async () => fake.base, headers: async () => ({ authorization: 'Bearer harness-session' }) })
     try {
       const vault = new Store(join(home, 'store'), env)
-      const requests = startConnectors(fakeCore(), { vault, env, port: 0 })
+      const requests = startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0 })
       const ask = (flow: string) => requests.connectors!({ action: 'flow', flow }, OWNER) as Promise<Record<string, unknown>>
       const started = await requests.connectors!({ action: 'connect', connector: 'github' }, OWNER) as { flow: string }
       const seen: Record<string, unknown>[] = [await ask(started.flow)]
@@ -183,8 +242,29 @@ describe('the connectors service', () => {
 
   it('a failure that is not a connection\'s own says only that connections are unavailable', async () => {
     const vault = new Store(join(home, 'store'), env)
-    const requests = startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => { throw new Error('boom') } })
+    const requests = startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => { throw new Error('boom') } })
     expect(await requests.connectors!({ action: 'list' }, OWNER)).toEqual({ error: 'CONNECTORS_FAILED', detail: 'Connections are unavailable. Try again.' })
+  })
+
+  it('writes a profile home\'s connections as the core asks, when an agent launches there, and says why one could not be', async () => {
+    const vault = new Store(join(home, 'store'), env)
+    vault.save('linear', { access_token: 'secret', source: 'dcr', mcp_entry: { url: 'https://mcp.linear.app/mcp', headers: {} } })
+    const ports = emptyPorts()
+    startConnectors(fakeCore(), ports, { vault, env, port: 0, offered: async () => ({}) })
+    const profile = join(home, '.claude-work')
+    mkdirSync(profile)
+    writeFileSync(join(profile, '.claude.json'), '{}')
+    expect(await ports.connectors!.syncProfileHome('claude', profile)).toEqual(['linear'])
+    expect(Object.keys(JSON.parse(readFileSync(join(profile, '.claude.json'), 'utf8')).mcpServers)).toEqual(['linear'])
+    // The default home is no profile: nothing is written there.
+    expect(await ports.connectors!.syncProfileHome('claude', home)).toEqual([])
+    // A home that cannot be made: the agent launches with what it has, the log says why, and the port never fails.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    writeFileSync(join(home, 'a-file'), '')
+    try {
+      expect(await ports.connectors!.syncProfileHome('claude', join(home, 'a-file', 'profile'))).toEqual([])
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[connections\] could not update a claude profile home · ENOTDIR$/))
+    } finally { warn.mockRestore() }
   })
 
   it('moves off a port another account holds, tells agents, and comes back to the saved port next time', async () => {
@@ -197,7 +277,7 @@ describe('the connectors service', () => {
     saveBridgePort(vault, taken)
     const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
       let moved = taken
       for (let n = 0; n < 200 && moved === taken; n++) {
         await new Promise(resolve => setTimeout(resolve, 10))
@@ -232,23 +312,47 @@ describe('the connectors service', () => {
     saveBridgePort(vault, taken)
     const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, ...(holderIsMine ? { holderIsMine } : {}) })
-      // Well past the tries before it asks, with time for the lookup.
-      await new Promise(resolve => setTimeout(resolve, 400))
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), retryMs: 5, ...(holderIsMine ? { holderIsMine } : {}) })
+      // Until the lookup has answered, which the real one under load takes up to LSOF_MS to do (task #3640).
+      await vi.waitFor(() => expect(said.mock.calls.flat().join(' ')).toMatch(/a process of this account holds|cannot tell which account holds/),
+        { timeout: 10_000, interval: 10 })
       expect(bridgePort(free, new Store(join(home, 'store'), free))).toBe(taken)
       expect(said.mock.calls.flat().join(' ')).not.toContain('moved')
       await new Promise<void>(resolve => holder.close(() => resolve()))
-      let status = 0
-      for (let n = 0; n < 200 && !status; n++) {
-        await new Promise(resolve => setTimeout(resolve, 10))
-        status = await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)
-      }
-      expect(status).toBe(404)
+      await vi.waitFor(async () => expect(await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)).toBe(404), { timeout: 10_000, interval: 10 })
     } finally {
       said.mockRestore()
       holder.close()
     }
-  // Its waits add up past the default 5 s on a loaded machine: it timed out once in a full coverage run.
+  }, 30_000)
+
+  // lsof under load takes up to LSOF_MS (3 s) to say whose the port is; the bridge waited on it before trying the port again,
+  // and the real-lookup test above timed out at 30 s on a loaded Mac (task #3640).
+  it('takes the port once it is let go while asking whose it is has not answered yet', async () => {
+    const holder = await holdPort()
+    const taken = (holder.address() as { port: number }).port
+    const { HARNESS_CONNECTIONS_PORT: _named, ...free } = env
+    const vault = new Store(join(home, 'store'), free)
+    saveBridgePort(vault, taken)
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let asking!: () => void, answer!: (mine: boolean) => void
+    const asked = new Promise<void>(resolve => { asking = resolve })
+    try {
+      // A lookup still running, as a slow lsof is.
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), retryMs: 5,
+        holderIsMine: () => { asking(); return new Promise<boolean>(resolve => { answer = resolve }) } })
+      await asked
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+      await vi.waitFor(async () => expect(await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)).toBe(404), { timeout: 10_000, interval: 10 })
+      // Its answer, late, is about a hold that has ended: nothing is said of it.
+      answer(true)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(said.mock.calls.flat().join(' ')).not.toContain('a process of this account holds')
+      expect(await answered(`http://127.0.0.1:${taken}/x/linear/mcp`)).toBe(404)
+    } finally {
+      said.mockRestore()
+      holder.close()
+    }
   }, 30_000)
 
   it('does not move on one answer: a handover ending just then reads as another account, so it tries the port again first', async () => {
@@ -261,7 +365,7 @@ describe('the connectors service', () => {
     let asked = 0
     try {
       // Another account's by one answer, then this account's every time after, as a port another listener took over.
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => { asked++; return asked % 2 === 0 } })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => { asked++; return asked % 2 === 0 } })
       for (let n = 0; n < 200 && asked < 6; n++) await new Promise(resolve => setTimeout(resolve, 10))
       expect(asked).toBeGreaterThanOrEqual(6)
       expect(bridgePort(free, new Store(join(home, 'store'), free))).toBe(taken)
@@ -286,7 +390,7 @@ describe('the connectors service', () => {
       const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       // The default try every 5 s, as the daemon runs it.
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine })
       const told = (text: string) => said.mock.calls.flat().join('\n').split(text).length - 1
       const savedPort = () => bridgePort(free, new Store(join(home, 'store'), free))
       return { holder, taken, said, told, savedPort }
@@ -356,10 +460,10 @@ describe('the connectors service', () => {
     saveBridgePort(vault, (holder.address() as { port: number }).port)
     const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), retryMs: 5, holderIsMine: async () => false })
       vi.spyOn(vault, 'file').mockImplementation(() => { throw new Error('disk full') })
       for (let n = 0; n < 200 && !said.mock.calls.flat().join(' ').includes('could not save'); n++) await new Promise(resolve => setTimeout(resolve, 10))
-      expect(said.mock.calls.flat().join(' ')).toContain("could not save the bridge's new port: disk full")
+      expect(said.mock.calls.flat().join(' ')).toContain("could not save the bridge's new port: Error")
     } finally {
       said.mockRestore()
       await new Promise<void>(resolve => holder.close(() => resolve()))
@@ -394,11 +498,11 @@ describe('the connectors service', () => {
     }
 
     it('answers both keys on the port, leaves them unchanged, and makes no socket', async () => {
-      const vault = longVault(), port = await freePort()
+      const vault = longVault()
       mkdirSync(vault.root, { recursive: true, mode: 0o700 })
       writeFileSync(join(vault.root, 'harness-key.json'), JSON.stringify({ key: 'harness-key-placeholder' }), { mode: 0o600 })
       const agentKey = bridgeKey(vault)
-      startConnectors(fakeCore(), { vault, env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
+      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, vaultPort: null })
       expect(vault.file('bridge.json').key).toBe(agentKey)
       expect(vault.file('bridge.json').keyRetiresAt).toBeUndefined()
       expect(vault.file('harness-key.json').key).toBe('harness-key-placeholder')
@@ -413,9 +517,9 @@ describe('the connectors service', () => {
     })
 
     it('with neither key on file, refuses everyone, an empty key included', async () => {
-      const vault = longVault(), port = await freePort()
+      const vault = longVault()
       const agentKey = bridgeKey(vault)
-      startConnectors(fakeCore(), { vault, env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
+      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, vaultPort: null })
       rmSync(join(vault.root, 'bridge.json'), { force: true })
       rmSync(join(vault.root, 'harness-key.json'), { force: true })
       expect(await status(port, '/x/connections')).toBe(404)
@@ -434,7 +538,7 @@ describe('the connectors service', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       let asked = 0
       try {
-        startConnectors(fakeCore(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine: async () => { asked++; return true } })
+        startConnectors(fakeCore(), emptyPorts(), { vault, env: free, offered: async () => ({}), vaultPort: null, holderIsMine: async () => { asked++; return true } })
         await vi.advanceTimersByTimeAsync(3_600_000)
         expect(asked).toBeGreaterThanOrEqual(700)
       } finally {
@@ -454,8 +558,7 @@ describe('the connectors service', () => {
     const behindLink = JSON.stringify({ key: 'k'.repeat(40) })
     writeFileSync(join(elsewhere, 'bridge.json'), behindLink, { mode: 0o600 })
     symlinkSync(elsewhere, root)
-    const port = await freePort()
-    startConnectors(fakeCore(), { vault: new Store(root, env), env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
+    const port = await startedOnAnyPort({ vault: new Store(root, env), env, offered: async () => ({}), retryMs: 20, vaultPort: null })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not replace Harness\'s key'))
     let answer = ''
     for (let n = 0; n < 40 && !answer; n++) {
@@ -475,11 +578,11 @@ describe('the connectors service', () => {
       // It hangs up on each probe of the service's (localSocket.ts refuseLiveSocket), so close() waits on none.
       const holder = createServer(socket => socket.destroy())
       await new Promise<void>(resolve => holder.listen(path, resolve))
-      startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
+      startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
       const said = () => warn.mock.calls.filter(([line]) => String(line).includes('socket is not listening'))
       await vi.waitFor(() => expect(vi.mocked(serveBridgeSocket).mock.calls.length).toBeGreaterThanOrEqual(3))
       expect(said()).toHaveLength(1)
-      expect(String(said()[0][0])).toContain(path)
+      expect(String(said()[0][0])).not.toContain(path)
       const calls = vi.mocked(serveBridgeSocket).mock.calls.length
       await new Promise<void>(resolve => holder.close(() => resolve()))
       await vi.waitFor(async () => {
@@ -489,22 +592,32 @@ describe('the connectors service', () => {
       warn.mockRestore()
     })
 
-    it('says what went wrong when the failure is not an Error', async () => {
+    it('names the kind of a failure that is not an Error', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.mocked(serveBridgeSocket).mockRejectedValueOnce('a plain reason')
       const vault = new Store(join(shortHome(), 'p'), env), path = join(vault.root, 'bridge.sock')
-      startConnectors(fakeCore(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('a plain reason')))
+      startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 10, vaultPort: null })
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('trying again: string')))
       // Its retry goes on and listens: waited for, or it would make the folder again after this test's cleanup.
       await vi.waitFor(() => new Promise<void>((resolve, reject) => { const client = connect(path, () => { client.destroy(); resolve() }); client.once('error', reject) }))
       warn.mockRestore()
     })
   })
 
+  it('says which port its bridge bound, to a spec that asked for any', async () => {
+    const said: number[] = []
+    startConnectors(fakeCore(), emptyPorts(), { vault: new Store(join(home, 'store'), env), env, port: 0, offered: async () => ({}),
+      listening: (port) => { said.push(port) } })
+    await vi.waitFor(() => expect(said).toHaveLength(1))
+    expect(said[0]).toBeGreaterThan(0)
+    // The bridge answers there (refused, with no key).
+    expect(await answered(`http://127.0.0.1:${said[0]}/x/linear/mcp`)).toBe(404)
+  })
+
   it('waits for its port while another process holds it', async () => {
     const holder = await holdPort()
     const port = (holder.address() as { port: number }).port
-    startConnectors(fakeCore(), { vault: new Store(join(home, 'store'), env), env, port, offered: async () => ({}), retryMs: 20 })
+    startConnectors(fakeCore(), emptyPorts(), { vault: new Store(join(home, 'store'), env), env, port, offered: async () => ({}), retryMs: 20 })
     await new Promise(resolve => setTimeout(resolve, 60))
     await new Promise<void>(resolve => holder.close(() => resolve()))
     // Once the holder lets go, the bridge takes the port: a request is answered (refused, with no key).
@@ -530,9 +643,8 @@ describe('the connectors service', () => {
       const vault = new Store(join(home, 'store'), env)
       const stale = harnessKey(vault)
       bridgeKey(vault)
-      const port = await freePort()
       try {
-        startConnectors(fakeCore(), { vault, env, port, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
+        const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
         await vi.waitFor(() => expect(readBridgePipe(vault)?.pipe).toBe(pipe))
         expect(vault.file('harness-key.json')).toMatchObject({ socketOnly: true })
         expect(harnessKey(vault)).not.toBe(stale)
@@ -547,7 +659,7 @@ describe('the connectors service', () => {
       const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
         // Its folder is not there yet: the first listens fail.
-        startConnectors(fakeCore(), { vault, env, port: await freePort(), offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
+        startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
         await vi.waitFor(() => expect(said.mock.calls.flat().join(' ')).toContain('the bridge\'s pipe is not listening'))
         mkdirSync(join(folder, 'p'))
         await vi.waitFor(() => expect(readBridgePipe(vault)?.pipe).toBe(pipe))

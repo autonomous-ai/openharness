@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ContextArgsTemplate, EnvArgsTemplate, OwnProviderContract } from '../facets/launch.js'
+import { settingsText } from '../../lib/settingsText.js'
 
 /** `{key}` in `text` replaced by `value`, as written: never read as a `$` replacement pattern. */
 export const fill = (text: string, key: string, value: string): string => text.split(`{${key}}`).join(value)
@@ -75,9 +76,12 @@ function stripComment(line: string): string {
   return line
 }
 
-/** Read a config file; an unreadable or absent one is "nothing configured", not an error. */
+/**
+ * Read a config file as the engine reads it: its text past a BOM a Windows tool saved (lib/settingsText.ts). An
+ * unreadable or absent one, or one that is not UTF-8, is "nothing configured", not an error.
+ */
 export function readConfig(path: string): string | null {
-  try { return readFileSync(path, 'utf8') } catch { return null }
+  try { return settingsText(readFileSync(path)) } catch { return null }
 }
 
 /**

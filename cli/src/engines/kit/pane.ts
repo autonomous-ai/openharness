@@ -218,12 +218,12 @@ const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━])?\s*$/
 /** A row only Claude Code's own footer draws: its shortcut hint, or its permission mode with the key that cycles it. Claude
  *  Code cuts the row at the pane's width, so its start is enough: a mode's `⏵⏵`/`⏸`, or `? for sh…`. A 42-column pane on
  *  DESKTOP-0TFH0OJ (2026-10-26) showed `⏵⏵ bypass permissions on (shift+tab to`, its composer read as absent, and every
- *  Swarm message typed into it was held before its Enter as `prompt_hidden`. After a long message is pasted, the footer is
- *  only `paste again to expand` (a real Buddy there, 2026-11-04). */
+ *  message typed into it was held before its Enter as `prompt_hidden`. After a long message is pasted, the footer is
+ *  only `paste again to expand` (a real agent there, 2026-11-04). */
 const CLAUDE_FOOTER = /^\s+(?:\? for sh|[⏵⏸]+\s|paste again|.*\(shift\+tab to cycle\))/
 /**
  * The line of Claude Code's composer when it draws `>` for its marker, or -1. In the Harness terminal on Windows it draws
- * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every Super Tab delivery to it
+ * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every delivery to it
  * was held (DESKTOP-0TFH0OJ, 2026-10-23). Only the bottom box counts: `>` at the start of the line under its top rule,
  * and under its bottom rule Claude Code's own footer, with nothing but indented rows. A shell prompt (`PS C:\>`), or a
  * `>` quoted or framed in output above more output, indented or not, must never read as an idle Claude Code (review of
@@ -266,7 +266,7 @@ export function inspectPane(engine: AgentEngine, capture: string, takeover: Take
 /**
  * Claude Code shows what the connected IDE has open or selected as a chip in the empty composer, `❯ [⧉ In .env]` or
  * `❯ [⧉ Selected 3 lines from a.ts]`, in a colour of its own (not dim, not grey). It is context sent with the next
- * message, not text anyone typed. Read as a draft, an idle pane held every Super Tab delivery as
+ * message, not text anyone typed. Read as a draft, an idle pane held every delivery as
  * `team_waiting_draft`, and the same message was retried every second (2026-10-21, 10:44-10:49, 266 times).
  * ONLY chips and nothing else: any word typed beside one is a real draft and still holds.
  */

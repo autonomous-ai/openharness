@@ -4,6 +4,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CONVERSATIONS_OFF } from './api.js'
 import { answerConversationQuery, conversationReads } from './conversationQueries.js'
+import { handoffSessionFact } from '../lib/handoffAuthority.js'
 
 const session = { agentId: 'retained', sessionId: 's1', engine: 'claude' } as RegisteredSession
 const source = { engine: 'claude', sessionId: 's1', transcriptPath: '/claude/s1.jsonl' }
@@ -28,7 +29,7 @@ describe('the conversation reads the handoff asks of the core', () => {
 
   it('reads retained agents and their recaps now, and discovers from the core record alone', async () => {
     const d = deps(), reads = conversationReads(d)
-    expect(await reads.resolve('retained')).toBe(session)
+    expect(await reads.resolve('retained')).toEqual(session)
     expect(await reads.resolve('missing')).toBeNull()
     expect(await reads.recentAsks('s', 20)).toEqual(['ask'])
     expect(d.recentAsks).toHaveBeenCalledWith('s', 20)
@@ -43,6 +44,32 @@ describe('the conversation reads the handoff asks of the core', () => {
     expect(d.findTranscript).toHaveBeenCalledWith('codex', 's', { codexHome: '/home' })
     expect(await reads.transcriptOk('codex', '/path', '/home')).toBe(true)
     expect(d.transcriptOk).toHaveBeenCalledWith('codex', '/path', '/home')
+  })
+
+  it('withholds live and stopped launch credentials from the handoff while discovery keeps the authoritative row', async () => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-handoff-canary' }
+    const live = { ...session, agentId: 'live', gridLaunch: override }
+    const stopped = { ...session, agentId: 'stopped', gridLaunch: override }
+    const records = [live, stopped]
+    const d = { ...deps(), resolve: vi.fn(id => records.find(row => row.agentId === id) ?? null) }
+    const reads = conversationReads(d)
+    const core = fakeCore({ conversations: reads })
+    for (const original of records) {
+      const view = await reads.resolve(original.agentId)
+      expect(view).not.toBeNull()
+      expect(view).not.toBe(original)
+      expect(Object.hasOwn(view!, 'gridLaunch')).toBe(false)
+      expect(handoffSessionFact(view!)).toEqual(handoffSessionFact(original))
+      const reply = await answerConversationQuery(core, 'resolve', { id: original.agentId })
+      expect(JSON.stringify(reply)).not.toContain(override.apiKey)
+      await reads.discover(original.agentId)
+      expect(d.discoverSession).toHaveBeenLastCalledWith(original)
+      expect(vi.mocked(d.discoverSession!).mock.lastCall?.[0]).toBe(original)
+      expect(original.gridLaunch).toBe(override)
+    }
+    expect(await reads.resolve('missing')).toBeNull()
+    d.resolve.mockImplementationOnce(() => { throw new Error('fixture unreadable record') })
+    await expect(reads.resolve('stopped')).rejects.toThrow('fixture unreadable record')
   })
 
   it('keeps missing and optional data empty instead of guessing a conversation or a path', async () => {

@@ -50,6 +50,9 @@ jobs:
         run: npm run build
 
       - name: Verify production routes and the static OS and agents pages
+        env:
+          # /os/latest reads GitHub releases; unauthenticated, the runner's shared IP hits the rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           PORT=3000 HOSTNAME=127.0.0.1 node .next/standalone/server.js > /tmp/website-server.log 2>&1 &

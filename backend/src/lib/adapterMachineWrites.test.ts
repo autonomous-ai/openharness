@@ -13,7 +13,7 @@ vi.mock('./ssoAuth.js', async original => ({ ...await original<typeof import('./
 vi.mock('./wsServer.js', async original => ({ ...await original<typeof import('./wsServer.js')>(), createWss: () => ({ handleUpgrade: m.upgrade }) }))
 vi.mock('../services/MachineService.js', () => ({ machineService: m.machineService }))
 vi.mock('./prisma.js', () => ({
-  prisma: { machine: { update: m.machineUpdate }, user: { findUnique: m.userFindUnique }, swarmAgent: { aggregateRaw: vi.fn(async () => []) } },
+  prisma: { machine: { update: m.machineUpdate }, user: { findUnique: m.userFindUnique } },
   machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] },
 }))
 vi.mock('./bus.js', () => ({

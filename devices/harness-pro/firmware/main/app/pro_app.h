@@ -39,7 +39,8 @@ void pro_app_button_hold(void);
 void pro_app_notice(const char *text);
 // Leave the Talk frame whose recording is over (pod_ui_talk_over), redrawing.
 void pro_app_talk_over(void);
-// Why a recording for this agent must not start (the copy is the screen's), or NULL when it may.
+// Why a recording for this agent must not start (the copy is the screen's), or NULL when it may. An agent whose app
+// withholds voice (no POD_CAP_V) gets "See it in <App>" (pod_host_see_it) before any other per-agent reason.
 const char *pro_app_voice_block_reason(const char *agent_id);
 // The agent has an unanswered question (pro_app_question and not yet closed or answered by a new turn).
 bool pro_app_question_open(const char *agent_id);

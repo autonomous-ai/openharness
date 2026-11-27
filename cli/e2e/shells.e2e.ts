@@ -83,7 +83,7 @@ describe('the person\'s login shell', () => {
     const d = await IsolatedDaemon.create({ env: { SHELL: '/bin/zsh' } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    rmSync(join(d.env.ZDOTDIR!, '.zshrc'))
+    for (const name of ['.zshenv', '.zprofile', '.zshrc']) rmSync(join(d.env.ZDOTDIR!, name))
     await d.start()
     const client = await LocalClient.connect(d)
     const cwd = join(d.projectsDir, `new-zsh-user-${engine}`)

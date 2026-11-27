@@ -10,9 +10,14 @@ const loader = fileURLToPath(new URL('./loadEnv.ts', import.meta.url))
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
-function project(): string {
+function folder(): string {
   const root = mkdtempSync(join(tmpdir(), 'harness-env-'))
   roots.push(root)
+  return root
+}
+
+function project(): string {
+  const root = folder()
   writeFileSync(join(root, '.env'), 'BACKEND_WS_URL=ws://sandbox.invalid:8090\nAUTONOMOUS_ENV=stag\nADAPTER_DATA_DIR=/sandbox/data\nHARNESS_AUTH_DIR=/sandbox/auth\nPORT=3000\n')
   return root
 }
@@ -51,10 +56,33 @@ describe('Harness environment loading', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ BACKEND_WS_URL: 'ws://sandbox.invalid:8090', AUTONOMOUS_ENV: 'stag' })
   })
 
+  // The master ran in the folder it was started from, the core in the home: a relative file was two files, or none.
+  it.each(['HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH'])('reads a relative %s from the home, whatever folder the process starts in', (name) => {
+    const home = folder(), elsewhere = folder()
+    writeFileSync(join(home, 'harness.env'), 'BACKEND_WS_URL=ws://home.invalid:8090\n')
+    writeFileSync(join(elsewhere, 'harness.env'), 'BACKEND_WS_URL=ws://elsewhere.invalid:8090\n')
+    const result = run(elsewhere, { HOME: home, USERPROFILE: home, [name]: 'harness.env' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({ BACKEND_WS_URL: 'ws://home.invalid:8090' })
+  })
+
   it('fails clearly if the explicitly selected environment file cannot be read', () => {
     const root = project()
     const result = run(root, { HARNESS_ENV_FILE: join(root, 'missing.env') })
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain('Cannot read Harness environment file')
+  })
+
+  it('reads the selected file again into an environment it is handed, keeping what is set there', async () => {
+    const root = project()
+    const file = join(root, 'harness.env')
+    writeFileSync(file, 'FROM_FILE=in-the-file\nALREADY=in-the-file\n')
+    const { loadEnvFile } = await import('./loadEnv.js')
+    const env: NodeJS.ProcessEnv = { HARNESS_ENV_FILE: file, ALREADY: 'in-the-environment' }
+    loadEnvFile(env)
+    expect(env).toEqual({ HARNESS_ENV_FILE: file, FROM_FILE: 'in-the-file', ALREADY: 'in-the-environment' })
+    expect(process.env.FROM_FILE).toBeUndefined()
+    expect(() => loadEnvFile({})).not.toThrow()
+    expect(() => loadEnvFile({ HARNESS_ENV_FILE: join(root, 'missing.env') })).toThrow('Cannot read Harness environment file')
   })
 })

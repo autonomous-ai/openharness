@@ -127,11 +127,18 @@ void main() {
     // What the machine sends that this build does not know falls back to the defaults.
     final odd = BrowserSettings.fromJson({
       'proxy': {'scheme': 'ftp', 'host': 'x', 'port': 1},
-      'screen': '800x600',
+      'screen': 'huge',
       'humanSpeed': 'warp',
     });
     expect(odd.proxy, isNull);
-    expect(odd.screen, '1920x1080');
+    expect(odd.screen, '1080x1920');
+    // A size a newer machine offers stays as it is, so saving another setting never changes the screen.
+    expect(
+      BrowserSettings.fromJson({'screen': '2560x1440'}).screen,
+      '2560x1440',
+    );
+    expect(BrowserSettings.screens.first, '1080x1920');
+    expect(const BrowserSettings(languages: 'en-US').screen, '1080x1920');
     expect(odd.humanInput, isTrue);
     expect(odd.humanSpeed, 'normal');
     expect(odd.device, isNull);

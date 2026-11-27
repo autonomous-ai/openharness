@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as childProcess from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { engineAccount, type EngineStatusRun } from './engineAccount.js'
 import { resetLoginShellEnvironmentCache } from './loginShellEnv.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
@@ -97,9 +98,18 @@ describe('engineAccount', () => {
     expect(asked.calls).toEqual([])
   })
 
-  it('counts a saved model API as a sign-in, so a machine with no subscription can take Swarm work', async () => {
+  it('takes an apiKeyHelper from a settings.json saved with a BOM, as Windows PowerShell 5 writes it', async () => {
+    const asked = cli({ claude: false })
+    const helper = home()
+    mkdirSync(join(helper, '.claude'))
+    writeFileSync(join(helper, '.claude', 'settings.json'), `﻿${JSON.stringify({ apiKeyHelper: '~/bin/key' })}`)
+    expect((await engineAccount('claude', { home: helper, env: {}, run: asked.run })).signedIn).toBe(true)
+    expect(asked.calls).toEqual([])
+  })
+
+  it('counts a saved model API as a sign-in, so a machine with no subscription can start agents', async () => {
     // Headless run, 2026-11-03: a working OpenRouter key was saved for the team account, and the machine still read
-    // "not signed in", so no Swarm start was admitted.
+    // "not signed in", so no start was admitted.
     const root = home()
     const data = join(root, '.harness', 'cli', 'data', 'api-connections')
     mkdirSync(data, { recursive: true })
@@ -112,14 +122,46 @@ describe('engineAccount', () => {
     expect((await engineAccount('codex', { home: root, env: {}, run: signedOut.run })).signedIn).toBe(false)
   })
 
+  it('reads the saved model API from a relative ADAPTER_DATA_DIR in the home, as config/env.ts reads it', async () => {
+    const root = home()
+    const data = join(root, 'own-data', 'api-connections')
+    mkdirSync(data, { recursive: true })
+    writeFileSync(join(data, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'openrouter', provider: 'openrouter',
+      name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'sk-x' }] }))
+    expect((await engineAccount('claude', { home: root, env: { ADAPTER_DATA_DIR: 'own-data' }, run: cli().run })).signedIn).toBe(true)
+  })
+
+  // The checked read every launch holds the file to decides, loaded only where an API was saved: a file it refuses
+  // would not serve a launch, and a machine that said "signed in" on it was sent work it could not start.
+  it('counts no saved API the launch could not use: another header, or a file the checked read refuses', async () => {
+    const saved = (row: Record<string, unknown>) => {
+      const root = home()
+      const data = join(root, '.harness', 'cli', 'data', 'api-connections')
+      mkdirSync(data, { recursive: true })
+      writeFileSync(join(data, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'openrouter', provider: 'openrouter',
+        name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'sk-x', ...row }] }))
+      return root
+    }
+    const signedOut = cli()
+    const account = async (root: string) => (await engineAccount('claude', { home: root, env: {}, run: signedOut.run })).signedIn
+    expect(await account(saved({}))).toBe(true)
+    // In any letter case, and with the space the checked read trims.
+    expect(await account(saved({ authHeader: 'authorization', authPrefix: 'bearer ' }))).toBe(true)
+    expect(await account(saved({ authHeader: 'x-api-key', authPrefix: '' }))).toBe(false)
+    // A name a launch may not set in an agent's environment: the checked read refuses the whole file.
+    expect(await account(saved({ keyEnv: 'NODE_OPTIONS' }))).toBe(false)
+    expect(await account(saved({ apiKey: '' }))).toBe(false)
+    // No file at all asks nothing of the checked read.
+    expect(await account(home())).toBe(false)
+  })
+
   it.skipIf(process.platform === 'win32')('runs the CLI found on the given PATH, with the given environment', async () => {
     const root = home()
     const bin = join(root, 'bin')
     mkdirSync(bin)
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\n[ "$1 $2 $3" = "auth status --json" ] || exit 2\n'
+    writeExecutable(join(bin, 'claude'), '#!/bin/sh\n[ "$1 $2 $3" = "auth status --json" ] || exit 2\n'
       + 'if [ "$CLAUDE_CONFIG_DIR" = /signed/in ]; then echo \'{"loggedIn": true}\'; else echo \'{"loggedIn": false}\'; exit 1; fi\n')
-    writeFileSync(join(bin, 'codex'), '#!/bin/sh\n[ "$1 $2" = "login status" ] || exit 2\n[ "$CODEX_HOME" = /signed/in ]\n')
-    for (const name of ['claude', 'codex']) chmodSync(join(bin, name), 0o755)
+    writeExecutable(join(bin, 'codex'), '#!/bin/sh\n[ "$1 $2" = "login status" ] || exit 2\n[ "$CODEX_HOME" = /signed/in ]\n')
     const account = (engine: 'claude' | 'codex', env: NodeJS.ProcessEnv) => engineAccount(engine, { home: root, env: { PATH: bin, ...env }, lastUsed: false })
     expect((await account('claude', { CLAUDE_CONFIG_DIR: '/signed/in' })).signedIn).toBe(true)
     expect((await account('claude', {})).signedIn).toBe(false)

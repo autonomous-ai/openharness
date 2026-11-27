@@ -1,3 +1,4 @@
+import { validProjectPath } from './projectPath.js'
 import { execFile } from 'node:child_process'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -5,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { isGitHubHost, safeSshAlias } from './githubRepository.js'
 import { insideGitCheckout } from './gitProject.js'
+import { gitPath } from './gitOnPath.js'
 import { resolveHost } from './sshHosts.js'
 
 const exec = promisify(execFile)
@@ -81,7 +83,7 @@ async function runGit(cwd: string, args: string[]): Promise<string | null> {
   if (!(await insideGitCheckout(cwd))) throw Object.assign(new Error('not a Git checkout'), { code: 128 })
   const environment = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (environment as NodeJS.ProcessEnv)[key]
-  const { stdout } = await exec('git', ['-C', cwd, ...args], {
+  const { stdout } = await exec(await gitPath(), ['-C', cwd, ...args], {
     timeout: 1500, maxBuffer: 16 * 1024, encoding: 'utf8',
     env: environment,
   })
@@ -246,12 +248,6 @@ async function metadataStamp(cwd: string, project: AgentProject): Promise<string
   } catch { return null }
 }
 
-/** A `cwd` worth running Git in: absolute, bounded, printable. Exported for the SCM seam
- *  (`scm/scmProjects.ts`), which must answer null for exactly the folders this does. */
-export function validProjectCwd(cwd: string | null | undefined): cwd is string {
-  return !!cwd && isAbsolute(cwd) && cwd.length <= 4096 && !/[\x00-\x1f\x7f]/.test(cwd)
-}
-
 export function createAgentProjectReader(lookup: (cwd: string) => Promise<AgentProject> = inspect) {
   type Entry = { at: number; gitAt: number; pending: boolean; stamp: string | null; value: Promise<AgentProject> }
   const cache = new Map<string, Entry>()
@@ -264,7 +260,7 @@ export function createAgentProjectReader(lookup: (cwd: string) => Promise<AgentP
     }
   }
   const read = (cwd: string | null, now = Date.now()): Promise<AgentProject | null> => {
-    if (!validProjectCwd(cwd)) return Promise.resolve(null)
+    if (!validProjectPath(cwd)) return Promise.resolve(null)
     const found = cache.get(cwd)
     if (found && (found.pending || now - found.at < 15_000)) {
       cache.delete(cwd)

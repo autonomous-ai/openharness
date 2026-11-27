@@ -8,6 +8,8 @@ import 'package:harness/core/models.dart';
 import 'package:harness/ws/relay_codec.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/loopback_websocket.dart';
+
 // Task #2195: a big answer decodes off the UI thread, and frames stay in the order they came.
 
 String _frame(int seq, {int pad = 0}) => jsonEncode({
@@ -66,7 +68,8 @@ void main() {
     final ready = Completer<WebSocket>(), connected = Completer<void>();
     unawaited(
       server.forEach((request) async {
-        final s = await WebSocketTransformer.upgrade(request);
+        final s = await acceptWebSocket(request);
+        if (s == null) return;
         s.listen((raw) {
           final frame = jsonDecode(raw as String) as Map<String, dynamic>;
           if (frame['type'] == 'machine_select') {
@@ -216,7 +219,8 @@ void main() {
       final ready = Completer<WebSocket>();
       unawaited(
         relay.forEach((request) async {
-          final s = await WebSocketTransformer.upgrade(request);
+          final s = await acceptWebSocket(request);
+          if (s == null) return;
           s.listen((_) {});
           if (!ready.isCompleted) ready.complete(s);
         }),

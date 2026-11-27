@@ -1,12 +1,34 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmodSync, constants } from 'node:fs'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PNG } from 'pngjs'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PACK_VERSION, decodePack } from './pack.js'
 import { PetSheetError, type PetRows } from './sheet.js'
 import { PetStore, PetStoreError } from './store.js'
+
+// Pass-through, recording which paths are opened, written by name and renamed.
+const fsCalls = vi.hoisted(() => [] as Array<{ call: 'open' | 'write' | 'rename'; path: string; to?: string; flags?: unknown }>)
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      fsCalls.push({ call: 'open', path: String(args[0]), flags: args[1] })
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') fsCalls.push({ call: 'write', path: String(args[0]) })
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      fsCalls.push({ call: 'rename', path: String(args[0]), to: String(args[1]) })
+      return actual.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { fsCalls.length = 0; vi.restoreAllMocks() })
 
 const roots: string[] = []
 afterAll(async () => {
@@ -341,6 +363,61 @@ describe('PetStore', () => {
     old[4] = 0
     await writeFile(file, old)
     expect(await store.pack(a.id)).toEqual(fresh)
+  })
+
+  it('a torn pets.json is set aside, not written over', async () => {
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'pets.json'), '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const torn = new PetStore(dir)
+    expect(torn.mapping()).toEqual({ all: null, engines: {} })
+    const a = await torn.prepare(await source(140))
+    await torn.apply('all', a.id)
+    expect(await readFile(join(dir, 'pets.json.unreadable'), 'utf8')).toBe('{"')
+    expect(JSON.parse(await readFile(join(dir, 'pets.json'), 'utf8'))).toEqual({ all: a.id, engines: {} })
+    expect(warn).toHaveBeenCalledWith(
+      '[state] pets.json could not be read (not valid JSON); kept as pets.json.unreadable, starting empty.')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a pets.json this account cannot read is not written over', async () => {
+    const a = await store.prepare(await source(142))
+    await store.apply('all', a.id)
+    const file = join(dir, 'pets.json')
+    const before = await readFile(file, 'utf8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    chmodSync(file, 0o000)
+    const locked = new PetStore(dir)
+    await expect(locked.apply('claude', a.id)).rejects.toThrow('pets.json could not be read (EACCES)')
+    await expect(locked.reset('all')).rejects.toThrow('pets.json could not be read (EACCES)')
+    chmodSync(file, 0o600)
+    expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
+  it('each save goes through a temporary file of its own renamed onto the target', async () => {
+    const a = await store.prepare(await source(141))
+    await store.apply('all', a.id)
+    for (const name of [`${a.id}.hpet`, `${a.id}.png`, `${a.id}.json`, 'pets.json']) {
+      const file = join(dir, name)
+      const renames = fsCalls.filter(({ call, to }) => call === 'rename' && to === file)
+      expect(renames, name).toHaveLength(1)
+      // Made new and exclusive: never a file another writer or a planted link holds.
+      const opens = fsCalls.filter(({ call, path }) => call === 'open' && path === renames[0].path)
+      expect(opens, name).toHaveLength(1)
+      expect(Number(opens[0].flags) & constants.O_EXCL, name).toBe(constants.O_EXCL)
+      expect(fsCalls.some(({ call, path }) => path === file && call === 'write'), name).toBe(false)
+    }
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    const path = await source(142)
+    const { id } = await store.prepare(path)
+    await writeFile(join(dir, `${id}.hpet.tmp`), 'another writer\'s')
+    await writeFile(join(dir, 'pets.json.tmp'), 'another writer\'s')
+    await store.prepare(path)
+    await store.apply('all', id)
+    expect(await readFile(join(dir, `${id}.hpet.tmp`), 'utf8')).toBe('another writer\'s')
+    expect(await readFile(join(dir, 'pets.json.tmp'), 'utf8')).toBe('another writer\'s')
+    expect(store.mapping()).toEqual({ all: id, engines: {} })
   })
 
   it('rows: null for an unknown id, a sidecar without rows, or one with a bad row', async () => {

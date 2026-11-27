@@ -1,8 +1,9 @@
 /** Recoverable publication of a bounded preparation. Receipts never authorize guessed completion. */
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, renameSync, statSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { setImmediate as yieldLoop } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import { NativeFiles } from '../engines/kit/nativeFiles.js'
 import { nativeFileKey, verifyNativePathFacts, type NativePathFact } from '../engines/kit/nativePaths.js'
 import { HandoffError, handoffBaseName, handoffExcludeText, handoffHash, handoffIntentHash,
@@ -22,7 +23,37 @@ const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).co
 function exists(path: string): boolean {
   try { lstatSync(path); return true } catch (error) { if (missing(error)) return false; throw error }
 }
-function sync(path: string, directory = false): void {
+/**
+ * The file and directory states one publication has flushed. On macOS every fsync is F_FULLFSYNC, a full drive flush
+ * (25-35 ms on an Intel Mac, several times that loaded), and a Change agent preparation made 73 of them: 2.5 s of a
+ * 3.3 s preparation at load 8, under its 5 s deadline. Most flushed again a state already flushed. A flush makes durable
+ * a file's bytes, or the names a directory holds, as they are when it runs, so crash safety needs one per state: a file
+ * is flushed again only once its bytes changed, a directory once this publication changed its names (`changed`). A
+ * publication starts with none, so whatever an interrupted one left is confirmed by its first flush, as before.
+ */
+class Flushes {
+  private readonly done = new Set<string>()
+  /** Flush [fd], unless its state is flushed already. On libuv's threadpool, so the core's loop runs while the drive
+   *  flushes; libuv's fsync is F_FULLFSYNC on macOS, as fsyncSync's is. */
+  async flush(fd: number, info: BigIntStats): Promise<void> {
+    const state = flushedState(info)
+    if (this.done.has(state)) return
+    await promisify(fsync)(fd)
+    this.done.add(state)
+  }
+  /** A name in [directory] this publication relies on is new since its flush: one it created, linked or renamed, or one it
+   *  found made by another process (a folder, a peer's .gitignore or exclusion line). */
+  changed(directory: string): void {
+    // Followed, as the flush opened it resolved. One no longer there to name forgets every flush, as nothing else says
+    // which one it was.
+    try { this.done.delete(flushedState(statSync(directory, { bigint: true }))) } catch { this.done.clear() }
+  }
+}
+/** Files here are written once and never in place, so a file's bytes are its identity, size and modification time. */
+const flushedState = (info: BigIntStats): string =>
+  info.isDirectory() ? `d:${nativeFileKey(info)}` : `f:${nativeFileKey(info)}:${info.size}:${info.mtimeNs}`
+
+async function sync(flushes: Flushes, path: string, directory = false): Promise<void> {
   const files = new NativeFiles(), location = files.locate(path)!
   const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW | (directory ? constants.O_DIRECTORY : 0))
   try {
@@ -33,29 +64,32 @@ function sync(path: string, directory = false): void {
     // identity and bound its fresh verification; the request's deadline is never renewed.
     const route = files.paths.snapshot()
     // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
-    if (!directory || directorySyncSupported()) fsyncSync(fd)
+    if (!directory || directorySyncSupported()) await flushes.flush(fd, info)
     verifyNativePathFacts(route)
   } finally { closeSync(fd) }
 }
-function createFile(path: string, text: string): Stage {
+async function createFile(flushes: Flushes, path: string, text: string): Promise<Stage> {
   const route = new NativeFiles(); route.locate(dirname(path))
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
   try {
+    flushes.changed(dirname(path))
     const opened = fstatSync(fd, { bigint: true })
     const facts = route.paths.snapshot()
     if (!opened.isFile() || opened.nlink !== 1n || nativeFileKey(lstatSync(path, { bigint: true })) !== nativeFileKey(opened)) return held()
-    writeFileSync(fd, text); fsyncSync(fd); verifyNativePathFacts(facts)
+    writeFileSync(fd, text); await flushes.flush(fd, fstatSync(fd, { bigint: true })); verifyNativePathFacts(facts)
     if (nativeFileKey(lstatSync(path, { bigint: true })) !== nativeFileKey(opened)) return held()
     return { path, key: nativeFileKey(opened) }
   }
   finally { closeSync(fd) }
 }
-function directory(path: string): void {
+async function directory(flushes: Flushes, path: string): Promise<void> {
   try { mkdirSync(path, { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  // Made here or by another process since this publication flushed the parent: its name is confirmed either way.
+  flushes.changed(dirname(path))
   const info = lstatSync(path)
   if (!info.isDirectory() || (info.mode & 0o022) !== 0 || typeof process.getuid === 'function' && info.uid !== process.getuid()) held()
   // Repeat on recovery: an earlier mkdir may have succeeded while its parent fsync failed.
-  sync(path, true); sync(dirname(path), true)
+  await sync(flushes, path, true); await sync(flushes, dirname(path), true)
 }
 
 /** A durable reservation stores the complete redacted preparation before any project write.
@@ -65,7 +99,7 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
   verify: (prepared: PreparedHandoff, reserved: boolean) => void,
   checkRequest: () => void,
 ): Promise<HandoffOutcome> {
-  const token = Symbol(), locks: string[] = []
+  const token = Symbol(), locks: string[] = [], flushes = new Flushes()
   try {
     verify(candidate, false)
     const id = handoffHash(JSON.stringify([candidate.request.agentId, candidate.request.changeId]))
@@ -77,7 +111,7 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
     if (keys.some(key => publications.has(key))) throw new HandoffError('BUSY')
     for (const key of keys) { publications.set(key, token); locks.push(key) }
     const fingerprint = handoffIntentHash(candidate)
-    directory(dirname(directoryPath)); directory(directoryPath)
+    await directory(flushes, dirname(directoryPath)); await directory(flushes, directoryPath)
     const receiptFolders = new NativeFiles(); directoryPath = receiptFolders.locate(directoryPath)!.path
     const receiptRoute = receiptFolders.paths.snapshot()
     const receiptPath = join(directoryPath, `${id}.json`)
@@ -119,16 +153,16 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
       const current = readHandoffFile(receiptPath, MAX_RECEIPT_BYTES, true)
       if (current.key !== previous.key || current.version !== previous.version || current.text !== previous.text) return held()
     }
-    const save = (): void => {
+    const save = async (): Promise<void> => {
       receiptFence()
       const text = JSON.stringify(receipt)
       if (Buffer.byteLength(text) > MAX_RECEIPT_BYTES) return held()
-      const temporary = createFile(`${receiptPath}.${randomUUID()}.tmp`, text)
+      const temporary = await createFile(flushes, `${receiptPath}.${randomUUID()}.tmp`, text)
       receiptFence()
       checkRequest()
       if (previous.text === null) linkSync(temporary.path, receiptPath)
       else renameSync(temporary.path, receiptPath)
-      sync(directoryPath, true)
+      flushes.changed(directoryPath); await sync(flushes, directoryPath, true)
       previous = readHandoffFile(receiptPath, MAX_RECEIPT_BYTES, true)
       if (previous.key !== temporary.key || previous.text !== text) return held()
     }
@@ -154,7 +188,7 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
       if (JSON.stringify(prepared.exclude) !== JSON.stringify(baseline)) {
         prepared.exclude = baseline
         receipt.exclude = null
-        verify(candidate, false); verify(prepared, true); exclusionBaseline(); save()
+        verify(candidate, false); verify(prepared, true); exclusionBaseline(); await save()
       }
     }
     if (previous.text === null) {
@@ -162,7 +196,7 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
       exclusionBaseline()
       verify(prepared, false)
       if (!prepared.documents) receipt.committed = true
-      save()
+      await save()
     }
     const fence = (): void => {
       verify(prepared, true); receiptFence()
@@ -172,20 +206,20 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
     await checkpoint()
     if (!prepared.documents) {
       if (!receipt.committed) return held()
-      fence(); sync(receiptPath); sync(directoryPath, true); sync(dirname(directoryPath), true); fence()
+      fence(); await sync(flushes, receiptPath); await sync(flushes, directoryPath, true); await sync(flushes, dirname(directoryPath), true); fence()
       checkRequest()
       return prepared.result
     }
     const ignore = join(folder, '.gitignore')
-    const confirmIgnore = (): void => {
+    const confirmIgnore = async (): Promise<void> => {
       if (!receipt.ignore) return held()
       verifyNativePathFacts(receipt.ignore.route)
       const currentIgnore = readHandoffFile(ignore, 64 * 1024, true)
       if (currentIgnore.key !== receipt.ignore.key || currentIgnore.text !== '*\n') return held()
-      sync(ignore)
+      await sync(flushes, ignore)
     }
-    const guards = (): void => {
-      confirmIgnore()
+    const guards = async (): Promise<void> => {
+      await confirmIgnore()
       if (prepared.exclude) {
         const exclusion = prepared.exclude, current = readHandoffFile(exclusion.path, 129 * 1024)
         verifyNativePathFacts(exclusion.route.filter(fact => fact.path !== exclusion.path))
@@ -196,45 +230,49 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
           verifyNativePathFacts(exclusion.route)
           if (exclusion.before !== exclusion.after || current.version !== exclusion.version) return held()
         }
-        sync(exclusion.path); sync(dirname(exclusion.path), true)
+        await sync(flushes, exclusion.path); await sync(flushes, dirname(exclusion.path), true)
       }
     }
-    const confirmed = (): void => outputs.forEach((output, index) => {
-      const current = readHandoffFile(output.path, 8 * 1024 * 1024, true)
-      if (!receipt.outputs[index] || current.key !== receipt.outputs[index]!.key || current.text !== output.text) return held()
-      sync(output.path); sync(folder, true)
-    })
+    const confirmed = async (): Promise<void> => {
+      for (const [index, output] of outputs.entries()) {
+        const current = readHandoffFile(output.path, 8 * 1024 * 1024, true)
+        if (!receipt.outputs[index] || current.key !== receipt.outputs[index]!.key || current.text !== output.text) return held()
+        await sync(flushes, output.path); await sync(flushes, folder, true)
+      }
+    }
     const durable = async (): Promise<void> => {
-      fence(); confirmed(); guards()
+      fence(); await confirmed(); await guards()
       await checkpoint()
-      sync(join(cwd, '.harness'), true); sync(cwd, true)
+      await sync(flushes, join(cwd, '.harness'), true); await sync(flushes, cwd, true)
       // A rename-visible committed receipt may still have an unconfirmed directory fsync.
-      sync(receiptPath); sync(directoryPath, true); sync(dirname(directoryPath), true)
-      fence(); guards(); confirmed()
+      await sync(flushes, receiptPath); await sync(flushes, directoryPath, true); await sync(flushes, dirname(directoryPath), true)
+      // The fence after the last flush: the source and the request can change while one is pending.
+      await guards(); await confirmed(); fence()
       checkRequest()
     }
     if (receipt.committed) { await durable(); return prepared.result }
     fence()
     exclusionBaseline()
-    directory(join(cwd, '.harness')); directory(folder)
+    await directory(flushes, join(cwd, '.harness')); await directory(flushes, folder)
     if (!receipt.destination) {
       const folders = new NativeFiles(); folders.locate(folder)
-      receipt.destination = folders.paths.snapshot(); save()
+      receipt.destination = folders.paths.snapshot(); await save()
     }
     await checkpoint()
     if (!receipt.ignore) {
       if (!exists(ignore)) {
-        const staged = createFile(join(folder, `.${id}.${randomUUID()}.stage`), '*\n')
-        fence(); checkRequest(); linkSync(staged.path, ignore)
+        const staged = await createFile(flushes, join(folder, `.${id}.${randomUUID()}.stage`), '*\n')
+        fence(); checkRequest(); linkSync(staged.path, ignore); flushes.changed(folder)
       }
       const observed = readHandoffFile(ignore, 64 * 1024, true)
       if (!observed.key || observed.text !== '*\n') return held()
-      receipt.ignore = { key: observed.key, route: observed.route }; save()
+      receipt.ignore = { key: observed.key, route: observed.route }; await save()
     }
     verifyNativePathFacts(receipt.ignore.route)
     const observedIgnore = readHandoffFile(ignore, 64 * 1024, true)
     if (observedIgnore.key !== receipt.ignore.key || observedIgnore.text !== '*\n') return held()
-    sync(ignore); sync(folder, true)
+    // Linked here, or by a peer since the folder was flushed: its name is confirmed either way.
+    flushes.changed(folder); await sync(flushes, ignore); await sync(flushes, folder, true)
     await checkpoint()
     if (prepared.exclude) {
       const exclusion = prepared.exclude, parent = dirname(exclusion.path)
@@ -242,43 +280,48 @@ export async function publishHandoff(directoryPath: string, candidate: PreparedH
       excludeFence()
       const current = readHandoffFile(exclusion.path, 129 * 1024)
       if (receipt.exclude && current.key === receipt.exclude.key && current.text === exclusion.after) {
-        // This transaction completed the rename before a later write/fsync/reply failed.
-        sync(exclusion.path); sync(parent, true)
+        // This transaction, or a peer, completed the rename before a later write/fsync/reply failed.
+        flushes.changed(parent); await sync(flushes, exclusion.path); await sync(flushes, parent, true)
       } else {
         verifyNativePathFacts(exclusion.route)
         if (current.text !== exclusion.before || current.version !== exclusion.version) return held()
         if (exclusion.before !== exclusion.after) {
           if (!receipt.exclude) {
-            receipt.exclude = createFile(join(parent, `.${id}.${randomUUID()}.stage`), exclusion.after)
-            sync(parent, true); save()
+            receipt.exclude = await createFile(flushes, join(parent, `.${id}.${randomUUID()}.stage`), exclusion.after)
+            await sync(flushes, parent, true); await save()
           }
+          // The ignore's flush first: the stage, the route and the exclusion the rename relies on are read after it, with
+          // no await before the rename.
+          await confirmIgnore()
           const staged = readHandoffFile(receipt.exclude.path, 129 * 1024, true)
           if (staged.key !== receipt.exclude.key || staged.text !== exclusion.after) return held()
-          excludeFence(); confirmIgnore(); verifyNativePathFacts(exclusion.route)
+          excludeFence(); verifyNativePathFacts(exclusion.route)
           const latest = readHandoffFile(exclusion.path, 129 * 1024)
           if (latest.version !== current.version || latest.text !== current.text) return held()
-          checkRequest(); renameSync(receipt.exclude.path, exclusion.path); sync(parent, true)
+          checkRequest(); renameSync(receipt.exclude.path, exclusion.path); flushes.changed(parent); await sync(flushes, parent, true)
         }
       }
     }
     for (const [index, output] of outputs.entries()) {
       await checkpoint()
-      guards()
+      await guards()
       if (exists(output.path)) {
         const current = readHandoffFile(output.path, 8 * 1024 * 1024, true)
         if (!receipt.outputs[index] || current.key !== receipt.outputs[index]!.key || current.text !== output.text) return held()
       } else {
         if (!receipt.outputs[index]) {
-          receipt.outputs[index] = createFile(join(folder, `.${id}.${randomUUID()}.stage`), output.text)
-          sync(folder, true); save()
+          receipt.outputs[index] = await createFile(flushes, join(folder, `.${id}.${randomUUID()}.stage`), output.text)
+          await sync(flushes, folder, true); await save()
         }
+        // The guards' flushes first, so no await comes between the stage's check, the fence and the link.
+        await guards()
         const stage = receipt.outputs[index]!, current = readHandoffFile(stage.path, 8 * 1024 * 1024, true)
         if (current.key !== stage.key || current.text !== output.text) return held()
-        fence(); guards(); checkRequest(); linkSync(stage.path, output.path); sync(folder, true)
+        fence(); checkRequest(); linkSync(stage.path, output.path); flushes.changed(folder); await sync(flushes, folder, true)
       }
     }
     await checkpoint()
-    confirmed(); guards(); fence(); receipt.committed = true; save(); await durable()
+    await confirmed(); await guards(); fence(); receipt.committed = true; await save(); await durable()
     return prepared.result
   } catch (error) {
     if (error instanceof HandoffError) throw error

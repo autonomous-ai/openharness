@@ -8,7 +8,7 @@
  * manifest's own id — which we cannot know until the clone exists. A manifest that fails to parse
  * leaves nothing behind.
  */
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -24,7 +24,9 @@ import { resolveDshCommand } from './materialize.js'
 import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { removePath } from '../lib/removePath.js'
+import { spawnTied } from '../lib/tied.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
+import { gitPath } from '../lib/gitOnPath.js'
 import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 
 const execFileAsync = promisify(execFile)
@@ -91,7 +93,7 @@ export function resolveInstallSource(
 
 async function gitHead(dir: string, revision = 'HEAD'): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', dir, 'rev-parse', revision], { timeout: 10_000 })
+    const { stdout } = await execFileAsync(await gitPath(), ['-C', dir, 'rev-parse', revision], { timeout: 10_000 })
     return stdout.trim() || null
   } catch {
     return null
@@ -261,9 +263,12 @@ async function cloneRepo(source: string, ref: string | undefined, dir: string, s
 /** Run git, handing each stderr line (and each carriage-return progress segment) to `onLine` as it lands. */
 type GitResult = { ok: true } | { ok: false; detail: string; noGit?: true }
 
-function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<GitResult> {
+async function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<GitResult> {
+  let git: string
+  try { git = await gitPath() } catch (error) { return startFailed(error as NodeJS.ErrnoException) }
   return new Promise((resolve) => {
-    const child = spawn('git', args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
+    // Tied: a clone can run for minutes, and each crash of its service left it running, past the timeout that died too.
+    const child = spawnTied(git, args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
     const tail: string[] = []
     let rest = ''
     let timedOut = false
@@ -282,7 +287,7 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
     })
     child.on('error', (error: NodeJS.ErrnoException) => {
       clearTimeout(timer)
-      resolve({ ok: false, detail: gitStartFailure(error), ...(error.code === 'ENOENT' ? { noGit: true as const } : {}) })
+      resolve(startFailed(error))
     })
     // Exit may precede the last stderr data. Classify the failure only once
     // the pipe closes, so a retryable Git error cannot become an empty one.
@@ -306,6 +311,10 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
 export function gitStartFailure(error: NodeJS.ErrnoException, platform: NodeJS.Platform = process.platform): string {
   if (error.code !== 'ENOENT') return error.message
   return platform === 'win32' ? `Git is not installed on this computer, and harnesses are installed with it. ${INSTALL_GIT_FOR_WINDOWS}` : NO_GIT
+}
+
+function startFailed(error: NodeJS.ErrnoException): GitResult {
+  return { ok: false, detail: gitStartFailure(error), ...(error.code === 'ENOENT' ? { noGit: true as const } : {}) }
 }
 
 /** Put the clone (or the link) at its final path, replacing whatever an earlier install left there. */

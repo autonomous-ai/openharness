@@ -12,7 +12,7 @@
  * The bundles are built from this checkout at made-up versions and served from a local manifest, as in
  * e2e/update.e2e.ts, so nothing here reaches beyond the machine.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -71,20 +71,23 @@ describe('the master re-executing itself on an update', () => {
   }
 
   /**
-   * Every process running a build of this machine, from the process table. Each core must be the
-   * master's child: one left behind by a master that replaced itself would be an orphan holding the
-   * port, re-parented to launchd or init.
+   * Every process running a build of this machine, from the process table: the master, its core and its
+   * services, which show their own arguments. Each core and service must be the master's child: one left
+   * behind by a master that replaced itself would be an orphan holding the port, re-parented to launchd
+   * or init.
    */
   const daemonProcesses = (): Array<{ pid: number; ppid: number; command: string }> =>
     execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      // The core and the services from the lean bundle in the data folder, or from cli.js.
+      // The master, the core and the services from the lean bundle in the data folder, or from cli.js.
       .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(cliDir(), 'cli.js')) || (!!daemon && match[3].includes(join(daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   const nothingOrphaned = async (masterPid: number) => {
     // A probe is over within the update; give one a moment to end.
-    await until('only the master\'s own children', () => daemonProcesses().every((process) => process.ppid === masterPid && process.command.endsWith(' __run')), 10_000, 200)
-    expect(daemonProcesses().filter((process) => process.command.endsWith(' __run'))).toHaveLength(1)
+    const own = (one: { pid: number; ppid: number; command: string }) =>
+      one.pid === masterPid || (one.ppid === masterPid && / __(?:run|service \S+)$/.test(one.command))
+    await until('only the master and its own children', () => daemonProcesses().every(own), 10_000, 200)
+    expect(daemonProcesses().filter((one) => one.command.endsWith(' __run'))).toHaveLength(1)
   }
 
   beforeAll(async () => {
@@ -227,8 +230,9 @@ describe('the master re-executing itself on an update', () => {
     await until('the master that re-executed on 42.0.5 to die', () => !IsolatedDaemon.alive(master), 90_000, 200)
     expect(readFileSync(marker(), 'utf8')).toContain(`"pid":${master}`)
     expect(installed()).toEqual(releases.get('42.0.5'))
-    // The core it replaced had exited for the update; nothing was left running in its name.
-    expect(daemonProcesses()).toEqual([])
+    // The core it replaced had exited for the update; nothing was left running in its name. A service
+    // the master had stopped can still be on its way out.
+    await until('nothing left running in its name', () => daemonProcesses().length === 0 || null, 10_000, 200)
 
     // What the desktop app's `harness start`, or launchd restarting the master, would do.
     const from = daemon!.log().length
@@ -256,6 +260,11 @@ describe('the master re-executing itself on an update', () => {
  * re-execute in both directions, with the same pid and the version of the bundle now on disk.
  */
 const RELEASED = process.env.MIGRATION_FROM
+/** How a release from before probes refuses one: exit 1, its stderr ending with this line. Node can say something before
+ *  it (a deprecation warning, which names its pid), so how many bytes the probe counts on stderr is not fixed. */
+const OLD_REFUSAL_LINE = `Unknown command: ${PROBE_COMMAND}\n`
+/** That refusal as the probe tells it (harnessd/reexec.ts `runProbe`): its exit and stderr's size. */
+const OLD_REFUSAL = 'exit 1 · stderr \\d+ B'
 describe.skipIf(!RELEASED)('a released master and this one, each over the other\'s core', () => {
   const NEXT = '0.99.0'
   let scratch = ''
@@ -313,9 +322,14 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     })
     // Found by QA on a quiet machine: 0.3.60 re-executes, but this fixture assumed every published
     // release predated it. Probe the actual bundle; a timeout or broken probe must not select the old
-    // expectations and hide a regression. Old releases explicitly reject the private command.
+    // expectations and hide a regression. Old releases explicitly reject the private command (OLD_REFUSAL).
     const probe = await runProbe(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], daemon.env).result
-    if (!probe.ok) expect(probe.detail).toBe(`Unknown command: ${PROBE_COMMAND}`)
+    if (!probe.ok) {
+      expect(probe.ended).toMatch(new RegExp(`^${OLD_REFUSAL}$`))
+      // Asked again for its words, which the probe does not keep: a release from before refuses the command by name.
+      const refused = spawnSync(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], { env: daemon.env, encoding: 'utf8', timeout: 30_000 })
+      expect({ status: refused.status, refusal: refused.stderr.endsWith(OLD_REFUSAL_LINE) }, refused.stderr).toEqual({ status: 1, refusal: true })
+    }
     releasedCanReexec = probe.ok
     await daemon.start()
   })
@@ -374,9 +388,8 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       masterPid: master,
       reexecs: releasedCanReexec ? 1 : 0,
     })
-    expect(daemon!.log().slice(from)).toContain(releasedCanReexec
-      ? `now v${releasedVersion}`
-      : 'did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
+    if (releasedCanReexec) expect(daemon!.log().slice(from)).toContain(`now v${releasedVersion}`)
+    else expect(daemon!.log().slice(from)).toMatch(new RegExp(`did not answer its probe \\(${OLD_REFUSAL}\\) — keeping this master`))
     // This master over a core too old to ask for a process on demand starts each as that core binds
     // (harnessd/services.ts `unasked`): models, which a core of protocol 4 asks for only once grid is in use,
     // the gateway, which it asks for only signed in or with something paired, and the viewers, which a core of

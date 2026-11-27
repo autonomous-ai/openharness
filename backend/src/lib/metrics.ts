@@ -37,12 +37,6 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     labelNames: ['work'] as const, registers: [registry] })
   const workBusy = new Counter({ name: 'work_busy_seconds_total', help: 'Main-thread busy time, by kind of work, while CPU_SELF_PROFILE=1',
     labelNames: ['work'] as const, registers: [registry] })
-  const phonePushes = new Counter({ name: 'phone_pushes_total', help: 'Pushes to phones (push/send.ts), by platform, outcome and kind',
-    labelNames: ['platform', 'outcome', 'kind'] as const, registers: [registry] })
-  const githubCommentRecords = new Counter({ name: 'swarm_github_comment_records_total',
-    help: 'Records of which agent wrote a GitHub comment (superTabs/githubComments.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
-  const githubCommentReads = new Counter({ name: 'swarm_github_comment_ids_total',
-    help: 'Comment ids the merger and news asked about (superTabs/githubComments.ts), by whether a record answered', labelNames: ['found'] as const, registers: [registry] })
   const works = new Set<string>()
   const work = (kind: string) => {
     if (works.has(kind)) return kind
@@ -67,15 +61,6 @@ export function createMetrics(hour: LastHour = createLastHour()) {
         dbBytes.inc(labels, w.bytes)
       }
       hour.db(window)
-    },
-    /** One push to one phone: sent, gone (a dead token), sandbox, failed, or unconfigured (no keys for its platform). */
-    phonePush(platform: string, outcome: string, kind: string) { phonePushes.inc({ platform, outcome, kind }) },
-    /** One record of a GitHub comment's author: recorded, again (the same agent's), taken (another's), limited. */
-    githubCommentRecord(outcome: 'recorded' | 'again' | 'taken' | 'limited') { githubCommentRecords.inc({ outcome }) },
-    /** One read of comment authors: how many ids it asked about, and how many a record answered. */
-    githubCommentRead(asked: number, found: number) {
-      githubCommentReads.inc({ found: 'yes' }, found)
-      githubCommentReads.inc({ found: 'no' }, asked - found)
     },
     /** A minute of `cpu by kind`, every kind of work's busy ms. */
     busyWindow(window: BusyWindow) {

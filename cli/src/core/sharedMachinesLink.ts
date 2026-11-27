@@ -6,7 +6,7 @@
  * The argv and the variables are checked here, as strings, because the core runs them in a pane.
  */
 import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type SharedMachinesCorePort } from './api.js'
-import { isGuestUser } from '../lib/guestAccounts.js'
+import { isGuestUser } from '../lib/guestUser.js'
 
 /** Ask shared machines' process (core/serviceLinks.ts `call`, for `sharedMachines`): never rejects. */
 export type CallSharedMachines = (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>

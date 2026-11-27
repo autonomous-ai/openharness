@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { atomicWriteFile } from '../lib/secureState.js'
 import type { RosterHarness } from './roster.js'
 import { list, NO, num, object, oneOf, text } from './shape.js'
 
@@ -36,8 +36,6 @@ export class RequestStore {
 
   save(list: QueuedRequest[]): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temp = `${this.path}.${randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify(list), { flag: 'wx', mode: 0o600 })
-    renameSync(temp, this.path)
+    atomicWriteFile(this.path, JSON.stringify(list), 'cache')
   }
 }

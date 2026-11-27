@@ -52,6 +52,11 @@ describe('private model-control worker', () => {
     for (const value of [null, { ...check, stage: 'write' }, { ...check, state: {} }, { ...check, catalog: null }, { ...check, pane: { idle: true } },
       { ...check, pane: { idle: true, draft: false, plan: false, dialog: false, tmuxPane: '%1' } }]) expect(modelControlCheck(value, 'claude')).toBeNull()
     expect(modelControlInput({ ...input, current: target }, 'claude')?.current).toEqual(target)
+    // The engine's line under a model rides with its options (the phone's Model sheet): every switch was refused while
+    // this said no to it (MSI, 2026-11-17). A driver needs only the id and label, so that is all it is handed.
+    const described = modelControlInput({ ...input, options: [{ ...input.options[0], description: 'Most efficient for simpler tasks' }] }, 'claude')
+    expect(described?.options).toEqual(input.options)
+    expect(modelControlInput({ ...input, options: [{ ...input.options[0], description: 'x'.repeat(257) }] }, 'claude')).toBeNull()
     expect(modelControlCheck({ ...check, pane: { idle: true, draft: false, plan: false, dialog: false } }, 'claude')?.pane?.idle).toBe(true)
   })
 

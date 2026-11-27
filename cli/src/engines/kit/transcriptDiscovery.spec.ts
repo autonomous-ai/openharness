@@ -91,7 +91,7 @@ it('retains pending work across a failed group listing and reports a repeated ho
   const { discovery, found } = fresh()
   await discovery.start(); await discovery.add(id)
   await vi.advanceTimersByTimeAsync(20)
-  expect(found).not.toHaveBeenCalled(); expect(console.error).toHaveBeenCalledTimes(1)
+  expect(found).not.toHaveBeenCalled(); expect(console.error).toHaveBeenCalledExactlyOnceWith(`[discovery] transcript ${id} held · string`)
   await vi.advanceTimersByTimeAsync(10)
   expect(found).toHaveBeenCalledExactlyOnceWith(id, '/fixture/recovered.jsonl')
 })

@@ -1,5 +1,6 @@
 /** Run an agent at the current prompt using cm. Credentials stay on this computer. */
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { constants } from 'node:os'
 import { engineBin, PROCESS_ENGINES } from './lib/engineBin.js'
 import type { ProcessEngine } from './engines/types.js'
@@ -7,7 +8,9 @@ import { launchContract } from './engines/launches.js'
 import { screenArgs, screenEnvironment } from './engines/kit/launchScreen.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { shellAgentArgv } from './lib/engineLaunch.js'
+import { writeGridConfigDir } from './lib/gridConfigDir.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './lib/gridLaunch.js'
+import { gridConfigHandOff, type GridConfigFile, type GridConfigLink } from './lib/gridLaunchWire.js'
 import { parseNewAgentModel, type NewAgentModel } from './lib/newAgentModel.js'
 import type { GridLaunchOverride } from './lib/gridLaunch.js'
 
@@ -15,18 +18,32 @@ export interface ShellLaunchDeps {
   resolve: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   run: (binary: string, args: string[], env: NodeJS.ProcessEnv) => Promise<number>
   error: (message: string) => void
+  /** Where a launch's config files go (`writeGridConfigDir`); the directory written. */
+  writeConfig?: GridConfigWriter
 }
 
-export function routedInvocation(engine: 'codex' | 'claude', route: GridLaunchOverride,
-  args: string[], inherited: NodeJS.ProcessEnv): { binary: string; args: string[]; env: NodeJS.ProcessEnv } {
+type GridConfigWriter = (key: string, files: readonly GridConfigFile[], links: readonly GridConfigLink[]) => Promise<string>
+
+export async function routedInvocation(engine: 'codex' | 'claude', route: GridLaunchOverride,
+  args: string[], inherited: NodeJS.ProcessEnv,
+  writeConfig: GridConfigWriter = writeGridConfigDir): Promise<{ binary: string; args: string[]; env: NodeJS.ProcessEnv }> {
   const result = buildGridEngineLaunch(engine, route, { hermesSystemManaged: false })
   if (!result.ok) throw new Error(result.detail)
   const { launch } = result
   const env = { ...inherited }
   for (const name of gridConflictingEnvToClear(launch)) delete env[name]
   Object.assign(env, launch.env)
-  if (launch.configDir) throw new Error('This agent requires a newer shell launcher.')
-  return { binary: engineBin(engine), args: [...launch.args, ...args], env }
+  const launchArgs = [...launch.args]
+  if (launch.configDir) {
+    // The same private directory a pane gets (`core/agents/create.ts`), one per engine, grid and model, so a
+    // second launch of the same route rewrites it rather than adding another; unused ones are pruned.
+    const key = `shell-${engine}-${createHash('sha256').update(`${route.networkId}\0${route.model ?? ''}`).digest('hex').slice(0, 16)}`
+    const dir = await writeConfig(key, launch.configDir.files, launch.configDir.links ?? [])
+    const handOff = gridConfigHandOff(launch.configDir, dir)
+    Object.assign(env, handOff.env)
+    launchArgs.push(...handOff.args)
+  }
+  return { binary: engineBin(engine), args: [...launchArgs, ...args], env }
 }
 
 async function run(binary: string, args: string[], env: NodeJS.ProcessEnv): Promise<number> {
@@ -80,7 +97,7 @@ export async function shellLaunch(args: string[], deps: ShellLaunchDeps = {
   const target = await deps.resolve(parsed.selection).catch(() => null)
   if (!target) { deps.error('That model is unavailable from this computer. Choose another with cm, or use cm default.'); return 1 }
   try {
-    const launch = routedInvocation(engine, target, [...screenArgs(screen), ...nativeArgs], process.env)
+    const launch = await routedInvocation(engine, target, [...screenArgs(screen), ...nativeArgs], process.env, deps.writeConfig)
     const argv = shellAgentArgv(launch.binary, launch.args, engineInstallRecipe(engine)!)
     return await deps.run(argv[0], argv.slice(1), screenEnvironment(screen, launch.env))
   } catch {

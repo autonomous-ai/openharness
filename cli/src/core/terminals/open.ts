@@ -27,7 +27,7 @@ export function createTerminalOpener({ createBackend, recoverBackend, registry, 
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     const result = await createAndRegisterPane({
       tmuxBackend: createBackend, registry, engine: 'terminal', cwd, spawnCwd: cwd,
-      argv: [...argv], sessionLabel: `harness-shell-${randomUUID()}`, bypassPermission: false,
+      argv: () => [...argv], sessionLabel: `harness-shell-${randomUUID()}`, bypassPermission: false,
     })
     if (!result.ok) return result
     await createBackend.releaseHold(result.spawned.runtime)

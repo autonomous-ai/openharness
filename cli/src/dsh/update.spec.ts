@@ -1,12 +1,12 @@
 import { prepareHarnessLaunch } from './runtime.js'
 import { updateDsh } from './update.js'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { env } from '../config/env.js'
-import { dshInstallDir, installedDsh, invalidateInstalledDsh, readInstalledIndex, upsertInstalledRecord } from './installed.js'
+import { dshInstallDir, installedDsh, invalidateInstalledDsh, markSetup, readInstalledIndex, upsertInstalledRecord } from './installed.js'
 import { installDsh, removeDsh, type DshInstallProgress } from './install.js'
 import { materializeWorkspace } from './materialize.js'
 import { dshUpdateInfo, samePackageSource } from './updates.js'
@@ -65,10 +65,19 @@ describe('package updates', { timeout: 60_000 }, () => {
   })
   const update = (entry?: DshRegistryEntry, progress?: DshInstallProgress[]) => updateDsh({ id,
     registry: candidate => candidate === id ? entry : undefined, onProgress: p => progress?.push(p) })
+  // The login shell (dsh/shell.ts) is a plain sh, written and started once per file: a new script's first exec pays
+  // the system's check of it, which a loaded Mac made slow when every test paid it.
+  let shellDir: string
+  let shell: string
+  beforeAll(() => {
+    shellDir = mkdtempSync(join(tmpdir(), 'dsh-update-shell-'))
+    shell = join(shellDir, 'test-shell')
+    writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
+    execFileSync(shell, ['-c', 'true'])
+  })
+  afterAll(() => { rmSync(shellDir, { recursive: true, force: true }) })
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-update-')))
-    const shell = join(root, 'test-shell')
-    writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
     vi.stubEnv('SHELL', shell)
     savedRoot = env.DSH_DIR
     env.DSH_DIR = join(root, 'installed')
@@ -92,6 +101,55 @@ describe('package updates', { timeout: 60_000 }, () => {
     const lines: string[] = []
     expect((await updateDsh({ id, onLine: line => lines.push(line) })).ok).toBe(true)
     expect(lines).toContain(`${id} is already up to date`)
+  })
+
+  it('an update runs the setup again for a needs-setup package that is up to date', async () => {
+    const repo = create()
+    await installDsh({ source: repo })
+    markSetup(id, 'needs-setup')
+    rmSync(join(dshInstallDir(id), 'setup-path'))
+    const lines: string[] = []
+    const result = await updateDsh({ id, registry: () => catalog(repo, 'main'), onLine: line => lines.push(line) })
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(lines).not.toContain(`${id} is already up to date`)
+    expect(readFileSync(join(dshInstallDir(id), 'setup-path'), 'utf8').trim()).toBe(dshInstallDir(id))
+    expect(readInstalledIndex()[0]).not.toHaveProperty('setup')
+  })
+
+  it('an up-to-date package with no mark still returns at once', async () => {
+    const repo = create()
+    await installDsh({ source: repo })
+    const before = readInstalledIndex()
+    const lines: string[] = []
+    const phases: DshInstallProgress[] = []
+    const result = await updateDsh({ id, registry: () => catalog(repo, 'main'), onLine: line => lines.push(line), onProgress: p => phases.push(p) })
+    expect(result.ok).toBe(true)
+    expect(lines).toContain(`${id} is already up to date`)
+    expect(phases.map(p => p.phase)).toEqual(['clone', 'done'])
+    expect(readInstalledIndex()).toEqual(before)
+  })
+
+  it('an update that commits clears any mark', async () => {
+    const repo = create()
+    await installDsh({ source: repo })
+    markSetup(id, 'pending')
+    write(repo, { 'AGENTS.md': '# Updated\n' })
+    expect((await update(catalog(repo, commit(repo)))).ok).toBe(true)
+    expect(readInstalledIndex()[0]).not.toHaveProperty('setup')
+  })
+
+  it('an update whose setup fails leaves the mark and the previous folder', async () => {
+    const repo = create()
+    await installDsh({ source: repo })
+    markSetup(id, 'needs-setup')
+    write(dshInstallDir(id), { 'local-cache': 'keep me' })
+    const before = readInstalledIndex()
+    write(repo, { 'setup.sh': '#!/bin/sh\nexit 1\n' })
+    expect(await update(catalog(repo, commit(repo)))).toMatchObject({ ok: false, error: 'SETUP_FAILED' })
+    expect(readInstalledIndex()).toEqual(before)
+    expect(before[0].setup).toBe('needs-setup')
+    expect(readFileSync(join(dshInstallDir(id), 'setup.sh'), 'utf8')).toBe('#!/bin/sh\npwd > setup-path\n')
+    expect(readFileSync(join(dshInstallDir(id), 'local-cache'), 'utf8')).toBe('keep me')
   })
 
   it('keeps release-bundled core packages on the Harness update path without fetching a Store copy', async () => {

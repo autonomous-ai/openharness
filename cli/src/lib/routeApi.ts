@@ -20,7 +20,8 @@
  * throw would turn a backend hiccup into a lost turn.
  */
 import { env } from '../config/env.js'
-import { readAuthSession, AuthSessionManager } from './authSession.js'
+import { AuthSessionManager } from './authRefresh.js'
+import { readAuthSession } from './authSession.js'
 
 /** One row of the answer. */
 export interface RankedAgent {

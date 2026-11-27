@@ -17,12 +17,11 @@ mod com {
     use std::path::{Path, PathBuf};
     use std::ptr::null_mut;
 
-    use windows_sys::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-        CoTaskMemFree, CoUninitialize,
-    };
+    use windows_sys::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
     use windows_sys::Win32::UI::Shell::ShellLink;
     use windows_sys::core::{GUID, HRESULT, PCWSTR, PWSTR};
+
+    use crate::desktop::win::Apartment;
 
     const IID_ISHELLLINKW: GUID = GUID::from_u128(0x000214f9_0000_0000_c000_000000000046);
     const IID_IPERSISTFILE: GUID = GUID::from_u128(0x0000010b_0000_0000_c000_000000000046);
@@ -121,27 +120,6 @@ mod com {
 
     fn wide(text: &OsStr) -> Vec<u16> {
         text.encode_wide().chain(std::iter::once(0)).collect()
-    }
-
-    /// COM on this thread for as long as it lives.
-    struct Apartment(bool);
-    impl Apartment {
-        fn enter() -> io::Result<Apartment> {
-            // S_FALSE (already entered) is a success to undo as well; RPC_E_CHANGED_MODE is a usable apartment.
-            let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-            if hr == 0x80010106u32 as i32 {
-                return Ok(Apartment(false));
-            }
-            check(hr)?;
-            Ok(Apartment(true))
-        }
-    }
-    impl Drop for Apartment {
-        fn drop(&mut self) {
-            if self.0 {
-                unsafe { CoUninitialize() };
-            }
-        }
     }
 
     /// One interface pointer, released when dropped.

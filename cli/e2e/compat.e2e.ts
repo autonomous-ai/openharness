@@ -170,8 +170,12 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   for (const engine of ENGINES) {
     const from = client.frames.length
     const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent[engine], 60_000, `turn_ended (${engine})`)
+    // Its recap, which this build sends after a quiet window and the released one at once.
+    const recap = client.next((frame) => frame.type === 'turn_summary' && (frame.agentId === agent[engine] || (frame.payload as Answers | undefined)?.agentId === agent[engine]),
+      60_000, `turn_summary (${engine})`)
     client.send('message', { agentId: agent[engine], content: `compat turn on ${engine}` })
     await ended
+    await recap
     await new Promise((done) => setTimeout(done, 1_000))
     answers[`frames of a turn on ${engine}`] = shape(client.frames.slice(from).filter((frame) => frame.agentId === agent[engine] || (frame.payload as Answers | undefined)?.agentId === agent[engine]))
   }

@@ -20,7 +20,7 @@ worked, and **Stuck?** for when it didn't.
 
 ## 1. Install Harness and sign in
 
-1. Download **Harness Desktop** from https://harness.autonomous.ai/desktop → **Download the app for macOS**, drag
+1. Download **Harness Desktop** from https://harness.autonomous.ai/download, drag
    Harness into Applications and open it. (Linux: download the AppImage, `chmod +x` it, then open it.)
 2. Sign in with **Continue with Google**, **Continue with Apple** or **Continue with email**. Your browser opens a
    sign-in page. When you're done, go back to the app.

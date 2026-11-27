@@ -3,8 +3,9 @@
  *
  *   ~/.config/harness/policy.jsonc   the rules, and `pins`. Written for a person: commented, hand-edited,
  *                                    next to `keybindings.jsonc`. $XDG_CONFIG_HOME is respected.
- *   ~/.harness/monitor/paused.json (legacy filename)   the open tickets. Written by the program, never by a person.
- *   ~/.harness/monitor/log.jsonl     one line per stop and open, with the rule that caused it.
+ *   <state root>/monitor/paused.json (legacy filename)   the open tickets. Written by the program, never by a person.
+ *   <state root>/monitor/log.jsonl     one line per stop and open, with the rule that caused it.
+ *   The state root is Harness's (localDaemon.mjs `harnessRoots`): ~/.harness, on Linux $XDG_STATE_HOME/harness once moved.
  *
  * Machine-wide on purpose. The first version kept all three inside the Harness Monitor workspace, which
  * meant a second workspace got a second policy, and a harness stopped from one could not be reopened from
@@ -16,6 +17,7 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
+import { harnessRoots } from './localDaemon.mjs'
 import { DEFAULT_POLICY } from './policy.mjs'
 
 export function configPath(env = process.env) {
@@ -25,7 +27,7 @@ export function configPath(env = process.env) {
 }
 
 export function stateDir(env = process.env) {
-  return env.HARNESS_MONITOR_STATE || join(env.HOME || homedir(), '.harness', 'monitor')
+  return env.HARNESS_MONITOR_STATE || join(harnessRoots(env).state, 'monitor')
 }
 export const ticketsPath = (env) => join(stateDir(env), 'paused.json')
 export const logPath = (env) => join(stateDir(env), 'log.jsonl')

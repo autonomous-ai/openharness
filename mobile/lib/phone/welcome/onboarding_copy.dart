@@ -59,9 +59,9 @@ abstract final class OnboardingCopy {
   /// ② The address, as written on the button that sends it: short enough to type off the phone.
   static const goAddress = 'autonomous.ai/go';
 
-  /// ② The address the button sends — the download for whatever computer opens it. The main site
-  /// sends `/go` on to Harness's download page (`harness.autonomous.ai/desktop`), which picks the
-  /// file for the computer that opens it.
+  /// ② The address the button sends. The main site sends `/go` on to
+  /// `harness.autonomous.ai/desktop`, which redirects to the Harness Device guide at `/device`; it
+  /// offers the Harness Device app for the computer that opens it.
   static const goUrl = 'https://autonomous.ai/go';
 
   /// ② Under the picture, while the laptop breathes.

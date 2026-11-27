@@ -224,7 +224,7 @@ describe('a service in its own process', () => {
       { type: 'session_other_result', payload: { error: 'SERVICE_FAILED', service: 'search', requestId: 'r3' } },
     ]))
     // What went wrong is logged here, as the core's host logs it, and not told to whoever asked.
-    expect(lines).toEqual(expect.arrayContaining(['[service search] session_tail failed · index gone', '[service search] session_other failed · not an error']))
+    expect(lines).toEqual(expect.arrayContaining(['[service search] session_tail failed · Error', '[service search] session_other failed · string']))
   })
 
   it('tells each handler who asked, as the core established it, and the least it could be when that is missing', async () => {
@@ -252,7 +252,10 @@ describe('a service in its own process', () => {
     socket().say({ type: 'session_search', payload: { requestId: 'r15' }, asker: { ...remote, machine: { machineId: 'm_desk', label: 7 } } })
     socket().say({ type: 'session_search', payload: { requestId: 'r16' }, asker: { ...remote, machine: { machineId: 'm_desk' } } })
     socket().say({ type: 'session_search', payload: { requestId: 'r17', machine: { machineId: 'm_payload', label: null } }, asker: { ...remote, machine: null } })
-    await vi.waitFor(() => expect(asked).toHaveLength(17))
+    // The door over the daemon's own socket, as the core said it: never a payload's, and nothing else is that door.
+    socket().say({ type: 'session_search', payload: { requestId: 'r18', door: 'socket' }, asker: { local: true, owner: true, door: 'socket' } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r19', door: 'socket' }, asker: { local: true, owner: true, door: 'tcp' } })
+    await vi.waitFor(() => expect(asked).toHaveLength(19))
     expect(asked).toEqual([
       { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
       { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
@@ -261,6 +264,7 @@ describe('a service in its own process', () => {
       { local: false, owner: false, guest: 'kim@acme.io' }, { local: false, owner: false },
       { ...remote, machine: { machineId: 'm_desk', label: 'Desk' } }, { ...remote, machine: { machineId: 'm_desk', label: null } },
       remote, remote, remote, remote, remote,
+      { local: true, owner: true, door: 'socket' }, { local: true, owner: true },
     ])
   })
 
@@ -297,6 +301,31 @@ describe('a service in its own process', () => {
     // The core gone: nobody is left to read any answer, so all that is left is aborted.
     socket().drop()
     expect(asked[3].closed.aborted).toBe(true)
+  })
+
+  // A service that keeps something of its own per connection (an agent browser's viewers' streams) hears each end.
+  it('tells the service a connection ended after what it asked is aborted, and logs a throw', async () => {
+    const order: string[] = []
+    const closedConnections: string[] = []
+    run({
+      requests: { command: (_payload: Record<string, unknown>, _asker: unknown, closed?: AbortSignal) => new Promise(() => { closed!.addEventListener('abort', () => order.push('aborted')) }) },
+      onConnectionClosed: (connection) => {
+        order.push(`closed ${connection}`)
+        closedConnections.push(connection)
+        if (connection === 'conn-x') throw new Error('kept nothing')
+      },
+    })
+    socket().open()
+    socket().say({ type: 'command', payload: { id: 'a1', requestId: 'a1' }, asker: { local: false, owner: true, connection: 'conn-a' } })
+    await vi.waitFor(() => expect(order).toEqual([]))
+    await Promise.resolve()
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-a' } })
+    expect(order).toEqual(['aborted', 'closed conn-a'])
+    socket().say({ type: 'service_connection_closed', payload: { connection: 'conn-x' } })
+    expect(lines).toContain('[service search] connection closed failed · Error')
+    // Not a connection's name: nobody to tell.
+    socket().say({ type: 'service_connection_closed', payload: { connection: 7 } })
+    expect(closedConnections).toEqual(['conn-a', 'conn-x'])
   })
 
   it('hears what the core tells it, and asks the core what it needs to know', async () => {
@@ -348,7 +377,7 @@ describe('a service in its own process', () => {
     // A binary frame its handler cannot take is logged, and the link goes on.
     onBinary.mockImplementationOnce(() => { throw new Error('bad bytes') })
     socket().emit('message', Buffer.from([7]), true)
-    expect(lines).toContain('[service search] binary frame failed · bad bytes')
+    expect(lines).toContain('[service search] binary frame failed · Error')
     socket().drop()
     expect(onDisconnected).toHaveBeenCalledOnce()
     // Gone: bytes cannot be sent, and a notice is dropped rather than thrown.
@@ -360,7 +389,7 @@ describe('a service in its own process', () => {
     socket().open()
     socket().say({ type: 'connected', payload: {} })
     socket().drop()
-    expect(lines).toContain('[service search] disconnect failed · stuck')
+    expect(lines).toContain('[service search] disconnect failed · Error')
     // A socket that refuses the bytes as they are written: not sent.
     vi.advanceTimersByTime(400)
     const failing = new FakeSocket('x', true)
@@ -502,8 +531,8 @@ describe('a service in its own process', () => {
     expect(requests.session_search).not.toHaveBeenCalled()
     expect(onEvent.mock.calls).toEqual([[{ kind: 'deleteHistory', sessionId: 's1' }]])
     expect(lines).toEqual(expect.arrayContaining([
-      '[service search] session_search failed · injected fault: search.session_search',
-      '[service search] touch failed · injected fault: search.touch',
+      '[service search] session_search failed · Error',
+      '[service search] touch failed · Error',
     ]))
   })
 
@@ -517,9 +546,9 @@ describe('a service in its own process', () => {
     } })
     socket().open()
     for (const kind of ['throws', 'rejects', undefined, 'fine']) socket().say({ type: 'service_event', payload: kind ? { kind } : {} })
-    await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · index closed'))
+    await vi.waitFor(() => expect(lines).toContain('[service search] rejects failed · Error'))
     expect(heard).toEqual(['throws', 'rejects', undefined, 'fine'])
-    expect(lines).toEqual(expect.arrayContaining(['[service search] throws failed · bad row', '[service search] event failed · not an error']))
+    expect(lines).toEqual(expect.arrayContaining(['[service search] throws failed · Error', '[service search] event failed · string']))
   })
 
   it('says it connected on the console by default', () => {

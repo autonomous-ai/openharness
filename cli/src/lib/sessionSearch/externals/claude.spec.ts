@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { externalEvidence } from '../evidence.js'
+import { OpenSessions, SessionRows } from '../external.js'
 import { claudeProvider, readClaudeHead } from './claude.js'
 import { scanMemo } from './support.js'
 import { type ProcessView, UNSETTLED } from './types.js'
@@ -127,6 +128,36 @@ describe('claudeProvider', () => {
     expect(looked).toBe(false)
     // The record gone is the process gone: not mid-turn.
     expect(await provider.busy!({ pid: 9, record: join(root, 'sessions', 'gone.json') })).toBe(false)
+  })
+
+  // Ken's VM, 2026-11-26: after a daemon restart the open scan found the owner of a Windows Claude Code but no row for
+  // it, since its transcript's cwd is `C:\...`, so the dial listed nothing until its next hook.
+  it('on Windows lists a session whose folder is a drive path, and finds the row of the process that has it open', async () => {
+    const platform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    try {
+      const root = home()
+      const projects = join(root, 'projects')
+      const started = Date.parse('2026-11-26T09:00:00Z')
+      write(join(projects, 'C--work-dial', `${A}.jsonl`), [line(A, 'cli', { cwd: 'C:\\work\\dial' })])
+      write(join(root, 'sessions', '5160.json'), [{ pid: 5160, sessionId: A, status: 'idle', startedAt: started + 400 }])
+      const providers = [claudeProvider({ projectsDir: projects, home: root })]
+      const open = new OpenSessions({
+        providers,
+        view: () => ({ ...view((pid) => pid === 5160),
+          list: async () => [{ pid: 5160, ppid: 1, executable: 'claude.exe', args: 'C:\\Users\\someone\\.local\\bin\\claude.exe', started }] }),
+        // Windows names no terminal.
+        ttys: async (pids) => new Map(pids.map((pid) => [pid, null])),
+        harnessTtys: async () => new Set(),
+      })
+      const owners = await open.owners()
+      expect([...owners.keys()]).toEqual([A])
+      const rows = await new SessionRows({ providers }).find(new Map([...owners].map(([id, owner]) => [id, owner.engine])))
+      expect([...rows.values()]).toEqual([expect.objectContaining({ sessionId: A, cwd: 'C:\\work\\dial' })])
+      expect(await providers[0].scan(scanMemo().context())).toEqual([expect.objectContaining({ sessionId: A, cwd: 'C:\\work\\dial' })])
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    }
   })
 
   it('places a live Claude with no record by its arguments, or leaves it unplaced with its folder, for admission only', async () => {

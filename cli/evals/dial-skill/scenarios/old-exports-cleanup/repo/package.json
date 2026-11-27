@@ -1,0 +1,10 @@
+{
+  "name": "ledger-export",
+  "version": "0.4.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "export": "node src/export.js",
+    "test": "node --test"
+  }
+}

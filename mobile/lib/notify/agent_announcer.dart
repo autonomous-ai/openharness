@@ -63,13 +63,11 @@ class AgentAnnouncer {
 
   final SystemNotices system;
 
-  /// Whether an agent runs in a Harness Team account: a teammate's Swarm work
-  /// on this person's Mac. Its turns and questions are not this person's news
-  /// — it reaches them only through the Swarm rule (tags, decisions asked of
-  /// them, replies in their threads) — so none is announced: no chime, no
-  /// mark, no notice (2026-11-05: Dee's phone showed a banner for a teammate's
-  /// tester in a task she was not part of). Null counts every agent as the
-  /// person's own. Set after construction by the app, which knows the
+  /// Whether an agent runs in a Harness Team account: a teammate's work on
+  /// this person's Mac. Its turns and questions are not this person's news, so
+  /// none is announced: no chime, no mark, no notice (2026-11-05: Dee's phone
+  /// showed a banner for a teammate's tester in a task she was not part of).
+  /// Null counts every agent as the person's own. Set after construction by the app, which knows the
   /// machines; read at each turn and question, never remembered.
   bool Function(AgentRef agent)? inTeamAccount;
 

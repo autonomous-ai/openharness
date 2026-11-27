@@ -3,8 +3,6 @@ import 'dart:math' as math;
 // A browser leaves the Finder out of main.dart.js until a Finder tile is drawn.
 import '../finder/widgets/finder_pane_panel.dart'
     if (dart.library.js_interop) '../web/parts/finder_pane_panel.dart';
-import '../super_tabs/pane.dart';
-import '../super_tabs/saved_session.dart';
 import '../sharing/shared_harness_panel.dart';
 
 import 'dart:async';
@@ -17,6 +15,7 @@ import 'package:xterm/xterm.dart';
 
 import 'window_chrome.dart';
 
+import '../browser/browser_panel.dart';
 import '../clipboard/image_bytes.dart';
 import '../core/runtime_platform.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
@@ -29,6 +28,7 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../shortcuts/app_shortcuts.dart' hide TerminalKey;
 import '../state/account_devices.dart' show registerRefusalSentence;
 import '../state/app_state.dart';
+import '../state/hachi.dart';
 import '../state/harness_sessions.dart' show heldLaunchDetail;
 import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
@@ -394,7 +394,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       );
       _activeId = app.activeSwarmId;
       // The notification precedes the frame. Restore before layout/paint so
-      // switching never briefly displays the previous Swarm's scroll offset.
+      // switching never briefly displays the previous tab's scroll offset.
       final offset = _offsets[_activeId] ?? Offset.zero;
       if (_scroll.hasClients) _scroll.jumpTo(offset.dy);
       if (_horizontalScroll.hasClients) _horizontalScroll.jumpTo(offset.dx);
@@ -550,6 +550,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       canSplitDown:
           app.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) != null,
       composer: pane.composerVisible,
+      // The header's Browser: offered, and open in this tab.
+      browser: agent == null || !app.offersBrowser(pane.machineId, agent.id)
+          ? null
+          : app.browserPaneShown(pane.machineId, agent.id),
       blocked:
           app.questionFor(pane.machineId, pane.agentId ?? session.agentId) !=
           null,
@@ -1483,7 +1487,7 @@ class _PaneCell extends StatelessWidget {
 
   Widget _clipContent({required Widget child}) {
     // GTK overlays cannot render under a rounded Flutter clip.
-    if (RuntimePlatform.isLinux && pane.isWeb) {
+    if (RuntimePlatform.isLinux && (pane.isWeb || pane.isBrowser)) {
       return ClipRect(child: child);
     }
     // Keep terminal backgrounds inside the pane rim.
@@ -1705,19 +1709,7 @@ class _PaneContent extends StatelessWidget {
       unawaited(notifier.requestClosePane(pane.id));
     }
 
-    final superPane = SuperPane.maybeOf(context);
-    final VoidCallback? close = superPane == null ? closeView : null;
-    final failure = superPane?.failures[(pane.machineId, pane.agentId)];
-    if (failure != null) {
-      return _PaneStatus(
-        title:
-            superPane?.titleFor(pane.machineId, pane.agentId ?? '') ?? 'Agent',
-        icon: AppIcons.terminal,
-        message: failure,
-        actionLabel: 'Retry',
-        onAction: superPane?.onRetry,
-      );
-    }
+    final VoidCallback close = closeView;
 
     VoidCallback? split(PaneResizeAxis axis) =>
         swarmMode &&
@@ -1743,13 +1735,46 @@ class _PaneContent extends StatelessWidget {
     }
 
     // A folder browsed in place: no agent and no terminal behind it.
+    // Any tile but one alone in its tab is carried by its header, whatever it shows.
+    PaneDragHandle? carry(BoxConstraints constraints) => single
+        ? null
+        : PaneDragHandle(
+            ref: PaneDragRef(paneId: pane.id),
+            size: constraints.biggest,
+          );
     if (pane.finderRoot case final root? when pane.isFinder) {
-      return FinderPanePanel(
-        key: ValueKey('finder-pane-${pane.id}'),
-        root: root,
-        onGuardClose: (guard) => pane.beforeClose = guard,
-        onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
-        compactHeader: swarmMode,
+      return LayoutBuilder(
+        builder: (context, constraints) => FinderPanePanel(
+          key: ValueKey('finder-pane-${pane.id}'),
+          root: root,
+          onGuardClose: (guard) => pane.beforeClose = guard,
+          onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
+          compactHeader: swarmMode,
+          paneDrag: carry(constraints),
+        ),
+      );
+    }
+
+    // An agent's own Chrome, left of its terminal (lib/browser/). Its × only
+    // hides the tile: the browser runs on.
+    if (pane.ownerAgentId case final owner? when pane.isBrowser) {
+      return LayoutBuilder(
+        builder: (context, constraints) => BrowserPanel(
+          // The stream is its agent's: a tile that became another agent's (a
+          // Change agent) is a new panel.
+          key: ValueKey('browser-pane-${pane.id}/$owner'),
+          app: notifier,
+          machineId: pane.machineId,
+          agentId: owner,
+          thisComputer: machine?.isLocalMachine == true,
+          visible: visible,
+          compactHeader: swarmMode,
+          paneDrag: carry(constraints),
+          onClose: () {
+            if (notifier.activeSwarmId != swarmId) return;
+            unawaited(notifier.closePane(pane.id));
+          },
+        ),
       );
     }
 
@@ -1760,31 +1785,32 @@ class _PaneContent extends StatelessWidget {
       final owner = machine?.agents
           .where((agent) => agent.id == pane.ownerAgentId)
           .firstOrNull;
-      return WebPanePanel(
-        key: ValueKey('web-pane-${pane.id}'),
-        notifier: notifier,
-        pane: pane,
-        title: viewerPaneName(owner, machine?.dsh.entries ?? const []),
-        visible: visible,
-        ownerName: owner?.name ?? pane.ownerAgentId ?? 'Viewer',
-        ownerEngine: owner?.identityEngine,
-        ownerDisplayName: owner?.identityDisplayName,
-        verdict: owner?.verdict,
-        working:
-            owner != null &&
-            notifier.agentIsProcessing(pane.machineId, owner.id),
-        onClose: close,
-        compactHeader: swarmMode,
-        zoomed: notifier.zoomedPaneId == pane.id,
-        onToggleZoom:
-            superPane == null &&
-                swarmMode &&
-                (!single || notifier.zoomedPaneId == pane.id)
-            ? () {
-                notifier.focusPane(pane.id);
-                notifier.toggleZoomPane();
-              }
-            : null,
+      return LayoutBuilder(
+        builder: (context, constraints) => WebPanePanel(
+          key: ValueKey('web-pane-${pane.id}'),
+          paneDrag: carry(constraints),
+          notifier: notifier,
+          pane: pane,
+          title: viewerPaneName(owner, machine?.dsh.entries ?? const []),
+          visible: visible,
+          ownerName: owner?.name ?? pane.ownerAgentId ?? 'Viewer',
+          ownerEngine: owner?.identityEngine,
+          ownerDisplayName: owner?.identityDisplayName,
+          verdict: owner?.verdict,
+          working:
+              owner != null &&
+              notifier.agentIsProcessing(pane.machineId, owner.id),
+          onClose: close,
+          compactHeader: swarmMode,
+          zoomed: notifier.zoomedPaneId == pane.id,
+          onToggleZoom:
+              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
+              ? () {
+                  notifier.focusPane(pane.id);
+                  notifier.toggleZoomPane();
+                }
+              : null,
+        ),
       );
     }
     final session = pane.session;
@@ -1823,6 +1849,11 @@ class _PaneContent extends StatelessWidget {
         machine != null &&
         (machine.nodeOnline == false ||
             (machine.isLocalMachine && !machine.usesLocalTransport));
+    // Hachi's home, asleep: said where it lives (docs/design/2026-11-12-hachi.md).
+    final hachiAsleep =
+        machine != null &&
+        identical(notifier.hachi.home, pane) &&
+        identical(notifier.hachi.asleepHome, machine);
     // On its way back rather than gone: worded where the host labels pane
     // states (the web), and not typed into until it is back.
     final dialing =
@@ -1918,6 +1949,12 @@ class _PaneContent extends StatelessWidget {
               : null,
           banner: review,
         );
+      } else if (hachiAsleep) {
+        notice = terminalNotice(
+          label: 'Asleep',
+          icon: AppIcons.cloudOff,
+          detail: HachiController.asleepLine(machine.machine.displayName),
+        );
       } else if (offline) {
         notice = terminalNotice(
           label: 'Offline',
@@ -1939,28 +1976,12 @@ class _PaneContent extends StatelessWidget {
           pane.machineId,
           wantedAgentId!,
         );
-        final resume = superPane?.onResume;
-        final canResume = resume != null && !machine.belongsToOtherAccount;
         notice = terminalNotice(
           label: opening?.busy == true ? 'Opening' : 'Stopped',
           icon: AppIcons.terminal,
-          detail:
-              opening?.result?.error ??
-              (superPane != null
-                  ? 'This agent is stopped. Retained output is read only.'
-                  : 'Open to continue your saved conversation. Retained output is read only.'),
-          actionLabel: opening?.busy == true
-              ? null
-              : superPane == null
-              ? 'Open'
-              : canResume
-              ? 'Resume'
-              : null,
-          onAction: superPane == null
-              ? () => notifier.openSavedPane(pane.id).ignore()
-              : canResume
-              ? () => resume(pane.machineId, wantedAgentId)
-              : null,
+          detail: opening?.result?.error ?? 'Open to continue your saved conversation. Retained output is read only.',
+          actionLabel: opening?.busy == true ? null : 'Open',
+          onAction: () => notifier.openSavedPane(pane.id).ignore(),
           banner: true,
         );
       } else if (agent != null && agent.launchState == 'held') {
@@ -2018,6 +2039,11 @@ class _PaneContent extends StatelessWidget {
                 wantedAgentId,
               ).joining !=
               null;
+      // The agent's Browser, opened left of this terminal from its header.
+      final browser =
+          agent != null && notifier.offersBrowser(pane.machineId, agent.id)
+          ? agent
+          : null;
       final panel = LayoutBuilder(
         builder: (context, constraints) => TerminalPanel(
           notifier: notifier,
@@ -2058,6 +2084,15 @@ class _PaneContent extends StatelessWidget {
               !agent.terminalAvailable,
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
+          onToggleBrowser: browser == null
+              ? null
+              : () => unawaited(
+                  notifier.toggleBrowserPane(pane.machineId, browser.id),
+                ),
+          browserOpen:
+              browser != null &&
+              notifier.browserPaneShown(pane.machineId, browser.id),
+          browserRunning: browser?.browser?.state == 'ready',
           onClose: single && !swarmMode ? null : close,
           onOpenModels: onOpenModels == null
               ? null
@@ -2080,9 +2115,7 @@ class _PaneContent extends StatelessWidget {
                 ),
           zoomed: notifier.zoomedPaneId == pane.id,
           onToggleZoom:
-              superPane == null &&
-                  swarmMode &&
-                  (!single || notifier.zoomedPaneId == pane.id)
+              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
               ? () {
                   notifier.focusPane(pane.id);
                   notifier.toggleZoomPane();
@@ -2142,6 +2175,14 @@ class _PaneContent extends StatelessWidget {
         busy: waiting || retrying,
         actionLabel: waiting ? null : 'Retry',
         onAction: waiting ? null : notifier.retryMachines,
+      );
+    }
+    if (hachiAsleep) {
+      return _PaneStatus(
+        activity: activityMark,
+        title: hachiEssential.name,
+        icon: AppIcons.cloudOff,
+        message: HachiController.asleepLine(machine.machine.displayName),
       );
     }
     if (needsLink) {
@@ -2214,31 +2255,6 @@ class _PaneContent extends StatelessWidget {
       );
     }
     if (agent?.isStopped == true) {
-      if (superPane != null) {
-        final resume = superPane.onResume;
-        return Column(
-          children: [
-            _PaneHeader(
-              title:
-                  superPane.titleFor(pane.machineId, wantedAgentId) ??
-                  agentName,
-              activity: activityMark,
-            ),
-            Divider(height: 1, color: AppColors.border),
-            Expanded(
-              child: SuperTabSavedSession(
-                key: ValueKey((pane.machineId, wantedAgentId)),
-                app: notifier,
-                machineId: pane.machineId,
-                harnessId: wantedAgentId,
-                onResume: resume != null && !machine.belongsToOtherAccount
-                    ? () => resume(pane.machineId, wantedAgentId)
-                    : null,
-              ),
-            ),
-          ],
-        );
-      }
       final opening = notifier.pendingAgentRestart(
         pane.machineId,
         wantedAgentId,

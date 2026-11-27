@@ -1,0 +1,32 @@
+#!/usr/bin/env node
+const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
+
+const args = process.argv.slice(2)
+const at = args.indexOf('--otp')
+const otp = at === -1 ? undefined : args[at + 1]
+const rest = at === -1 ? args : [...args.slice(0, at), ...args.slice(at + 2)]
+
+if (rest[0] !== 'publish') {
+  console.log('usage: pkgpub publish [<package folder>] [--otp <code>]')
+  process.exit(rest.length === 0 || rest[0] === '--help' ? 0 : 64)
+}
+
+const dir = rest[1] ?? '.'
+let pkg
+try {
+  pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+} catch {
+  console.error(`pkgpub: no package.json in ${dir}`)
+  process.exit(1)
+}
+
+console.log(`pkgpub: publishing ${pkg.name}@${pkg.version} to https://registry.acme.invalid`)
+if (otp === undefined) {
+  console.error('pkgpub: one-time code required: this account has two-factor auth on for publishing.')
+  console.error('Enter the code from your authenticator app:')
+  console.error('pkgpub: no code entered (stdin is not a terminal). Re-run with --otp <code>.')
+  process.exit(1)
+}
+console.error(`pkgpub: Invalid one-time code. ${pkg.name}@${pkg.version} was not published.`)
+process.exit(1)

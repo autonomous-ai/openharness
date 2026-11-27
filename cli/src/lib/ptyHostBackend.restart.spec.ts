@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 // Restart's primitives against the real Harness PTY host: a pane keeps its id and its scrollback while the
 // process in it is replaced, as tmux's `remain-on-exit` + `respawn-pane -k` keep a tmux pane. And stop and resume
 // through their services on a machine whose only backend is the host, as on Windows. Build it first:
@@ -7,6 +8,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { heldPaneArgv } from '../core/agents/heldLaunches.js'
 import { PtyHostBackend } from './ptyHostBackend.js'
 import { listDiscoveries } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
@@ -168,6 +170,23 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
     })
   }, CASE_TIMEOUT_MS)
 
+  it('a respawn over this platform\'s own held pane replies before the host\'s 2 s grace', async () => {
+    await withHost(async (backend) => {
+      const token = '6d0a1c2e-4b3f-4a5d-9e8f-7a6b5c4d3e2f'
+      const pane = await created(backend, heldPaneArgv('why', token))
+      // Its line follows its signal handling, so the respawn's hangup meets the pane as restore's would.
+      expect(await until(() => screen(backend, pane), (text) => /^why$/m.test(text))).toMatch(/^why$/m)
+      const started = performance.now()
+      const respawned = await backend.respawn(pane, { command: SHELL, expectedHeldToken: token })
+      const ms = Math.round(performance.now() - started)
+      console.log(`respawn over the held pane: ${ms} ms`)
+      expect(respawned).toEqual({ state: 'succeeded', dispatch: 'executed' })
+      // The host gives a child that outlives the hangup 2 s (RESPAWN_GRACE, pty/src/panes.rs) before it kills it.
+      expect(ms).toBeLessThan(2_000)
+      expect((await backend.kill(pane)).state).toBe('succeeded')
+    })
+  }, CASE_TIMEOUT_MS)
+
   it('stop closes a pty host harness\'s pane and ends its whole process tree; resume opens it again on the host', async () => {
     await withHost(async (backend) => {
       const dir = mkdtempSync(join(tmpdir(), 'pty-stop-resume-'))
@@ -184,7 +203,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         if (typeof root !== 'number' || !child) throw new Error(`no process tree: root=${String(root)} child=${child}`)
         expect(running(root) && running(child)).toBe(true)
 
-        const row = registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: dir })!
+        const row = (await registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: dir }))!
         registry.setLaunch(row.agentId, { state: 'ready' })
         const stoppedAgents = new StoppedAgentStore(join(dir, 'saved'))
         const restartJobs = new AgentRestartCoordinator()
@@ -193,8 +212,8 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         const backendFor = (runtime: TerminalRuntimeRef) => runtime.backend === 'ptyhost' ? backend : undefined
         const stop = createStopAgentService({
           registry, stoppedAgents, restartJobs, stopJobs, backendFor,
-          agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-          forgetSession: (id) => { registry.removeAgent(id) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
+          agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, nudge: () => {} },
+          forgetSession: async (id) => { (await removeRegistryAgent(registry, id)) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
         })
         await stop(row.agentId)
         expect(registry.byAgent(row.agentId)).toBeUndefined()
@@ -208,7 +227,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
           registry, stoppedAgents, createBackend: backend, backendFor, restartJobs, stopJobs, pinnedControls: new Set(),
           retainExitedSession() { throw new Error('nothing live to retain') }, announceSession() {},
           relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
-          prepareSessionResume() {}, refreshGridWebSearch() {}, clearDeleted() {}, attachDsh() {}, attachSession: async () => true,
+          async prepareSessionResume() { return false }, refreshGridWebSearch() {}, clearDeleted() {}, attach() {}, attachSession: async () => true,
         })
         const resumed = await resume(row.agentId)
         if (!resumed.ok) throw new Error(`resume failed: ${JSON.stringify(resumed)}`)
@@ -222,7 +241,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         await stop(row.agentId)
         expect(await until(() => backend.paneState(again), (state) => state === 'gone')).toBe('gone')
       } finally {
-        for (const entry of registry.list()) registry.removeAgent(entry.agentId)
+        for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
         await removeTree(dir)
       }
     })

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import { ingestProductUsage, ingestSetupUsage, productUsageChoice, setProductUsageChoice } from '../lib/productUsage.js'
 import { PRODUCT_FEEDBACK, PRODUCT_USAGE_MAX_COUNT, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from '../types/productUsage.js'
+import { DIAL_USAGE_METRICS } from '../types/dialUsage.js'
 import { HUB_METRICS, HUB_REPORT_MAX_COUNTERS, HUB_REPORT_MAX_VALUE } from '../lib/hubMetricsContract.js'
 import { releaseBucket } from '../types/productHealthContract.js'
 import { sendError, sendSuccess } from '../utils/response.js'
@@ -13,11 +14,14 @@ const contextSchema = z.strictObject({
   channel: z.enum(['production', 'development', 'testing']),
 })
 const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+// The dial's names live in a vocabulary of their own (types/dialUsage.ts), so the product one, whose bytes the CLI's
+// core shares, does not grow with them; a signed-in report may carry either.
+const REPORT_NAMES = [...PRODUCT_USAGE_METRICS, ...DIAL_USAGE_METRICS] as const
 
 export const productUsageReportSchema = z.strictObject({
   context: contextSchema.optional(),
   schemaVersion: z.literal(1), revision: z.number().int().nonnegative(), id: z.uuid(), day: daySchema,
-  counters: z.partialRecord(z.enum(PRODUCT_USAGE_METRICS), z.number().int().min(0).max(PRODUCT_USAGE_MAX_COUNT)),
+  counters: z.partialRecord(z.enum(REPORT_NAMES), z.number().int().min(0).max(PRODUCT_USAGE_MAX_COUNT)),
 })
 const feedbackSchema = z.strictObject({ id: z.uuid(), answer: z.enum(PRODUCT_FEEDBACK) })
 const choiceSchema = z.strictObject({ enabled: z.boolean() })
@@ -76,7 +80,7 @@ function busyCategory(error: unknown): string | null {
   return null
 }
 
-const REPORT_METRICS = new Set<string>(PRODUCT_USAGE_METRICS)
+const REPORT_METRICS = new Set<string>(REPORT_NAMES)
 const SETUP_METRICS = new Set<string>(PRODUCT_USAGE_SETUP_METRICS)
 /** A client a release ahead of this backend can name a counter the contract here does not have yet.
  * Rejecting the whole report for it lost every other counter in it — up to 64 per CLI report — and the

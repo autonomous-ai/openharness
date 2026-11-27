@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Select fast CI suites from a complete Git diff and verify their final results.
 
-A PR runs the unit suite of each component it changes, and nothing else. Merge
-groups run only the plan and process checks: the PR run already covered the code.
+A PR runs the unit suite of each component it changes and of each suite that reads a changed file (PR_READS), and each
+end-to-end suite (E2E: windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop,
+device-app-install) whose own path list names a changed file; linux-e2e runs the CLI e2e files the PR adds or modifies.
+A change to a component, to a file an end-to-end suite runs as its own, to this planner, its test, the tables it reads
+or the CLI lists they copy runs the repository-wide cross-read scan and the planner's other full-checkout tests on a
+full checkout.
+Merge groups run only the plan and process checks: the PR run already covered the code.
 After GitHub merges main into a PR head whose ci/required passed, a component whose
 inputs main's new commits left untouched reuses that run's result instead of running
 again (docs/validation-and-release.md#reuse-after-update-branch).
 Checks outside PR CI are listed in docs/validation-and-release.md#what-pr-ci-does-not-run.
 """
 import argparse
+import fnmatch
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -28,8 +35,11 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
-SUITES = CORE | EXTRA | {"pro"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app", "store"}
+# End to end on Windows and Linux, each selected by its own path list (below).
+E2E = {"windows-e2e", "linux-e2e", "dial-hosts", "device-app-e2e", "device-app-update", "device-app-desktop",
+       "device-app-install"}
+SUITES = CORE | EXTRA | {"pro", "cross-read-scan"} | E2E
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
@@ -37,71 +47,270 @@ JOBS = {
     # backend-integration: the Super Tab integration suite (backend/integration) in four shards (task #2459).
     "tui": {"tui-test"}, "backend": {"backend-desk", "backend-integration"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
+    # windows-e2e calls windows.yml; device-app-e2e is the app on Linux and on Windows. linux-e2e's summary holds each
+    # file to its own result, in both of its modes; dial-hosts calls cli-e2e-dial-hosts.yml.
+    "windows-e2e": {"windows-e2e"}, "device-app-e2e": {"device-app-linux", "device-app-windows"},
+    "linux-e2e": {"linux-e2e", "linux-e2e-summary"},
+    **{name: {name} for name in ("dial-hosts", "device-app-update", "device-app-desktop", "device-app-install",
+                                 "cross-read-scan")},
 }
-MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for name in SUITES}}
+# all: every component's suite and the cross-read scan. The end-to-end suites cost far more runner time; each runs by
+# its own scope.
+MANUAL = {"full": CORE, "all": SUITES - E2E, "process": set(), **{name: {name} for name in SUITES}}
 # Each component's own directory selects its suite. Everything else (docs, workflows,
-# scripts, store, fixtures) is covered by the plan's actionlint and process checks.
+# scripts, store/ but the files store-checks runs or reads (ALSO), fixtures) is covered by the plan's actionlint and
+# process checks.
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              "device-app": "device-app",
               # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
               "installer": "pty"}
-# Paths inside another component that also select a suite: the PTY host's suite runs the CLI's
-# ptyhost terminal contract against the host it builds, and the host builds on the vendored terminal.
-# The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too.
-# The Windows pipe's shared proof vectors are read by the desktop app's test as well as the CLI's spec.
+# Code inside another component that a suite runs as its own (its references are scanned as the suite's reads): the PTY
+# host's suite runs the CLI's ptyhost terminal contract against the host it builds, and the host builds on the vendored
+# terminal. The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too. A file a suite
+# only reads is in DEPENDS.
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
-        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
-        "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop"}
-# Each Swarm UI style allowlist is checked by its own component's job (check-ui-style.py --only), so
-# it is that component's input: a PR or main commit that changes it runs (never reuses) that suite.
-# Any other file in scripts/ui-style-allowlist/ stays a shared input.
-STYLE_ALLOWLISTS = {"scripts/ui-style-allowlist/desktop.json": "desktop", "scripts/ui-style-allowlist/mobile.json": "mobile"}
-ALSO.update(STYLE_ALLOWLISTS)
+        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui"}
 # The Desktop VM runner and the measured file times it splits the shards by (task #3458): a change to either runs those
 # shards, so a split that runs short cannot merge on process checks alone.
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
-# The desktop files the phone's tests read (mobile/test): the Swarm models the phone carries as copies or must parse alike
-# (swarm/desktop_parity_test.dart), the words and helpers its other tests compare. A desktop-only change to one runs
-# mobile-checks too; it once failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
-# test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
-ALSO.update({f"desktop/{path}": "mobile" for path in (
-    "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
-    "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart",
-    "lib/super_tabs/live_card.dart", "lib/widgets/engine_identity.dart", "lib/super_tabs/tasks/personal_tasks.dart",
-    "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
+# The desktop test helper the phone's tests import (session_work_page_test.dart).
+ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
+# The VS Code extension: the CLI's build inlines the folder and the CLI's vitest runs its tests.
+ALSO.update({"plugins/harness-device-vscode/": "cli"})
+# Orca's plugin: the CLI's build inlines the folder.
+ALSO.update({"plugins/harness-device-orca/": "cli"})
+# Claude Code's two plugins and the repository's marketplace: the CLI's build inlines them as Claude Code's marketplace.
+ALSO.update({"plugins/harness-device/": "cli", "plugins/harness/": "cli", ".claude-plugin/marketplace.json": "cli"})
+# The Store's tools: the files store-checks runs (ci.yml) and those they read beside them, by name or by a path built
+# from parts (runtimes.sh), which the scan cannot see; test_ci_plan follows the names. The rest of store/tools/ (the
+# browser and network suites authoring-browser-checks.yml and experience-checks.yml run, the pipe checks windows-e2e
+# runs, the scripts run by hand) is in no component, as the rest of store/ is: a change to it on main reruns every suite
+# after Update branch, whatever reads it beside it.
+ALSO.update({f"store/tools/{name}": "store" for name in (
+    "local-ai/", "local-credential.mjs", "local-credential.test.mjs", "local-daemon.mjs", "local-daemon.test.mjs",
+    "port-holder.test.mjs", "runtimes.sh", "sync-runtimes.mjs", "sync-runtimes.test.mjs", "test-folders.mjs",
+    "test-folders.test.mjs", "test_runtimes.py")})
+# test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
+# two undeclared reads slipped in: their own job runs them on a full checkout. They run for a change to the planner, its
+# test, the tables it reads (DEPENDS takes the desktop's from record-ci-validation.py) and the CLI's lists its tables
+# copy (dialHosts.ts's DIAL_HOST_FILES, the CI config's exclude), and select() adds them for any change to a file a
+# component or an end-to-end suite runs as its own: an undeclared read an ordinary component pull request added was
+# found only by the next planner pull request or make merge-pr's reuse check, and the scan costs about 0.5
+# runner-minutes (measured in #4526).
+ALSO.update({path: "cross-read-scan" for path in ("scripts/ci-plan.py", "scripts/tests/test_ci_plan.py",
+                                                  "scripts/record-ci-validation.py", "cli/e2e/harness/dialHosts.ts",
+                                                  "cli/vitest.e2e.ci.config.ts")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
-# Reuse after Update branch. A PR's own diff selects suites by the maps above; reusing an
-# earlier result also needs every file a suite reads outside its own directory, because
-# main's commits were never tested together with this PR. "dir/" is a prefix, else a file.
+# The end-to-end suites' own paths: what each one's jobs build, run or install. Narrow on purpose, and no PR_READS: each
+# costs many times a unit suite (windows-e2e about 43 runner-minutes, the Device suites about 200 together), so only a
+# change to code its jobs exercise runs one, and a typical CLI pull request runs none. A file their tests merely read
+# runs its component's unit suite; reuse after Update branch still counts it (DEPENDS).
+# windows-e2e: windows.yml's specs (both of its `$paths` lists, cli/-relative there), each with the module it tests.
+WINDOWS_SPECS = (
+    "cli/src/lib/ptyHostBackend.contract.spec.ts", "cli/src/lib/ptyHostBackend.spec.ts",
+    "cli/src/lib/ptyHostBackend.restart.spec.ts", "cli/src/lib/ptyHost/", "cli/src/lib/windows/",
+    "cli/src/scripts/windowsCiChecks.spec.ts", "cli/src/lib/uninstall/",
+    "cli/src/engines/kit/hookRemoval.spec.ts", "cli/src/engines/kit/windowsHooks.spec.ts",
+    "cli/src/engines/kit/windowsFiles.spec.ts", "cli/src/engines/kit/nativePaths.windows.spec.ts",
+    "cli/src/engines/kit/launchExecutable.windows.spec.ts", "cli/src/dsh/runtime.windows.spec.ts",
+    "cli/src/engines/removeHooks.spec.ts", "cli/src/engines/windowsHomes.spec.ts", "cli/src/cable/windowsSerial.spec.ts",
+    "cli/src/cable/serialWindows.spec.ts", "cli/src/engines/kit/folderTrust.spec.ts",
+    "cli/src/lib/tied.spec.ts", "cli/src/lib/connectors/call.spec.ts", "cli/src/lib/secureState.spec.ts",
+    "cli/src/lib/registryLock.publish.spec.ts", "cli/src/lib/pidFileSettle.spec.ts",
+    "cli/src/devices/listenerPipe.windows.real.spec.ts", "cli/src/devices/claudePlugin.windows.real.spec.ts",
+    "cli/src/devices/pluginFolder.windows.real.spec.ts",
+    "cli/src/deviceClaude/inbox.windows.real.spec.ts", "cli/src/hookCaller.windows.real.spec.ts",
+    "cli/src/harnessDevicePlugin.spec.ts", "plugins/harness-device-vscode/src/",
+    "cli/src/lib/engineBin.pathEntries.spec.ts", "cli/src/hookServer.wait.spec.ts",
+    "cli/src/core/engines/sessionHookWait.spec.ts", "cli/src/deviceClaude/codexTurn.spec.ts",
+    "cli/src/devices/codexPluginTrust.spec.ts", "cli/src/devices/codexPlugin.spec.ts",
+    # The two real builds.
+    "cli/src/lib/hostMove/hostMove.real.spec.ts", "cli/src/lib/ptyHost/drain.spec.ts",
+    "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
+    "cli/src/testing/windowsPowerShell.spec.ts",
+)
+# windows-e2e: what windows.yml's e2e config (cli/vitest.e2e.windows.config.ts: its files, setup files and global setup)
+# and the dial desk bundle (cli/scripts/windows-dial-e2e/desk.mts, which dialWindowsTools.e2e.ts builds and runs on
+# Windows) import from the harness and the testing helpers, with the setup file outside them. test_ci_plan walks the
+# imports. Product code they carry selects windows-e2e only where its own folder rules say so.
+WINDOWS_E2E_HARNESS_PATHS = (
+    "cli/vitest.setup.ts",
+    *(f"cli/e2e/harness/{name}.ts" for name in ("artifacts", "artifactsSetup", "bundle", "client", "daemon", "desk",
+                                                 "fakeBackend", "fakeDial", "reaper")),
+    *(f"cli/src/testing/{name}.ts" for name in ("claudeAppFixture", "codexAppFixture", "daemonEnvironment",
+                                                 "dialCarousel", "executableFixture", "ghStub", "isolatedTmux",
+                                                 "placeNode", "removeRoot", "rootProcesses", "socketPathRoom",
+                                                 "spawnedRuns", "startEnvFile", "testNode", "testPath")),
+    # Run or read by a path the walk cannot see: bundle.ts and the desk's bundle.mjs build the daemon's CLI with
+    # build-bundle.mjs, fakeDial.ts greets with the firmware's version, reaper.ts starts reaperProcess.mjs.
+    "cli/build-bundle.mjs", "devices/harness-device/firmware/version.txt", "cli/e2e/harness/reaperProcess.mjs",
+)
+# A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
+WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
+                        for spec in WINDOWS_SPECS if not spec.endswith("/")}
+# windows-e2e: the Store's pipe test, cross-platform JS that storePackagesPipe.windows.spec.ts runs and no other job
+# does, and what it and the pipe script (store/tools/windows-ci/, windows_only) import under store/: the pipe client, the
+# agents' transports they drive (audit W1) with the copy of the client each imports, and the test's temporary folders.
+# test_ci_plan walks the imports.
+WINDOWS_STORE_PIPE_PATHS = (
+    *(f"store/tools/{name}.mjs" for name in ("windows-pipe.test", "local-credential", "local-daemon", "test-folders")),
+    *(f"store/agents/{transport}.mjs" for transport in ("autonomous-grid/lib/harness", "harness-monitor/lib/bridge",
+                                                         "machine-monitor/lib/daemon", "memories/lib/bridge")),
+    *(f"store/agents/{agent}/lib/localDaemon.mjs" for agent in ("autonomous-grid", "harness-monitor", "machine-monitor",
+                                                                "memories")),
+)
+# Harness Device's suites: what each of ci.yml's Device jobs tests. "dir/" is a folder; a "*" matches within the last
+# name. Each also selects on the jobs' setup action, as dial-hosts on its own: device-app-update's jobs and the
+# device-app-build packages the others install set up through it.
+DEVICE_APP_SETUP = ".github/actions/device-app-setup/"
+DEVICE_APP_PATHS = {
+    # The app end to end on Linux and on Windows: any change to it.
+    "device-app-e2e": ("device-app/", DEVICE_APP_SETUP),
+    # One build updating to the next: the updater, the pair of builds, each driver's update path, how a release builds,
+    # the app's configuration and dependencies, and the Windows installer's hooks, which run in the updater's install.
+    "device-app-update": (DEVICE_APP_SETUP, "device-app/src-tauri/src/update.rs",
+                          "device-app/scripts/e2e/update-pair.sh",
+                          "device-app/scripts/e2e/linux.sh", "device-app/scripts/e2e/windows.ps1",
+                          "device-app/scripts/release-build.sh", "device-app/scripts/release-check.sh",
+                          "device-app/scripts/release-setup.sh", "device-app/src-tauri/tauri*.conf.json",
+                          "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock",
+                          "device-app/src-tauri/windows/"),
+    # Desktop installs the app: Desktop's half, the Linux signature check it runs (with the update check that one
+    # extends), the end-to-end install test and the test signer it signs the Device package with, so a change to how
+    # that package's signature is made or checked runs it; the Flutter its jobs set up on each arch, and the app's
+    # install, packaging and instance code and the Windows installer's hooks.
+    "device-app-desktop": (DEVICE_APP_SETUP, ".github/actions/desktop-flutter/", ".github/actions/desktop-flutter-arm64/",
+                           "desktop/lib/devices/", "desktop/lib/update/tauri_signature.dart",
+                           "desktop/lib/update/update_signature.dart",
+                           "desktop/integration_test/device_app_install_windows_linux_native_test.dart",
+                           "desktop/test/support/tauri_test_signer.dart",
+                           "device-app/src-tauri/src/install.rs", "device-app/src-tauri/src/packaging.rs",
+                           "device-app/src-tauri/src/instance.rs", "device-app/src-tauri/tauri*.conf.json",
+                           "device-app/src-tauri/windows/"),
+    # The one-line install on each Ubuntu: the website's script, its stand-in CDN, and how the AppImage starts.
+    "device-app-install": (DEVICE_APP_SETUP, "website/scripts/device-install.sh",
+                           "device-app/scripts/e2e/linux-install.sh",
+                           "device-app/scripts/e2e/https-fake-cdn.py", "device-app/src-tauri/src/appimage_env.rs",
+                           "device-app/src-tauri/src/packaging.rs", "device-app/src-tauri/tauri*.conf.json"),
+}
+# The debug packages (bundle, arch) the Device suites' jobs install, in device-app-build's order. That job is in no
+# suite's JOBS: its rows are the running suites' packages, so a suite reused after Update branch builds nothing and its
+# jobs skip, while ci/required still needs the job (a failed build fails the gate).
+DEVICE_APP_PACKAGES = (("appimage", "x64"), ("appimage", "arm64"), ("nsis", "x64"), ("nsis", "arm64"))
+DEVICE_APP_BUILDS = {"device-app-e2e": DEVICE_APP_PACKAGES, "device-app-desktop": DEVICE_APP_PACKAGES,
+                     "device-app-install": (("appimage", "x64"),)}
+# linux-e2e: a CLI e2e file the PR adds or modifies, but those another job runs: windows-e2e the dial and the apps'
+# sessions on it on Windows, diskfull.e2e.ts needs macOS, the dial app eval's iTerm2 file needs macOS (iTerm2 is a Mac
+# app; the tester runs it, docs/plans/2026-11-22-dial-eval-iterm2-design.md), so does Rex's (the Rex Server app is a Mac
+# app; docs/specs/2026-11-25-dial-rex.md), the agent browser's Podman file runs by hand (about 50 minutes), and
+# dial-hosts the files that need the hosts installed (cli/e2e/harness/dialHosts.ts's DIAL_HOST_FILES, which the CI
+# config leaves out).
+LINUX_E2E_NEVER = {"cli/e2e/dialWindows.e2e.ts", "cli/e2e/dialWindowsAppSessions.e2e.ts", "cli/e2e/diskfull.e2e.ts",
+                   "cli/e2e/dialAppEvalIterm.e2e.ts", "cli/e2e/dialRex.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"}
+# What every e2e file runs on but none tests itself: the jobs' setup action (its real backend, which dial-hosts does not
+# ask for), the harness, Vitest's e2e configs and the timing hints. A change to one runs linux-e2e's canary, a short file
+# (two daemons on the real backend, one case) beside the PR's own; the canary's own deletion runs it, so that PR fails.
+LINUX_E2E_CANARY = "cli/e2e/twoAccounts.spike.e2e.ts"
+LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", "cli/vitest.e2e*.config.ts",
+                          "cli/ci-e2e-durations.json", LINUX_E2E_CANARY)
+# The e2e files that drive an Orca terminal through Orca's terminal-host stand-in (InOrca with a handle) and run on
+# Linux; the macOS-only ones are run locally (docs/plans/2026-11-21-dial-linux-followups-plan.md, Verification), as no
+# PR CI suite runs macOS.
+LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRing.e2e.ts", "cli/e2e/dialStream.e2e.ts",
+                        "cli/e2e/dialPaneFollow.e2e.ts", "cli/e2e/dialClaudeAppFollow.e2e.ts",
+                        "cli/e2e/deviceNotify.e2e.ts")
+# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI, Orca's adapter, and the
+# harness's loop that runs Orca's plugin and its dial stream (dialStream.e2e.ts drives them). A change to one runs them
+# beside the PR's own files; its deletion too, as a canary path's does.
+LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.ts", "cli/e2e/harness/fakeOrca.ts",
+                        "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/pluginLoop.ts", "cli/e2e/harness/pluginDial.ts")
+# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md,
+# docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's and
+# docs/plans/2026-11-22-dial-eval-orca-design.md for Orca's), and what they cover: the hosts' adapters, the eval's
+# catalog and grader, the carousel model and the tier B driver; for the editors, the devices process and the listener
+# whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension and its setup, Cursor's
+# engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin's code, the devices' Orca reads
+# (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
+# terminal-host stand-in, and InOrca; for every app, the rest of the harness the driver runs (its desk, dial, backend,
+# mod inbox, scheme apps and ChatGPT's Codex CLI; iTerm2's tmux and herdr with the recording wrapper and the herdr-only
+# process table: test_ci_plan walks the imports), and the clip its dial sends for the voice gate to hear. A change to
+# one runs them beside the PR's own files; its deletion too, as the Orca paths' does.
+LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
+                            "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
+                            "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
+LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval/", "cli/src/testing/dialCarousel.ts",
+                            "cli/e2e/harness/appEval*.ts", "cli/src/services/devices.ts",
+                            "cli/src/services/devicesListener.ts", "cli/src/devices/listenerPath.ts", "cli/hook/notify.mjs",
+                            "plugins/harness-device-vscode/src/", "cli/src/devices/vscodeExtension.ts",
+                            "cli/src/cable/vscodeExtensionSetup.ts", "cli/src/engines/cursor/",
+                            "cli/src/core/engines/cursorDiscovery.ts", "plugins/harness-device-orca/src/",
+                            "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts",
+                            "cli/src/cable/__fixtures__/heardClip.ts",
+                            *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
+                                                                         "cursorOutside", "editorWindow", "fakeOrca",
+                                                                         "inOrca", "orcaHost", "pluginDial",
+                                                                         "pluginLoop", "desk", "fakeDial", "fakeBackend",
+                                                                         "modInbox", "schemeApps", "codexAppCli",
+                                                                         "herdrServer", "dialHosts", "ownTmux",
+                                                                         "runLog")),
+                            *LINUX_E2E_APP_EVAL_FILES)
+DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
+# dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
+# bundle, and the adapters share their folder's code (observed.ts finds the hosts): the whole folder, and what it and the
+# files import from the cable. The files drive them through the harness's stand-in dial and desk and each host's helper.
+# test_ci_plan walks the imports.
+DIAL_HOST_PATHS = (
+    "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
+    "cli/src/testing/dialCarousel.ts", *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
+    "cli/src/cable/__fixtures__/heardClip.ts",
+    *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
+                                                 "kittyWindow", "modInbox", "orcaHost", "outsideAgent", "runLog", "swayDesk",
+                                                 "weztermMux", "x11Desk", "zellijSession")),
+    ".github/workflows/cli-e2e-dial-hosts.yml", ".github/actions/cli-e2e-setup/",
+)
+# The names linux-e2e passes on: they reach the jobs' shells through env, and Vitest as file filters, so plain names only.
+E2E_FILE = re.compile(r"cli/e2e/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.e2e\.ts")
+# Answer 6: one runner per 10 hinted minutes (cli/ci-e2e-durations.json), at most 4. Above 40 files the full suite runs
+# instead, as the nightly runs it: cli-e2e.yml's `shard: [1..8]`, `vitest.e2e.ci.config.ts --shard=N/8`, which its
+# duration sequencer splits.
+LINUX_E2E_RUNNERS = 4
+LINUX_E2E_FILES_MAX = 40
+LINUX_E2E_RUNNER_MS = 600_000
+LINUX_E2E_FULL_SHARDS = 8
+
+# Reuse after Update branch. Reusing an earlier result needs every file a suite may read outside its own directory,
+# because main's commits were never tested together with this PR: these sets are broad on purpose, as the scan misses a
+# path joined from parts, and a miss here would reuse a stale result. "dir/" is a prefix, else a file.
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
-    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
-    # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
-                "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
-                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "cli/src/lib/dialUsageContract.ts", "daemons/frames.json",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
-    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
-    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
-    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
-            "backend/src/superTabs/processNotes.ts", "desktop/",
-            "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+            "cli/e2e/harness/", "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
+            "devices/harness-device/firmware/test/vectors/", "devices/harness-device/firmware/version.txt",
+            "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
-    "daemons": ("backend/src/lib/daemonRoster.g.ts", "cli/src/", "desktop/assets/daemon-art/",
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "companions/src/companion/", "desktop/assets/daemon-art/",
                 "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
     "firmware": ("cli/scripts/", "cli/src/", "daemons/plates/tux.mjs", "daemons/review/traits.html",
                  "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
+    # Its release tests read both release workflows (test_release_workflow.py) and the signing action's inputs
+    # (test_windows_sign.py), each through a path built from parts.
+    # app_list.rs holds its Linux app-list entry to the vectors every writer of it reads.
+    "device-app": (".github/actions/windows-signing/action.yml", ".github/workflows/release-desktop.yml",
+                   ".github/workflows/release-device.yml", "tests/fixtures/app-list-entry-vectors.json"),
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
                "docs/performance/"),
@@ -110,12 +319,139 @@ DEPENDS = {
     # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
     "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "term/", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    # store-checks: the local AI packages' packaging test compares their toolchain/node.sh copies, port-holder.test.mjs
+    # imports four agents' libs, and sync-runtimes.mjs --check compares every agent's and viewer's runtimes.sh copy
+    # (a path joined from parts, which the scan cannot see). store/tools/: local-ai's vllm.test.mjs hands its validator
+    # '../../file' as test data, which the scan reads as a path built into that folder; a change to a file there the
+    # job does not own is a shared input still (ALSO).
+    "store": ("store/agents/", "store/tools/", "store/viewers/"),
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
-    "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
+    # device-install.spec.ts holds the one-line installer's app-list entry to the vectors.
+    "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/agentClient/readUsage.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
-                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png"),
+                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
+                "tests/fixtures/app-list-entry-vectors.json"),
+}
+# An end-to-end suite reads what the unit suites of the code it runs read, and all of that code: windows.yml builds the
+# PTY host, the serial bridge and the TUI, and runs the CLI's specs, the dial plugins' and the website's flasher; the
+# Device jobs run the app, Desktop's install of it and the website's one-line installer. linux-e2e and dial-hosts run the
+# CLI's e2e files on its build, which inlines the dial plugins and Claude Code's marketplace; linux-e2e also starts the
+# real backend.
+DEPENDS.update({
+    "windows-e2e": DEPENDS["cli"] + DEPENDS["pty"] + DEPENDS["tui"] + (
+        "cli/", "tests/", "plugins/", ".claude-plugin/marketplace.json", "pty/", "serial/", "term/", "tui/", "website/"),
+    # device-app/src-tauri/: dialAppFilterOnDial.e2e.ts starts the Device app's debug build (with a dial, by hand).
+    # .github/actions/, in both: their setup action's folder (a shared input), where the scan also places the action's
+    # `../backend`.
+    "linux-e2e": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
+                                   "plugins/harness-device/", "plugins/harness/", ".claude-plugin/marketplace.json",
+                                   "backend/", "device-app/src-tauri/", ".github/actions/"),
+    "dial-hosts": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
+                                    "plugins/harness-device/", "plugins/harness/", ".claude-plugin/marketplace.json",
+                                    ".github/actions/"),
+    "device-app-e2e": DEPENDS["device-app"] + ("device-app/",),
+    "device-app-update": DEPENDS["device-app"] + ("device-app/",),
+    "device-app-desktop": DEPENDS["device-app"] + DEPENDS["desktop"] + ("device-app/", "desktop/"),
+    "device-app-install": DEPENDS["device-app"] + ("device-app/", "website/scripts/device-install.sh"),
+    # The scan reads every component's files and the docs their strings may name; the planner's tables name them all.
+    # So after Update branch it is reused only when main's new commits change none of them.
+    "cross-read-scan":tuple(sorted({path.split("/", 1)[0] + "/" for path in (*COMPONENTS, *ALSO, *SUBCOMPONENTS)}
+                                    | {"docs/"})),
+})
+
+# Selection. The files each suite reads outside its own directory, as narrow as the scan shows: a PR that changes one
+# runs that suite (#4033 changed a CLI file Desktop's tests read and ran the CLI's suite only). Each is inside the
+# suite's DEPENDS above. Name files, not their folders: a folder runs its reader on every PR that touches it.
+# test_ci_plan.CrossReadTests scans the components' sources against these too; a path built from parts is declared by
+# hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
+PR_READS = {
+    "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
+                "cli/src/lib/dialUsageContract.ts", "daemons/frames.json",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
+                "provider/reference-provider/", "tests/fixtures/"),
+    # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
+    # store/: the dsh specs read its agents, viewers and starter (the scan skips them: paths outside every component).
+    # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
+    # version.txt: the e2e fake dial greets with the round firmware's version (fakeDial.spec.ts).
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+            "cli/e2e/harness/", "desktop/assets/connector-icons/",
+            "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
+            "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
+            "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
+            "devices/harness-device/firmware/test/vectors/", "devices/harness-device/firmware/version.txt",
+            "docs/contracts/", "mobile/assets/connector-icons/",
+            "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
+            "mobile/test/viewer/deviceHistory.vectors.json",
+            "pty/", "store/", "tui/"),
+    "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
+                   "docs/research/2026-09-30-memory-extraction-cases.json"),
+    # Its generators write (and its checks may compare) these outputs.
+    "daemons": ("backend/src/lib/daemonRoster.g.ts", "companions/src/companion/plates/",
+                "companions/src/companion/roster.g.ts", "desktop/assets/daemon-art/",
+                "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
+                "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
+    # test_touch_ui.py holds the dial's host names and busy fuse to the daemon's (cli/src/cable/hosts/hostDetect.ts,
+    # cli/src/services/devices.ts REMIND_MS). The Pro's run.sh checks main/pod/app_icons.c against every file in
+    # .github/assets/apps (gen_app_icons.py --check, test_app_icons.py); .github/ already reruns every suite on reuse.
+    "firmware": (".github/assets/apps/", "cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts",
+                 "daemons/plates/tux.mjs", "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py",
+                 "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
+    # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
+    # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
+    # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);
+    # the scan skips a path outside every component. Its tools also import the web release scripts.
+    "desktop": ("backend/src/lib/communityContract.ts", "backend/src/lib/hubMetricsContract.ts", "cli/src/engines/",
+                "cli/src/lib/__fixtures__/github-repository-vectors.json", "cli/src/lib/e2ee/applicationFrames.ts",
+                "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineInstall.ts", "cli/src/lib/engineLaunch.ts",
+                "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts", "cli/src/lib/viewerFrames.ts",
+                # The Windows pipe's shared proof vectors.
+                "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json", "cli/src/messages/wire.ts",
+                "cli/src/sharing/protocol.ts", "daemons/frames.json", "docs/images/",
+                "daemons/plates.json",
+                "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
+                "daemons/tools/illustrated/generate.py",
+                # tauri_signature_test.dart holds Desktop's pinned update key to the Device app's.
+                "device-app/src-tauri/tauri.conf.json", "mobile/lib/e2ee/relay_session_crypto.dart",
+                "mobile/lib/p2p/terminal_p2p_link.dart", "mobile/lib/p2p/terminal_p2p_plugin.dart",
+                "mobile/lib/p2p/terminal_p2p_policy.dart", "mobile/lib/ws/relay_codec.dart",
+                "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",
+                "tests/fixtures/shared-pane-layouts.json",
+                # device_app_launcher_test.dart holds the app-list entry Desktop writes to the vectors.
+                "tests/fixtures/app-list-entry-vectors.json",
+                "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
+    # test_release_workflow.py reads its own release workflow and Desktop's runners and signing inputs, and
+    # test_windows_sign.py the signing action's inputs, through a path built from parts, which the scan cannot see.
+    # app_list.rs holds its Linux app-list entry to the vectors every writer of it reads.
+    "device-app": (".github/actions/windows-signing/action.yml", ".github/workflows/release-desktop.yml",
+                   ".github/workflows/release-device.yml", "tests/fixtures/app-list-entry-vectors.json"),
+    # The desktop files the phone's tests read: the words and helpers its tests compare; a desktop-only change to one once
+    # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
+    # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
+    "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/engines/",
+               "cli/src/lib/e2ee/applicationFrames.ts", "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineLaunch.ts",
+               "cli/src/lib/productUsageSignals.ts", "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts",
+               "cli/src/lib/viewerFrames.ts", "cli/src/messages/wire.ts", "cli/src/sharing/protocol.ts",
+               "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json",
+               "desktop/lib/widgets/engine_identity.dart",
+               "docs/performance/"),
+    # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
+    # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
+    # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
+    "os": ("cli/package.json", "cli/src/cable/serial.ts", "devices/harness-device/firmware/README.md", "docs/naming-system.md",
+           "docs/terminology.md", "term/", "tui/"),
+    "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    "store": DEPENDS["store"],
+    # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
+    "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
+            "tests/fixtures/shared-pane-layouts.json"),
+    # device-install.spec.ts holds the one-line installer's app-list entry to the vectors.
+    # backend/src/lib/: its Hub contract specs import the backend's contract modules, named without an extension.
+    "website": ("backend/src/lib/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/agentClient/readUsage.ts", "cli/src/lib/newCommand.ts",
+                "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
+                "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
+                "tests/fixtures/app-list-entry-vectors.json"),
 }
 # Folders inside a suite's own component that its PR jobs never read: the CLI's typecheck and unit
 # tests cover src/ (end to end runs elsewhere). backend/integration is read: backend-integration runs it.
@@ -123,54 +459,36 @@ DEPENDS = {
 NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
-# A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
+# A folder covers the paths under it named from the repository root. A relative read ("../../cli/x.ts") is always a
+# read, but one that also names a path inside its file's own directory, which the scan then fails closed on: there an
+# entry naming exactly the outside path covers it (the setup action's `../backend`, also beside it in .github/actions/).
 NOT_READS = {
-    **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
-                                                                "desktop/lib/super_tabs/roster.dart"})
-       for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
-    # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
-    **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
-                                                                 "os/", "tests/", "website/"})
-       for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
-                      "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
-                      "backend/src/superTabs/dispatch.test.ts",
-                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
-                      "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
-                      "backend/src/superTabs/prHistory.test.ts",
-                      "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
-                      "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
-                      "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
-                      "backend/src/superTabs/reviewTable.test.ts", "backend/src/superTabs/stepOs.test.ts")},
-    **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
-                                                                               "devices/", "docs/", "installer/", "mobile/",
-                                                                               "pty/", "term/", "tui/", "website/"})
-       for source in ("backend/src/superTabs/releases.ts",
-                      "backend/src/superTabs/reviewTable.ts")},
-    **{source: ("test data: a task's owned paths", {"docs/"})
-       for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
+    ".github/actions/cli-e2e-setup/action.yml": ("the real backend, set up only for a job that asks (linux-e2e, which "
+                                                 "declares backend/); dial-hosts does not", {"backend/"}),
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
-    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
-                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
+    "cli/src/lib/connectors/call.spec.ts": ("test data: files in a temporary home", {"docs/"}),
+    "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
-    "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
+    "desktop/tool/native_benchmark/connected_stack.mjs": ("a benchmark run by hand against the built CLI", {"cli/"}),
+    "desktop/tool/test_test_flavor_isolation.py": ("a macOS check run by hand with the CLI's installed packages", {"cli/"}),
+    "devices/harness-device/firmware/test/device_release_check.py": ("a release check run by hand that fingerprints the "
+                                                                     "CLI's sources", {"cli/"}),
     "desktop/test/p2p/mobile_parity_test.dart": ("reads ../mobile/<file> only for the phone files desktop-tests' sparse "
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
-    "desktop/test/swarm_instructions_shared_test.dart": ("test data: a project's instruction file names",
-                                                         {"AGENTS.md", "CLAUDE.md"}),
-    "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
+    "mobile/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
+    "os/tests/build-update-fixture.py": ("the CLI bundle a hand-run build copies from its work folder", {"cli/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
     # tui-test runs cargo test only (tui/tests/ holds no Rust tests); these read build output and installed packages.
     "tui/tests/local-first.py": ("a script run by hand against the built CLI (cli/dist)", {"cli/"}),
@@ -201,18 +519,184 @@ def sha(value):
     return value
 
 
-def select(paths):
+def owners(path):
+    """The suites whose own files include this path: its component's, and ALSO's and SUBCOMPONENTS' extras."""
+    suite = COMPONENTS.get(path.split("/", 1)[0])
+    scopes = {suite} if suite else set()
+    scopes |= {also for prefix, also in ALSO.items() if path.startswith(prefix)}
+    scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
+    return scopes
+
+
+def windows_docs(path):
+    """Docs and images in windows-e2e's folders: nothing windows.yml builds or runs reads them, but the notices the TUI
+    compiles in (tui/src/main.rs)."""
+    return (path.endswith((".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"))
+            and path != "tui/THIRD_PARTY_NOTICES.md")
+
+
+def windows_only(path):
+    """Code that runs on Windows alone, where windows-e2e's arm64 leg tests what its x64 leg does not."""
+    return not windows_docs(path) and (
+        # The host's crate, the terminal it builds on (term/, and the vendored one in tui/vendor/), the serial bridge.
+        path.startswith(("pty/", "term/", "tui/vendor/", "serial/", "cli/src/lib/ptyHost", "cli/scripts/windows-ci/"))
+        or PurePosixPath(path).name == "install.ps1"
+        or path in {".github/workflows/windows.yml", "cli/vitest.e2e.windows.config.ts",
+                    "cli/scripts/windows-install-manifest.mjs"}
+        # The Store's pipe script: check-install.ps1 runs it against the installed daemon.
+        or path.startswith("store/tools/windows-ci/")
+        # A file's own name, not a folder's (cli/src/lib/windows/ runs x64 alone), in the code its specs and the dial's
+        # end to end run: arm64 adds about 27 runner-minutes a run.
+        or (path.startswith(("cli/src/", "cli/e2e/")) and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
+
+
+def windows_e2e(path):
+    """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
+    (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
+    runs, its specs with the modules they test, the Store's pipe test with what it imports, and the dial desk bundle
+    dialWindowsTools.e2e.ts builds and runs, with the harness and the testing helpers it and windows.yml's e2e config
+    run."""
+    return windows_only(path) or not windows_docs(path) and (
+        path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
+                         "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
+        or re.match(r"plugins/harness-device[^/]*/", path) is not None
+        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS or path in WINDOWS_STORE_PIPE_PATHS
+        or any(covers(spec, path) for spec in WINDOWS_SPECS))
+
+
+def listed(entry, path):
+    """covers(), and a "*" in the entry's last name matching within that name."""
+    folder, _, name = entry.rpartition("/")
+    return covers(entry, path) or ("*" in name and str(PurePosixPath(path).parent) == folder
+                                   and fnmatch.fnmatchcase(PurePosixPath(path).name, name))
+
+
+def linux_e2e_file(path):
+    """A CLI e2e file linux-e2e runs when a PR adds or modifies it."""
+    return (path.startswith("cli/e2e/") and path.endswith(".e2e.ts") and path not in LINUX_E2E_NEVER
+            and not dial_hosts_path(path))
+
+
+def linux_e2e_canary_path(path):
+    """What linux-e2e runs its canary for."""
+    return any(listed(entry, path) for entry in LINUX_E2E_CANARY_PATHS)
+
+
+def linux_e2e_orca_path(path):
+    """What linux-e2e runs LINUX_E2E_ORCA_FILES for."""
+    return path in LINUX_E2E_ORCA_PATHS
+
+
+def linux_e2e_app_eval_path(path):
+    """What linux-e2e runs LINUX_E2E_APP_EVAL_FILES for."""
+    return any(listed(entry, path) for entry in LINUX_E2E_APP_EVAL_PATHS)
+
+
+def dial_hosts_path(path):
+    """What the dial-hosts job runs: its files (a "*" stays within e2e/, as Vitest's glob does), adapters and helpers."""
+    return any(listed(entry, path) for entry in (*DIAL_HOST_FILES, *DIAL_HOST_PATHS))
+
+
+def e2e_owners(path):
+    """The end-to-end suites whose own paths include this path."""
+    suites = {"windows-e2e"} if windows_e2e(path) else set()
+    if (linux_e2e_file(path) or linux_e2e_canary_path(path) or linux_e2e_orca_path(path)
+            or linux_e2e_app_eval_path(path)):
+        suites.add("linux-e2e")
+    if dial_hosts_path(path):
+        suites.add("dial-hosts")
+    # No Device job reads the docs or runs the release scripts' Python tests (device-app-checks runs those).
+    if not path.endswith(".md") and not listed("device-app/scripts/test_*.py", path):
+        suites |= {suite for suite, entries in DEVICE_APP_PATHS.items() if any(listed(entry, path) for entry in entries)}
+    return suites
+
+
+def owns(suite, path):
+    """Whether the path is one of the suite's own files. Only an end-to-end suite reads the path lists: the cross-read
+    scan asks for every file, and they made a unit suite's scan half again as slow."""
+    return suite in owners(path) or (suite in E2E and suite in e2e_owners(path))
+
+
+def select(paths, present=None):
+    """Each changed path runs its owners' suites, the end-to-end suites whose own paths include it, and every suite
+    that declares reading it (PR_READS); a path a suite owns, a component or an end-to-end one, runs the cross-read
+    scan too. linux-e2e runs an e2e file only when the diff leaves it in the tree (present: the paths it adds or
+    modifies; None, all of them), its canary for any change to what it runs for, and the Orca files and the dial app
+    eval's for any change to what they cover."""
     selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
-        suite = COMPONENTS.get(path.split("/", 1)[0])
-        scopes = {suite} if suite else set()
-        scopes |= {also for prefix, also in ALSO.items() if path.startswith(prefix)}
-        scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
+        own = owners(path)
+        scopes = own | e2e_owners(path) | {
+            suite for suite, entries in PR_READS.items() if any(covers(entry, path) for entry in entries)}
+        if (own | e2e_owners(path)) - {"cross-read-scan"}:
+            scopes.add("cross-read-scan")
+        if present is not None and path not in present and not (linux_e2e_canary_path(path) or linux_e2e_orca_path(path)
+                                                                 or linux_e2e_app_eval_path(path)):
+            scopes.discard("linux-e2e")
         selected |= scopes
         reasons[path] = sorted(scopes)
     return selected, reasons
+
+
+CI_WORKFLOW = ".github/workflows/ci.yml"
+
+
+def yaml_entries(text):
+    """A YAML mapping's keys at its first key's indent, each with the rest of its line and the lines indented below it;
+    comment lines left out."""
+    text = re.sub(r"(?m)^[ \t]*#.*\n", "", text)
+    first = re.search(r"(?m)^([ \t]*)[\w-]", text)
+    if first is None:
+        return {}
+    indent = first.group(1)
+    return dict(re.findall(rf"(?m)^{indent}([\w-]+):(.*\n(?:(?:{indent}[ \t]+.*)?\n)*)", text))
+
+
+def ci_jobs(text):
+    """ci.yml's jobs: each id under `jobs:` and its definition."""
+    return yaml_entries(yaml_entries(text).get("jobs", ""))
+
+
+# A YAML anchor (`key: &name`, `- &name`) and an alias of one (`key: *name`, `<<: *name`, `- *name`).
+YAML_ANCHOR = re.compile(r"(?m)(?:^[ \t]*-|:)[ \t]+&([\w-]+)")
+YAML_ALIAS = re.compile(r"(?m)(?:^[ \t]*-|:)[ \t]+\*([\w-]+)")
+
+
+def edited_job_suites(root, base, head):
+    """The suites whose ci.yml jobs head edits, adds or removes: a job's definition is part of what its suite tests, with
+    what it takes from the rest of the file (the env variables it names, the permissions, defaults and concurrency, the
+    anchors it names). device-app-build's are the Device suites that install its packages; the plan, process and gate
+    jobs run none."""
+    def top(commit):
+        try:
+            return yaml_entries(git(root, "show", f"{commit}:{CI_WORKFLOW}") + "\n")
+        except subprocess.CalledProcessError:
+            return {}  # No ci.yml there: every job of the other side changed.
+
+    old_top, new_top = top(base), top(head)
+    old, new = yaml_entries(old_top.get("jobs", "")), yaml_entries(new_top.get("jobs", ""))
+    jobs = old.keys() | new.keys()
+    edited = {job for job in jobs if old.get(job) != new.get(job)}
+    if any(old_top.get(key) != new_top.get(key) for key in ("permissions", "defaults", "concurrency")):
+        edited |= jobs
+    old_env, new_env = yaml_entries(old_top.get("env", "")), yaml_entries(new_top.get("env", ""))
+    variables = [re.escape(name) for name in old_env.keys() | new_env.keys() if old_env.get(name) != new_env.get(name)]
+    named = re.compile(rf"\b(?:{'|'.join(variables)})\b") if variables else None
+    edited |= {job for job in jobs if named and named.search(old.get(job, "") + new.get(job, ""))}
+    # An edited anchor reaches each job that names it, and through it what that job anchors.
+    sections = {key for key in old_top.keys() | new_top.keys() if key != "jobs" and old_top.get(key) != new_top.get(key)}
+    while True:
+        changed = "".join(old_top.get(key, "") + new_top.get(key, "") for key in sections)
+        changed += "".join(old.get(job, "") + new.get(job, "") for job in edited)
+        anchors = set(YAML_ANCHOR.findall(changed))
+        reached = {job for job in jobs - edited if anchors & set(YAML_ALIAS.findall(old.get(job, "") + new.get(job, "")))}
+        if not reached:
+            break
+        edited |= reached
+    return ({suite for suite, names in JOBS.items() if names & edited}
+            | (set(DEVICE_APP_BUILDS) if "device-app-build" in edited else set()))
 
 
 def covers(entry, path):
@@ -227,24 +711,26 @@ def inert(path):
 
 def shared_input(path):
     """Why a changed path invalidates every suite, or None."""
-    if path in STYLE_ALLOWLISTS:
-        return None
     if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES:
         return "workflow, CI script, merge tool or repository setting"
     if PurePosixPath(path).name in LOCKS_AND_TOOLCHAINS:
         return "lockfile or toolchain pin"
-    if not select([path])[0] and not inert(path):
+    if not owners(path) and not inert(path):
         return "outside every component"
     return None
 
 
-def reads(suite, path):
-    own = suite in select([path])[0] and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
-    return own or any(covers(entry, path) for entry in DEPENDS.get(suite, ()))
+def reads(suite, path, inputs=None):
+    """Whether the suite reads this path: its own files, or its inputs (DEPENDS for reuse; PR_READS for selection)."""
+    own = owns(suite, path) and not any(covers(skip, path) for skip in NOT_READ.get(suite, ()))
+    return own or any(covers(entry, path) for entry in (DEPENDS if inputs is None else inputs).get(suite, ()))
 
 
-def changed_paths(root, old, new):
-    changed = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", old, new], cwd=root, timeout=120)
+def changed_paths(root, old, new, present_only=False):
+    """The paths new changes from old; present_only, those it adds or modifies (a rename is a deletion and an addition)."""
+    present = ["--diff-filter=d"] if present_only else []
+    changed = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", *present, old, new], cwd=root,
+                                      timeout=120)
     return sorted(p.decode() for p in changed.split(b"\0") if p)
 
 
@@ -267,8 +753,17 @@ def update_parents(root, head, base):
 def own_shared_change(root, head, base):
     """A shared input this PR itself changes (its own CI runs its own planner), or None."""
     own = changed_paths(root, git(root, "merge-base", base, head), head)
-    return next((path for path in own if (path.startswith(SHARED_PREFIXES) or path in SHARED_FILES)
-                 and path not in STYLE_ALLOWLISTS), None)
+    return next((path for path in own if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES), None)
+
+
+# A changed path the job summary's Markdown may name.
+PLAIN_PATH = re.compile(r"[A-Za-z0-9_./-]+")
+
+
+def shown(path):
+    """A changed path as a reason names it: the job summary writes reasons into its Markdown, and git allows backticks
+    and newlines in a path."""
+    return path if PLAIN_PATH.fullmatch(path) else "a path of other characters"
 
 
 def reuse_blocker(root, suite, origin, head):
@@ -279,12 +774,12 @@ def reuse_blocker(root, suite, origin, head):
     for path in paths:
         reason = shared_input(path)
         if reason:
-            return "all", f"main changed {path} ({reason})"
+            return "all", f"main changed {shown(path)} ({reason})"
     touched = [path for path in paths if reads(suite, path)]
     if touched:
         more = f" and {len(touched) - 1} more" if len(touched) > 1 else ""
-        return "suite", f"main changed its input {touched[0]}{more}"
-    return None, "; ".join(paths[:3]) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
+        return "suite", f"main changed its input {shown(touched[0])}{more}"
+    return None, "; ".join(map(shown, paths[:3])) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
 
 
 REUSE_LOOKUP_SECONDS = 60
@@ -370,7 +865,7 @@ def plan_reuse(root, head, base, suites, evidence):
         reuse.update(source)
         changed = own_shared_change(root, head, base)
         if changed:
-            raise Rerun(f"this PR changes {changed}, which its own CI run reads")
+            raise Rerun(f"this PR changes {shown(changed)}, which its own CI run reads")
         probed = {}
         if source["kind"] == "update":
             try:
@@ -443,8 +938,8 @@ QUOTED_PATH = re.compile(r"""(?<![\w/.-])['"](?!\.\.?/)([A-Za-z0-9_.-]+/[^'"`\s$
 COMMENT_LINE = ("//", "#", "*", "/*", "<!--")
 
 
-def undeclared_reads(root, suite, known_paths=()):
-    """Files of this suite that name another directory's path without a DEPENDS entry: [(source, target)].
+def undeclared_reads(root, suite, known_paths=(), inputs=None):
+    """Files of this suite that name another directory's path without an entry in inputs (DEPENDS): [(source, target)].
 
     Run on a full checkout (the merge helper's, before accepting reuse; or locally). A read the scan
     cannot see (a path built from parts) belongs in DEPENDS by hand. known_paths count as existing:
@@ -457,14 +952,17 @@ def undeclared_reads(root, suite, known_paths=()):
     tops = {path.split("/", 1)[0] for path in tracked if "/" in path}
     found = []
     for source in sorted(sources):
-        if not SOURCE_FILE.search(source) or "/evidence/" in source or suite not in select([source])[0]:
+        if not SOURCE_FILE.search(source) or "/evidence/" in source or not owns(suite, source):
             continue
         try:
             text = (Path(root) / source).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
+            if not os.path.lexists(Path(root) / source):
+                # A sparse checkout lists files it does not hold: skipping them would report no read.
+                raise ValueError(f"the cross-read scan needs a full checkout; {source} is not in it") from None
             continue
         top = source.split("/", 1)[0]
-        if not reads(suite, source):
+        if not reads(suite, source, inputs):
             continue  # In a folder this suite skips; what it refers to is read only if a read file says so.
 
         def existing(target):
@@ -491,7 +989,7 @@ def undeclared_reads(root, suite, known_paths=()):
                       and (t in tracked or t in folders or str(PurePosixPath(t).parent) in folders)]
             if inside:
                 known = existing(inside[0])
-                if known and not reads(suite, known + "x" if known.endswith("/") else known):
+                if known and not reads(suite, known + "x" if known.endswith("/") else known, inputs):
                     found.append((source, known))
                 # Fail closed when the other reading names a real path too: a look-alike file inside the
                 # component (which the PR controls) must not hide a read of another directory.
@@ -499,7 +997,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     if target.split("/", 1)[0] != top and (target in tracked or target in folders):
                         known = target + "/" if target in folders else target
                         probe = known + "x" if known.endswith("/") else known
-                        if known not in data and not shared_input(probe) and not reads(suite, probe):
+                        if known not in data and not shared_input(probe) and not reads(suite, probe, inputs):
                             found.append((source, known))
                 continue
             for target in targets:
@@ -510,7 +1008,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     continue  # Names nothing in this repository (a URL path, a generated file).
                 # A folder read (a path built at run time) needs the whole folder declared.
                 probe = known + "x" if known.endswith("/") else known
-                if not shared_input(probe) and not reads(suite, probe):
+                if not shared_input(probe) and not reads(suite, probe, inputs):
                     found.append((source, known))
                 break
 
@@ -529,7 +1027,7 @@ def undeclared_reads(root, suite, known_paths=()):
             if known is None or any(covers(entry, known) for entry in data):
                 continue
             probe = known + "x" if known.endswith("/") else known
-            if not shared_input(probe) and not reads(suite, probe):
+            if not shared_input(probe) and not reads(suite, probe, inputs):
                 found.append((source, known))
     return sorted(set(found))
 
@@ -650,6 +1148,16 @@ class GitHubEvidence:
 
     def __init__(self, client):
         self.client = client
+        # (commit, run, attempt) -> (run, receipt): a run stands for several suites, each looked up inside one budget.
+        self.gates = {}
+
+    def gate(self, sha_value, run_id, attempt):
+        """A pull request run of the commit and its verified ci/required receipt, read once."""
+        key = (sha_value, run_id, attempt)
+        if key not in self.gates:
+            run = self.pr_run(sha_value, run_id, attempt)
+            self.gates[key] = (run, read_gate(self.client, run)[0])
+        return self.gates[key]
 
     def pr_run(self, sha_value, run_id, attempt):
         run = self.client.api(f"actions/runs/{run_id}")
@@ -674,26 +1182,24 @@ class GitHubEvidence:
         if (job.get("id") != latest["id"] or job.get("name") != "ci/required" or job.get("head_sha") != sha_value
                 or job.get("conclusion") != "success" or not positive(job.get("run_id")) or not positive(job.get("run_attempt"))):
             raise ValueError("the ci/required check does not match its job")
-        run = self.pr_run(sha_value, job["run_id"], job["run_attempt"])
-        receipt = read_gate(self.client, run)[0]
+        run, receipt = self.gate(sha_value, job["run_id"], job["run_attempt"])
         return dict(run_id=run["id"], run_attempt=run["run_attempt"], url=run["html_url"], receipt=receipt)
 
     def ran(self, sha_value, run_id, attempt, suite):
         """The tested tree and link of a run that itself ran and passed this suite."""
-        run = self.pr_run(sha_value, run_id, attempt)
-        receipt = read_gate(self.client, run)[0]
+        run, receipt = self.gate(sha_value, run_id, attempt)
         if suite not in receipt["suites"] or suite in receipt.get("reused", {}):
             raise ValueError("the recorded run did not run this suite")
         return dict(tree=receipt["source_tree"], url=run["html_url"])
 
 
-def make_plan(root, event_name, event, scope="full", source=None, evidence=None):
+def make_plan(root, event_name, event, scope="full", source=None, evidence=None, e2e_files=""):
     head = sha(source or git(root, "rev-parse", "HEAD"))
     if git(root, "rev-parse", "HEAD") != head:
         raise ValueError("checkout differs from the requested source")
     base = None
     draft = False
-    paths, reasons = [], {}
+    paths, reasons, present = [], {}, None
     if event_name == "pull_request":
         pr = event["pull_request"]
         draft = pr.get("draft", False)
@@ -713,24 +1219,113 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
         raise ValueError("unsupported CI event")
     if base:
         # Treat renames as deletion + addition so both input boundaries apply.
-        changed = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", base, head], cwd=root, timeout=120)
-        paths = sorted(p.decode() for p in changed.split(b"\0") if p)
-        suites, reasons = select(paths)
+        paths = changed_paths(root, base, head)
+        present = set(changed_paths(root, base, head, present_only=True))
+        suites, reasons = select(paths, present)
+        if CI_WORKFLOW in paths:
+            edited = edited_job_suites(root, base, head)
+            suites |= edited
+            reasons[CI_WORKFLOW] = sorted(set(reasons[CI_WORKFLOW]) | edited)
         if event_name == "merge_group":
             suites = set()  # The PR run tested these changes; releases test the rest.
     else:
         if scope not in MANUAL:
             raise ValueError("invalid manual CI scope")
         suites = MANUAL[scope]
+    # A run by hand names linux-e2e's files; a pull request's come from its diff.
+    files = e2e_files.split()
+    if not base and scope == "linux-e2e" and not files:
+        raise ValueError("scope linux-e2e runs the cli/e2e files e2e_files names, and it names none")
+    if files and (base or scope != "linux-e2e"):
+        raise ValueError("e2e_files is only for a run by hand with scope linux-e2e")
+    for path in files:
+        # -r: a folder named like a file lists what is inside it.
+        if not linux_e2e_file(path) or git(root, "ls-tree", "-r", "--name-only", head, "--", path) != path:
+            raise ValueError(f"e2e_files: {path!r} is not a cli/e2e file at {head[:12]} that linux-e2e runs")
     reused, reuse = {}, dict(status="none", reason="only a ready PR's update merge can reuse", rerun={})
     if event_name == "pull_request" and not draft and suites:
         reused, reuse = plan_reuse(root, head, base_sha(event), suites, evidence)
-    required = {"process-checks"} | set().union(*(JOBS[name] for name in suites - set(reused)))
+    running = suites - set(reused)
+    required = {"process-checks"} | set().union(*(JOBS[name] for name in running))
     return dict(schema=1, kind="ci-plan", event=event_name, head=head, base=base, draft=draft,
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
+                e2e=e2e_plan(paths, running, root, head, present, files or None),
                 local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
+
+
+def e2e_plan(paths, running, root=None, head=None, present=None, files=None):
+    """What the running end-to-end suites' jobs read besides their flags: whether windows-e2e adds arm64 (for a
+    Windows-only path, or a run by hand, which names none), the Device packages to build, and linux-e2e's files
+    (cli/-relative; a run by hand's files, else the present paths', the Orca files and the dial app eval's for what they
+    cover, and the canary
+    for what it runs for or when its job's definition changed alone) and rows, or the full suite above
+    LINUX_E2E_FILES_MAX files."""
+    arm64 = "windows-e2e" in running and (not paths or any(windows_only(path) for path in paths))
+    builds = [dict(bundle=bundle, arch=arch) for bundle, arch in DEVICE_APP_PACKAGES
+              if any((bundle, arch) in DEVICE_APP_BUILDS.get(suite, ()) for suite in running)]
+    linux = dict(linux_files=[], linux_shards=0, linux_full=False)
+    if "linux-e2e" in running:
+        if files is None:
+            files = [path for path in paths if (present is None or path in present) and linux_e2e_file(path)]
+            for covered, listed_files, name in ((linux_e2e_orca_path, LINUX_E2E_ORCA_FILES, "LINUX_E2E_ORCA_FILES"),
+                                                (linux_e2e_app_eval_path, LINUX_E2E_APP_EVAL_FILES,
+                                                 "LINUX_E2E_APP_EVAL_FILES")):
+                if not any(covered(path) for path in paths):
+                    continue
+                at_head = git(root, "ls-tree", "-r", "--name-only", head, "--", *listed_files).splitlines()
+                missing = [path for path in listed_files if path not in at_head]
+                if missing:
+                    raise ValueError(f"linux-e2e: {', '.join(missing)} not at {head[:12]}; update "
+                                     f"{name} in scripts/ci-plan.py")
+                files += listed_files
+            if not files or any(linux_e2e_canary_path(path) for path in paths):
+                if git(root, "ls-tree", "-r", "--name-only", head, "--", LINUX_E2E_CANARY) != LINUX_E2E_CANARY:
+                    raise ValueError(f"linux-e2e: its canary {LINUX_E2E_CANARY} is not at {head[:12]}; name another "
+                                     "real-backend e2e file as LINUX_E2E_CANARY in scripts/ci-plan.py")
+                files.append(LINUX_E2E_CANARY)
+        for path in files:
+            if not E2E_FILE.fullmatch(path):
+                raise ValueError(f"linux-e2e: {path!r} is not a plain file name; name e2e files with letters, digits, "
+                                 "'_', '-' and '.'")
+        files = sorted({path.removeprefix("cli/") for path in files})
+        if len(files) > LINUX_E2E_FILES_MAX:
+            linux.update(linux_shards=LINUX_E2E_FULL_SHARDS, linux_full=True)
+        else:
+            linux.update(linux_files=files, linux_shards=linux_e2e_shards(root, head, files))
+    return dict(windows_arm64=arm64, device_app_builds=builds, **linux)
+
+
+def linux_e2e_shards(root, head, files):
+    """One runner per LINUX_E2E_RUNNER_MS of the files' hinted time (the head's cli/ci-e2e-durations.json, as the nightly
+    shards are split), at least one, and at most one per file and LINUX_E2E_RUNNERS."""
+    try:
+        hints = json.loads(git(root, "show", f"{head}:cli/ci-e2e-durations.json"))
+        total = sum(float(hints["durationMs"].get(file, hints["defaultDurationMs"])) for file in files)
+        runners = math.ceil(total / LINUX_E2E_RUNNER_MS)
+    except (subprocess.CalledProcessError, ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
+        raise ValueError(f"linux-e2e: cli/ci-e2e-durations.json at {head} gives no timing hints "
+                         f"({type(error).__name__})") from None
+    return min(LINUX_E2E_RUNNERS, len(files), max(1, runners))
+
+
+def outputs(record):
+    """The plan job's outputs (ci.yml): the plan, whether it is ready, each suite's flag, and the end-to-end inputs."""
+    values = dict(plan=json.dumps(record, separators=(",", ":")), ready="false" if record["draft"] else "true")
+    # A reused suite's jobs skip; ci/required accepts that skip only for it.
+    for suite in sorted(SUITES):
+        values[suite] = "true" if suite in record["suites"] and suite not in record["reused"] else "false"
+    e2e = record["e2e"]
+    values["windows-e2e-arm64"] = "true" if e2e["windows_arm64"] else "false"
+    values["device-app-builds"] = json.dumps(e2e["device_app_builds"], separators=(",", ":"))
+    values["linux-e2e-files"] = " ".join(e2e["linux_files"])
+    values["linux-e2e-shards"] = json.dumps(list(range(1, e2e["linux_shards"] + 1)), separators=(",", ":"))
+    values["linux-e2e-full"] = "true" if e2e["linux_full"] else "false"
+    # The canary runs on the real backend: in the run, it must pass a case, never skip as without that backend.
+    canary = LINUX_E2E_CANARY.removeprefix("cli/")
+    values["linux-e2e-must-pass"] = canary if e2e["linux_full"] or canary in e2e["linux_files"] else ""
+    return values
 
 
 def base_sha(event):
@@ -761,12 +1356,12 @@ def verify(plan, needs, source):
     for job, result in needs.items():
         if result.get("result") not in {"success", "skipped"}:
             raise ValueError(f"CI job did not complete successfully: {job}")
-    required_local = local_checks.planned_checks(plan)
+    required = local_checks.planned_checks(plan)
     try:
         receipts = json.loads(needs.get("process-checks", {}).get("outputs", {}).get("local_receipts", "[]"))
     except (ValueError, TypeError):
-        raise local_checks.missing(required_local) from None
-    receipts = local_checks.validate_receipts(required_local, receipts, plan["head"])
+        receipts = None  # No receipt: validate_receipts names what is missing.
+    receipts = local_checks.validate_receipts(plan["head"], required, receipts)
     return dict(schema=1, kind="ci-required", status="passed", source_sha=plan["head"],
                 source_tree=plan["tree"], event=plan["event"], base=plan["base"],
                 suites=suites, required_jobs=sorted(expected), results={k: v["result"] for k, v in needs.items()},
@@ -807,6 +1402,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--scope", default="full")
+    parser.add_argument("--e2e-files", default="", help="with scope linux-e2e: the cli/e2e files to run, separated by spaces")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.verify:
@@ -821,14 +1417,9 @@ def main():
         evidence = (GitHubEvidence(ci.Client(os.environ["GITHUB_REPOSITORY"], time.monotonic() + REUSE_LOOKUP_SECONDS))
                     if event_name == "pull_request" and os.environ.get("GH_TOKEN") else None)
         record = make_plan(Path.cwd(), event_name, json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()),
-                           args.scope, os.environ["CI_SOURCE_SHA"], evidence)
+                           args.scope, os.environ["CI_SOURCE_SHA"], evidence, args.e2e_files)
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write("plan=" + json.dumps(record, separators=(",", ":")) + "\n")
-            output.write(f"ready={'false' if record['draft'] else 'true'}\n")
-            # A reused suite's jobs skip; ci/required accepts that skip only for it.
-            for suite in sorted(SUITES):
-                runs = suite in record["suites"] and suite not in record["reused"]
-                output.write(f"{suite}={'true' if runs else 'false'}\n")
+            output.writelines(f"{name}={value}\n" for name, value in outputs(record).items())
     args.output.write_text(json.dumps(record, indent=2) + "\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
         summary.write(f"Source: `{record.get('head', record.get('source_sha'))}`\n\n")
@@ -842,6 +1433,25 @@ def main():
             summary.write(f"\nReuse: {record['reuse']['reason']}.\n")
         for suite, reason in sorted(((record.get("reuse") or {}).get("rerun") or {}).items()):
             summary.write(f"- `{suite}` runs again: {reason}.\n")
+        e2e = record.get("e2e")  # A plan's; the gate's receipt has none.
+        if e2e and "windows-e2e" in set(record["suites"]) - set(record["reused"]):
+            first = next((path for path in record["paths"] if windows_only(path)), None)
+            summary.write("\nWindows end to end: " + (
+                "x64 alone.\n" if not e2e["windows_arm64"] else "x64 and arm64, run by hand.\n" if first is None else
+                # The PR names its paths, and git allows backticks and newlines in one.
+                f"x64 and arm64, for the Windows-only `{first}`.\n" if PLAIN_PATH.fullmatch(first) else
+                "x64 and arm64, for a Windows-only file.\n"))
+        if e2e and e2e["device_app_builds"]:
+            summary.write("\nHarness Device builds: "
+                          + ", ".join(f"{build['bundle']} {build['arch']}" for build in e2e["device_app_builds"]) + ".\n")
+        if e2e and e2e["linux_full"]:
+            summary.write(f"\nLinux end to end: more than {LINUX_E2E_FILES_MAX} e2e files, so the full suite on "
+                          f"{LINUX_E2E_FULL_SHARDS} shards.\n")
+        elif e2e and e2e["linux_files"]:
+            files, runners = len(e2e["linux_files"]), e2e["linux_shards"]
+            summary.write(f"\nLinux end to end: {files} file{'' if files == 1 else 's'} on {runners} "
+                          f"runner{'' if runners == 1 else 's'}: " + ", ".join(f"`{name}`" for name in e2e["linux_files"])
+                          + ".\n")
         if record.get("draft"):
             summary.write("Draft PR: only workflow/process checks run; mark ready for review to run the complete affected suites. The integration gate remains blocked.\n")
         summary.write("Native, real-engine, hardware and visual acceptance remain explicit review requirements.\n")

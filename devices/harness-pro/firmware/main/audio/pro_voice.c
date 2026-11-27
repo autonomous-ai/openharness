@@ -63,15 +63,20 @@ extern void pro_voice_test_step(int step);
 #define TEST_STEP(n) ((void)0)
 #endif
 
-void pro_voice_begin(const char *agent_id, bool face)
+void pro_voice_begin(const char *agent_id)
 {
     bool expected = false;
     if (!atomic_compare_exchange_strong(&s_starting, &expected, true)) return;   // another begin is mid-flight
     last_words_phase(LW_VOICE, "voice.begin");
     TEST_STEP(1);
     expected = false;
-    // Open at once so the Talk frame is never judged "no recording behind it"; STARTING keeps the tick away.
-    if (!atomic_compare_exchange_strong(&s_open, &expected, true)) {   // a recording or a send is in flight
+    // Open at once so the Talk frame is never judged "no recording behind it"; STARTING keeps the tick away. The last
+    // clip's upload id goes in the same step: a discard before this one's id is written cancels nothing.
+    portENTER_CRITICAL(&s_mux);
+    const bool claimed = atomic_compare_exchange_strong(&s_open, &expected, true);
+    if (claimed) s_upload[0] = 0;
+    portEXIT_CRITICAL(&s_mux);
+    if (!claimed) {   // a recording or a send is in flight
         atomic_store(&s_starting, false);
         return;
     }
@@ -87,17 +92,18 @@ void pro_voice_begin(const char *agent_id, bool face)
     portEXIT_CRITICAL(&s_mux);
     atomic_store(&s_waiting, false);
     TEST_STEP(4);
-    const bool started = pro_rec_start(agent_id, face, lang, upload);   // unavailable, or the last clip is still finishing
+    const bool started = pro_rec_start(agent_id, lang, upload);   // unavailable, or the last clip is still finishing
     TEST_STEP(5);
     if (!started) atomic_store(&s_open, false);
     atomic_store(&s_starting, false);
-    // A link drop or a discard that landed while the recorder was starting found nothing to stop: do it now, quietly,
-    // so the microphone is never left streaming for a recording that is no longer open.
-    if (started && !atomic_load(&s_open)) pro_rec_abort(true);
+    // A link drop or a discard that landed while the recorder was starting found nothing to stop: do it now, so the
+    // microphone is never left streaming for a recording that is no longer open. The sender's voice.begin may be out:
+    // its voice.abort follows unless the cable is dead (pro_cable ends its session before the link drop reaches here).
+    if (started && !atomic_load(&s_open)) pro_rec_abort(!pro_cable_connected());
 }
 
-// Discard the utterance and tell the daemon (A_VOICE_ABORT): stop the recorder, close the state, and cancel the
-// host's work, which the recorder's own abort cannot reach once the clip has been sent.
+// Discard the utterance and tell the daemon once (A_VOICE_ABORT): the recorder sends voice.abort, also after the clip
+// was sent, and nothing for a begin that has no upload id yet.
 static void discard(void)
 {
     char upload[24];
@@ -106,8 +112,7 @@ static void discard(void)
     portEXIT_CRITICAL(&s_mux);
     atomic_store(&s_open, false);
     atomic_store(&s_waiting, false);
-    pro_rec_abort(false);
-    (void)pro_cable_voice_cancel(upload);
+    pro_rec_cancel(upload);
 }
 
 void pro_voice_end(bool send)

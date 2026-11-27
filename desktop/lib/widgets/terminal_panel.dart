@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
+import '../browser/browser_panel.dart' show BrowserButton;
 import '../clipboard/native_clipboard.dart';
 import '../core/models.dart';
 import '../core/runtime_platform.dart';
@@ -20,7 +21,6 @@ import '../state/app_state.dart';
 import '../state/workspace_chrome.dart';
 import '../state/harness_activity.dart';
 import '../state/model_start_watch.dart';
-import '../super_tabs/pane.dart';
 
 import 'agent_drag.dart';
 import 'box_chrome.dart';
@@ -196,6 +196,14 @@ class TerminalPanel extends StatefulWidget {
   /// Flips [composerVisible]. Null where there is no composer to toggle.
   final VoidCallback? onToggleComposer;
 
+  /// Opens or closes the agent's Browser tile, from the header's globe. Null
+  /// where Browser is not offered ([AppNotifier.offersBrowser]).
+  final VoidCallback? onToggleBrowser;
+
+  /// The globe is selected while the tile is open in this tab, and marked
+  /// while the browser runs.
+  final bool browserOpen, browserRunning;
+
   /// Lets the header be dragged to trade places with another tile. Null when
   /// this is the only tile — see [_TerminalHeader.paneDrag].
   final PaneDragHandle? paneDrag;
@@ -224,6 +232,9 @@ class TerminalPanel extends StatefulWidget {
     this.readOnly = false,
     this.notice,
     this.onToggleComposer,
+    this.onToggleBrowser,
+    this.browserOpen = false,
+    this.browserRunning = false,
     this.onClose,
     this.onOpenModels,
     this.onSplitDown,
@@ -2650,10 +2661,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       terminalFont: terminalFontStore.value,
       notifier: widget.notifier,
       session: session,
-      name:
-          SuperPane.maybeOf(context)
-              ?.titleFor(session.machineId, session.agentId) ??
-          session.agentName,
+      name: session.agentName,
       status: session.status,
       notice: widget.notice,
       readOnly: widget.readOnly || session.readOnly,
@@ -2684,6 +2692,9 @@ class _TerminalPanelState extends State<TerminalPanel>
       delete: widget.onDelete != null,
       composer: widget.composerVisible,
       toggleComposer: widget.onToggleComposer != null,
+      browser: widget.onToggleBrowser != null,
+      browserOpen: widget.browserOpen,
+      browserRunning: widget.browserRunning,
       zoomed: widget.zoomed,
       zoom: widget.onToggleZoom != null,
       dragId: widget.paneDrag?.ref.paneId,
@@ -2702,6 +2713,11 @@ class _TerminalPanelState extends State<TerminalPanel>
         onToggleZoom: widget.onToggleZoom == null
             ? null
             : () => widget.onToggleZoom?.call(),
+        onToggleBrowser: widget.onToggleBrowser == null
+            ? null
+            : () => widget.onToggleBrowser?.call(),
+        browserOpen: widget.browserOpen,
+        browserRunning: widget.browserRunning,
         onClose: widget.onClose == null ? null : () => widget.onClose?.call(),
         onOpenModels: widget.onOpenModels == null
             ? null
@@ -2802,6 +2818,10 @@ class _TerminalHeader extends StatelessWidget {
   final VoidCallback? onToggleZoom;
   final bool zoomed;
 
+  /// The agent's Browser globe, before ×; null where Browser is not offered.
+  final VoidCallback? onToggleBrowser;
+  final bool browserOpen, browserRunning;
+
   /// This strip's drag gesture, or null when there is nothing to drag.
   ///
   /// Null with a SINGLE pane, and then the strip is inert on purpose: there is
@@ -2834,6 +2854,9 @@ class _TerminalHeader extends StatelessWidget {
     this.compact = false,
     this.onToggleZoom,
     this.zoomed = false,
+    this.onToggleBrowser,
+    this.browserOpen = false,
+    this.browserRunning = false,
     this.paneDrag,
     this.starting,
     this.pickerController,
@@ -2851,7 +2874,6 @@ class _TerminalHeader extends StatelessWidget {
     required String title,
     required TextStyle titleStyle,
     required String identityDetail,
-    required bool renamable,
     required TerminalNotice? status,
     required Color statusColor,
     required VoidCallback? statusAction,
@@ -2888,17 +2910,15 @@ class _TerminalHeader extends StatelessWidget {
                   waitDuration: const Duration(milliseconds: 500),
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onDoubleTap: renamable
-                        ? () => unawaited(
-                            showAgentRenameDialog(
-                              context,
-                              notifier,
-                              session.machineId,
-                              session.agentId,
-                              session.agentName,
-                            ),
-                          )
-                        : null,
+                    onDoubleTap: () => unawaited(
+                      showAgentRenameDialog(
+                        context,
+                        notifier,
+                        session.machineId,
+                        session.agentId,
+                        session.agentName,
+                      ),
+                    ),
                     child: Text(
                       title,
                       key: const ValueKey('terminal-pane-title'),
@@ -3083,9 +3103,7 @@ class _TerminalHeader extends StatelessWidget {
         .firstOrNull;
     final project = agent == null ? null : machine?.projectOf(agent);
     final machineName = machine?.machine.displayName ?? session.machineId;
-    final roleTitle = SuperPane.maybeOf(context)
-        ?.titleFor(session.machineId, session.agentId);
-    final title = roleTitle ?? session.agentName;
+    final title = session.agentName;
     // Started by another harness's agent: that harness by the name it shows
     // now, which the person may have changed since. Nothing when it is not
     // listed here any more: an id would mean nothing to them.
@@ -3102,7 +3120,7 @@ class _TerminalHeader extends StatelessWidget {
       if (project != null) project.cwd,
       ?project?.branchDetail,
       if (profile != null) 'Codex profile: $profile',
-      if (roleTitle == null) 'Double-click to rename',
+      'Double-click to rename',
     ].join('\n');
     // Reserve space for the pane-local model selector.
     // Engines without a picker keep their existing header width.
@@ -3127,7 +3145,6 @@ class _TerminalHeader extends StatelessWidget {
           title: title,
           titleStyle: titleStyle,
           identityDetail: identityDetail,
-          renamable: roleTitle == null,
           status: status,
           statusColor: color,
           statusAction: statusAction,
@@ -3147,10 +3164,16 @@ class _TerminalHeader extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final scale = grid.appTextScaleOf(context);
-            final narrow = constraints.maxWidth < 560 * math.max(1, scale);
-            final controlsWidth = onClose != null
-                ? PaneHeaderButton.width
+            final browserWidth = onToggleBrowser != null
+                ? BrowserButton.width
                 : 0.0;
+            // The Browser globe takes room the rest of the header had, so the
+            // header goes narrow that much sooner: a status chip squeezed past
+            // its icon overflowed in a 600-point window.
+            final narrow =
+                constraints.maxWidth - browserWidth < 560 * math.max(1, scale);
+            final controlsWidth =
+                browserWidth + (onClose != null ? PaneHeaderButton.width : 0.0);
             final actionsWidth = pickerWidth + controlsWidth;
             // At the smallest widths, connection state takes the leading
             // mark's place so the pane name survives beside the fixed tools.
@@ -3301,17 +3324,15 @@ class _TerminalHeader extends StatelessWidget {
                               waitDuration: const Duration(milliseconds: 500),
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                onDoubleTap: roleTitle != null
-                                    ? null
-                                    : () => unawaited(
-                                        showAgentRenameDialog(
-                                          context,
-                                          notifier,
-                                          session.machineId,
-                                          session.agentId,
-                                          session.agentName,
-                                        ),
-                                      ),
+                                onDoubleTap: () => unawaited(
+                                  showAgentRenameDialog(
+                                    context,
+                                    notifier,
+                                    session.machineId,
+                                    session.agentId,
+                                    session.agentName,
+                                  ),
+                                ),
                                 child: Text(
                                   title,
                                   key: const ValueKey('terminal-pane-title'),
@@ -3527,6 +3548,12 @@ class _TerminalHeader extends StatelessWidget {
                           ),
                   ),
                 ),
+                if (onToggleBrowser != null)
+                  BrowserButton(
+                    open: browserOpen,
+                    running: browserRunning,
+                    onPressed: onToggleBrowser!,
+                  ),
                 if (onClose != null) PaneCloseButton(onPressed: onClose!),
               ],
             );
@@ -3538,40 +3565,8 @@ class _TerminalHeader extends StatelessWidget {
   }
 
   /// [strip], carried by this pane's drag when it has one.
-  Widget _carried(Widget strip) {
-    final handle = paneDrag;
-    if (handle == null) return strip;
-
-    return Draggable<PaneDragRef>(
-      data: handle.ref,
-      // The grip is kept where the hand took it, so the ghost stays under the
-      // cursor at the same spot on the header it was picked up by.
-      dragAnchorStrategy: childDragAnchorStrategy,
-      onDragStarted: () => paneDragging.value = handle.ref,
-      onDragUpdate: (details) => paneDragPointer.value = details.globalPosition,
-      onDragEnd: (_) {
-        paneDragging.value = null;
-        paneDragPointer.value = null;
-      },
-      onDraggableCanceled: (_, _) {
-        paneDragging.value = null;
-        paneDragPointer.value = null;
-      },
-      feedback: _PaneGhost(session: session, size: handle.size, header: strip),
-
-      // The header itself does NOT change — the whole tile fades instead, in
-      // _PaneCell, so what dims is the thing that is moving rather than one
-      // strip of it.
-      //
-      // OPAQUE TO THE POINTER across its whole width. The strip is a SizedBox
-      // of a Row, so only its words and icons hit-test; a press on the empty
-      // space between them — most of the strip, and where a hand reaches to
-      // carry a pane — never reached this Draggable, and dragging a pane by its
-      // title did nothing (owner, 2026-10-01). The buttons on it still take
-      // their own clicks first.
-      child: ColoredBox(color: Colors.transparent, child: strip),
-    );
-  }
+  Widget _carried(Widget strip) =>
+      PaneCarry(handle: paneDrag, label: session.agentName, child: strip);
 }
 
 /// A pane's state as a chip: its icon and its word, the detail in the tooltip,
@@ -4288,86 +4283,6 @@ class _TransferProgressBadge extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// The whole tile, carried under the cursor.
-///
-/// ⚠️ THIS IS DRAWN, NOT PHOTOGRAPHED, AND THE PHOTOGRAPH IS WHY. The obvious
-/// way to carry "the whole pane" is RepaintBoundary.toImage() on press — and it
-/// FROZE THE APP. That call is a GPU readback on the raster thread, and the
-/// raster thread in this app is never idle: every pane holds a terminal that
-/// repaints on its own, so asking it to stop and hand a surface back on every
-/// pointer-down deadlocked the window. It is not a tuning problem; there is
-/// nothing to tune down to.
-///
-/// So the ghost is built from what is already known — the pane's measured size
-/// and its own header — and the body is a plain surface rather than a copy of
-/// the scrollback. It reads as the tile because it is tile-SHAPED and carries
-/// the tile's name, which is what the eye is following.
-///
-/// See-through on purpose: a full-size opaque copy sits exactly over the tile
-/// being aimed at and hides the "Swap with this pane" highlight that says the
-/// drop will land.
-class _PaneGhost extends StatelessWidget {
-  const _PaneGhost({
-    required this.session,
-    required this.size,
-    required this.header,
-  });
-
-  final TerminalSession session;
-
-  /// The tile's size, handed down from the grid's LayoutBuilder.
-  final Size size;
-
-  final Widget header;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final tile = size;
-    return Material(
-      color: Colors.transparent,
-      child: Opacity(
-        opacity: 0.75,
-        child: Container(
-          width: tile.width,
-          height: tile.height,
-          decoration: BoxDecoration(
-            color: grid.AppPalette.windowBg,
-            border: Border.all(color: AppColors.accent, width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                // A lifted tile: the dark shadow would smudge a light ground.
-                color: Colors.black.withValues(
-                  alpha: grid.AppTheme.pick(0.18, 0.45),
-                ),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              header,
-              Divider(height: 1, color: AppColors.border),
-              Expanded(
-                child: Center(
-                  child: Text(
-                    session.agentName,
-                    style: grid.AppType.monoLabel(
-                      color: AppColors.mutedStrong,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

@@ -45,6 +45,11 @@ function learn(changes: Partial<MemoryDraft> = {}) {
   return store.propose(draft(event, changes), access).record
 }
 
+// Each store write is a durable commit; per-row commits made fixture setup take seconds on a busy CI disk.
+function seedInOneCommit(seed: () => void): void {
+  store['transaction'](seed)
+}
+
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'coding-memory-'))
   store = open()
@@ -163,15 +168,17 @@ describe('session privacy', () => {
     const publicEvent = source('public', { sessionId: 'public_session' })
     store.ingest(publicEvent)
     const publicRecord = store.propose(draft(publicEvent), access).record
-    for (let i = 0; i < 125; i++) {
-      const event = source(`private_${i}`)
-      store.ingest(event)
-      store.propose(draft(event, { claim: `Debugging bug reproducer ${i}`, conflictKey: `private_${i}` }), access)
-    }
+    seedInOneCommit(() => {
+      for (let i = 0; i < 125; i++) {
+        const event = source(`private_${i}`)
+        store.ingest(event)
+        store.propose(draft(event, { claim: `Debugging bug reproducer ${i}`, conflictKey: `private_${i}` }), access)
+      }
+    })
     store.setSessionIncluded('claude', 'session_a', false)
     expect(store.list(access, 1).map(record => record.id)).toEqual([publicRecord.id])
     expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging' } }, access).items.map(record => record.id)).toEqual([publicRecord.id])
-  }, 30_000) // Keep all 125 durable fixtures even on a busy shared CI disk.
+  })
 
   it('does not consult a private statement when admitting a new conflicting public statement', () => {
     const hidden = learn()
@@ -417,12 +424,14 @@ describe('coding memory ownership and admission', () => {
 describe('recall conditions and control', () => {
   it('finds an applicable older memory even when more than 120 newer matches are inapplicable', () => {
     const expected = learn()
-    for (let index = 0; index < 125; index++) {
-      learn({ conflictKey: `unusable_${index}`,
-        ...(index % 3 === 0 ? { applicability: { taskType: 'design' } }
-          : index % 3 === 1 ? { exceptions: [{ when: { urgency: 'incident' }, reason: 'Different workflow.' }] }
-            : { validity: { validFrom: null, validUntil: 900, recheckWhen: [] } }) })
-    }
+    seedInOneCommit(() => {
+      for (let index = 0; index < 125; index++) {
+        learn({ conflictKey: `unusable_${index}`,
+          ...(index % 3 === 0 ? { applicability: { taskType: 'design' } }
+            : index % 3 === 1 ? { exceptions: [{ when: { urgency: 'incident' }, reason: 'Different workflow.' }] }
+              : { validity: { validFrom: null, validUntil: 900, recheckWhen: [] } }) })
+      }
+    })
     expect(store.recall({ query: 'bug', conditions: { taskType: 'debugging', urgency: 'incident' } }, access).items.map(item => item.id))
       .toEqual([expected.id])
   })

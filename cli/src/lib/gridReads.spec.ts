@@ -15,10 +15,29 @@ import { join } from 'node:path'
 import { installFakeGrid, type FakeGrid, type FakeGridPlan, type FakeGridTurn } from './__fixtures__/fakeGrid.js'
 import { forgetGridModels, gridInventory, gridServingNodes, listAllGridModels, listGridModels, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 
-// Every look starts the fake `grid`, a node process, for its list and each grid's info: the seam under test is
-// that subprocess. The longest test here looks 13 times, about 26 starts: 2.7 s under 12 busy loops on a
-// 12-core Mac (load 85), and past vitest's 5 s at load 110. Room for a loaded machine, not for a hang.
-vi.setConfig({ testTimeout: 30_000 })
+// Pass-through, recording what replaced a file and what was opened by name through fs/promises; `sync`: each rename's
+// target and each path opened through node:fs's synchronous calls, which a save that must not block its event loop never
+// makes.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[], sync: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.sync.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.sync.push(`open ${String(args[0])}`); return actual.openSync(...args) },
+  }
+})
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    rename: (...args: Parameters<typeof actual.rename>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.rename(...args)
+    },
+    open: (...args: Parameters<typeof actual.open>) => { disk.opened.push(String(args[0])); return actual.open(...args) },
+  }
+})
+/** The synchronous writes of [file]: onto it, or of its temporary file. */
+const syncWrites = (file: string): string[] => disk.sync.filter(event => event === `rename ${file}` || event.startsWith(`open ${file}.`))
 
 const OWN = 'mine', OWN_ID = 'net-own', TEAM = 'team', TEAM_ID = 'net-team'
 const EMAIL = 'me@example.com'
@@ -180,10 +199,9 @@ describe('what an answer means', () => {
   it('a refused connection reads "not answering", keeps the list, and falls back to `grid` once, with --no-wake', async () => {
     answer(TEAM_ID, OVERVIEW, awake([node('rig', ['big-model'])], ['Big-Model']))
     await look()
-    const closed = createServer()
-    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
-    const refused = `http://127.0.0.1:${(closed.address() as { port: number }).port}`
-    await new Promise<void>((resolve) => closed.close(() => resolve()))
+    // Port 1, not a port freed a moment ago that another listener can take: nothing listens there, and
+    // Node's fetch refuses the port before it dials, so the read fails at once every time.
+    const refused = 'http://127.0.0.1:1'
     grid.replan(plan({ teamUrl: refused, models: { exit: 1, stderr: 'Could not reach grid team\n' } }))
     forgetGridModels()
 
@@ -506,6 +524,23 @@ describe('the grid list', () => {
 
     expect((await look()).map((s) => s.name)).toEqual([OWN])
     expect(grid.calls().filter((argv) => argv[1] === 'info').map((argv) => argv[2])).toEqual([OWN])
+  })
+})
+
+describe('a saved picture', () => {
+  it('the save goes through a temporary file renamed onto the target, and never blocks the event loop', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen'])]))
+    disk.renamed = []; disk.opened = []; disk.sync = []
+    await look()
+    const folder = join(root, 'data', 'grid-pictures')
+    const files = readdirSync(folder).filter((n) => n.endsWith('.json')).map((n) => join(folder, n))
+    expect(files.length).toBeGreaterThan(0)
+    for (const file of files) {
+      expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
+      expect(disk.renamed.find(([, to]) => to === file)![0].startsWith(`${file}.`)).toBe(true)
+      expect(disk.opened).not.toContain(file)
+      expect(syncWrites(file)).toEqual([])
+    }
   })
 })
 

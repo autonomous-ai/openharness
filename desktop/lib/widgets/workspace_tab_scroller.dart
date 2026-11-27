@@ -12,7 +12,7 @@ const int kWorkspaceTabArrowCells = 3;
 /// Whether tabs that do not fit get arrows and the mouse wheel: the web's chrome
 /// asks for them, and Windows always has them. Without them, a Windows person
 /// with a ninth tab had no way to reach the first, nor any sign it was there
-/// (DESKTOP-0TFH0OJ, 2026-11-05: their Personal Swarm looked gone).
+/// (DESKTOP-0TFH0OJ, 2026-11-05).
 bool scrollsTabsByMouse(WorkspaceChrome? chrome, {required bool windows}) =>
     windows || chrome?.scrollsTabsByArrows == true;
 

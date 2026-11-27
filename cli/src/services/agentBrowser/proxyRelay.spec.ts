@@ -26,13 +26,14 @@ function lanAddress(): string {
   return found.address
 }
 
-/** A port nothing listens on. */
-async function closedPort(): Promise<number> {
-  const server = createServer()
-  await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
-  const { port } = server.address() as AddressInfo
-  await new Promise(done => server.close(done))
-  return port
+/**
+ * A proxy that is down: a port this test holds, which resets every connection as it opens. A port freed and handed back
+ * (#4165) could be taken by another listen in the shard, or chosen by the kernel as the very connection's own source port:
+ * Linux then connects the socket to itself, the relay waited on its own echo for 30 s, and the next listen there failed
+ * with EADDRINUSE. Held, the port is nobody else's and never a source port.
+ */
+async function refusingPort(): Promise<number> {
+  return listen(createServer(socket => socket.resetAndDestroy()))
 }
 
 /** An HTTP proxy that records each request head, answers `status`, and echoes a tunnel it accepted. */
@@ -187,7 +188,7 @@ describe('proxy relay', () => {
     const site = createServer((socket) => { reached++; socket.destroy() })
     const sitePort = await listen(site)
     for (const scheme of ['http', 'socks5']) {
-      const port = await relay({ scheme, host: '127.0.0.1', port: await closedPort(), username: 'kim', password: 'p4ss' })
+      const port = await relay({ scheme, host: '127.0.0.1', port: await refusingPort(), username: 'kim', password: 'p4ss' })
       expect((await tunnel(port, `127.0.0.1:${sitePort}`)).line, scheme).toBe('HTTP/1.1 502 Bad Gateway')
       expect((await get(port, `http://127.0.0.1:${sitePort}/`)).status, scheme).toBe(502)
     }
@@ -329,7 +330,7 @@ describe('proxy relay with no proxy', () => {
 describe('start probe', () => {
   it('the start probe fails when the proxy is down or refuses the login', async () => {
     for (const scheme of ['http', 'socks5']) {
-      await expect(probe({ scheme, host: '127.0.0.1', port: await closedPort(), username: 'kim', password: 'p4ss' }), scheme).rejects.toThrow()
+      await expect(probe({ scheme, host: '127.0.0.1', port: await refusingPort(), username: 'kim', password: 'p4ss' }), scheme).rejects.toThrow()
     }
     const refusing = httpProxy(407)
     await expect(probe({ scheme: 'http', host: '127.0.0.1', port: await listen(refusing.server), username: 'kim', password: 'wrong' }))

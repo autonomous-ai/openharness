@@ -1,0 +1,8 @@
+{
+  "need": "no-need",
+  "kind": "failing-test",
+  "prompt": "The pagination tests fail; fix them.",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "npm test", "expect": "Expected values to be strictly deep-equal" }
+}

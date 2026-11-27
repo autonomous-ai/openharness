@@ -15,7 +15,6 @@ const _sayMacBehindACheck = {
   'lib/shared/theme/appearance_prefs_store.dart',
   'lib/shortcuts/shortcut_recorder.dart',
   'lib/state/harness_monitor.dart',
-  'lib/super_tabs/voice_row.dart',
   'lib/autonomous_device/autonomous_device_cli.dart',
   'lib/devices/wifi_robots.dart',
   'lib/bootstrap/environment_provisioner.dart',

@@ -1,0 +1,11 @@
+{
+  "spec": 1,
+  "id": "autonomous/hachi",
+  "name": "Hachi",
+  "category": "Essentials",
+  "author": "Autonomous",
+  "description": "Your starting point: give it a goal, and it starts and follows your other harnesses across your machines.",
+  "engine": "claude",
+  "workspace": { "template": "template", "marker": "NOTES.md" },
+  "agent": { "instructions": "AGENTS.md", "skills": ["skills"] }
+}

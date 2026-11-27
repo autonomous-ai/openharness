@@ -7,6 +7,7 @@ import { dailyProductPeople } from './analytics/dailyProductPeople.js'
 import { PEOPLE_METRICS } from './analytics/peopleCounters.js'
 import { dailyHubUsage } from './analytics/dailyHubUsage.js'
 import { HUB_METRICS } from './lib/hubMetricsContract.js'
+import { dailyDialReview, readDialRows } from './analytics/dailyDialReview.js'
 const days = Number(process.argv[2] ?? 14)
 if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error('Choose 1–90 days')
 const db = new PrismaClient()
@@ -22,6 +23,8 @@ try {
     where: { dayUtc: { gte: new Date(today - (days - 1) * 86400000), lt: new Date(today + 86400000) }, metric: { startsWith: 'breakdown:' } },
     select: { dayUtc: true, metric: true, value: true }, orderBy: [{ dayUtc: 'desc' }, { metric: 'asc' }], take: 50000,
   })
+  // A read of its own: the dial's section needs 28 days, not the 92 the cohorts above do.
+  const dialRows = await readDialRows(db, new Date())
   console.log(JSON.stringify({ generatedAt: new Date().toISOString(), timezone: 'UTC',
     definitions: {
       population: 'Daemon counts cover participating signed-in installations, including staff and both service environments. App flows and optional signed-out setup counts are separate populations, never unique people.',
@@ -34,6 +37,7 @@ try {
       relay: 'Legacy relay event totals are separate; never add them to the client counters.',
       hub: 'Anonymous Hub visits and clicks from browsers are a separate population again; never add them to app, daemon or people counts.',
       coverage: 'New local counters need updated clients. Delayed/offline reports and privacy changes can affect counts; today is incomplete.',
-    }, ...dailyProductUsage(rows, days, new Date()), review: dailyProductReview(rows, new Date()), people: dailyProductPeople(rows, days, new Date()), hub: dailyHubUsage(rows, days, new Date()), health: { ...dailyProductHealth([...rows, ...breakdowns], new Date()), breakdownReadLimitReached: breakdowns.length === 50000 } }, null, 2))
+    }, ...dailyProductUsage(rows, days, new Date()), review: dailyProductReview(rows, new Date()), people: dailyProductPeople(rows, days, new Date()), hub: dailyHubUsage(rows, days, new Date()), health: { ...dailyProductHealth([...rows, ...breakdowns], new Date()), breakdownReadLimitReached: breakdowns.length === 50000 },
+    dial: dailyDialReview(dialRows, breakdowns, new Date()) }, null, 2))
 } catch { console.error('Could not read aggregate product usage. Check the read-only connection and schema.'); process.exitCode = 1 }
 finally { await db.$disconnect() }

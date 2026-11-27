@@ -11,7 +11,6 @@
  *   is (lib/machineAccess.ts), so these change no one's access.
  */
 import type { FastifyInstance } from 'fastify'
-import { nextMachineShareGrants } from '../lib/machineSharePolicy.js'
 import type { MachineShare } from '@prisma/client'
 import { z } from 'zod'
 import { prisma, machineAlive } from '../lib/prisma.js'
@@ -53,8 +52,7 @@ async function policyView(share: MachineShare | null, user: AuthUser) {
   }
 }
 
-/** A concurrent share edit must reread the current grant versions. Reusing a
- * stale policy after a revocation could otherwise revive an old contribution. */
+/** The policy before and after, read and written in one transaction, so each edit tells the people it changed for. */
 async function writePolicy(machineId: string, user: AuthUser, emails: string[], domain: string | null) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -65,8 +63,7 @@ async function writePolicy(machineId: string, user: AuthUser, emails: string[], 
           await tx.machineShare.deleteMany({ where: { machineId } })
           await tx.machineShareAdd.deleteMany({ where: { machineId } })
         } else {
-          const data = { ownerId: user.sub, autonomousEnv: user.autonomousEnv, emails, domain,
-            grantVersions: nextMachineShareGrants(before, emails, domain) }
+          const data = { ownerId: user.sub, autonomousEnv: user.autonomousEnv, emails, domain }
           after = await tx.machineShare.upsert({ where: { machineId }, create: { machineId, ...data }, update: data })
         }
         return { before, after }

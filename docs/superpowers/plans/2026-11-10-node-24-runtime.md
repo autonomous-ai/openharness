@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Harness's CLI and daemon run on Node 24 LTS on every new and existing install (macOS, Linux, Windows, Harness OS, Team accounts), with engines installed under Node 22 still found.
+**Goal:** Harness's CLI and daemon run on Node 24 LTS on every new and existing install (macOS, Linux, Windows, Harness OS), with engines installed under Node 22 still found.
 
-**Architecture:** `MINIMUM_NODE_MAJOR = 24` lives in `cli/src/lib/nodeRuntime.ts`. The updater installs the manifest's Node 24 and writes `current-node` before it stages a build. `startMasterFromBundle` probes and execs on `managedNodePath()` when that meets the minimum, so the switch happens in the update's existing exec gap. The update's probation covers the Node switch. After a switch, the launcher, the service definition and Team links follow `current-node`. Engine lookup searches every managed Node folder.
+**Architecture:** `MINIMUM_NODE_MAJOR = 24` lives in `cli/src/lib/nodeRuntime.ts`. The updater installs the manifest's Node 24 and writes `current-node` before it stages a build. `startMasterFromBundle` probes and execs on `managedNodePath()` when that meets the minimum, so the switch happens in the update's existing exec gap. The update's probation covers the Node switch. After a switch, the launcher and the service definition follow `current-node`. Engine lookup searches every managed Node folder.
 
 **Tech Stack:** TypeScript (Node), vitest, bash/PowerShell installers, GitHub Actions, Arch/Fedora packaging (Python tests).
 
@@ -111,21 +111,20 @@
 ### Task 4: Everything that names the Node follows the switch
 
 **Files:**
-- Modify: `cli/src/cli.ts:1583-1588` and the core's start path in `cli/src/core/main.ts` (after the core is up on a Node different from the one in the launcher, call `ensureLauncher(managedNodePath())`). Also modify `cli/src/harnessd/platform.ts:122,196`, where the launchd plist and systemd unit are rewritten when their node differs from `managedNodePath()`, and `cli/src/team/script.ts:79,189,193,205,736` with `linkTeamNodeTools`, which replaces a link that points at another Node folder.
-- Test: `cli/src/harnessd/platform.spec.ts`, `cli/src/team/script.spec.ts`, `cli/src/lib/launcher.spec.ts` (or the spec that covers `ensureLauncher`; find it with `git grep -l ensureLauncher -- '*.spec.ts'`)
+- Modify: `cli/src/cli.ts:1583-1588` and the core's start path in `cli/src/core/main.ts` (after the core is up on a Node different from the one in the launcher, call `ensureLauncher(managedNodePath())`). Also modify `cli/src/harnessd/platform.ts:122,196`, where the launchd plist and systemd unit are rewritten when their node differs from `managedNodePath()`.
+- Test: `cli/src/harnessd/platform.spec.ts`, `cli/src/lib/launcher.spec.ts` (or the spec that covers `ensureLauncher`; find it with `git grep -l ensureLauncher -- '*.spec.ts'`)
 
 **Interfaces:**
-- Produces: `refreshNodeReferences(node: string, log): Promise<{ launcher: boolean; service: boolean; team: boolean }>` in `cli/src/lib/nodeReferences.ts` (create). Each flag says whether that reference was rewritten. Once the core is up, it is called once per core start.
+- Produces: `refreshNodeReferences(node: string, log): Promise<{ launcher: boolean; service: boolean }>` in `cli/src/lib/nodeReferences.ts` (create). Each flag says whether that reference was rewritten. Once the core is up, it is called once per core start.
 
 - [ ] **Step 1: Write the failing tests.**
   - `refreshNodeReferences rewrites a launcher that names node 22`
   - `rewrites the launchd plist and systemd unit whose node is 22` (fake fs, darwin and linux)
-  - `repoints team node, npm and npx links` (fake team layout from `team/script.spec.ts`)
   - `leaves everything alone when it already names node 24`: all flags false, no writes.
-- [ ] **Step 2: Run them and see them fail.** Run: `cd cli && npx vitest run src/lib/nodeReferences.spec.ts src/harnessd/platform.spec.ts src/team/script.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement**, reusing `ensureLauncher`, the service-definition writer in `platform.ts`, and `linkTeamNodeTools`.
+- [ ] **Step 2: Run them and see them fail.** Run: `cd cli && npx vitest run src/lib/nodeReferences.spec.ts src/harnessd/platform.spec.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement**, reusing `ensureLauncher` and the service-definition writer in `platform.ts`.
 - [ ] **Step 4: Run them and see them pass.** Expected: PASS.
-- [ ] **Step 5: Commit** (once Ken asks): `Launcher, service and Team links follow the managed Node`.
+- [ ] **Step 5: Commit** (once Ken asks): `Launcher and service follow the managed Node`.
 
 ### Task 5: Node version and migration reason in status
 
@@ -226,7 +225,6 @@
   - Linux (a box installed with `install.sh`, not `cli/docker/remote-machine`'s system Node);
   - Windows (the VM and the Dell PC, memories `windows-vm-e2e` and `windows-x64-dell-e2e`), recording the session's windows: none opens;
   - Harness OS (`os-runtime-updates` workflow, run once by hand);
-  - a Team account on macOS.
 - [ ] **Step 2: Rollback E2E.** On macOS, point staging at a Node 24 build that fails to start a core (for example, `HARNESS_TEST_CORE_CRASH=1`, if such a hook exists; otherwise a fixture manifest whose binary exits 1 after `--version`). Expect `rolled-back` in status, and the daemon on 22.
 - [ ] **Step 3: Idle numbers.** Record daemon CPU and RSS at rest for 10 minutes with the same agents, on 22 and then on 24 (`ps -o %cpu,rss` every 10 s). Expected: not worse. Put both tables in the PR.
 - [ ] **Step 4: Gates.** Run once, on Node 24: `cd cli && npm run test:core && npm run test:harnessd && npm run test:resume && npm run test:orchestrator && npm run test:sharing && npm run test:remote-viewers && npm run test:portability && npm run test:local-models`, plus Desktop's macOS tests. Compare against a clean `main` worktree, and record the receipts.

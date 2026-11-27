@@ -137,7 +137,7 @@ describe('socket meter', () => {
   })
 
   // Two daemons of one account declare the same client, version and token, so only where they dial tells them apart
-  // (Lead, 2026-10-29): each gets its own entry, and every socket and HTTP request through it carries that name.
+  // (2026-10-29): each gets its own entry, and every socket and HTTP request through it carries that name.
   it('names the entry a socket came through, and forwards it like any other', async () => {
     const backend = await standIn()
     stops.push(() => { backend.server.closeAllConnections(); backend.server.close() })

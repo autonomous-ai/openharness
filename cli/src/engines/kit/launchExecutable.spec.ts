@@ -3,10 +3,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 let root = ''
-afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }); root = '' })
+const execPath = process.execPath
+afterEach(() => { process.execPath = execPath; vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }); root = '' })
 async function fixture() {
   root = mkdtempSync(join(tmpdir(), 'launch-executable-'))
   const bin = join(root, 'bin'); mkdirSync(bin)
+  // The search also looks beside the Node running it (npmRuntimeBins). The suite's own Node is the machine's, and on a
+  // Mac with Homebrew's Node that folder is npm's global bin, real Codex and OpenCode in it: every absence read 'ready'.
+  process.execPath = join(root, 'runner-node', 'bin', 'node')
   vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', bin); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()
   return { bin, ...await import('./launchExecutable.js') }

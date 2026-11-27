@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { StopDeps } from './daemonStop.js'
@@ -24,6 +24,7 @@ function fakeDeps(state: { pid: number | null; alive: Set<number>; killed: strin
     sleep: async (ms) => { clock.now += ms },
     now: () => clock.now,
     lock: async () => { state.locked += 1; return () => { state.released += 1 } },
+    settlePid: async () => (state.pid === null ? { state: 'missing' } : { state: 'pid', pid: state.pid, from: 'file' }),
     warn: () => {},
     ...overrides,
   }
@@ -87,6 +88,19 @@ describe('stopDaemonProcess', () => {
     expect(existsSync(PID_FILE)).toBe(true)
   })
 
+  it('a stop settles under its lock', async () => {
+    // A pid file that cannot be read is asked of the daemon, or set aside, only while no start can write it.
+    const { stopDaemonProcess } = await load()
+    const seen: string[] = []
+    const state = { pid: null, alive: new Set<number>(), killed: [] as string[], locked: 0, released: 0 }
+    await stopDaemonProcess(fakeDeps(state, {
+      lock: async () => { seen.push('lock'); return () => { seen.push('release') } },
+      settlePid: async () => { seen.push('settle'); return { state: 'missing' } },
+      readPid: () => { seen.push('read'); return null },
+    }))
+    expect(seen).toEqual(['lock', 'settle', 'read', 'release'])
+  })
+
   it('clears a pid file naming a dead process and reports nothing stopped', async () => {
     const { stopDaemonProcess } = await load()
     const { PID_FILE } = await import('./daemonState.js')
@@ -95,6 +109,22 @@ describe('stopDaemonProcess', () => {
     await expect(stopDaemonProcess(fakeDeps(state))).resolves.toEqual({ pid: null, stopped: false })
     expect(existsSync(PID_FILE)).toBe(false)
     expect(state.released).toBe(1)
+  })
+
+  it('leaves a pid file it cannot read while another process holds the lock, and says so', async () => {
+    // The lock could not be taken and the stop went on without it: the holder may be writing the file this moment.
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    writeFileSync(PID_FILE, 'x')
+    const warned: string[] = []
+    const state = { pid: null, alive: new Set<number>(), killed: [] as string[], locked: 0, released: 0 }
+    await expect(stopDaemonProcess(fakeDeps(state, {
+      settlePid: async () => ({ state: 'busy' }),
+      warn: (line) => warned.push(line),
+    }))).resolves.toEqual({ pid: null, stopped: false })
+    expect(readFileSync(PID_FILE, 'utf8')).toBe('x')
+    expect(warned).toEqual(['  ! the pid file cannot be read and the daemon does not answer: nothing was stopped'])
+    expect(state.killed).toEqual([])
   })
 
   describe('when launchd or systemd runs the master', () => {
@@ -346,6 +376,14 @@ describe('stopDaemonProcess on Windows', () => {
     const parts = defaultWindowsStopDeps()
     expect(parts.pidFileWrittenMs()).toBeNull()
     expect(parts.corePid(500)).toBeNull()
+  })
+
+  it('does not judge a pid the daemon answered by the time the pid file was written', async () => {
+    const { defaultWindowsStopDeps } = await load()
+    const { PID_FILE, setAnsweredPid } = await import('./daemonState.js')
+    writeFileSync(PID_FILE, 'x')
+    setAnsweredPid(500)
+    expect(defaultWindowsStopDeps().pidFileWrittenMs()).toBeNull()
   })
 })
 

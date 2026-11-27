@@ -301,6 +301,8 @@ export class CodexNormalizer implements EngineNormalizer {
   private compactJustEmitted = false
   /** Objective of the active `/goal`, so its re-injection each turn isn't read as a new submission. */
   private goalObjective: string | null = null
+  /** When Codex wrote the last record read (its own `timestamp`), epoch ms; undefined when it says none. */
+  at: number | undefined
 
   constructor(
     private readonly mode: 'live' | 'replay',
@@ -313,6 +315,8 @@ export class CodexNormalizer implements EngineNormalizer {
 
   ingest(line: string): LiveEvent[] {
     const raw = parse(line)
+    const at = typeof raw?.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
+    this.at = Number.isSafeInteger(at) ? at : undefined
     if (!raw) return []
     const topType = string(raw.type)
     const item = payload(raw)
@@ -372,10 +376,14 @@ export class CodexNormalizer implements EngineNormalizer {
 
     if (type === 'task_complete' || type === 'turn_aborted') {
       this.pendingTask = false
-      const events = this.completeOutstanding(type === 'turn_aborted')
+      const aborted = type === 'turn_aborted'
+      const events = this.completeOutstanding(aborted)
       if (!this.open || this.mode === 'replay') return events
       this.open = false
-      return [...events, { type: 'turn_ended', payload: {} }]
+      // A turn the person stopped says so, as Claude Code's interrupt does. Codex also aborts a turn it replaced, a
+      // review that ended and a spent budget: those are the turn's plain end, told as news (facts-codex §2).
+      const stopped = aborted && string(item.reason) === 'interrupted'
+      return [...events, { type: 'turn_ended', payload: stopped ? { aborted: true } : {} }]
     }
 
     return []

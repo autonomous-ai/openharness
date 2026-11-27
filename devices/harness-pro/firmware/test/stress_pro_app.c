@@ -62,8 +62,8 @@ void pro_display_set_brightness(uint8_t l) { (void)l; }
 void pro_display_power(bool on) { (void)on; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; return true; }
-bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) { CHECK(LOCK_DEPTH == 0); (void)t; (void)tab; (void)lead; return true; }
-bool pro_cable_supertab_side(const char *tab, const char *side) { CHECK(LOCK_DEPTH == 0); (void)tab; (void)side; return true; }
+static int g_picks;
+bool pro_cable_send_app_pick(const char *app) { CHECK(LOCK_DEPTH == 0); (void)app; g_picks++; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity) { (void)phase; (void)dy; (void)velocity; return true; }
 static int lib_req_offset = -1;
 static uint32_t lib_req_id;
@@ -72,7 +72,7 @@ bool pro_cable_library_supported(void) { return true; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
 uint32_t pro_cable_seq_gaps(void) { return 0; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
-void pro_voice_begin(const char *agent, bool face) { (void)agent; (void)face; }
+void pro_voice_begin(const char *agent) { (void)agent; }
 void pro_voice_end(bool send) { (void)send; }
 bool pro_voice_open(void) { return false; }
 unsigned pro_rec_level(void) { return 0; }
@@ -157,7 +157,16 @@ static void send_swarms(int n, int sel, int tile_n, int base)
 static void send_agents(int a)
 {
     pro_agent_row_t r = {agent_id[a], "", "claude", "mid", "Diego's Mac"};
-    pro_app_agents(&r, 1);
+    pro_app_agents(&r, 1, false, true);
+}
+
+// The welcome's apps.switch and the daemon's app list: Home has the Tabs | Apps pill, so random taps choose Apps and pick
+// cards while the other feeds run.
+static void send_apps(void)
+{
+    static const cable_app_t apps[3] = {{"harness", "Harness", 3, 0, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 1, 0, 0}};
+    pro_app_apps_switch(true);
+    pro_app_apps(apps, 3, "harness");
 }
 
 static void answer_library(void)
@@ -185,6 +194,7 @@ int main(int argc, char **argv)
     mk_ids();
     pro_app_start();
     pro_app_link(true, "Diego's Mac");
+    send_apps();
     render_pass();
     for (long it = 0; it < iters; it++) {
         g_step = (int)it;
@@ -216,7 +226,7 @@ int main(int argc, char **argv)
             pro_app_turn(agent_id[roster_agent], k[rnd() % 5], "Reading files", -1);
             break;
         }
-        case 8: if (rnd() % 50 == 0) { pro_app_link(false, NULL); pro_app_link(true, "Diego's Mac"); } break;
+        case 8: if (rnd() % 50 == 0) { pro_app_link(false, NULL); pro_app_link(true, "Diego's Mac"); send_apps(); } break;
         default: break;
         }
         CHECK(LOCK_DEPTH == 0);
@@ -225,7 +235,7 @@ int main(int argc, char **argv)
         render_pass();
     }
     alarm(0);
-    printf("stress_pro_app: %ld steps, no hang; min wake %u ms, zero wakes %u\n", iters, (unsigned)g_wake_min, (unsigned)g_zero_wakes);
+    printf("stress_pro_app: %ld steps, no hang; min wake %u ms, zero wakes %u, picks %d\n", iters, (unsigned)g_wake_min, (unsigned)g_zero_wakes, g_picks);
     printf("frames per view:");
     for (int v = 0; v < 16; v++) if (g_views[v]) printf(" v%d=%ld", v, g_views[v]);
     printf("; most tabs %ld\n", g_maxtabs);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { emptyPorts, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
+import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
 import { createServiceHost, FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
 
 // A port whose members cover every shape: sync and async, value and FAIL fallbacks, a stop.
@@ -14,15 +14,15 @@ class FakeSearch {
   async tail(sessionId: string) { return { sessionId } as never }
   stop(): void { this.calls.push('stop') }
 }
-// The search port as these tests drive it: two more members, whose fallback is to fail, sync and async —
-// the shapes of a member a request needs answered. The host guards whatever the fallbacks name.
-type TestPort = SearchPort & { search(query: string, options: object): unknown; tail(sessionId: string, options: object): Promise<unknown> }
+// The search port as these tests drive it: three more members, a notice, and two whose fallback is to fail, sync and
+// async — the shapes of a member a request needs answered. The host guards whatever the fallbacks name.
+type TestPort = SearchPort & { deleteHistory(sessionId: string): void; search(query: string, options: object): unknown; tail(sessionId: string, options: object): Promise<unknown> }
 const SEARCH = {
   touch: undefined, deleteHistory: undefined, session: undefined, search: FAIL, tail: later(FAIL), stop: undefined,
 } as unknown as PortFallbacks<SearchPort>
 const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
-  attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+  forwardingUrl: null, stop: later(undefined),
   stream: false, surface: later({}), closed: undefined,
 }
 /** The viewer streams' members, which these tests never call. */
@@ -65,14 +65,14 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const viewers = { stop: vi.fn() } as unknown as ViewersPort
       h.ports.viewers = viewers
       h.services.start('search', () => { throw new Error('index locked') }, fakeCore(), SEARCH)
-      h.services.start('workspaces', () => { throw 'no home folder' }, fakeCore(), { nameBranches: undefined, sweepUnused: undefined })
+      h.services.start('workspaces', () => { throw 'no home folder' }, fakeCore(), WORKSPACES_FALLBACKS)
       expect(h.ports.search).toBeNull()
       expect(h.ports.workspaces).toBeNull()
       expect(h.ports.viewers).toBe(viewers)
       expect(h.services.isOff('search')).toBe(true)
       expect(h.lines).toEqual([
-        '[services] search did not start · index locked · the core runs without it',
-        '[services] workspaces did not start · no home folder · the core runs without it',
+        '[services] search did not start · Error · the core runs without it',
+        '[services] workspaces did not start · string · the core runs without it',
       ])
     })
 
@@ -86,7 +86,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
     it('takes only the port a service owns: what it writes into another is dropped', () => {
       const h = host()
-      const stray = { nameBranches: vi.fn(), sweepUnused: vi.fn() } as WorkspacesPort
+      const stray: WorkspacesPort = { ...WORKSPACES_OFF, nameBranches: vi.fn() }
       h.services.start('search', (_core, ports) => { ports.search = new FakeSearch(); ports.workspaces = stray }, fakeCore(), SEARCH)
       expect(h.ports.search).not.toBeNull()
       expect(h.ports.workspaces).toBeNull()
@@ -104,7 +104,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       expect(testPort(h).touch('s1')).toBeUndefined()
       expect(testPort(h).session('s1')).toBeUndefined()
       expect(port).toBeDefined()
-      expect(h.lines).toEqual(['[services] search.touch failed · catalog closed', '[services] search.session failed · bad row'])
+      expect(h.lines).toEqual(['[services] search.touch failed · Error', '[services] search.session failed · string'])
     })
 
     it('goes back to the one request when its fallback is FAIL, sync or async', async () => {
@@ -122,18 +122,18 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host()
       let viewersStop: () => Promise<void> = async () => { throw new Error('viewer hung') }
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop(), ...STREAMS }
+        ports.viewers = { forwardingUrl: vi.fn(() => null), stop: () => viewersStop(), ...STREAMS }
       }, fakeCore(), VIEWERS)
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
-      viewersStop = () => { throw new Error('sync throw in async member') }
+      viewersStop = () => { throw new TypeError('sync throw in async member') }
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
-      expect(h.lines).toEqual(['[services] viewers.stop failed · viewer hung', '[services] viewers.stop failed · sync throw in async member'])
+      expect(h.lines).toEqual(['[services] viewers.stop failed · Error', '[services] viewers.stop failed · TypeError'])
     })
 
     it('passes a promise that resolves straight through', async () => {
       const h = host()
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {}, ...STREAMS }
+        ports.viewers = { forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {}, ...STREAMS }
       }, fakeCore(), VIEWERS)
       expect(h.ports.viewers!.forwardingUrl('a1')).toBe('http://v')
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
@@ -186,26 +186,26 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('carries on when an unbinding or a stop fails, and stops nothing it cannot', async () => {
       const h = host({ maxFailures: 1 })
       const late = vi.fn()
-      startSearch(h, { ...new FakeSearch(), touch: () => { throw new Error('x') }, stop: () => { throw new Error('stop failed') } })
-      h.services.onOff('search', () => { throw new Error('unbind failed') })
+      startSearch(h, { ...new FakeSearch(), touch: () => { throw new Error('x') }, stop: () => { throw new RangeError('stop failed') } })
+      h.services.onOff('search', () => { throw new TypeError('unbind failed') })
       h.services.onOff('search', late)
       testPort(h).touch('s1')
       expect(late).toHaveBeenCalled()
-      expect(h.lines).toContain('[services] switching search off: stop failed')
-      expect(h.lines).toContain('[services] switching search off: unbind failed')
+      expect(h.lines).toContain('[services] switching search off: RangeError')
+      expect(h.lines).toContain('[services] switching search off: TypeError')
 
       const async = host({ maxFailures: 1 })
       async.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: () => { throw new Error('x') }, detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') }, ...STREAMS }
+        ports.viewers = { forwardingUrl: () => { throw new Error('x') }, stop: async () => { throw new Error('viewer stuck') }, ...STREAMS }
       }, fakeCore(), VIEWERS)
-      async.ports.viewers!.attach({} as never)
+      async.ports.viewers!.forwardingUrl({} as never)
       await new Promise((resolve) => setImmediate(resolve))
       expect(async.services.isOff('viewers')).toBe(true)
 
       const stopless = host({ maxFailures: 1 })
       stopless.services.start('workspaces', (_core, ports) => {
-        ports.workspaces = { nameBranches: () => { throw new Error('x') }, sweepUnused: vi.fn() }
-      }, fakeCore(), { nameBranches: undefined, sweepUnused: undefined })
+        ports.workspaces = { ...WORKSPACES_OFF, nameBranches: () => { throw new Error('x') } }
+      }, fakeCore(), WORKSPACES_FALLBACKS)
       stopless.ports.workspaces!.nameBranches()
       expect(stopless.services.isOff('workspaces')).toBe(true)
     })
@@ -214,7 +214,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const ports: CorePorts = emptyPorts()
       const services = createServiceHost(ports)
-      services.start('workspaces', (_core, p) => { p.workspaces = { nameBranches: () => { throw new Error('x') }, sweepUnused: vi.fn() } }, fakeCore(), { nameBranches: undefined, sweepUnused: undefined })
+      services.start('workspaces', (_core, p) => { p.workspaces = { ...WORKSPACES_OFF, nameBranches: () => { throw new Error('x') } } }, fakeCore(), WORKSPACES_FALLBACKS)
       for (let i = 0; i < 5; i++) ports.workspaces?.nameBranches()
       expect(services.isOff('workspaces')).toBe(true)
       expect(warn).toHaveBeenLastCalledWith('[services] workspaces switched off after 5 failures in 60s · it stays off until the daemon restarts')
@@ -301,26 +301,6 @@ describe('hosting services so one that fails cannot take the core down', () => {
       expect(h.lines.at(-1)).toBe('[services] catalog switched off after 1 failures in 60s · it stays off until the daemon restarts')
     })
 
-    it('leaves a service the computer switched off off: its requests answered SERVICE_UNAVAILABLE, its port empty, nothing started', () => {
-      const h = host()
-      h.ports.search = new FakeSearch() as unknown as SearchPort
-      h.services.leaveOff('search', ['session_search'])
-      h.services.leaveOff('catalog', ['dsh_list'])
-      const { got, reply } = collect()
-      h.services.route('session_search', {}, ASKER, reply)
-      h.services.route('dsh_list', {}, ASKER, reply)
-      expect(got).toEqual([
-        { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false },
-        { error: 'SERVICE_UNAVAILABLE', service: 'catalog', retryable: false },
-      ])
-      expect(h.ports.search).toBeNull()
-      expect(h.services.isOff('search')).toBe(true)
-      expect(h.lines).toEqual(['[services] search is turned off on this computer', '[services] catalog is turned off on this computer'])
-      // Its types stay its own: another service declaring them is the mistake it always was.
-      h.services.serve('other', () => ({ dsh_list: () => ({}) }), fakeCore(), ['dsh_list'])
-      expect(h.lines.at(-1)).toBe('[services] other did not start · dsh_list is answered by catalog · the core runs without it')
-    })
-
     it('answers a handler that throws, rejects or replies with nothing SERVICE_FAILED, and counts each against its service', async () => {
       const h = host({ maxFailures: 3 })
       h.services.serve('catalog', () => ({
@@ -333,9 +313,9 @@ describe('hosting services so one that fails cannot take the core down', () => {
       await vi.waitFor(() => expect(got).toHaveLength(3))
       expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'catalog' }, { error: 'SERVICE_FAILED', service: 'catalog' }, { error: 'SERVICE_FAILED', service: 'catalog' }])
       expect(h.lines).toEqual([
-        '[services] catalog.a failed · bad row',
-        '[services] catalog.b failed · closed',
-        '[services] catalog.c failed · c was answered with no reply',
+        '[services] catalog.a failed · Error',
+        '[services] catalog.b failed · string',
+        '[services] catalog.c failed · Error',
         '[services] catalog switched off after 3 failures in 60s · it stays off until the daemon restarts',
       ])
     })
@@ -351,11 +331,11 @@ describe('hosting services so one that fails cannot take the core down', () => {
       expect(['rival', 'loose', 'looser', 'short', 'shorter'].every((name) => h.services.isOff(name))).toBe(true)
       expect(h.services.isOff('catalog')).toBe(false)
       expect(h.lines).toEqual([
-        '[services] rival did not start · dsh_list is answered by catalog · the core runs without it',
-        '[services] loose did not start · it answers b, c without declaring them · the core runs without it',
-        '[services] looser did not start · it answers e without declaring it · the core runs without it',
-        '[services] short did not start · it declares x, y without answering them · the core runs without it',
-        '[services] shorter did not start · it declares z without answering it · the core runs without it',
+        '[services] rival did not start · Error · the core runs without it',
+        '[services] loose did not start · Error · the core runs without it',
+        '[services] looser did not start · Error · the core runs without it',
+        '[services] short did not start · Error · the core runs without it',
+        '[services] shorter did not start · Error · the core runs without it',
       ])
       // The catalog keeps its own requests.
       const { got, reply } = collect()
@@ -368,7 +348,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       h.services.start('search', (_core, ports) => { ports.search = new FakeSearch() as unknown as SearchPort; return {} }, fakeCore(), SEARCH, ['session_search'])
       expect(h.ports.search).toBeNull()
       expect(h.services.isOff('search')).toBe(true)
-      expect(h.lines).toEqual(['[services] search did not start · it declares session_search without answering it · the core runs without it'])
+      expect(h.lines).toEqual(['[services] search did not start · Error · the core runs without it'])
     })
 
     it('serves a service with no port, and will not serve one whose name is a port\'s', () => {
@@ -376,7 +356,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       h.services.serve('search', () => ({}), fakeCore(), [])
       expect(h.services.isOff('search')).toBe(true)
       expect(h.ports.search).toBeNull()
-      expect(h.lines).toEqual(['[services] search did not start · it has a port: start it with start() · the core runs without it'])
+      expect(h.lines).toEqual(['[services] search did not start · Error · the core runs without it'])
     })
   })
 
@@ -392,14 +372,14 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const started = host({ faults: testFaults('search') })
       startSearch(started)
       expect(started.ports.search).toBeNull()
-      expect(started.lines).toEqual(['[services] search did not start · injected fault: search · the core runs without it'])
+      expect(started.lines).toEqual(['[services] search did not start · Error · the core runs without it'])
 
       const member = host({ faults: testFaults('search.touch') })
       const real = startSearch(member, new FakeSearch()) as unknown as FakeSearch
       member.ports.search!.touch('s1')
-      member.ports.search!.deleteHistory('s1')
+      testPort(member).deleteHistory('s1')
       expect(real.calls).toEqual(['delete s1'])
-      expect(member.lines).toEqual(['[services] search.touch failed · injected fault: search.touch'])
+      expect(member.lines).toEqual(['[services] search.touch failed · Error'])
     })
 
     it('fails one request on every ask, and leaves the service\'s others alone', async () => {
@@ -410,7 +390,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       h.services.route('dsh_remove', {}, { local: true, owner: true }, (result) => got.push(result))
       await vi.waitFor(() => expect(got).toHaveLength(2))
       expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'catalog' }, { ok: true }])
-      expect(h.lines).toEqual(['[services] catalog.dsh_list failed · injected fault: catalog.dsh_list'])
+      expect(h.lines).toEqual(['[services] catalog.dsh_list failed · Error'])
     })
   })
 })

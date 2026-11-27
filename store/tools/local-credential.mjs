@@ -2,15 +2,14 @@
 //
 // Since Harness 0.4.21 the loopback port (REST and `/api/local-ws`) answers 401 to a process that does
 // not show `X-Harness-Local: <credential>`, the 0600 `hook-credential` file in Harness's data folder
-// (`ADAPTER_DATA_DIR`, default `~/.harness/cli/data`). Read with the CLI's own checks
+// (`ADAPTER_DATA_DIR`, default `cli/data` in its data root). Read with the CLI's own checks
 // (cli/src/lib/hookAuth.ts `readHookCredential`); anything else is no credential and no header. On Windows
 // there is none: the checks reach the daemon over its pipe (audit W1). The Store packages that talk to the
 // daemon each carry the same function, by the same name.
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
 import { connect } from 'node:net'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { daemonPipe, daemonSocketPath, HARNESS_NOT_RUNNING, socketIsPrivate } from './local-daemon.mjs'
+import { daemonDataDir, daemonPipe, daemonSocketPath, HARNESS_NOT_RUNNING, socketIsPrivate } from './local-daemon.mjs'
 
 /**
  * Where a check using the `ws` package opens the daemon's bridge, and what it shows: its private socket and nothing, where one can be
@@ -41,7 +40,7 @@ export function openDaemonBridge(WebSocket, port = 18473, env = process.env) {
 
 export function localCredentialHeaders(env = process.env) {
   if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return {}
-  const dir = env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data')
+  const dir = daemonDataDir(env)
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   const opened = []
   try {
@@ -63,4 +62,4 @@ export function localCredentialHeaders(env = process.env) {
 }
 
 /** What a check prints when the daemon answers its upgrade 401. */
-export const CREDENTIAL_REFUSED = "Harness refused this process's local credential (hook-credential in ADAPTER_DATA_DIR, default ~/.harness/cli/data). Run this as the same OS user as Harness."
+export const CREDENTIAL_REFUSED = "Harness refused this process's local credential (hook-credential in ADAPTER_DATA_DIR, default cli/data in Harness's data root). Run this as the same OS user as Harness."

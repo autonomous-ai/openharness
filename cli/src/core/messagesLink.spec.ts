@@ -97,8 +97,12 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
       { method: 'POST', path: `/api/agent-messages/shares/${SID}/move/x` }, { method: 'GET', path: `/api/agent-messages/shares/${SID}/move` },
       { method: 'POST', path: '/api/agent-messages/shares/tab-1/move' },
     ]
-    for (const asked of refused) expect(await l.answer('backend', asked as Record<string, unknown>)).toEqual({ error: 'INVALID_REQUEST' })
+    // Each is refused, and said in the core's log as an experiment's is (core/experimentQueries.ts `createRouteRefusals`).
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const asked of refused) expect(await l.answer('backend', asked as Record<string, unknown>)).toEqual({ error: 'ROUTE_NOT_DECLARED' })
     expect(backend).not.toHaveBeenCalled()
+    expect(warned).toHaveBeenCalledWith('[services] messages asked for a backend route which it has not declared, and was refused: PATCH /api/agent-messages (core/api.ts)')
+    warned.mockRestore()
   })
 
   it('says which account is signed in here, as the core reads it, or that it cannot', async () => {

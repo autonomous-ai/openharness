@@ -76,13 +76,15 @@ export interface RunningProcess {
   ppid: number
   /** The command's name as the system reports it (`comm`). */
   executable: string
+  /** macOS: the whole `comm`, where `executable` is its first 16 bytes (lib/processTable.ts `commandPath`). */
+  commandPath?: string
   args: string
   /**
-   * When it started, epoch ms to the second (`ps` lstart), when known. A record or lock older than
-   * the process named in it was left by another process that once had the same pid.
+   * When it started, epoch ms, when known: to the second from `ps` lstart, to the millisecond from a Windows FILETIME.
+   * A record or lock older than the process named in it was left by another process that once had the same pid.
    */
   started?: number
-  /** Stable across wall-clock corrections on Linux; otherwise the locale-pinned process start. */
+  /** Stable across wall-clock corrections on Linux; otherwise the process start (`started`). */
   generation?: string
 }
 

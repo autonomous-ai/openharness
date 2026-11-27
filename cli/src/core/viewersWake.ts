@@ -10,7 +10,7 @@
  *   (core/viewersLink.ts). Each waits for it to start (core/serviceLinks.ts `onDemand`).
  * - **what it does on its own as it starts**, asked for as the core starts when there is something to do. The Store
  *   puts in place the harnesses the release bundles (dsh/builtins.ts: the Model Manager, Devices, the Harness Monitor,
- *   Memories) when the installed index does not have this build's. That cannot wait for a request: the core checks a
+ *   Memories, and Hachi while its switch is on) when the installed index does not have this build's. That cannot wait for a request: the core checks a
  *   create against the index before it asks the Store, and memory and models run those packages' own files. And the
  *   viewers stop the viewer servers an earlier process of theirs left running (dsh/viewerLedger.ts), when its ledger
  *   names any.
@@ -18,8 +18,9 @@
  * Nothing else in it runs on a timer: the Store's catalog is fetched when it is listed, and the viewers' watches and
  * restarts are each harness's. Once asked for, it is the master's to keep running, as every service is.
  */
-import { BUNDLED_HARNESSES, bundledRevisions } from '../dsh/builtinIds.js'
+import { BUNDLED_HARNESSES, bundledRevisions, HACHI_ID } from '../dsh/builtinIds.js'
 import { isBrokenDsh, readInstalledIndex, resolveInstalled, type InstalledDshRecord } from '../dsh/installed.js'
+import { readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { savedRows } from './devicesWake.js'
 
@@ -38,12 +39,16 @@ export interface BundledState {
   index(): readonly InstalledDshRecord[]
   /** Whether a record's package is gone or no longer reads as it. */
   broken(record: InstalledDshRecord): boolean
+  /** Whether the account's `hachi` switch is on here. Off, the Store generates no Hachi, so none is pending: counting
+   *  it would wake the viewers' process at every start for nothing. */
+  hachi: boolean
 }
 
 const BUNDLED: BundledState = {
   revisions: bundledRevisions(),
   index: readInstalledIndex,
   broken: (record) => isBrokenDsh(resolveInstalled(record)),
+  hachi: false,
 }
 
 /**
@@ -57,7 +62,7 @@ export function bundledPending(given: Partial<BundledState> = {}): string | null
   const index = state.index()
   for (const harness of BUNDLED_HARNESSES) {
     const revision = state.revisions[harness.name]
-    if (!revision) continue
+    if (!revision || (harness.id === HACHI_ID && !state.hachi)) continue
     const record = index.find((each) => each.id === harness.id)
     if (!record) return `${harness.what} to put in place`
     if (record.linked || record.source !== harness.source) continue
@@ -107,6 +112,6 @@ export function wakeViewers(deps: {
 }): void {
   if (deps.agents().some((agent) => !!agent.dsh)) deps.wake.ask('viewers', 'a harness here')
   else if (savedRows(deps.dataDir, VIEWER_LEDGER, deps.read).length) deps.wake.ask('viewers', 'viewer servers an earlier process left running')
-  const pending = bundledPending(deps.bundled)
+  const pending = bundledPending({ hachi: readAgentSettings(deps.dataDir).hachi, ...deps.bundled })
   if (pending) deps.wake.ask('store', pending)
 }

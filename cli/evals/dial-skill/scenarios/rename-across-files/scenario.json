@@ -1,0 +1,8 @@
+{
+  "need": "no-need",
+  "kind": "long-task",
+  "prompt": "Rename `getUser` to `fetchUser` everywhere, tests included.",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "! git grep -nw getUser && npm test", "expect": "getUser" }
+}

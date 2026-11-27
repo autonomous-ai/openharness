@@ -2,8 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
+import { systemRoot } from './windows/powershell.js'
+
+/** A write of exactly `text` reaches the disk half way, then the disk is full. `events`: each flush (of a file or a
+ *  folder) and each rename's target, as they happened. */
+const tear = vi.hoisted(() => ({ text: undefined as string | undefined, events: [] as string[] }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const [target, data] = args
+      if (tear.text === undefined || data !== tear.text) return actual.writeFileSync(...args)
+      const half = tear.text.slice(0, tear.text.length >> 1)
+      if (typeof target === 'number') actual.writeSync(target, half)
+      else actual.writeFileSync(target, half)
+      throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { tear.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { tear.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
+  }
+})
 
 let root = ''
 let runtimeDir = ''
@@ -133,6 +153,11 @@ describe('ensureManagedRuntime', () => {
     expect(node).toBe(join(runtimeDir, `node-v22.23.2-${key}`, 'bin', 'node'))
     expect(existsSync(node!)).toBe(true)
     expect(readFileSync(join(runtimeDir, 'current-node'), 'utf8').trim()).toBe(node)
+    // An emptied pointer stops Harness from starting until a reinstall: flushed before it is renamed into place.
+    const { directorySyncSupported } = await import('./secureState.js')
+    const at = tear.events.indexOf(`rename ${join(runtimeDir, 'current-node')}`)
+    expect(tear.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${join(runtimeDir, 'current-node')}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
     // Staging never survives, whatever happened.
     expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
   })
@@ -339,6 +364,30 @@ describe('ensureNodeMeetsMinimum', () => {
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
+  it('a runtime ready or kept names no folder', async () => {
+    // Export logs sends the log off the machine, and the runtime folder is under the person's home.
+    rmSync(root, { recursive: true, force: true })
+    root = mkdtempSync(join(tmpdir(), 'sentinel-'))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    for (const dir of [runtimeDir, binDir, cliDir]) mkdirSync(dir, { recursive: true })
+    installedNode('v22.23.2', key)
+    const lines: string[] = []
+    const log = (line: string): void => { lines.push(line) }
+    const broken = buildArchive('v24.22.2', key, 'node', '#!/bin/sh\nexit 1\n')
+    stubFetch(manifestFor('node', key, 'v24.22.2', broken.bytes, broken.root), broken.bytes)
+    expect(await (await load()).ensureNodeMeetsMinimum(log)).toMatchObject({ reason: 'does-not-run' })
+    const good = buildArchive('v24.22.3', key)
+    stubFetch(manifestFor('node', key, 'v24.22.3', good.bytes, good.root), good.bytes)
+    expect(await (await load()).ensureNodeMeetsMinimum(log)).toMatchObject({ reason: null })
+
+    const said = lines.join('\n')
+    expect(said).not.toContain('sentinel')
+    expect(said).toContain('  ✗ Node stays on the one installed: does-not-run')
+    expect(said).toContain('  ✓ Node runtime ready (v24.22.3)')
+  })
+
   it('touches nothing on a computer with no managed Node, and says so when the Node it runs on is too old', async () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
@@ -398,6 +447,7 @@ describe('ensureManagedGrid', () => {
   })
 
   afterEach(() => {
+    tear.text = undefined
     vi.unstubAllGlobals()
     // 0555 directories cannot be emptied as they are; give them back before the sweep.
     for (const entry of readdirSync(runtimeDir)) {
@@ -454,6 +504,20 @@ describe('ensureManagedGrid', () => {
     // deleting it would take `grid` away from an agent mid-conversation. One version back stays.
     expect(existsSync(previous)).toBe(true)
     expect(existsSync(join(runtimeDir, `grid-0.3.45-${key}`))).toBe(false)
+  })
+
+  it('a pointer write that fails leaves the old pointer', async () => {
+    const previous = installedGrid('0.3.46', key, true)
+    const { bytes, root: archiveRoot } = buildArchive('0.3.47', key, 'grid')
+    stubFetch(manifestFor('grid', key, '0.3.47', bytes, archiveRoot), bytes)
+    tear.text = `${join(runtimeDir, `grid-0.3.47-${key}`, 'bin', 'grid')}\n`
+
+    const { ensureManagedGrid } = await load()
+
+    expect(await ensureManagedGrid()).toBe(previous)
+    // Desktop Harness and the hook installer run what it names: never half a path.
+    expect(readFileSync(join(runtimeDir, 'current-grid'), 'utf8')).toBe(`${previous}\n`)
+    expect(readdirSync(runtimeDir).filter((n) => n.endsWith('.tmp'))).toEqual([])
   })
 
   it('tries a pin that does not run on this computer ONCE, and remembers', async () => {
@@ -569,9 +633,10 @@ describe('startGridPinRecheck', () => {
     }
   })
 
-  /** A snapshot of everything under the runtime dir: names, sizes and times. */
+  /** A snapshot of everything under the runtime dir: names, inodes, sizes and times. A write renames a new file in,
+   *  so the inode tells a rewrite that lands in the same clock tick as the last one. */
   const tree = (): string[] => readdirSync(runtimeDir, { recursive: true, withFileTypes: true })
-    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.size}:${st.mtimeMs}` })
+    .map((entry) => { const path = join(entry.parentPath, entry.name); const st = statSync(path); return `${path}:${st.ino}:${st.size}:${st.mtimeMs}` })
     .sort()
 
   it('re-reads the pin every ten minutes, writes nothing while it matches, and a moved pin reaches the next grid call', async () => {
@@ -810,6 +875,7 @@ describe('the managed runtimes on Windows', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     rmSync(root, { recursive: true, force: true })
     for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
       delete process.env[key]
@@ -827,13 +893,16 @@ describe('the managed runtimes on Windows', () => {
   })
 
   it('unpacks with the tar.exe Windows ships, never a tar from PATH, and nodejs.org\'s tarball with /usr/bin/tar elsewhere', async () => {
+    // Windows' own folder, as the file system names it: a SystemRoot variable is whoever runs the command's.
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    vi.stubEnv('windir', 'D:\\Elsewhere')
     const { unpackCommand } = await load()
-    expect(unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32', 'D:\\Windows')).toEqual({
-      file: 'D:\\Windows\\System32\\tar.exe',
+    const unpack = unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32')
+    expect(unpack.file).not.toContain('Elsewhere')
+    expect(unpack).toEqual({
+      file: win32.join(systemRoot(), 'System32', 'tar.exe'),
       args: ['-xf', 'C:\\r\\.node-staging-1\\node.zip', '-C', 'C:\\r\\.node-staging-1'],
     })
-    // A scrubbed environment with no SystemRoot falls back to Windows' own folder, never to a relative tar.exe.
-    expect(unpackCommand('a.zip', 'b', 'win32', '').file).toBe('C:\\Windows\\System32\\tar.exe')
     expect(unpackCommand('/r/node.tar.gz', '/r', 'darwin')).toEqual({ file: '/usr/bin/tar', args: ['-xzf', '/r/node.tar.gz', '-C', '/r'] })
   })
 

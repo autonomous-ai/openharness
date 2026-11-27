@@ -19,7 +19,7 @@ vi.mock('node:fs/promises', async original => {
     return fs.lstat(...args)
   } }
 })
-const { nativeProcessImages, parseNativeProcessImages, prepareProcessImageHelper } = await import('./nativeProcessImages.js')
+const { bundledProcessImageHelper, nativeProcessImages, parseNativeProcessImages, prepareProcessImageHelper, processImageHelperBundled } = await import('./nativeProcessImages.js')
 
 const header = '{"schema":1,"mode":"paths"}\n'
 const record = (pid: number, path = '/fixture/native') => ({
@@ -104,6 +104,15 @@ describe('bundled native helper preparation', () => {
     expect(await prepareProcessImageHelper(artifact, root)).toBe(path)
   })
 
+  it('extracts each helper into its own folder, and never hands one folder\'s file out for the other', async () => {
+    const images = await prepareProcessImageHelper(artifact, root)
+    const watch = await prepareProcessImageHelper(artifact, root, 'dev-watch')
+    expect(images).toBe(join(root, 'process-images', artifact.sha256))
+    expect(watch).toBe(join(root, 'dev-watch', artifact.sha256))
+    expect((await lstat(join(root, 'dev-watch'))).mode & 0o777).toBe(0o700)
+    expect(await readFile(watch!)).toEqual(bytes)
+  })
+
   // Linux CI, #2358 at d618a08: the concurrent test above returned one path and one null.
   // A preparer found no target, then another linked it before this one's existence
   // check, which took the new, complete helper for a foreign file. Force that order.
@@ -139,6 +148,26 @@ describe('bundled native helper preparation', () => {
     expect(await prepareProcessImageHelper(artifact, root)).toBeNull()
     expect((await lstat(target)).isSymbolicLink()).toBe(true)
     expect(await readFile(elsewhere)).toEqual(bytes)
+  })
+
+  it.each([
+    ['no artifact', undefined],
+    ['text that is not JSON', 'not json'],
+    ['no checksum', '{}'],
+    ['another schema', JSON.stringify({ ...artifact, schema: 2 })],
+    ['a size that is not its bytes', JSON.stringify({ ...artifact, size: bytes.length + 1 })],
+    ['base64 that does not round trip', JSON.stringify({ ...artifact, base64: artifact.base64 + '\n' })],
+    ['bytes that are not its checksum', JSON.stringify({ ...artifact, sha256: '0'.repeat(64) })],
+  ])('finds no usable helper in a build with %s, and prepares none', async (_, source) => {
+    if (source !== undefined) vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', source)
+    expect(processImageHelperBundled()).toBe(false)
+    expect(await bundledProcessImageHelper()).toBeNull()
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('finds a usable helper in a build whose artifact passes every check', () => {
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
+    expect(processImageHelperBundled()).toBe(true)
   })
 
   it('leaves unsafe directory permissions unchanged and falls back', async () => {
@@ -218,6 +247,42 @@ describe('fresh native image reads', () => {
     now = 60_001
     expect((await nativeProcessImages([10], 500)).images.get(10)?.path).toBe('/new')
     expect(await readFile(path)).toEqual(bytes)
+  })
+
+  it('keeps a helper whose first exec outlasts its queries, as macOS\'s signature check makes it, and turns off one that never answers', async () => {
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify(artifact))
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    // How Node's execFile reports a child it killed at its timeout, and how the off-thread worker says so.
+    let queries = 0
+    const timedOut = (_path: unknown, _args: unknown, _options: unknown, done: (error: Error | null, stdout: string, stderr?: string, outcome?: { timedOut: boolean }) => void) =>
+      queries++ % 2 ? done(Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM', code: null }), '')
+        : done(Object.assign(new Error('timed out'), { signal: 'SIGKILL' }), '', '', { timedOut: true })
+    const answers = (_path: unknown, _args: unknown, _options: unknown, done: (error: Error | null, stdout: string) => void) =>
+      done(null, output(record(10)))
+    // The first exec: every query started meanwhile is killed at its deadline, and answered by lsof alone.
+    host.execFile.mockImplementation(timedOut)
+    const first = await Promise.all([1, 2, 3].map(() => nativeProcessImages([10], 500)))
+    expect(first.map(result => result.images.size)).toEqual([0, 0, 0])
+    host.execFile.mockImplementation(answers)
+    expect((await nativeProcessImages([10], 500)).images.get(10)?.path).toBe('/fixture/native')
+    // A timeout long after the last starts a window of its own: these two are 5 s apart, and the helper stays on.
+    host.execFile.mockImplementation(timedOut)
+    for (now = 1_000; now <= 6_000; now += 5_000) expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    host.execFile.mockImplementationOnce(answers)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(1)
+    // A helper that times out for 2 s with no answer between is turned off: no spawn for 60 s.
+    for (now = 10_000; now <= 12_000; now += 1_000) expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    const spawned = host.execFile.mock.calls.length
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    expect(host.execFile).toHaveBeenCalledTimes(spawned)
+    // Any other failure turns it off at once.
+    now = 80_000
+    host.execFile.mockImplementationOnce((_path, _args, _options, done) => done(Object.assign(new Error('exit 69'), { code: 69 }), ''))
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    host.execFile.mockImplementation(answers)
+    expect((await nativeProcessImages([10], 500)).images.size).toBe(0)
+    expect(host.execFile).toHaveBeenCalledTimes(spawned + 1)
   })
 
   it('does not launch a late helper when preparation exceeds the request deadline', async () => {

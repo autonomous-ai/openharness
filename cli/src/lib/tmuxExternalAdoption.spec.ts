@@ -51,7 +51,8 @@ describe.skipIf(!resolveBinaryOnPath('tmux'))('external adoption on a private tm
 
   it('cannot cancel a replacement waiting shell, and an uncommitted dispatch never replaces its pane', async () => {
     const token = randomUUID(), next = randomUUID(), pane = await waiting(token)
-    await expect(backend.respawn(pane, { command: ['/bin/false'], expectedHeldToken: token, onDispatch: () => { throw new Error('disk full') } })).rejects.toThrow('disk full')
+    expect(await backend.respawn(pane, { command: ['/bin/false'], expectedHeldToken: token, onDispatch: () => { throw new Error('disk full') } }))
+      .toEqual({ state: 'failed', dispatch: 'not_started', reason: 'disk full' })
     expect(await backend.isHeld(pane, token)).toBe(true)
     expect(await backend.respawn(pane, { command: ['/bin/false'], expectedHeldToken: token, current: () => false })).toMatchObject({ dispatch: 'not_started' })
     expect(await backend.killHeld(pane, token, () => false)).toMatchObject({ dispatch: 'not_started' })

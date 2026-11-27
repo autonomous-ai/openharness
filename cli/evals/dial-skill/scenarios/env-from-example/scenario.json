@@ -1,0 +1,8 @@
+{
+  "need": "no-need",
+  "kind": "local-config",
+  "prompt": "`npm run dev:check` fails; get it passing.",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "npm run dev:check", "expect": "DATABASE_URL is not set" }
+}

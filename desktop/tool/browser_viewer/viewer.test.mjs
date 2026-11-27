@@ -7,6 +7,17 @@ import { buildViewerHtml } from './build.mjs';
 // noVNC's logging reads window.console when it loads.
 globalThis.window = globalThis;
 const { default: Websock } = await import('./node_modules/@novnc/novnc/core/websock.js');
+const { default: Display } = await import('./node_modules/@novnc/novnc/core/display.js');
+
+// Enough canvas for noVNC's real Display: it sizes and scales, nothing is drawn.
+function canvas() {
+  const context = { drawImage() {}, getImageData() { return {}; }, putImageData() {} };
+  return { width: 0, height: 0, style: {}, getContext: () => context };
+}
+globalThis.document = { createElement: canvas };
+
+// The Device setting's screen, which Xvnc sends at the handshake.
+const SCREEN = { width: 1920, height: 1080 };
 
 const XK_Control_L = 0xffe3;
 
@@ -26,12 +37,14 @@ function recorded(target, touches) {
 }
 
 // A page with a fake host and a fake RFB that, like the real one, reads the
-// channel through noVNC's own Websock.
-function page({ mac }) {
+// channel through noVNC's own Websock and draws with noVNC's own Display.
+function page({ mac, size = { width: 1200, height: 800 } }) {
   const win = new EventTarget();
   const doc = new EventTarget();
   const touches = [];
-  const screen = recorded({}, touches);
+  // The page's size; a test resizes the page by changing it.
+  const pageSize = { ...size };
+  const screen = recorded({ getBoundingClientRect: () => ({ ...pageSize }) }, touches);
   doc.getElementById = (id) => (id === 'screen' ? screen : null);
   win.document = recorded(doc, touches);
   const posted = [];
@@ -50,7 +63,45 @@ function page({ mac }) {
       this._sock = new Websock();
       this._sock.attach(channel);
       this._sock.on('close', () => this.dispatchEvent(new CustomEvent('disconnect', { detail: { clean: true } })));
+      this._display = new Display(canvas());
+      this.dragViewport = false;
+      this._clipViewport = false;
+      this._scaleViewport = false;
       rfbs.push(this);
+    }
+    // noVNC 1.7.0's clip and scale paths (core/rfb.js), on its own copy of the
+    // page's size: noVNC measures the div it puts inside the target.
+    get clipViewport() { return this._clipViewport; }
+    set clipViewport(clip) {
+      this._clipViewport = clip;
+      this._updateClip();
+    }
+    get scaleViewport() { return this._scaleViewport; }
+    set scaleViewport(scale) {
+      this._scaleViewport = scale;
+      if (scale && this._clipViewport) this._updateClip();
+      this._updateScale();
+      if (!scale && this._clipViewport) this._updateClip();
+    }
+    _updateClip() {
+      const clip = this._clipViewport && !this._scaleViewport;
+      if (this._display.clipViewport !== clip) this._display.clipViewport = clip;
+      if (clip) this._display.viewportChangeSize(pageSize.width, pageSize.height);
+    }
+    _updateScale() {
+      if (!this._scaleViewport) this._display.scale = 1.0;
+      else this._display.autoscale(pageSize.width, pageSize.height);
+    }
+    // The handshake's screen size (RFB._resize).
+    serverInit() {
+      this._display.resize(SCREEN.width, SCREEN.height);
+      this._updateClip();
+      this._updateScale();
+    }
+    // What noVNC runs when the page resizes (RFB._handleResize).
+    relayout() {
+      this._updateClip();
+      this._updateScale();
     }
     sendKey(keysym, code, down) { this.log.push(['key', keysym, code, down]); }
     clipboardPasteFrom(text) { this.log.push(['paste', text]); }
@@ -62,8 +113,24 @@ function page({ mac }) {
   send({ t: 'config', mac });
   send({ t: 'open' });
   const rfb = rfbs[0];
+  rfb.serverInit();
   rfb.dispatchEvent(new Event('connect'));
-  return { win, doc, posted, rfb, send, touches, frame };
+  return { win, doc, posted, rfb, rfbs, send, touches, frame, pageSize };
+}
+
+// What the page shows of the screen: the rectangle at the top left and its scale.
+function shown(rfb) {
+  const display = rfb._display;
+  return {
+    clip: rfb.clipViewport,
+    scaleViewport: rfb.scaleViewport,
+    drag: rfb.dragViewport,
+    x: display.absX(0),
+    y: display.absY(0),
+    width: display._viewportLoc.w,
+    height: display._viewportLoc.h,
+    scale: display.scale,
+  };
 }
 
 function key(type, props) {
@@ -190,6 +257,76 @@ test('a close from noVNC reaches the host as a state', async () => {
   await Promise.resolve();
   assert.equal(rfb.channel.readyState, 'closed');
   assert.deepEqual(posted.at(-1), { t: 'state', connected: false });
+});
+
+test('before any window message the screen is scaled to fit, as before', () => {
+  const { rfb } = page({ mac: false });
+  assert.deepEqual(shown(rfb), {
+    clip: false, scaleViewport: true, drag: false, x: 0, y: 0, width: 1920, height: 1080, scale: 1200 / 1920,
+  });
+});
+
+test('a window the size of the page is clipped to that rectangle at 0,0 at 1:1', () => {
+  const { rfb, send } = page({ mac: false });
+  send({ t: 'window', width: 1200, height: 800 });
+  assert.deepEqual(shown(rfb), {
+    clip: true, scaleViewport: false, drag: false, x: 0, y: 0, width: 1200, height: 800, scale: 1,
+  });
+  // A click lands where it is on Chrome's window.
+  assert.equal(rfb._display.absX(700), 700);
+  assert.equal(rfb._display.absY(500), 500);
+});
+
+test('a window within a pixel of a fractional page is still 1:1', () => {
+  const { rfb, send } = page({ mac: false, size: { width: 1137.5, height: 843.25 } });
+  send({ t: 'window', width: 1137, height: 843 });
+  assert.equal(shown(rfb).width, 1137);
+  assert.equal(shown(rfb).height, 843);
+  assert.equal(shown(rfb).scale, 1);
+});
+
+test('a window larger or smaller than the page is that rectangle scaled to fit', () => {
+  const small = page({ mac: false, size: { width: 800, height: 600 } });
+  small.send({ t: 'window', width: 1024, height: 640 });
+  assert.deepEqual(shown(small.rfb), {
+    clip: true, scaleViewport: false, drag: false, x: 0, y: 0, width: 1024, height: 640, scale: 800 / 1024,
+  });
+  // A click maps back through the scale onto Chrome's window.
+  assert.equal(small.rfb._display.absX(400), 512);
+
+  const large = page({ mac: false, size: { width: 2400, height: 1500 } });
+  large.send({ t: 'window', width: 1920, height: 1080 });
+  assert.deepEqual(shown(large.rfb), {
+    clip: true, scaleViewport: false, drag: false, x: 0, y: 0, width: 1920, height: 1080, scale: 2400 / 1920,
+  });
+});
+
+test('the page resizing scales again without another message', () => {
+  const { rfb, send, pageSize } = page({ mac: false });
+  send({ t: 'window', width: 1200, height: 800 });
+  pageSize.width = 1000;
+  pageSize.height = 700;
+  rfb.relayout();
+  assert.deepEqual(shown(rfb), {
+    clip: true, scaleViewport: false, drag: false, x: 0, y: 0, width: 1200, height: 800, scale: 1000 / 1200,
+  });
+  pageSize.width = 1200;
+  pageSize.height = 800;
+  rfb.relayout();
+  assert.equal(shown(rfb).scale, 1);
+});
+
+test('a new connection keeps the last window', () => {
+  const { rfbs, send } = page({ mac: false });
+  send({ t: 'window', width: 1100, height: 700 });
+  send({ t: 'window', width: 1200, height: 800 });
+  send({ t: 'closed', reason: 'gone' });
+  send({ t: 'open' });
+  const next = rfbs[1];
+  next.serverInit();
+  assert.deepEqual(shown(next), {
+    clip: true, scaleViewport: false, drag: false, x: 0, y: 0, width: 1200, height: 800, scale: 1,
+  });
 });
 
 test('the committed html equals a fresh build', async () => {

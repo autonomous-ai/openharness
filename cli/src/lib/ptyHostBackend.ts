@@ -24,6 +24,7 @@ import path from 'node:path'
 import { env } from '../config/env.js'
 import type { AgentEngine } from '../engines/types.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { codeOrLength, errorKind } from './log.js'
 import { isHeldStartCommand } from './nativePaneHold.js'
 import { lookupPaneEngineProcess } from './paneEngineProcess.js'
 import { comparableStartMarker, processRows, setProcessTableSource, type ProcessRow } from './processTable.js'
@@ -39,7 +40,7 @@ import { PtyHostStream } from './ptyHost/stream.js'
 import { submitContent, submitSettleMs } from './submitTiming.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
 import { TMUX_KEYS } from './terminalKeys.js'
-import { processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 import { windowsBlockedReason } from './windows/launch.js'
 import { windowsProcessRows } from './windows/processTable.js'
 import { defaultWindowsShell } from './windows/shell.js'
@@ -280,16 +281,16 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     // A drain host that does not answer yet, and is not proven gone, is still the one its panes are on: ready,
     // reconnecting, its inventory unavailable (so its panes are kept) until it answers or is proven gone.
     if (this.draining && !('client' in reached)) {
-      console.error(`[terminal] ptyhost: draining ${this.instance} unavailable (${'incompatible' in reached ? reached.incompatible : reached.unavailable}); reconnecting`)
+      console.error(`[terminal] ptyhost: draining ${this.instance} unavailable (${'incompatible' in reached ? 'incompatible' : reached.code}); reconnecting`)
       this.scheduleReconnect()
       return { state: 'ready' }
     }
     if ('incompatible' in reached) {
-      console.error(`[terminal] ptyhost: unavailable (${reached.incompatible})`)
+      console.error('[terminal] ptyhost: unavailable (incompatible)')
       return { state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: reached.incompatible }
     }
     if ('unavailable' in reached) {
-      console.error(`[terminal] ptyhost: unavailable (${reached.unavailable})`)
+      console.error(`[terminal] ptyhost: unavailable (${reached.code})`)
       return { state: 'unavailable', code: reached.code, reason: reached.unavailable }
     }
     this.attach(reached.client)
@@ -314,7 +315,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     this.detach()
     client?.close()
     this.panes.clear()
-    console.log(`[terminal] ptyhost: draining ${this.instance} has gone (${reason})`)
+    console.log(`[terminal] ptyhost: draining ${this.instance} has gone (${codeOrLength(reason)})`)
     this.onHostReplaced?.()
   }
 
@@ -440,7 +441,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     void this.endTree(pid).then((outcome) => {
       if (outcome === 'failed') console.error(`[terminal] ptyhost: could not end pid ${pid} (${signal})`)
     }).catch((error: unknown) => {
-      console.error(`[terminal] ptyhost: could not ${signal} pid ${pid}: ${error instanceof Error ? error.message : String(error)}`)
+      console.error(`[terminal] ptyhost: could not ${signal} pid ${pid}: ${errorKind(error)}`)
     })
   }
 
@@ -457,7 +458,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
           deps.kill(target)
         } catch (error) {
           if (target !== pid && (error as NodeJS.ErrnoException).code !== 'ESRCH') {
-            console.error(`[terminal] ptyhost: could not end pid ${target}, under pid ${pid}: ${(error as Error).message}`)
+            console.error(`[terminal] ptyhost: could not end pid ${target}, under pid ${pid}: ${errorKind(error)}`)
           }
           throw error
         }
@@ -541,7 +542,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       }
     }
     if (!('client' in reached)) {
-      console.error(`[terminal] ptyhost: reconnect failed (${'incompatible' in reached ? reached.incompatible : reached.unavailable})`)
+      console.error(`[terminal] ptyhost: reconnect failed (${'incompatible' in reached ? 'incompatible' : reached.code})`)
       this.scheduleReconnect()
       return
     }
@@ -596,7 +597,9 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     // A pre-G host drops `seed` silently, which would look like a pane that kept its scrollback: refuse instead.
     if (request.seed !== undefined && !client.features.includes(SEED_FEATURE)) return terminalActionNotStarted('this host cannot seed a pane')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    request.onDispatch?.()
+    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
+    if (request.current?.() === false || this.disposed || this.draining || this.client !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
     // Held from the start, as tmux's remain-on-exit at create: an engine that exits at once still leaves
     // its error readable. The agent services release it once the pane is a real agent (`releaseHold`).
     const result = await client.call({
@@ -686,7 +689,8 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
    * `validate` as it runs on [platform]. On Windows the engine found under the pane's root must also be in the
    * pane's Job (`jobPids`): every process the root started is, unless it broke away, and nothing else is. A pid
    * the table shows under the root but the Job does not hold is another process that has its number. A failed
-   * `jobPids` is `unknown`, never `gone`: no evidence either way.
+   * `jobPids` is `unknown`, never `gone`: no evidence either way. The recorded process of a pane with no engine
+   * in it is held to the Job as an engine is.
    */
   async validateOn(platform: NodeJS.Platform, runtime: PtyRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
     let found: Awaited<ReturnType<typeof lookupPaneEngineProcess>>
@@ -695,19 +699,27 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     } catch {
       return { state: 'unknown', reason: 'pty host runtime probe failed' }
     }
-    if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
-    // A saved marker that can never equal one read today (see `TmuxBackend.validate`; a Windows `w:` marker
-    // can): the pane still runs a matching engine, take it.
-    const compared = expected.processIdentity && comparableStartMarker(expected.processIdentity.startMarker)
-    if (compared && !sameProcessIdentity(expected.processIdentity, found.identity)) {
-      return { state: 'gone', reason: 'process changed under ptyhost pane', replaced: true }
+    let pid: number
+    if (found.ok) {
+      // A saved marker that can never equal one read today (see `TmuxBackend.validate`; a Windows `w:` marker
+      // can): the pane still runs a matching engine, take it.
+      const compared = expected.processIdentity && comparableStartMarker(expected.processIdentity.startMarker)
+      if (compared && !sameProcessIdentity(expected.processIdentity, found.identity)) {
+        return { state: 'gone', reason: 'process changed under ptyhost pane', replaced: true }
+      }
+      pid = found.identity.pid
+    } else if (expected.processIdentity && processAmong(expected.processIdentity, found.paneProcesses)) {
+      // The process the agent was bound to, under another name while its engine loads (see `TmuxBackend.validate`).
+      pid = expected.processIdentity.pid
+    } else {
+      return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
     }
     if (platform !== 'win32') return { state: 'alive' }
     const client = this.clientFor(runtime)
     if (!client) return { state: 'unknown', reason: UNAVAILABLE }
     const job = await client.call({ op: 'jobPids', pane: runtime.paneId })
     if (job.state !== 'ok') return { state: 'unknown', reason: `pty host could not list the pane job: ${job.reason}` }
-    if (!job.value.pids.includes(found.identity.pid)) return { state: 'gone', reason: 'process is not in the pane job' }
+    if (!job.value.pids.includes(pid)) return { state: 'gone', reason: 'process is not in the pane job' }
     return { state: 'alive' }
   }
 
@@ -730,9 +742,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   }
 
   /** Typed as `tmux paste-buffer` without `-p` types it (sendLiteralToTmux): each newline a carriage return. */
-  async typeLiteral(runtime: PtyRuntimeRef, text: string): Promise<TerminalActionResult> {
+  async typeLiteral(runtime: PtyRuntimeRef, text: string, allowed?: () => boolean): Promise<TerminalActionResult> {
     const client = this.clientFor(runtime)
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
     return actionOf(await client.call({ op: 'paste', pane: runtime.paneId, text, bracketed: false }))
   }
 
@@ -753,7 +766,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     const withheld = options?.beforeEnter ? await options.beforeEnter() : null
     if (withheld) return terminalEnterWithheld(withheld)
     if (options?.allowed && !options.allowed()) return terminalEnterWithheld('terminal control revoked')
-    return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: 'Enter' }))
+    // The text is in the composer whatever the Enter's answer, as tmux's submit says (`legacyActionResult`): a refused
+    // Enter passed on as `not_started` or `rejected` let the lease dispatch, and then the input path, type it again.
+    const entered = actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: 'Enter' }))
+    return entered.state === 'failed' ? terminalActionPossiblyExecuted(entered.reason) : entered
   }
 
   /** The host's raw `write`: the bytes a stream's input frame carries, sent as they are. */
@@ -771,9 +787,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return actionOf(await client.call({ op: 'paste', pane: runtime.paneId, text, bracketed: true }))
   }
 
-  async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
+  async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey, allowed?: () => boolean): Promise<TerminalActionResult> {
     const client = this.clientFor(runtime)
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
     return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: TMUX_KEYS[key] }))
   }
 
@@ -813,7 +830,9 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    request.onDispatch?.()
+    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
+    if (request.current?.() === false || this.disposed || this.clientFor(runtime) !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
     const result = await client.call({
       op: 'respawn',
       pane: runtime.paneId,

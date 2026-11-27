@@ -3,16 +3,18 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import type { AdoptSwarmSkill } from '../api.js'
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
+import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { sid } from '../../lib/log.js'
-import type { ProcessIdentity, registry, RegisteredSession } from '../../lib/registry.js'
+import { heldFirstLaunch, matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
+  type RegisteredSession } from '../../lib/registry.js'
+import { publishEngine, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { restartTargetOf, type RestartTarget } from '../../lib/terminalBackend.js'
@@ -24,6 +26,7 @@ import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { guardHold, legacyNativeHold } from '../../lib/restoreAgents.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -49,38 +52,79 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
 
 type RestartAgentHandler = RestartAgent
 
+const NO_ENGINE = 'the relaunched engine is not in its pane'
+const ANOTHER_PROCESS = 'the replacement process changed before publication'
+const NO_SHELL = 'the replacement shell could not be confirmed'
+/** Which check held a relaunch's publication, told by comparing its error with each check's fixed words: the log
+ *  names the check, never the words. */
+const HELD_BY = ([
+  [NO_ENGINE, 'refresh found no engine'],
+  [ANOTHER_PROCESS, 'refresh found another process'],
+  [NO_SHELL, 'refresh found no shell'],
+  [OBSERVATION_BATCH_INCOMPLETE, 'registry batch incomplete'],
+  [SAVED_BINDING_CHANGED, 'saved binding changed'],
+] as const).map(([reason, label]) => ({ message: new IdentityReadUnavailable(reason).message, label }))
+
 export interface RelaunchCommitDeps {
-  registry: Pick<typeof registry, 'updateProcessIdentity' | 'setActive' | 'byAgent'>
+  registry: Pick<typeof registry, 'confirmLaunch' | 'byAgent'>
   announceSession: (session: RegisteredSession) => void
   refreshGridAssignment: (session: RegisteredSession) => void
 }
 
 /**
  * The row learns the engine a restart relaunched in [place] (restart, and a move's fallback to the old pane:
- * core/agents/hostMove.ts): its process and gateway, active again, the pane handed back to its backend's default
- * disposal, then announced. Gateway is a core process fact; optional grid metadata follows the committed binding in the
- * background, so an unavailable models service cannot hold this route. 'changed' when [current] went false before the
- * row learned the engine, 'changed after commit' once it had, 'vanished' when the row is gone.
+ * core/agents/hostMove.ts): its process and [grid], the one its launch put it on, active again, the pane handed back to
+ * its backend's default disposal, then announced. The row keeps its gateway: no process is read for it, and the
+ * relaunched engine says it again (its hook, or a Codex's argv on the next discovery pass). A Codex's or Pi's grid is
+ * read off its argv in the background after, so an unavailable models service cannot hold this route. An engine that
+ * started as `node` and named itself before the publication's refresh is published under its new name
+ * (`publishEngine`), not held on a dead pid. 'changed' when [current] went false before the row learned the engine,
+ * 'changed after commit' once it had, 'vanished' when the row is gone.
  */
 export async function commitRelaunchedEngine(
-  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, place: RestartTarget, current: () => boolean,
+  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity | null, grid: GridAssignment | null | undefined, place: RestartTarget,
+  current: () => boolean, input: Pick<LaunchPublicationInput, 'launchArgs' | 'gridLaunchRecord'> = {},
+  operationCurrent: () => boolean = current,
 ): Promise<RegisteredSession | 'changed' | 'changed after commit' | 'vanished'> {
-  const gateway = await probeGatewayRuntime(identity)
   if (!current()) return 'changed'
-  deps.registry.updateProcessIdentity(agentId, identity, gateway.kind)
-  deps.registry.setActive(agentId, true)
-  await place.backend.releaseHold(place.runtime)
+  const selected = deps.registry.byAgent(agentId)
+  if (!selected) return 'vanished'
+  const engine = selected.engine
+  // `resolvePaneEngineProcess` answers null also when the probe could not answer: the refresh holds that as NO_ENGINE.
+  const published = identity
+    ? publishEngine(identity, () => resolvePaneEngineProcess(place.backend, place.runtime, engine), { gone: NO_ENGINE, changed: ANOTHER_PROCESS },
+      (process, refresh, expires) => {
+        if (process !== identity) console.log(`[restart] publication · engine renamed · ${sid(agentId)}`)
+        return deps.registry.confirmLaunch(agentId, { ...input, processIdentity: process, grid }, { current, refresh, expires })
+      })
+    : deps.registry.confirmLaunch(agentId, { ...input, processIdentity: identity, grid }, {
+      current,
+      refresh: async () => {
+        const pane = await place.backend.paneState(place.runtime)
+        if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable(NO_SHELL)
+      },
+    })
+  const publication = await published.catch((error: unknown) => {
+    // The dispatch's line names only the error's kind; this one names the check that held it (nightly run 45237523183).
+    if (error instanceof IdentityReadUnavailable) {
+      console.warn(`[restart] publication held · ${HELD_BY.find(held => held.message === error.message)?.label ?? 'other'}`)
+    }
+    throw error
+  })
+  if (publication.state !== 'confirmed') return 'changed'
+  const refreshed = publication.entry
+  if (!refreshed) return 'changed after commit'
+  const owns = () => operationCurrent() && matchesLaunchReceipt(deps.registry.byAgent(agentId), refreshed)
+  if (!owns()) return 'changed after commit'
+  await place.backend.releaseHold(place.runtime, owns)
   // The row has its new engine: cancelled from here on, the engine is still relaunched.
-  if (!current()) return 'changed after commit'
-  const refreshed = deps.registry.byAgent(agentId)
-  if (!refreshed) return 'vanished'
+  if (!owns()) return 'changed after commit'
   deps.announceSession(refreshed)
   deps.refreshGridAssignment(refreshed)
   return refreshed
 }
 
 export interface RestartDeps {
-  adoptSwarmSkill?: AdoptSwarmSkill
   native?: LaunchOverridesDeps['native']
   restartJobs: PaneSwap['restartJobs']
   registry: typeof registry
@@ -99,7 +143,6 @@ export interface RestartDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   relaunchOverrides: LaunchHelpers['relaunchOverrides']
   downgradedPermission: LaunchHelpers['downgradedPermission']
-  refreshGridWebSearch: LaunchHelpers['refreshGridWebSearch']
   liveBypassPermission: PaneSwap['liveBypassPermission']
   paneSwapDeps: PaneSwap['paneSwapDeps']
   /** A held agent runs no engine to swap: its restart is its launch, now (core/agents/heldLaunches.ts). Null for
@@ -107,13 +150,15 @@ export interface RestartDeps {
   restartHeld: (agentId: string) => Promise<HeldRestart> | null
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
+  /** The held passes, asked to try that agent again (core/agents/heldLaunches.ts `startAgain`). */
+  startAgain?: (agentId: string) => void
 }
 
 export function createAgentRestarter({
-  native: inspectNative, adoptSwarmSkill,
+  native: inspectNative,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
-  terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
-  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
+  terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission,
+  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld, startAgain,
 }: RestartDeps) {
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -151,7 +196,14 @@ export function createAgentRestarter({
     let session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
-    if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
+    // A fresh launch would drop a native first launch's first prompt or fork. One the guard held starts again from
+    // its receipt, so its restart is that recovery, now (`restartHeld`); one without that proof keeps today's refusal.
+    // One 0.6.86 or older held has that proof in its words: its restore re-reads the held shell and marks it (or fails
+    // it) as a pass would; refused here, a row no pass could read stayed held until the core restarted.
+    if (!session.sessionId && session.launch?.state === 'starting' && session.launch.nativeToken) {
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'This harness is still starting.' }
+    }
+    if (!session.sessionId && session.launch?.state === 'held' && session.launch.nativeToken && !heldFirstLaunch(session) && !legacyNativeHold(session)) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' }
     }
     const held = restartHeld(session.agentId)
@@ -161,8 +213,9 @@ export function createAgentRestarter({
     const place = restartTargetOf(session, (candidate) => terminals.backendFor(candidate))
     if (!place) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
     const { backend, runtime } = place
-    const target = { ...session }
-    const current = () => operationCurrent() && sameRestartTarget(target)
+    const target = structuredClone(session)
+    const operation = () => operationCurrent() && terminals.backendFor(runtime) === backend
+    const current = () => operation() && sameRestartTarget(target) && matchesLaunchReceipt(registry.byAgent(target.agentId), target)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' } as const
     if (!current()) return changed
     // Both branches below `cd` into the row's folder before they exec, and both have already killed
@@ -188,12 +241,9 @@ export function createAgentRestarter({
         const respawned = await backend.respawn(runtime, { command, cwd: homedir(), ...windowsPaneLaunch(engine, { cwd: session.cwd }) })
         if (!current()) return changed
         if (respawned.state !== 'succeeded') return { ok: false, error: 'RESTART_FAILED', detail: respawned.reason }
-        await backend.releaseHold(runtime)
-        if (!current()) return changed
-        registry.setActive(session.agentId, true)
-        const refreshed = registry.byAgent(session.agentId)
-        if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
-        announceSession(refreshed)
+        const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment },
+          session.agentId, null, null, place, current, {}, operation)
+        if (typeof refreshed === 'string') return changed
         console.log(`[restart] ${sid(session.agentId)} terminal · fresh shell`)
         return { ok: true, session: refreshed, resumed: false }
       } finally {
@@ -202,12 +252,6 @@ export function createAgentRestarter({
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
 
-    // An attached agent's Swarm role, before native inspection and launch preparation (superTabs/inCore/adoption.ts).
-    if (adoptSwarmSkill) {
-      const adopted = await adoptSwarmSkill(session, current)
-      if (!adopted || !current()) return changed
-      session = adopted
-    }
     // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
     // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
     // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
@@ -236,35 +280,43 @@ export function createAgentRestarter({
     // Keep this route through publication, and release only this operation's own reservation.
     const releaseRoute = agentReconciler.holdRoute(routeKey, null)
     try {
-      // A Swarm's PM comes back in full mode (Ken, 11-09): Restart (⌘⇧E) is how a person brings a stuck PM back, and in its
-      // owner's settings it asked before each tool and stood still until someone approved. Every other Swarm agent keeps
-      // the mode its person chose, or none (#4215).
-      const permitted = session.swarmSkill?.role === 'coordinator' ? { ...session, permissionMode: 'full' } : session
-      const restartPermission = await downgradedPermission(permitted,
-        await bypassPermissionFor(permitted, () => liveBypassPermission(session)), 'restart', built.overrides.native)
+      const restartPermission = await downgradedPermission(session,
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart', built.overrides.native)
       if (restartPermission.nativeHold || built.overrides.native?.current() === false) return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: restartPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.' }
       const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
         restartPermission.bypassPermission === true,
-        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent, isOwned: current },
       )
 
       if (!current()) return changed
+      // The guard held the relaunch: the pane is the held shell under its launch's token, kept so (no publication, no
+      // release of the pane). A conversation starts again from it as any launch the guard held, and its restart is
+      // answered now. Not a running row with no conversation: its first launch was confirmed, so it names no receipt
+      // (registry.ts `creationId`) and, marked, would be failed. Nor one with new launch words: the row keeps them only
+      // once the engine is back, and the recovery builds from the row, so it would come back with the old ones.
+      const heldToken = built.overrides.native?.token
+      if (!outcome.ok && outcome.held && session.sessionId && heldToken && launchArgs === undefined) {
+        const row = registry.setLaunch(session.agentId, guardHold(session, heldToken))!
+        announceSession(row)
+        startAgain?.(session.agentId)
+        console.log(`[restart] ${sid(session.agentId)} ${engine} · held by the native guard · starting again`)
+        return { ok: true, session: row, resumed: true }
+      }
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
       if (!outcome.ok) return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
-      refreshGridWebSearch(session.agentId, built.overrides)
-      // The engine is back with the words: now they are the record's, as `launchModel` is committed.
-      if (launchArgs) registry.setLaunchArgs(session.agentId, launchArgs)
 
       // Address the CANONICAL agentId from the resolved session, not the raw RPC input — `resolve()`
       // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
       // real agentId.
-      const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity, place, current)
-      if (refreshed === 'changed' || refreshed === 'changed after commit') return changed
-      if (refreshed === 'vanished') return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
+      const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity,
+        launchedGrid(built.overrides.gridLaunchRecord?.override), place, dispatchCurrent,
+        { launchArgs, ...(built.overrides.gridLaunchRecord ? { gridLaunchRecord: built.overrides.gridLaunchRecord } : {}) }, operation)
+      if (typeof refreshed === 'string') return changed
+      // A grid's name is one the person can choose, short enough to be guessed from a hash: the log says only that it is one.
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
-        + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
+        + (session.gridLaunch ? ' · on a grid' : ''))
       return { ok: true, session: refreshed, resumed: outcome.resumed }
     } finally {
       releaseRoute()

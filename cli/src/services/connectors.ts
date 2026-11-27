@@ -4,7 +4,9 @@
  * again as it starts, so an agent installed since a service was connected gets it too.
  *
  * `connectors` takes `{action}`: `list`, `connect` {connector}, `flow` {flow}, `disconnect` {connector},
- * `custom` {name, url, headers}, `callback` {flow, url}. The app opens a returned `authorize_url` in the
+ * `custom` {name, url, headers}, `callback` {flow, url}; and for Gmail, Calendar and Drive through this computer's
+ * Claude Code or Codex instead of Harness, `elsewhere`, `connect_via` / `disconnect_via` {connector, via, plugin?}, which answer
+ * the page to open in that engine's account (lib/connectors/elsewhere.ts). The app opens a returned `authorize_url` in the
  * browser and follows the flow. A phone signing in for this computer opens it in its own browser and,
  * for a service this computer signs in to itself, sends back the redirect to 127.0.0.1 it caught as
  * `callback`: the code alone is useless without the PKCE verifier kept here. Never a token in a reply.
@@ -15,20 +17,32 @@
  */
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync } from '../lib/connectors/agents.js'
+import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import { bridgePort, bridgeSocketPath, retireBridgeKey, rotateHarnessKey, saveBridgePort, sync, syncProfileHome } from '../lib/connectors/agents.js'
+import { errorKind } from '../lib/log.js'
 import { portHolderIsThisAccount } from '../lib/peerAccount.js'
 import { createBridge, serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { services, type GatewayRow } from '../lib/connectors/catalog.js'
 import { addApiKey, addCustom, cards, disconnect, Flows, signInFor } from '../lib/connectors/connect.js'
 import * as gateway from '../lib/connectors/gateway.js'
+import { connectVia, disconnectVia, elsewhere, type ElsewhereDeps } from '../lib/connectors/elsewhere.js'
+import { keepAlive, KEEP_ALIVE_S } from '../lib/connectors/renew.js'
 import { ConnectorError, Store, validateCode } from '../lib/connectors/store.js'
-import { answerVaultOp, VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
+import { answerVaultOp } from '../lib/connectors/vaultOps.js'
+import { VaultSync, vaultPortOf, type VaultPort } from '../lib/connectors/vaultSync.js'
 
 /** The request connectors answers for the apps, declared in core/api.ts for the core to route. */
 export { CONNECTORS_REQUESTS } from '../core/api.js'
 
 const GATEWAY_CACHE_MS = 60_000
+/** How long a Refresh waits for the account's connections to be exchanged before it lists what is here. */
+const SYNC_WAIT_MS = 15_000
+/** How often the bridge looks for connections to keep alive (renew.ts `keepAlive`), and how soon after it starts. */
+const KEEP_ALIVE_EVERY_MS = 3_600_000
+const KEEP_ALIVE_FIRST_MS = 120_000
+/** Up to this much more wait, drawn once per start: the account's computers do not renew one token at the same moment
+ *  (a service that rotates refresh tokens honours only the first), and the first one's renewal resets the others' wait. */
+const KEEP_ALIVE_SPREAD_S = 12 * 3600
 
 export interface ConnectorsDeps {
   vault: Store
@@ -81,6 +95,9 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   let gap = 1
   let toldMine = false
   let toldUnknown = false
+  // The port is tried again while an ask is out: lsof under load takes up to LSOF_MS, and a try that waited on it held a
+  // port this account had let go for that long (task #3640).
+  let asking = false
   bridge.on('listening', () => {
     if (leaving) moving!.moved((bridge.address() as AddressInfo).port, port)
     leaving = false
@@ -89,10 +106,15 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
   const again = (): void => { setTimeout(() => bridge.listen(leaving ? 0 : port, '127.0.0.1'), retryMs).unref() }
   bridge.on('error', (error: Error) => {
     tries++
-    if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${error.message}); trying again every ${retryMs} ms`)
-    if (!moving || tries < TRIES_BEFORE_ASKING || leaving) { again(); return }
-    if (skip > 0) { skip--; again(); return }
+    if (tries === 1) console.warn(`[connections] bridge port ${port} is not available (${errorKind(error)}); trying again every ${retryMs} ms`)
+    again()
+    if (!moving || tries < TRIES_BEFORE_ASKING || leaving || asking) return
+    if (skip > 0) { skip--; return }
+    asking = true
     void moving.holderIsMine(port).then((mine) => {
+      asking = false
+      // The port was taken while the ask was out: its answer is about a hold that has ended.
+      if (bridge.listening) return
       notMine = mine === false ? notMine + 1 : 0
       leaving = notMine >= 2
       if (mine !== false && moving.local) {
@@ -108,7 +130,6 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
         toldUnknown = true
         console.warn(`[connections] cannot tell which account holds bridge port ${port}; the bridge keeps trying the port and asking`)
       }
-      again()
     })
   })
   bridge.listen(port, '127.0.0.1')
@@ -118,7 +139,7 @@ function listen(bridge: Server, port: number, retryMs: number, moving?: Moving):
  *  Said once: its clients are told Harness is not running, though it is. */
 function listenSocket(vault: Store, path: string, retryMs: number, said = false): void {
   serveBridgeSocket(vault, path).catch((error: unknown) => {
-    if (!said) console.warn(`[connectors] the bridge's socket is not listening (${path}), trying again: ${error instanceof Error ? error.message : String(error)}`)
+    if (!said) console.warn(`[connectors] the bridge's socket is not listening, trying again: ${errorKind(error)}`)
     setTimeout(() => listenSocket(vault, path, retryMs, true), retryMs).unref()
   })
 }
@@ -126,19 +147,28 @@ function listenSocket(vault: Store, path: string, retryMs: number, said = false)
 /** The bridge's pipe on Windows (bridge.ts `serveBridgePipe`), a new name at each try. Said once, as the socket is. */
 function listenPipe(vault: Store, path: (() => string) | undefined, retryMs: number, said = false): void {
   serveBridgePipe(vault, path?.()).catch((error: unknown) => {
-    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${String(error)}`)
+    if (!said) console.warn(`[connectors] the bridge's pipe is not listening, trying again: ${errorKind(error)}`)
     setTimeout(() => listenPipe(vault, path, retryMs, true), retryMs).unref()
   })
 }
 
 export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
   holderIsMine?: (port: number) => Promise<boolean | null>
+  /** How Claude Code and Codex are found and asked (a spec's fakes). */
+  elsewhere?: ElsewhereDeps
+  /** Seconds a connection goes unrenewed before it is kept alive (renew.ts `keepAlive`); by default a day and up to 12 hours more. */
+  keepAliveAfter?: number
   /** The platform it runs on, and on Windows where its pipe is (a test's socket named as a pipe). */
   platform?: NodeJS.Platform
   pipePath?: () => string
+  /**
+   * The port the bridge bound, each time it listens: a spec that asks for any port dials this one, as a port freed for it to
+   * bind can be taken by any process in between. Production passes none.
+   */
+  listening?: (port: number) => void
 }
 
-export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = {}): ServiceRequests {
+export function startConnectors(core: CoreApi, ports: CorePorts, overrides: ConnectorsOverrides = {}): ServiceRequests {
   const env = overrides.env ?? process.env
   const store = overrides.vault ?? new Store(undefined, env)
   const deps: ConnectorsDeps = {
@@ -154,12 +184,13 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
   // Windows has no socket, but a pipe (task #2162): until then the Team account, holding the port from boot, heard every tool call.
   const local = socket !== null || platform === 'win32'
   // Where a socket or pipe can be, the port takes neither key for long: Harness's own goes over it, and the agents' retires (agents.ts).
-  if (local) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${(error as Error).message}`) } }
+  if (local) { try { rotateHarnessKey(vault) } catch (error) { console.warn(`[connections] could not replace Harness's key: ${errorKind(error)}`) } }
   const bridgeKeys = local
     ? { key: () => { try { return retireBridgeKey(vault) } catch { return '' } } }
     : { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
   const bridge = createBridge(vault, bridgeKeys)
   bridge.unref()
+  bridge.on('listening', () => overrides.listening?.((bridge.address() as AddressInfo).port))
   // A port a test or HARNESS_CONNECTIONS_PORT names stays that port.
   const movable = overrides.port === undefined && env.HARNESS_CONNECTIONS_PORT === undefined
   listen(bridge, deps.port, deps.retryMs, movable ? {
@@ -167,7 +198,7 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
     holderIsMine: overrides.holderIsMine ?? portHolderIsThisAccount,
     moved: (port, from) => {
       console.warn(`[connections] another account holds port ${from}; the bridge moved to port ${port}, and agents started from now on use it`)
-      try { saveBridgePort(vault, port); sync(vault, env) } catch (error) { console.warn(`[connections] could not save the bridge's new port: ${(error as Error).message}`) }
+      try { saveBridgePort(vault, port); sync(vault, env) } catch (error) { console.warn(`[connections] could not save the bridge's new port: ${errorKind(error)}`) }
       // Agents already running keep the old address: they recover here as soon as the other account lets go of it.
       const old = createBridge(vault, bridgeKeys)
       old.unref()
@@ -178,18 +209,40 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
   else if (local) listenPipe(vault, overrides.pipePath, deps.retryMs)
   // Stamped now, not at a client's first call: the day counts from this start.
   if (local) { try { retireBridgeKey(vault) } catch { /* The next request tries again. */ } }
-  try { sync(vault, env) } catch { /* A config that cannot be written now is written at the next connect. */ }
+  /** Every agent installed here given its entries; a config that cannot be written now is written at the next change. */
+  const syncAgents = (): void => { try { sync(vault, env) } catch { /* Left as it is. */ } }
+  syncAgents()
+  // The core asks as an agent launches on a profile home (core/api.ts ConnectorsPort). A home that cannot be written now
+  // (the vault's lock held past its wait, a read-only folder) launches with what its config holds, and is said here: never
+  // a failure of this service, which a few launches in a busy minute would switch off.
+  ports.connectors = {
+    syncProfileHome: async (engine, folder) => {
+      try { return syncProfileHome(vault, engine, folder, env) } catch (error) {
+        console.warn(`[connections] could not update a ${engine} profile home · ${errorKind(error)}`)
+        return []
+      }
+    },
+  }
 
   // Connections the same on every computer of the account: read now, at each `connectors_changed`, and
   // written whenever this computer's change (here, by `harness connections`, by a renewal in the bridge).
-  if (deps.vaultPort) {
-    const shared = new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn })
+  const shared = deps.vaultPort ? new VaultSync({ vault, port: deps.vaultPort, env, log: console.warn }) : null
+  if (shared) {
     shared.start()
     core.account.onNotice((notice) => {
       if (notice.type === 'connectors_changed') shared.changed(notice.revision)
       else if (notice.type === 'device_keys_changed') shared.changed(null)
     })
   }
+
+  const keepAliveAfter = overrides.keepAliveAfter ?? KEEP_ALIVE_S + Math.floor(Math.random() * KEEP_ALIVE_SPREAD_S)
+  const keepRound = (): void => {
+    void keepAlive(vault, keepAliveAfter).then((failed) => {
+      for (const [code, why] of Object.entries(failed)) console.warn(`[connections] could not keep ${code} signed in: ${why}`)
+    }, (error: unknown) => console.warn(`[connections] keeping connections signed in failed: ${errorKind(error)}`))
+  }
+  setTimeout(keepRound, KEEP_ALIVE_FIRST_MS).unref()
+  setInterval(keepRound, KEEP_ALIVE_EVERY_MS).unref()
 
   let offered: Record<string, GatewayRow> = {}
   let offeredAt = 0
@@ -202,7 +255,17 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
     switch (payload.action) {
       // `shared`: a connection made here reaches the account's other computers. The phone signs in
       // through one that says so before one that keeps it to itself (an older CLI says nothing).
-      case 'list': return { ...cards(vault, await gatewayOffers()), shared: deps.vaultPort !== null }
+      // `sync`: the Refresh button. The account's connections are exchanged first (a computer added since the last
+      // write is sealed for), waited on for a while. Then every agent installed here gets its entries again: one
+      // installed since the last connection change (Claude Code or Codex set up after signing in) has none.
+      // Only when the person asks: nothing watches for an agent being installed.
+      case 'list': {
+        if (payload.sync === true) {
+          if (shared) await Promise.race([shared.run(), new Promise((done) => setTimeout(done, SYNC_WAIT_MS).unref())])
+          syncAgents()
+        }
+        return { ...cards(vault, await gatewayOffers()), shared: shared !== null }
+      }
       case 'connect': {
         const code = validateCode(payload.connector)
         return { ...(await flows.start(code, signInFor(vault, code, services(await gatewayOffers())))) }
@@ -220,6 +283,10 @@ export function startConnectors(core: CoreApi, overrides: ConnectorsOverrides = 
       }
       case 'custom': return payload.kind === 'api' ? addApiKey(vault, payload, env) : addCustom(vault, flows, payload, env)
       case 'callback': return { ...flows.deliver(String(payload.flow ?? ''), String(payload.url ?? '')) }
+      // Gmail, Calendar and Drive through this computer's Claude Code or Codex instead (lib/connectors/elsewhere.ts).
+      case 'elsewhere': return { ...(await elsewhere(overrides.elsewhere)) }
+      case 'connect_via': return await connectVia(payload.connector, payload.via, overrides.elsewhere, payload.plugin)
+      case 'disconnect_via': return await disconnectVia(payload.connector, payload.via, overrides.elsewhere, payload.plugin)
       default: return { error: 'CONNECTORS_FAILED', detail: 'Unknown action.' }
     }
   }

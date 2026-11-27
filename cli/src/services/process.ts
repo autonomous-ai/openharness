@@ -17,6 +17,7 @@ import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, type MasterChannel } from '../harnessd/coreLink.js'
 import { isMasterMessage } from '../harnessd/protocol.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 
@@ -48,6 +49,9 @@ export interface ServiceProcessOptions {
   onDisconnected?: () => void
   /** A binary frame from the core (a remote client's terminal, for the gateway). A throw is logged. */
   onBinary?: (bytes: Uint8Array) => void
+  /** A client's connection to the core ended (`service_connection_closed`), after what it asked was aborted: for a
+   *  service that keeps something of its own per connection, an agent browser's viewers' streams. A throw is logged. */
+  onConnectionClosed?: (connection: string) => void
   env?: NodeJS.ProcessEnv
   connect?: (url: string) => WebSocket
   log?: (line: string) => void
@@ -90,7 +94,6 @@ export function serviceFaults(env: NodeJS.ProcessEnv, name: string): ServiceFaul
   return faults
 }
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 /** Another of the owner's machines (Asker.machine), as the core said it; read as none when malformed. */
 const machineOf = (value: unknown): { machineId: string; label: string | null } | null => {
   const m = value as { machineId?: unknown; label?: unknown } | null
@@ -230,10 +233,10 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   const onFrame = (raw: WebSocket.RawData, isBinary = false): void => {
     if (isBinary) {
       try { options.onBinary?.(raw instanceof Buffer ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(Buffer.concat(raw as Buffer[]))) }
-      catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
+      catch (error) { log(`[service ${options.name}] binary frame failed · ${errorKind(error)}`) }
       return
     }
-    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown } }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown; door?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
@@ -247,7 +250,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       // An event that fails is this service's alone: logged, and the next one handled as usual. Thrown
       // out of the socket's listener it ended the process, and every request in flight with it.
       const kind = typeof payload.kind === 'string' ? payload.kind : 'event'
-      const failed = (error: unknown): void => log(`[service ${options.name}] ${kind} failed · ${describe(error)}`)
+      const failed = (error: unknown): void => log(`[service ${options.name}] ${kind} failed · ${errorKind(error)}`)
       try {
         if (faults.calls.has(kind)) throw new Error(`injected fault: ${options.name}.${kind}`)
         void Promise.resolve(options.onEvent?.(payload)).catch(failed)
@@ -256,6 +259,8 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     }
     if (frame.type === 'service_connection_closed') {
       for (const [closed, asked] of answering) if (asked === payload.connection) closed.abort()
+      if (typeof payload.connection !== 'string') return
+      try { options.onConnectionClosed?.(payload.connection) } catch (error) { log(`[service ${options.name}] connection closed failed · ${errorKind(error)}`) }
       return
     }
     if (frame.type === 'service_query_result') {
@@ -281,6 +286,8 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       ...(machineOf(frame.asker?.machine) ? { machine: machineOf(frame.asker?.machine)! } : {}),
       ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
       ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
+      // Asked through the local door over the daemon's own socket (core/serviceRoutes.ts): what only that socket may ask.
+      ...(frame.asker?.door === 'socket' ? { door: 'socket' as const } : {}),
     }
     // Aborted when that connection closes (`service_connection_closed`), or when the core goes.
     const closed = new AbortController()
@@ -293,7 +300,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
         return handle(payload, asker, closed.signal)
       })
       .catch((error: unknown) => {
-        log(`[service ${options.name}] ${type} failed · ${describe(error)}`)
+        log(`[service ${options.name}] ${type} failed · ${errorKind(error)}`)
         return { error: 'SERVICE_FAILED', service: options.name }
       })
       .then((result) => {
@@ -328,7 +335,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       // The core that asked is gone, and every connection it routed with it: nobody can read these answers.
       for (const closed of answering.keys()) closed.abort()
       if (wasOpen) {
-        try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${describe(error)}`) }
+        try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${errorKind(error)}`) }
       }
       if (stopped) return
       // Refused: this core does not run the service out of its process, as a core from before it did under

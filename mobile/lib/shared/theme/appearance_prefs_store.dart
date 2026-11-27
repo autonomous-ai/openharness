@@ -5,7 +5,7 @@ import '../../core/local_key_value_store.dart';
 import 'app_theme.dart';
 import 'color_palette.dart';
 
-/// Light or dark, as Settings opened from Swarm offers it: System, Dark or Light.
+/// Light or dark: System, Dark or Light.
 ///
 /// Beside [HarnessPalette], not instead of it. App colors (the terminal's Settings) still picks an
 /// exact palette, and a palette carries its own brightness; Theme only says which side of it to
@@ -46,13 +46,11 @@ class AppearancePrefs {
   /// The palette chosen in App colors — or, before any was, the shipped one.
   final HarnessPalette palette;
 
-  /// Settings ▸ Appearance ▸ Theme, as Swarm's Settings offers it. Null — the default, and what
-  /// App colors sets — means [palette] decides on its own, light or dark, as it always has. So
-  /// nobody's app changes until they choose here.
+  /// Theme: light or dark. Null — the default, and what App colors sets — means [palette] decides on
+  /// its own, light or dark, as it always has.
   final AppThemeMode? themeMode;
 
-  /// The palette each side falls back to when [palette] is on the other: the phone's two themes,
-  /// as Swarm's pages are drawn and reviewed in.
+  /// The palette each side falls back to when [palette] is on the other: the phone's two themes.
   static const darkPalette = HarnessPalette.graphite;
   static const lightPalette = HarnessPalette.paper;
 

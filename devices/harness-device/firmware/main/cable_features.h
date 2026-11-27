@@ -13,12 +13,13 @@ enum {
     // device that does not see it keeps its own settings screens; nothing here is load-bearing for a
     // session, so an older daemon simply never asks.
     CABLE_FEATURE_SETTINGS = 1u << 6,
-    // Words reviewed on a Swarm face are posted in its chat by Send. Without it a reviewed draft would be typed into the
-    // Lead's terminal, so a Swarm face never asks an older daemon for review.
-    CABLE_FEATURE_SWARM_REVIEW = 1u << 7,
-    // A Lead on another machine may be named by its Swarm id: the daemon posts the words in its chat. An older daemon would
-    // hand that id to the pane focused in the window, so without it such a Lead is named to no one.
-    CABLE_FEATURE_SWARM_REMOTE = 1u << 8,
+    // The daemon lists the other apps on the window's tab and takes a pick there, so the TABS screen
+    // can offer its TABS | APPS switch. An older daemon would ignore that pick, so without it there is
+    // no switch.
+    CABLE_FEATURE_APPS_SWITCH = 1u << 7,
+    // The daemon sends a question the dial was already told back as a `tier: "list"` row. Without it
+    // the dial treats such a frame as an alert, so an older daemon never mutes a ring.
+    CABLE_FEATURE_QUESTION_TIER = 1u << 8,
 };
 
 // Optional welcome field. Older daemons omit it and retain the core voice,

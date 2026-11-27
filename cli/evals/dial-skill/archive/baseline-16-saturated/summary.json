@@ -1,0 +1,21 @@
+{
+  "description": "Baseline: DIAL_SKILL as on feat/dial-skill-eval, unchanged",
+  "label": "baseline",
+  "target": "skill",
+  "environment": {
+    "commit": "e9364ade4597c38ee44b52517ed29c8d63ce68c1",
+    "lockfile": "cli/package-lock.json",
+    "lockfile_sha256": "a7cc1f1846e31034bca132a0c072bd5d1877aa01e4ee188a57b3b5cf53eed738",
+    "claude_version": "2.1.326 (Claude Code)",
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "max_turns": 40,
+    "agent_timeout_s": 600,
+    "judge_model": "claude-opus-5-5",
+    "judge_effort": "low",
+    "harness_sha": "f2b8b7205f6bc23c3df8a2ee10cd9615a34819ebe802d09d5413ff127a941cc3",
+    "rubric_sha": "2d63432e46a0017813ed1b4dbe12c0613b0ddcaed268c348ac1ca46802b298bb",
+    "setting_sources": "project",
+    "date": "2026-11-17"
+  }
+}

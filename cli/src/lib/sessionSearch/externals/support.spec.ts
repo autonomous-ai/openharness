@@ -82,6 +82,18 @@ describe('reading values', () => {
     expect(absoluteFolder(3)).toBeNull()
   })
 
+  // Ken's VM, 2026-11-26: Claude Code on Windows writes its cwd as `C:\...`, so every Windows session was dropped.
+  it('takes a Windows drive folder on Windows only, never a share, a device path or a drive-relative one', () => {
+    for (const folder of ['C:\\work\\dial', 'c:/work', 'D:\\']) expect(absoluteFolder(folder, 'win32')).toBe(folder)
+    for (const folder of ['\\\\server\\share\\x', '\\\\?\\C:\\x', '\\\\.\\pipe\\x', '//server/share', 'C:work', 'work', '/work']) {
+      expect(absoluteFolder(folder, 'win32')).toBeNull()
+    }
+    for (const platform of ['linux', 'darwin'] as const) {
+      expect(absoluteFolder('C:\\work', platform)).toBeNull()
+      expect(absoluteFolder('/work', platform)).toBe('/work')
+    }
+  })
+
   it('reads a time in every unit the engines write', () => {
     const ms = Date.parse('2026-09-27T10:00:00Z')
     expect(epochMs(ms / 1000)).toBe(ms)
@@ -231,6 +243,21 @@ describe('processes', () => {
     expect(calls).toHaveLength(1)
   })
 
+  it('reads no tty, cwd or open file on Windows, and runs neither ps nor lsof', async () => {
+    const calls: string[] = []
+    const exec = async (command: string, args: readonly string[]) => {
+      calls.push(`${command} ${args.join(' ')}`)
+      return command === 'lsof' ? 'p7\nn/f\n' : '  7 ttys001\n'
+    }
+    expect(await processTtys([7], exec, 'win32')).toEqual(new Map())
+    expect(await processCwds([7], exec, 'win32')).toEqual(new Map())
+    const view = processView(exec, undefined, undefined, undefined, 'win32')
+    expect(await view.openFiles([7])).toEqual(new Map())
+    expect(await view.openFilesOf(['codex'])).toEqual(new Map())
+    expect(await view.cwds([7])).toEqual(new Map())
+    expect(calls).toEqual([])
+  })
+
   it('keys a folder the same however it is spelled', async () => {
     const dir = home()
     mkdirSync(join(dir, 'project'))
@@ -305,6 +332,32 @@ describe('processes', () => {
       { pid: 6, ppid: 1, executable: 'grok', args: 'grok' },
     ])
     expect((await listProcesses(async () => [{ ...row, startTicks: 42 }]))[0].generation).toBe('linux:42')
+  })
+
+  it('keeps a Windows start marker, and adds none to any other row', async () => {
+    const row = { pid: 5, parentPid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133456789012345678' }
+    expect(await listProcesses(async () => [row])).toEqual([
+      { pid: 5, ppid: 1, executable: 'claude.exe', args: 'claude', started: 1_701_205_301_234, startMarker: 'w:133456789012345678',
+        generation: 'ps:1701205301234' },
+    ])
+    const result = await listProcesses(async () => [
+      { ...row, startMarker: 'Sun Sep 27 09:05:03 2026' }, { ...row, pid: 6, startMarker: 'soon' },
+    ])
+    expect(result[0]).not.toHaveProperty('startMarker')
+    expect(result[1]).not.toHaveProperty('startMarker')
+  })
+
+  it('gives a process with a Windows start marker its start', async () => {
+    const row = { pid: 5, parentPid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133700000000000000' }
+    expect((await listProcesses(async () => [row]))[0].started).toBe(1_725_526_400_000)
+  })
+
+  it('carries the whole command path where ps cut it, and adds none of its own', async () => {
+    const app = '/Users/someone/Library/Application Support/Claude/claude-code/2.1.325/485fdac4332e/claude.app/Contents/MacOS/claude'
+    const row = { pid: 5, parentPid: 1, executable: app.slice(0, 16), args: app, startMarker: 'Sun Nov 15 15:41:22 2026' }
+    const [cut, whole] = await listProcesses(async () => [row, { ...row, pid: 6, commandPath: app }])
+    expect(cut).not.toHaveProperty('commandPath')
+    expect(whole).toMatchObject({ pid: 6, executable: '/Users/someone/L', commandPath: app })
   })
 
   it("knows Harness's own panes by their tmux session names, and by a daemon's tag wherever they moved", async () => {

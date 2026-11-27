@@ -53,8 +53,8 @@ interface Reply {
 // The timeout is the worker's own patient deadline (patientExec.ts `patientDeadline`, the same rules), never
 // Node's: the worker is held too, by its own synchronous spawns, and under a burst of probes Node's timer ran
 // before the child's exit was read and reported an answered child as success with nothing in it (found in
-// review, 2026-10-15). A late timer gets its window again; one on time kills from the check phase, after
-// an answer that landed in the same instant has been read.
+// review, 2026-10-15). The window runs in slices of at most HELD_MS, as there: a late slice gets the window
+// again; the last one on time kills from the check phase, after an answer that landed in the same instant is read.
 // Built when the worker starts, not at load: patientExec.ts imports this module, so its constants are not
 // initialised yet while this one loads.
 const workerSource = (): string => `
@@ -62,14 +62,16 @@ const { parentPort } = require('node:worker_threads')
 const { execFile } = require('node:child_process')
 const HELD_MS = ${HELD_MS}, MAX_WINDOWS = ${MAX_WINDOWS}
 const deadline = (ms, expire) => {
-  let cancelled = false, windows = 0, timer
+  let cancelled = false, windows = 1, left = ms, timer
   const arm = () => {
-    windows++
-    const due = performance.now() + ms
+    const slice = Math.min(left, HELD_MS), start = performance.now(), due = start + slice
     timer = setTimeout(() => {
-      if (performance.now() - due > HELD_MS && windows < MAX_WINDOWS) { arm(); return }
+      const now = performance.now()
+      if (now - due > HELD_MS && windows < MAX_WINDOWS) { windows++; left = ms; arm(); return }
+      left -= Math.max(slice, now - start)
+      if (left > 0) { arm(); return }
       setImmediate(() => { if (!cancelled) expire() })
-    }, ms)
+    }, slice)
   }
   arm()
   return () => { cancelled = true; clearTimeout(timer) }

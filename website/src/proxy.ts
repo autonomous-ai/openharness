@@ -14,15 +14,15 @@ function siteOrigin(request: NextRequest): SiteOrigin {
 
 /**
  * Keeps a tagged link's `utm_*` and `rid` for the sign-in (lib/signInAttribution.ts). Every page and
- * download route goes through here — /desktop, a link straight to /desktop/download-macos, the web app
- * at / — and an untagged request passes untouched.
+ * download route goes through here — /download, a link straight to /desktop/download-macos, the device
+ * guide that / redirects to — and an untagged request passes untouched.
  */
 export function proxy(request: NextRequest): NextResponse {
   const response = NextResponse.next()
   const cookies = attributionCookies(request.nextUrl.searchParams, siteOrigin(request))
   if (!cookies.length) return response
   for (const { name, value, ...options } of cookies) response.cookies.set(name, value, options)
-  // /desktop is prerendered with `s-maxage=31536000`. Cloudflare passes it through today, but a cache
+  // /download is prerendered with `s-maxage=31536000`. Cloudflare passes it through today, but a cache
   // that kept this response would hand one person's referral cookies to everyone after them.
   response.headers.set("Cache-Control", "private, no-store")
   return response

@@ -24,6 +24,11 @@ describe('findGitBash', () => {
     expect(findGitBash({ env: { LOCALAPPDATA: 'C:\\Users\\ana\\AppData\\Local' }, isFile: user })).toBe('C:\\Users\\ana\\AppData\\Local\\Programs\\Git\\bin\\bash.exe')
   })
 
+  it("finds the git of a PATH folder in quotes, as Node's spawn reads it", () => {
+    const quoted = disk('D:\\Apps\\Git\\cmd\\git.exe', 'D:\\Apps\\Git\\bin\\bash.exe')
+    expect(findGitBash({ env: { PATH: 'C:\\Windows\\System32;"D:\\Apps\\Git\\cmd"' }, isFile: quoted })).toBe('D:\\Apps\\Git\\bin\\bash.exe')
+  })
+
   it('prefers the git on PATH over an older install in Program Files', () => {
     const both = disk('C:\\Program Files\\Git\\bin\\bash.exe', 'D:\\Git\\cmd\\git.exe', 'D:\\Git\\bin\\bash.exe')
     expect(findGitBash({ env: { PATH: 'D:\\Git\\cmd', ProgramFiles: 'C:\\Program Files' }, isFile: both })).toBe('D:\\Git\\bin\\bash.exe')
@@ -42,15 +47,28 @@ describe('findGitBash', () => {
       .toBe('C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
   })
 
-  it('looks where Scoop installs git when PATH has none yet: its own root, the home folder\'s, the global one', () => {
+  it('looks where Scoop installs git for this user when PATH has none yet: its own root, the home folder\'s', () => {
     const custom = disk('D:\\scoop\\apps\\git\\current\\bin\\bash.exe')
     expect(findGitBash({ env: { SCOOP: 'D:\\scoop' }, isFile: custom })).toBe('D:\\scoop\\apps\\git\\current\\bin\\bash.exe')
     const home = disk('C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
     expect(findGitBash({ env: { USERPROFILE: 'C:\\Users\\ana' }, isFile: home })).toBe('C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
+  })
+
+  it("never looks in Scoop's root for everyone, which any user of the computer can fill", () => {
+    // Users may make C:\ProgramData\scoop, a Harness guest included; a real global install puts its shims on PATH.
     const global = disk('E:\\apps-global\\apps\\git\\current\\bin\\bash.exe')
-    expect(findGitBash({ env: { SCOOP_GLOBAL: 'E:\\apps-global' }, isFile: global })).toBe('E:\\apps-global\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { SCOOP_GLOBAL: 'E:\\apps-global' }, isFile: global })).toBeNull()
     const programData = disk('C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe')
-    expect(findGitBash({ env: { ProgramData: 'C:\\ProgramData' }, isFile: programData })).toBe('C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { ProgramData: 'C:\\ProgramData' }, isFile: programData })).toBeNull()
+  })
+
+  it('never follows a relative PATH entry, which names a folder of whatever folder the daemon runs in', () => {
+    // Every file exists, so a relative entry followed anywhere would give a bash; `\tools` is relative to the drive.
+    const everywhere = (path: string) => /(?:git|bash)\.exe$/i.test(path)
+    for (const relative of ['tools\\Git\\cmd', '.\\cmd', '\\tools\\Git\\cmd', 'C:Git\\cmd']) {
+      expect(findGitBash({ env: { PATH: relative }, isFile: everywhere })).toBeNull()
+    }
+    expect(findGitBash({ env: { PATH: 'cmd;D:\\Git\\cmd' }, isFile: everywhere })).toBe('D:\\Git\\bin\\bash.exe')
   })
 
   it('is null on a computer with no Git for Windows at all', () => {

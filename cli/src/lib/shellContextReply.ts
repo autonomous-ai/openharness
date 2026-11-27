@@ -3,6 +3,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, renameSync, rmSyn
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 
 export function shellContextReply(payload: Record<string, unknown>, home = homedir()): boolean {
   const { context, id, code, text } = payload
@@ -12,7 +13,7 @@ export function shellContextReply(payload: Record<string, unknown>, home = homed
   const uid = process.getuid?.()
   let fd: number | undefined
   try {
-    const base = join(home, '.harness', 'shell-requests')
+    const base = harnessPath('shell-requests', home)
     for (const path of [base, join(base, context)]) {
       const stat = lstatSync(path)
       if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0) return false

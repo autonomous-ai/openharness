@@ -1,6 +1,31 @@
 /** Shared runtime value and formatting mechanics; no engine registry or profile manager. */
 import { readFile } from 'node:fs/promises'
-import type { EngineRuntime, RuntimeField, RuntimeModelOption, RuntimeProfile, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+import { settingsText } from '../../lib/settingsText.js'
+import type { EngineRuntime, ProfileEvidence, RuntimeControl, RuntimeField, RuntimeModelOption, RuntimeProfile, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+
+/**
+ * One record's profile evidence (facets/runtime.ts `ProfileEvidence`), applied as the engine's own reader applied the
+ * record when it ran in the core: the model and effort it names, the version, an effort shown until one is known, a
+ * switch it confirms, and a configuration read again when the model changed.
+ */
+export function applyProfileEvidence(context: { session: { cliVersion: string | null }; state: RuntimeState; control?: RuntimeControl;
+  refreshConfig(): void }, evidence: ProfileEvidence): void {
+  const { session, state, control } = context
+  if (evidence.cliVersion) { session.cliVersion = evidence.cliVersion; state.cliVersion = evidence.cliVersion }
+  if (evidence.model) {
+    const before = state.model
+    state.model = evidence.model
+    if (evidence.effortUnset) state.effort ??= evidence.effortUnset
+    state.observedAt = Date.now()
+    if (evidence.confirms && control?.target.model === evidence.model) control.modelConfirmed = true
+    if (evidence.refresh && state.model !== before) context.refreshConfig()
+  }
+  if (evidence.effort) {
+    state.effort = evidence.effort
+    state.observedAt = Date.now()
+    if (evidence.confirms && control?.target.effort === evidence.effort) control.effortConfirmed = true
+  }
+}
 
 export const blankRuntimeState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 
@@ -13,8 +38,8 @@ export function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 
-/** Puts [configured], the settings' default, where the session has shown no effort: none yet, or the one an earlier
- * settings read put there, which follows the settings (moved homes, the project override last). Read after the
+/** Puts [configured], the launch flag's or the settings' default, where the session has shown no effort: none yet, or the one
+ * an earlier read put there, which follows the settings (moved homes, the project override last). Read after the
  * transcript on attach, it replaced the effort a reply recorded, so an adopted agent or a restarted daemon reported it
  * wrong (#1966 review). */
 export function fillConfiguredEffort(state: RuntimeState, configured: string): void {
@@ -95,7 +120,7 @@ export function currentPaneUi(paneText: string): string {
 }
 
 export async function readJson(file: string): Promise<Record<string, unknown> | null> {
-  try { return record(JSON.parse(await readFile(file, 'utf8'))) } catch { return null }
+  try { return record(JSON.parse(settingsText(await readFile(file)))) } catch { return null }
 }
 
 export function addOption(
@@ -105,13 +130,14 @@ export function addOption(
   model: string,
   effort: string,
   modelLabel = runtimeModelLabel(model),
+  description?: string,
 ): void {
   // The id inside a `runtime-v1:` string is what the web/device echoes back on a pick, so it is the
   // AGENT id — the public one — not the engine session that happens to be bound right now.
   const id = encodeRuntimeProfile({ sessionId: session.agentId, engine: session.engine, model, effort })
   if (seen.has(id)) return
   seen.add(id)
-  output.push({ id, displayName: `${modelLabel} / ${effortLabel(effort)}` })
+  output.push({ id, displayName: `${modelLabel} / ${effortLabel(effort)}`, ...(description ? { description } : {}) })
 }
 
 /** Use the engine's actual reducer on an isolated value. No live session or control is mutated. */

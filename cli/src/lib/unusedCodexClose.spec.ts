@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -31,15 +32,18 @@ let screen: string | null
 let checkpointDirectory: string
 const killPane = vi.fn<TmuxBackend['kill']>(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp/companions' })!
+  vi.mocked(checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture process ended' })
+  row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp/companions' }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, {
     launch: { state: 'ready' },
     dsh: 'autonomous/pair',
     codexHome: join(env.ADAPTER_DATA_DIR, 'unused-codex', row.agentId),
     processIdentity: { pid: 99, executable: 'node', startMarker: 'old companion' },
   })
+  expect(registry.byAgent(row.agentId)?.processIdentity).toEqual(row.processIdentity)
   mkdirSync(join(row.codexHome!, 'app-server-daemon'), { recursive: true })
   writeFileSync(join(row.codexHome!, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid: 78, processStartTime: 'shared server' }))
   vi.mocked(processRows).mockResolvedValue([
@@ -51,8 +55,8 @@ beforeEach(() => {
   const stop = createStopAgentService({
     registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: killPane }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
-    forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(),
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
+    forgetSession: async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }, markDeleted: vi.fn(), clearDeleted: vi.fn(),
     // The real chain: the core's broker, Codex's own control in process, the process table mocked above.
     stopNative: inlineNativeControls({ rows: processRows }).stop,
   })
@@ -64,20 +68,22 @@ beforeEach(() => {
     checkpoint: (session, phase) => checkpoints.save(session, { screen: phase === 'before' ? screen : null }),
   })
 })
-afterEach(() => {
-  service.dispose()
+afterEach(async () => {
+  service?.dispose()
   vi.restoreAllMocks()
-  for (const entry of registry.list()) registry.removeAgent(entry.agentId)
+  for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
 })
 
 it.each(['idle', 'now'] as const)('closes an unused companion with a shared Codex server after saving its terminal (%s)', async mode => {
+  const publish = vi.spyOn(registry, 'confirmEngineExit')
   const request = { agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString() }
   expect(await service.request({ ...request, mode: 'inspect' })).toEqual({ activity: 'idle' })
-  expect(await service.request({ ...request, mode })).toEqual({ closed: true })
+  expect(await service.request({ ...request, mode })).toEqual({ closed: true, withoutConversation: true })
   expect(terminateDeletedAgent).toHaveBeenCalledOnce()
   expect(vi.mocked(terminateDeletedAgent).mock.calls[0][0].processIdentity?.pid).toBe(99)
   expect(killPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%500' }, expect.any(Function))
   expect(registry.byAgent(row.agentId)).toBeUndefined()
+  expect(publish).toHaveBeenCalledWith(row.agentId, 'remove', expect.objectContaining({ current: expect.any(Function), refresh: expect.any(Function) }))
   const manifest = JSON.parse(readFileSync(join(checkpointDirectory, readdirSync(checkpointDirectory).find(file => /^[a-f0-9]{64}\.json$/.test(file))!), 'utf8'))
   expect(JSON.parse(readFileSync(join(checkpointDirectory, manifest.file), 'utf8')).screen).toBe(emptyComposer)
 })
@@ -108,7 +114,7 @@ it('closes the saved shell when an unbound Codex client exits before discovery c
   const request = { agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString() }
   expect(await service.request({ ...request, mode: 'inspect' })).toEqual({ activity: 'unknown' })
   expect(await service.request({ ...request, mode: 'idle' })).toMatchObject({ error: 'SESSION_NOT_IDLE' })
-  expect(await service.request({ ...request, mode: 'now' })).toEqual({ closed: true })
+  expect(await service.request({ ...request, mode: 'now' })).toEqual({ closed: true, withoutConversation: true })
   expect(killPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%500' }, expect.any(Function))
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   const manifest = JSON.parse(readFileSync(join(checkpointDirectory, readdirSync(checkpointDirectory).find(file => /^[a-f0-9]{64}\.json$/.test(file))!), 'utf8'))
@@ -146,7 +152,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('closes only the exited cl
     await vi.waitFor(async () => expect((await processRows())!.some(process => process.pid === row.processIdentity!.pid)).toBe(false))
     screen = await server.run('capture-pane', '-p', '-t', pane)
     const result = await service.request({ agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString(), mode: 'now' })
-    expect(result).toEqual({ closed: true })
+    expect(result).toEqual({ closed: true, withoutConversation: true })
     expect(await server.run('list-panes', '-t', 'close-fixture', '-F', '#{pane_id}')).toBe(sibling)
     expect(await server.run('display-message', '-p', '-t', sibling, '#{pane_dead}')).toBe('0')
     expect((await processRows())!.some(row => row.pid === unrelatedServer.pid)).toBe(true)

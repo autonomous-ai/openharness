@@ -9,6 +9,7 @@ import 'package:xterm/xterm.dart';
 import '../core/crash_log.dart';
 import '../core/sleep_aware.dart';
 import '../logging/app_log.dart';
+import '../logging/redact.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
 import 'terminal_viewport.dart';
@@ -1400,11 +1401,13 @@ class TerminalSession extends ChangeNotifier {
     if (isBoundary) unawaited(_flushInput());
     var offset = 0;
     while (offset < bytes.length) {
-      final available = 8 * 1024 - _inputBytes.length;
+      final available = kInputFrameMaxBytes - _inputBytes.length;
       final take = min(available, bytes.length - offset);
       _inputBytes.addAll(bytes.sublist(offset, offset + take));
       offset += take;
-      if (_inputBytes.length == 8 * 1024) unawaited(_flushInput());
+      if (_inputBytes.length == kInputFrameMaxBytes) {
+        unawaited(_flushInput());
+      }
     }
     if (isBoundary) {
       unawaited(_flushInput());
@@ -1454,44 +1457,29 @@ class TerminalSession extends ChangeNotifier {
       // had the very next keystroke refused and the whole pane frozen. The
       // tail runs one closure at a time, which is what keeps the numbers in
       // order.
-      //
-      // Never larger than the daemon accepts, either — split rather than let
-      // one oversized frame be refused with the counter intact behind it.
-      for (
-        var offset = 0;
-        offset < bytes.length;
-        offset += kInputFrameMaxBytes
-      ) {
-        if (!_isCurrent(generation) ||
-            !acceptsInput ||
-            streamId != currentStreamId) {
-          return;
-        }
-        final end = min(offset + kInputFrameMaxBytes, bytes.length);
-        final frame = TerminalBinaryFrame(
-          kind: TerminalBinaryKind.input,
-          streamId: currentStreamId,
-          seq: _inputSeq++,
-          bytes: Uint8List.fromList(bytes.sublist(offset, end)),
-          compressed: false,
+      final frame = TerminalBinaryFrame(
+        kind: TerminalBinaryKind.input,
+        streamId: currentStreamId,
+        seq: _inputSeq++,
+        bytes: Uint8List.fromList(bytes),
+        compressed: false,
+      );
+      final sendStartedAt = _now();
+      final sent = await sendBinary(frame);
+      final sendTook = _now().difference(sendStartedAt);
+      if (sendTook >= _slowInputThreshold) {
+        appLog.warn(
+          'terminal',
+          'input send slow machine=$machineId agent=$agentId stream=$currentStreamId '
+              'link=$linkMode tookMs=${sendTook.inMilliseconds} bytes=${frame.bytes.length}',
         );
-        final sendStartedAt = _now();
-        final sent = await sendBinary(frame);
-        final sendTook = _now().difference(sendStartedAt);
-        if (sendTook >= _slowInputThreshold) {
-          appLog.warn(
-            'terminal',
-            'input send slow machine=$machineId agent=$agentId stream=$currentStreamId '
-                'link=$linkMode tookMs=${sendTook.inMilliseconds} bytes=${frame.bytes.length}',
-          );
-        }
-        if (!_isCurrent(generation)) return;
-        if (!sent) {
-          transportLost('Terminal input was not sent');
-          return;
-        }
-        _inputUnansweredSince ??= sendStartedAt;
       }
+      if (!_isCurrent(generation)) return;
+      if (!sent) {
+        transportLost('Terminal input was not sent');
+        return;
+      }
+      _inputUnansweredSince ??= sendStartedAt;
     });
     _inputSendTail = queued.catchError((_) {
       if (_isCurrent(generation)) transportLost('Terminal input was not sent');
@@ -1590,9 +1578,10 @@ class TerminalSession extends ChangeNotifier {
     );
   }
 
-  /// The daemon's ceiling on one input frame (`INPUT_MAX_BYTES` in
-  /// `cli/src/lib/terminalStreamManager.ts`). Larger is refused, not split.
-  static const kInputFrameMaxBytes = 64 * 1024;
+  /// The most one input frame carries: typing buffers up to this and flushes at it, so a frame
+  /// stays below the daemon's 64 KiB ceiling (`INPUT_MAX_BYTES` in
+  /// `cli/src/lib/terminalStreamManager.ts`), which refuses a larger frame rather than splitting it.
+  static const kInputFrameMaxBytes = 8 * 1024;
   static const _resizeCoalesceWindow = Duration(milliseconds: 50);
 
   void resize(int width, int height) {
@@ -1882,10 +1871,11 @@ class TerminalSession extends ChangeNotifier {
   void _fail(String code, String? message) {
     if (_disposed) return;
     // Why a pane shows Reconnect was only ever in debugPrint, invisible on a person's machine (2026-10-16).
+    // The message is a token or its length: a paste-file failure quotes the dropped file's path.
     appLog.warn(
       'terminal',
       'failed machine=$machineId agent=$agentId stream=$streamId code=$code'
-          '${message == null ? '' : ' message=$message'}',
+          '${message == null ? '' : ' message=${logToken(message)}'}',
     );
     _inputUnanswered(code);
     _generation++;

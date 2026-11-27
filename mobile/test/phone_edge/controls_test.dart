@@ -366,8 +366,17 @@ void main() {
     testWidgets('ctrl as the session holds it', (tester) async {
       final armed = <bool>[];
       await pumpBar(tester, ctrl: true, armCtrl: armed.add);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('terminal-key-ctrl')),
+      );
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('terminal-key-ctrl')));
       expect(armed, [false]);
+      // The strip scrolls: swiped to, as a thumb would.
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('terminal-key-Left')),
+      );
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('terminal-key-Left')));
       expect(armed, [false, false]);
     });

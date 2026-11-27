@@ -18,9 +18,8 @@
  *      never make another row surrender its route; all such conversations remain held.
  *   2. The new route is HELD in the reconciler until the engine process is bound here. Otherwise the
  *      reconciler's discovery half sees an unclaimed engine process and mints a fresh agentId for it.
- *   3. The row keeps `launch: starting` and only gets its process identity from here. The reconcile
- *      pass after the release then matches the process, sees a launch in progress, and does the
- *      full ready → attach → announce sequence it already does for `agent_create`.
+ *   3. The settled process and ready state are published durably before the terminal hold releases.
+ *      Discovery can then attach and announce the verified owner.
  *
  * A grid agent comes back onto its grid: the registry kept the launch it was created or retargeted
  * with (`gridLaunch`, credential included), and `buildLaunch` turns that back into the same env and
@@ -37,12 +36,18 @@
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
-import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
+import { guardHeld, heldFirstLaunch, matchesLaunchReceipt, RegistryOwnershipChanged, type AgentLaunch, type LaunchPublication, type ProcessIdentity, type RegisteredSession, type RegistryAuthority, type registry } from './registry.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
-import { sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
+import { holdsResumedConversation } from './resumeStoppedAgent.js'
+import { codeOrLength, errorKind, sid } from './log.js'
+import { publishEngine } from './paneEngineProcess.js'
+import { STARTING_AGAIN, supportsNativeFork } from './engineLaunch.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -56,12 +61,19 @@ export interface RestoreLaunch {
    *  so the caller prepares and relaunches with the same overrides once the engine has stopped, without asking the
    *  grid or the Store again. */
   deferred?: DeferredLaunch
+  /** The first task an engine takes typed, not in argv (engineLaunch.ts `typedFirstPrompt`): committed to the row with
+   *  the dispatch (registry.ts `beginExternalDispatch`), so the bind pass types it once the pane is ready. */
+  firstTask?: string
+  /** The grid this launch puts its engine on (`launchedGrid`), written on the row with the process it starts: null
+   *  on the engine's own login. Absent from a pane that only waits, which starts no engine. */
+  grid?: GridAssignment | null
 }
 
 export interface DeferredLaunch {
-  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Throws when the
-   *  conversation could not be prepared. */
-  prepare(): void
+  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Rejects when the
+   *  conversation could not be prepared. [waiting]: whether its caller still waits for it; once not, the history is left
+   *  as it is (a move's step is bounded, hostMove/moveAgent.ts). */
+  prepare(waiting?: () => boolean): Promise<void>
   /** The overrides (`relaunchOverrides`) and the permission (`downgradedPermission`) the launch was built with. */
   overrides: LaunchOverrides
   permission: { permissionMode?: string | null; bypassPermission?: boolean }
@@ -78,6 +90,40 @@ export function heldLaunch(service: string, label = service === 'models' ? 'the 
 /** The row knows it was on a grid but not how to get back there. */
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
+/** A launch the guard held that cannot start again: the person's way out, the one they would take anyway. */
+export const DID_NOT_START = { error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' } as const
+
+/** Whether a first launch's request can be rebuilt from what its row names: the receipt that made it (`creationId`),
+ *  and for a fork an engine with a native fork and the session it forked. */
+export function firstLaunchRebuildable<T extends Pick<RegisteredSession, 'creationId' | 'forkedFrom' | 'engine'>>(row: T): row is T & { creationId: string } {
+  const fork = row.forkedFrom
+  // A handoff fork's first prompt was composed from its source at fork time and kept nowhere.
+  return !!row.creationId && (!fork || (supportsNativeFork(row.engine) && !!fork.sessionId))
+}
+
+/** The launch a row gets once its pane is seen to be the guard's held shell under [nativeToken]: held, to start again,
+ *  for a conversation (it resumes) and for a first launch whose request can be rebuilt; else the failed state. The held
+ *  shell proves no engine ran under that token (2026-11-25). */
+export function guardHold(row: RegisteredSession, nativeToken: string): Extract<AgentLaunch, { state: 'held' }> | { state: 'failed' } & typeof DID_NOT_START {
+  return row.sessionId || firstLaunchRebuildable(row)
+    ? { state: 'held', service: 'native', nativeToken, startsAgain: true, detail: STARTING_AGAIN } : { state: 'failed', ...DID_NOT_START }
+}
+
+/** What 0.6.86 and older saved on a launch the guard held, each once its pane was seen to be the held shell, before
+ *  `startsAgain` marked such a hold. No current code writes them. */
+const LEGACY_HELD_DETAILS: ReadonlySet<string> = new Set([
+  'Waiting to confirm the engine executable and native hooks.',
+  'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.',
+])
+
+/** A first launch 0.6.86 or older held for the guard. By its words, not its shape: current code still holds a first
+ *  launch with a native token and no mark on purpose (newPane.ts), and that one stays held. */
+export function legacyNativeHold(row: RegisteredSession): boolean {
+  const launch = row.launch
+  return launch?.state === 'held' && launch.service === 'native' && !!launch.nativeToken && !launch.startsAgain
+    && !row.sessionId && LEGACY_HELD_DETAILS.has(launch.detail)
+}
+
 export interface RestoreAgentsDeps {
   /** Whether restore can rebuild and relaunch a pane on [runtime]'s backend: one that respawns in place
    *  (`canRestart`). Left out: tmux's alone, as before any other backend could. */
@@ -92,23 +138,25 @@ export interface RestoreAgentsDeps {
   /** A missing-pane group reserves every possible stale route owner until its synchronous commit. */
   paneBusy?: (agentId: string) => boolean
   paneAllocations?: <T>(agentIds: readonly string[], operation: () => Promise<T>) => Promise<T>
-  retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
+  retainStopped?: (entry: RegisteredSession, paneAlive: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
   /** Keeps a conversation the restore had to leave for a new one as a stopped harness (keepAbandonedConversation.ts). */
   keepAbandoned?: (left: RegisteredSession) => void
 
   registry: {
+    confirmLaunch: typeof registry.confirmLaunch
+    confirmEngineExit: typeof registry.confirmEngineExit
+    beginNativeDispatch: typeof registry.beginNativeDispatch
     list(): RegisteredSession[]
     byAgent(agentId: string): RegisteredSession | undefined
     transaction<T>(apply: () => T | Promise<T>): Promise<T>
     clearProcessIdentity(agentId: string): boolean
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
     setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null
-    beginExternalDispatch?(agentId: string): RegisteredSession | null
-    updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity): boolean
-    unbindSession(sessionId: string): boolean
+    beginExternalDispatch?(agentId: string, firstTask?: string, authority?: { current?: () => boolean }): Promise<RegisteredSession | null>
+    /** A relaunch never says the gateway (the engine's hook or argv does); its grid is its launch's. */
+    updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity, gateway?: undefined, grid?: GridAssignment | null): boolean
+    confirmSessionUnbound: typeof registry.confirmSessionUnbound
     inheritName(fromSessionId: string, toSessionId: string): void
-    /** A terminal's adopted engine is gone: back to a shell (registry.ts). */
-    releaseEngine(agentId: string): RegisteredSession | null
   }
   /**
    * Whether the row's PANE is still there — a live pane in a session this daemon created. Every
@@ -119,9 +167,9 @@ export interface RestoreAgentsDeps {
    */
   waitingPane?: (runtime: TerminalRuntimeRef, token: string) => Promise<boolean | 'unknown'>
   livePane?: (runtime: TerminalRuntimeRef) => Promise<boolean | 'unknown'>
-  /** The engine process still running in this row's pane, or null when tmux does not know the pane
-   *  at all — including when no tmux server is running — or the pane has become something else.
-   *  `'unknown'` when tmux or `ps` could not be asked. */
+  /** The engine process still running in this row's pane, or the process the row recorded when it still runs there
+   *  under another name (`terminalSurvey`); null when tmux does not know the pane at all — including when no tmux
+   *  server is running — or the pane has become something else. `'unknown'` when tmux or `ps` could not be asked. */
   liveProcess: (entry: RegisteredSession, runtime: TerminalRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
   /** The pane's launch — engine argv plus whatever puts it back on its grid / profile. A grid the
    *  machine cannot honour (unsupported engine, tmux too old, config dir unwritable) is a refusal. */
@@ -143,7 +191,7 @@ export interface RestoreAgentsDeps {
    *  `engineExit` set: the engine left and the pane is a shell now (`ENGINE_EXIT_PANE_OPTION`), which for
    *  a restore is the same news as `dead`. */
   paneState: (runtime: TerminalRuntimeRef) => Promise<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>
-  clearRemainOnExit: (runtime: TerminalRuntimeRef) => Promise<void>
+  clearRemainOnExit: (runtime: TerminalRuntimeRef, current?: () => boolean) => Promise<void>
   holdRoute: (routeKey: string, autoReleaseMs: number) => void | (() => void)
   releaseRoute: (routeKey: string) => void
   triggerHint: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<void>
@@ -158,6 +206,9 @@ export interface RestoreAgentsDeps {
   waitingLaunch?: (entry: RegisteredSession, launch: Extract<AgentLaunch, { state: 'held' }>) => RestoreLaunch
   /** Close a held agent's pane whose launch then failed: it would otherwise go on saying it waits. */
   killPane?: (runtime: TerminalRuntimeRef) => Promise<void>
+  /** The held passes, asked to try that agent again: the guard held its launch (`guardHold`), and nothing else wakes
+   *  a hold seen outside a pass (core/agents/heldLaunches.ts). */
+  startAgain?: (agentId: string) => void
   /** How long a restored pane may take to show an engine process. Default matches `agent_create`. */
   budgetMs?: number
   /** How long the engine must stay up after appearing before the pane is handed over. */
@@ -173,7 +224,9 @@ export interface RestoreSummary {
   /** Agents whose pane was recreated; their engine process is bound in the background. */
   restored: string[]
   skipped: Array<{ agentId: string; reason: string }>
-  failed: Array<{ agentId: string; reason: string }>
+  /** [code] is what a log says of the failure (a fixed code, or the launch's own error code), [reason] what a person is
+   *  shown: a pane's refusal or a launch's detail, which can name the person's folders. */
+  failed: Array<{ agentId: string; code: string; reason: string }>
   /** Agents held for a service their launch asks (`heldLaunch`), each in a pane that says so. */
   held: string[]
   /** Agents left as they were because tmux or `ps` could not say whether their pane or engine lives.
@@ -212,10 +265,15 @@ export type SurveyListing = { ok: true; panes: readonly TerminalRuntimeRef[] } |
  * The survey's two questions, each asked of the runtime's own backend: one pane listing per backend for the whole
  * survey, read again only after a read that failed, and the engine in a pane as `lookupPaneEngineProcess` finds it.
  * A pane counts only on its own backend: `%3` on tmux is not `%3` on the pty host.
+ * A pane with no engine in it but the process the agent was bound to still counts as running: a wrapper that `exec`s
+ * keeps its pid and start under another name, and a daemon that restarted while the pane held only `unshare` would
+ * archive a running agent, as two passes of the reconciler did on lamp-9adf (2026-11-13, #4259).
  */
 export function terminalSurvey(
   listPanes: (runtime: TerminalRuntimeRef) => Promise<SurveyListing>,
-  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<{ ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean }>,
+  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<
+    { ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean; paneProcesses?: readonly ProcessIdentity[] }
+  >,
 ): Pick<RestoreAgentsDeps, 'livePane' | 'liveProcess'> {
   const inventories = new Map<string, Promise<SurveyListing>>()
   return {
@@ -233,7 +291,9 @@ export function terminalSurvey(
     },
     liveProcess: async (entry, runtime) => {
       const found = await lookup(runtime, entry.engine)
-      return found.ok ? found.identity : found.unknown ? 'unknown' : null
+      if (found.ok) return found.identity
+      if (found.unknown) return 'unknown'
+      return processAmong(entry.processIdentity, found.paneProcesses) ? entry.processIdentity : null
     },
   }
 }
@@ -254,9 +314,10 @@ export function restoreRuntimeOf(entry: { readonly runtimes: readonly TerminalRu
 
 /** A service or tmux answer cannot act on a newer binding, launch, route or in-progress Stop. */
 function restoreOwner(deps: RestoreAgentsDeps, entry: RegisteredSession, committing = false): () => boolean {
+  // `ready` reads as no launch, as in the registry's `launchIdentity`.
   const identity = (row: RegisteredSession | undefined) => row && JSON.stringify([
     row.registeredAt, row.boundAt, row.sessionId, row.engine, row.cwd, row.dsh, row.dshRuntime,
-    row.runtimes.map(terminalRouteKey).sort(), row.launch, row.externalResume,
+    row.runtimes.map(terminalRouteKey).sort(), row.launch?.state === 'ready' ? undefined : row.launch, row.externalResume,
   ])
   const owned = identity(entry)
   const revision = deps.revision?.(entry.agentId)
@@ -347,7 +408,7 @@ async function allocateWaitingPanes(deps: RestoreAgentsDeps, missing: MissingPan
         const allocated = await deps.createPane(item.entry, deps.waitingLaunch?.(item.entry, launch) ?? { argv: [] }, { current: item.current })
           .catch(error => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }))
         if (!allocated.ok) {
-          if (owns()) summary.failed.push({ agentId: item.entry.agentId, reason: allocated.reason })
+          if (owns()) summary.failed.push({ agentId: item.entry.agentId, code: 'WAITING_PANE_FAILED', reason: allocated.reason })
           continue
         }
         created.set(item, { runtime: allocated.runtime, owns })
@@ -391,7 +452,8 @@ async function allocateWaitingPanes(deps: RestoreAgentsDeps, missing: MissingPan
         if (item.current()) {
           const reason = allocated ? `Waiting for safe pane recovery. Pane ${allocated.runtime.paneId} could not be assigned without changing another harness; it was left intact for review.`
             : 'Waiting for pane recovery. The pane could not be allocated yet.'
-          deps.registry.setLaunch(item.entry.agentId, { ...waiting(item.entry), detail: reason })
+          // A launch the guard held keeps its words: it still starts again by itself.
+          deps.registry.setLaunch(item.entry.agentId, guardHeld(item.entry) ? waiting(item.entry) : { ...waiting(item.entry), detail: reason })
           summary.held.push(item.entry.agentId)
         }
       }
@@ -411,6 +473,34 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   const patience = { left: true }
   /** `alive`: a held agent's waiting pane, which its launch goes into rather than a new one. */
   const missing: MissingPane[] = []
+  /** The guard's hold on [entry] under [nativeToken], and the held passes asked to try it again; or the failed state,
+   *  whose words say what to do, and null. */
+  const markGuarded = (entry: RegisteredSession, nativeToken: string): RegisteredSession | null => {
+    const launch = guardHold(entry, nativeToken)
+    const row = deps.registry.setLaunch(entry.agentId, launch)!
+    if (launch.state === 'failed') {
+      summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
+      deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · failed · ${launch.error}`)
+      return null
+    }
+    deps.startAgain?.(entry.agentId)
+    return row
+  }
+  /** [entry]'s pane is seen to be the guard's held shell under [nativeToken]: it starts again there, or fails. */
+  const heldByGuard = (entry: RegisteredSession, runtime: TerminalRuntimeRef, nativeToken: string): void => {
+    const row = markGuarded(entry, nativeToken)
+    if (!row) return
+    const copy = { ...row }
+    missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
+  }
+  /** [entry], still this pass's, whose pane could not be read. A row 0.6.86 or older held for the guard gets the guard's
+   *  hold all the same: no pass would try it again otherwise (`legacyNativeHold`), and its held passes never relaunch
+   *  into a pane they cannot read. */
+  const unread = (entry: RegisteredSession): void => {
+    const launch = entry.launch
+    if (legacyNativeHold(entry) && launch?.state === 'held' && !markGuarded(entry, launch.nativeToken!)) return
+    summary.unsurveyed.push(entry.agentId)
+  }
 
   // Per row, because a survey that gives up on the first bad one gives up on every row behind it —
   // one pane whose `tmux list-panes` timed out, or one archive that could not be written, and the
@@ -434,19 +524,36 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     // Held: its pane, alive, runs no engine on purpose, so it is neither a stopped engine nor a terminal. Its
     // launch goes into that pane, or a new one if the pane went (a reboot).
     if (entry.launch?.state === 'held') {
-      // A first launch/fork has no conversation to resume yet. Its saved row
-      // cannot reconstruct the original prompt or fork argv. Keep the explicit
-      // hold until that exact request can recover it; a fresh launch is different work.
-      if (entry.launch.nativeToken && !entry.sessionId) {
+      // A first launch/fork has no conversation to resume yet. Without the guard's proof (`startsAgain`) nothing says
+      // its original prompt or fork argv never reached an engine: keep the explicit hold; a fresh launch is different work.
+      // One 0.6.86 or older held for the guard has that proof in its words (`legacyNativeHold`), but no `startsAgain`:
+      // every pass skipped it, and it stayed held for good. It gets the guard's hold on its first pass, its pane read
+      // or not, and from then on #4604's bounds (core/agents/heldLaunches.ts: 10 holds or 15 minutes, then
+      // DID_NOT_START).
+      const legacy = legacyNativeHold(entry)
+      const first = heldFirstLaunch(entry) || legacy
+      if (entry.launch.nativeToken && !entry.sessionId && !first) {
         summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
         continue
       }
       const alive = deps.livePane ? await surveyed(deps, patience, () => deps.livePane!(runtime)) : false
-      if (alive && entry.launch.nativeToken && await deps.waitingPane?.(runtime, entry.launch.nativeToken) !== true) {
-        if (current()) summary.unsurveyed.push(entry.agentId)
+      const waiting = alive && entry.launch.nativeToken ? await deps.waitingPane?.(runtime, entry.launch.nativeToken) : undefined
+      if (first && (!alive || waiting === false)) {
+        // Its own held shell is the one pane it may start in, and the proof that its task reached no engine: gone, or
+        // surely something else now, it did not start. Never a pane of the restore's: that would prove nothing.
+        if (!current()) continue
+        deps.registry.setLaunch(entry.agentId, { state: 'failed', ...DID_NOT_START })
+        summary.failed.push({ agentId: entry.agentId, code: DID_NOT_START.error, reason: DID_NOT_START.detail })
+        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · failed · ${DID_NOT_START.error}`)
         continue
       }
-      if (current()) missing.push({ entry, runtime, current, ...(alive ? { alive: true as const } : {}) })
+      if (alive && entry.launch.nativeToken && waiting !== true) {
+        if (current()) unread(entry)
+        continue
+      }
+      if (!current()) continue
+      if (legacy) heldByGuard(entry, runtime, entry.launch.nativeToken!)
+      else missing.push({ entry, runtime, current, ...(alive ? { alive: true as const } : {}) })
       continue
     }
     // A pane is alive as long as tmux has it, whatever runs in it: every pane is a shell with the
@@ -467,16 +574,13 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       } else if (entry.launch?.state === 'starting' && entry.launch.nativeToken) {
         const waiting = await deps.waitingPane?.(runtime, entry.launch.nativeToken)
         if (!current()) continue
-        if (waiting === true) {
-          const row = deps.registry.setLaunch(entry.agentId, { state: 'held', service: 'native', nativeToken: entry.launch.nativeToken,
-            detail: 'Waiting to confirm the engine executable and native hooks.' })!
-          const copy = { ...row }
-          if (!copy.sessionId) summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
-          else missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
-        } else {
+        // The guard held it before this core saw its pane.
+        if (waiting === true) heldByGuard(entry, runtime, entry.launch.nativeToken)
+        else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
-          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
+            launchedGrid(entry.gridLaunch))
         }
       } else if (entry.externalResume?.phase === 'admitted' && entry.launch?.state === 'starting') {
         // The dispatch journal precedes tmux. If its exact waiting shell remains, no engine ran;
@@ -490,11 +594,22 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         } else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
-          void watchRestoredPane(deps, entry, runtime, true, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+          void watchRestoredPane(deps, entry, runtime, true, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
+            launchedGrid(entry.gridLaunch))
         }
       } else if (!isTerminalEngine(entry.engine)) {
-        if (deps.retainStopped) deps.retainStopped(entry, true)
-        else deps.registry.releaseEngine(entry.agentId)
+        if (deps.retainStopped) {
+          const retained = await deps.retainStopped(entry, true, { current, refresh: async () => {
+            if (await deps.liveProcess(entry, runtime)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+          } })
+          if (retained.state !== 'confirmed') { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
+        }
+        else {
+          const publication = await deps.registry.confirmEngineExit(entry.agentId, 'shell', { current, refresh: async () => {
+            if (await deps.liveProcess(entry, runtime)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+          } })
+          if (publication.state !== 'confirmed' || !publication.entry) { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
+        }
         deps.log(`[restore] ${entry.engine} → terminal · agent ${entry.agentId} · its engine exited while the daemon was down`)
       }
       continue
@@ -514,7 +629,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     // catalog, then `harness stop` + `tmux kill-server` + app relaunch — every other tile came
     // back, this one sat on "no verified terminal pane" with nothing to press.
     if (entry.resumeOnly && !entry.externalResume && entry.launch?.state !== 'ready' && deps.retainStopped) {
-      deps.retainStopped(entry, false)
+      const retained = await deps.retainStopped(entry, false, { current })
+      if (retained.state !== 'confirmed') { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
       summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue
     }
@@ -525,7 +641,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     // every reboot as a bare prompt with the conversation unbound, while Claude came back. A resume
     // the engine refuses falls back to the shell, never a fresh engine (`relaunchFresh`).
     if (entry.terminalHost && !resumesConversation(entry.engine, entry.sessionId)) {
-      if (!isTerminalEngine(entry.engine)) deps.registry.releaseEngine(entry.agentId)
+      if (!isTerminalEngine(entry.engine)) {
+        const publication = await deps.registry.confirmEngineExit(entry.agentId, 'shell', { current, refresh: async () => {
+          if (await deps.liveProcess(entry, runtime)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+        } })
+        if (publication.state !== 'confirmed' || !publication.entry) { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
+      }
       const shell = deps.registry.byAgent(entry.agentId) ?? entry
       missing.push({ entry: { ...shell }, runtime, current: restoreOwner(deps, shell) })
       continue
@@ -558,9 +679,11 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     missing.push({ entry, runtime, current })
    } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    if (error instanceof Unsurveyed) summary.unsurveyed.push(entry.agentId)
-    else summary.failed.push({ agentId: entry.agentId, reason })
-    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${reason}`)
+    if (error instanceof Unsurveyed) {
+      if (current()) unread(entry)
+      else summary.unsurveyed.push(entry.agentId)
+    } else summary.failed.push({ agentId: entry.agentId, code: 'SURVEY_FAILED', reason })
+    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${errorKind(error)}`)
    }
   }
   if (!missing.length) return summary
@@ -572,7 +695,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   const unavailable = new Map<string, string | undefined>()
   /** Held in its waiting pane: the one it has, or a new one. False when no pane could be opened for it. */
   const hold = async (entry: RegisteredSession, runtime: TerminalRuntimeRef, alive: boolean, current: () => boolean, service: string, detail?: string): Promise<boolean> => inPane(deps, entry, current, async owns => {
-    const launch = { ...heldLaunch(service), ...((entry.launch?.state === 'held' || entry.launch?.state === 'starting') && entry.launch.nativeToken ? { nativeToken: entry.launch.nativeToken } : {}), ...(detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
+    // A launch the guard held keeps its pane, which already says "Starting again.", whatever holds it now: the held
+    // passes log why, once per change (core/agents/heldLaunches.ts). Held for another service, its wait is that
+    // service's, and its row says so as any row held for it does.
+    const guard = guardHeld(entry)
+    const launch = { ...heldLaunch(service), ...((entry.launch?.state === 'held' || entry.launch?.state === 'starting') && entry.launch.nativeToken ? { nativeToken: entry.launch.nativeToken } : {}),
+      ...(guard ? { startsAgain: true } : {}), ...(guard && service === 'native' ? { detail: STARTING_AGAIN } : detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
     let pane = runtime
     if (!alive) {
       const created = await deps.createPane(entry, deps.waitingLaunch?.(entry, launch) ?? { argv: [] }, { current })
@@ -581,13 +709,13 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         return false
       }
       if (!created.ok) {
-        summary.failed.push({ agentId: entry.agentId, reason: created.reason })
-        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane to wait in · ${created.reason}`)
+        summary.failed.push({ agentId: entry.agentId, code: 'WAITING_PANE_FAILED', reason: created.reason })
+        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane to wait in · ${codeOrLength(created.reason)}`)
         return false
       }
       pane = created.runtime
       deps.registry.updateRuntimes(entry.agentId, [pane], terminalRouteKey(pane))
-    } else if (entry.launch?.state === 'held' && entry.launch.detail !== launch.detail && deps.waitingLaunch) {
+    } else if (!guard && entry.launch?.state === 'held' && entry.launch.detail !== launch.detail && deps.waitingLaunch) {
       // A grid harness can finish waiting for models and then wait for Store preparation. Its pane
       // must show the current reason as well as its row, including an unconfirmed workspace write.
       await deps.respawn(pane, deps.waitingLaunch(entry, launch), { current, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : {}) })
@@ -595,7 +723,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     }
     deps.registry.setLaunch(entry.agentId, launch)
     summary.held.push(entry.agentId)
-    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · held in pane ${pane.paneId} · waiting for ${service}`)
+    if (!guard) deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · held in pane ${pane.paneId} · waiting for ${service}`)
     return true
   }, false)
   // Waiting panes already own their committed routes. No service or engine preparation holds saves.
@@ -608,7 +736,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       const resumeSessionId = entry.sessionId || undefined
       if (entry.resumeOnly && !resumeSessionId && !isTerminalEngine(entry.engine)) {
         const reason = 'The saved conversation is no longer available. Start a new conversation separately.'
-        summary.failed.push({ agentId: entry.agentId, reason })
+        summary.failed.push({ agentId: entry.agentId, code: 'RESUME_UNAVAILABLE', reason })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: 'RESUME_UNAVAILABLE', detail: reason })
         if (alive) await deps.killPane?.(dead)
         continue
@@ -630,10 +758,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         continue
       }
       if ('error' in launch) {
-        summary.failed.push({ agentId: entry.agentId, reason: launch.detail })
+        summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: launch.error, detail: launch.detail })
-        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not build its launch · ${launch.detail}`)
-        if (alive) await deps.killPane?.(dead)
+        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not build its launch · ${codeOrLength(launch.error)}`)
+        // A first launch's held shell stays: closed, its tile would read Unavailable and discovery would remove the
+        // row, and the words that say what to do with it.
+        if (alive && !heldFirstLaunch(entry)) await deps.killPane?.(dead)
         continue
       }
       await inPane(deps, entry, current, async initialOwner => {
@@ -648,17 +778,19 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           release = deps.holdRoute(route, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
         }
         let watching = false
+        let journaled = false
         try {
-          const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : entry.launch?.state === 'held' && entry.launch.nativeToken ? { expectedHeldToken: entry.launch.nativeToken } : {}), onDispatch: () => {
+          const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : entry.launch?.state === 'held' && entry.launch.nativeToken ? { expectedHeldToken: entry.launch.nativeToken } : {}), onDispatch: async () => {
             if (entry.externalResume?.phase === 'admitted') {
-              const committed = deps.registry.beginExternalDispatch?.(entry.agentId)
+              const committed = await deps.registry.beginExternalDispatch?.(entry.agentId, launch.firstTask, { current: dispatchCurrent })
               if (!committed) throw new Error('External resume dispatch could not be committed')
               owns = restoreOwner(deps, committed, !!deps.paneOperation)
             }
             if (launch.nativeToken) {
-              const committed = deps.registry.setLaunch(entry.agentId, { state: 'starting', nativeToken: launch.nativeToken })
+              const committed = await deps.registry.beginNativeDispatch(entry.agentId, launch.nativeToken, { current: dispatchCurrent })
               if (!committed) throw new Error('Native launch dispatch could not be committed')
               owns = restoreOwner(deps, committed, !!deps.paneOperation)
+              journaled = true
             }
             // Before the engine can hook/attach, not after tmux's asynchronous reply.
             if (resumeSessionId) deps.engineStarted?.(resumeSessionId)
@@ -669,8 +801,25 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
             : deps.createPane(entry, launch, control)).catch(error => ({ ok: false as const, reason: String(error) }))
           if (!owns()) return
           if (!created.ok) {
-            if (!dispatchCurrent()) return
-            if (entry.externalResume) {
+            // A native dispatch the terminal turned away after its journal: the row is starting under its new token.
+            // Its pane still the held shell under the token it waited under (its evidence changed between the journal
+            // and the respawn), no engine ran and no pane has the new token: the row goes back to that hold, for the
+            // next attempt. Otherwise tmux may have run it: it is watched as boot watches one, never respawned over,
+            // and never left starting with nothing watching it.
+            const journal = journaled && !entry.externalResume && !deps.cancelled?.(entry.agentId) ? release : undefined
+            if (!journal && !dispatchCurrent()) return
+            const waited = journal && entry.launch?.state === 'held' ? entry.launch : undefined
+            if (waited?.nativeToken && await deps.waitingPane?.(pane, waited.nativeToken) === true) {
+              if (!owns()) return
+              deps.registry.setLaunch(entry.agentId, waited)
+              summary.held.push(entry.agentId)
+              return
+            }
+            if (journal) {
+              const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
+              watching = true
+              watches.push(() => watchRestoredPane(deps, entry, pane, !!resumeSessionId, budgetMs, currentWatch, journal, launch.grid))
+            } else if (entry.externalResume) {
               const row = deps.registry.byAgent(entry.agentId)!
               if (row.launch?.state === 'held') summary.retry = true
               else {
@@ -685,19 +834,30 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
                   const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
                   const releaseWatch = release!
                   watching = true
-                  watches.push(() => watchRestoredPane(deps, entry, pane, true, budgetMs, currentWatch, releaseWatch))
+                  watches.push(() => watchRestoredPane(deps, entry, pane, true, budgetMs, currentWatch, releaseWatch, launch.grid))
                 }
               }
             }
-            summary.failed.push({ agentId: entry.agentId, reason: created.reason })
-            deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${created.reason}`)
+            summary.failed.push({ agentId: entry.agentId, code: 'PANE_FAILED', reason: created.reason })
+            deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${codeOrLength(created.reason)}`)
             return
           }
           const key = terminalRouteKey(created.runtime)
           if (!isTerminalEngine(entry.engine)) release ??= deps.holdRoute(key, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(key))
           if (isTerminalEngine(entry.engine)) {
-            deps.registry.setLaunch(entry.agentId, { state: 'ready' })
-            await deps.clearRemainOnExit(created.runtime)
+            const revision = deps.revision?.(entry.agentId)
+            const publication = await deps.registry.confirmLaunch(entry.agentId, { processIdentity: null }, {
+              current: owns, refresh: async () => {
+                const pane = await deps.paneState(created.runtime)
+                if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable('the restored shell could not be confirmed')
+              },
+            })
+            const ready = publication.state === 'confirmed' ? publication.entry : null
+            const committed = () => !!ready && !deps.cancelled?.(entry.agentId) && deps.revision?.(entry.agentId) === revision
+              && matchesLaunchReceipt(deps.registry.byAgent(entry.agentId), ready)
+            if (!committed()) return
+            await deps.clearRemainOnExit(created.runtime, committed)
+            if (!committed()) return
             summary.restored.push(entry.agentId)
             deps.log(`[restore] terminal · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`)
             return
@@ -706,11 +866,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           summary.restored.push(entry.agentId)
           deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`
             + (resumeSessionId ? ` · resuming ${resumeSessionId.slice(0, 8)}` : ' · fresh session')
-            + (entry.gridLaunch ? ` · grid ${entry.gridLaunch.networkName}` : ''))
+            // A grid's name is one the person can choose, short enough to be guessed from a hash.
+            + (entry.gridLaunch ? ' · on a grid' : ''))
           const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
           const releaseWatch = release!
           watching = true
-          watches.push(() => watchRestoredPane(deps, entry, created.runtime, !!resumeSessionId, budgetMs, currentWatch, releaseWatch))
+          watches.push(() => watchRestoredPane(deps, entry, created.runtime, !!resumeSessionId, budgetMs, currentWatch, releaseWatch, launch.grid))
         } finally { if (!watching) release?.() }
       }, undefined)
     }
@@ -719,6 +880,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   return summary
 }
 
+/** [launched]: the grid of the launch in [runtime]. For one an earlier daemon dispatched, its record is the row's: that
+ *  launch wrote it before it dispatched (`refreshGridWebSearch`). */
 async function watchRestoredPane(
   deps: RestoreAgentsDeps,
   entry: RegisteredSession,
@@ -727,14 +890,38 @@ async function watchRestoredPane(
   budgetMs: number,
   current: () => boolean,
   release: () => void,
+  launched: GridAssignment | null | undefined,
 ): Promise<void> {
   const { agentId, engine } = entry
+  const generation = deps.revision?.(agentId)
+  const lifecycle = () => !deps.cancelled?.(agentId) && deps.revision?.(agentId) === generation
+  let initial = structuredClone(deps.registry.byAgent(agentId) ?? entry)
+  const origin = (row: RegisteredSession) => JSON.stringify([row.registeredAt, row.engine, row.cwd, row.runtimes,
+    row.primaryRuntimeKey, row.codexHome, row.claudeHome, row.hermesHome, row.dsh, row.dshRuntime, row.gridLaunch])
+  const original = origin(initial)
+  let selectedFirstHook = false
+  const maySelectFirstHook = () => {
+    const row = deps.registry.byAgent(agentId)
+    return !initial.sessionId && !selectedFirstHook && lifecycle() && !!row && origin(row) === original
+      && (!row.launch || row.launch.state === 'ready' || (row.launch.state === 'starting'
+        && initial.launch?.state === 'starting' && row.launch.nativeToken === initial.launch.nativeToken))
+  }
+  const selectFirstHook = (identity: ProcessIdentity | null): boolean => {
+    const row = deps.registry.byAgent(agentId)
+    if (!maySelectFirstHook() || !row?.sessionId || !identity || !sameProcessIdentity(identity, row.processIdentity)
+      || identity.executable !== row.processIdentity?.executable) return false
+    selectedFirstHook = true
+    const owner = restoreOwner(deps, row)
+    current = () => lifecycle() && owner()
+    return current()
+  }
+  let grid = launched
   const key = terminalRouteKey(runtime)
   const sleep = deps.sleep ?? defaultSleep
   const fail = (error: string, detail: string): void => {
     if (!current()) return
     deps.registry.setLaunch(agentId, { state: 'failed', error, detail })
-    deps.log(`[restore] ${engine} · agent ${agentId} · failed · ${detail}`)
+    deps.log(`[restore] ${engine} · agent ${agentId} · failed · ${codeOrLength(error)}`)
   }
   /** Its fresh launch asks a service that could not be asked: held in this pane, never failed. */
   const holdHere = async ({ held: service, detail }: Extract<RestoreLaunchResult, { held: string }>): Promise<false> => inPane(deps, entry, current, async owns => {
@@ -746,7 +933,7 @@ async function watchRestoredPane(
     if (!spawned.ok) {
       const detail = `${launch.detail} Its waiting pane could not be shown: ${spawned.reason ?? 'unknown reason'}. Pane recovery is still pending.`
       deps.registry.setLaunch(agentId, { ...launch, detail })
-      deps.log(`[restore] ${engine} · agent ${agentId} · held · ${detail}`)
+      deps.log(`[restore] ${engine} · agent ${agentId} · held · waiting for ${service} · its waiting pane could not be shown`)
       return false
     }
     deps.registry.setLaunch(agentId, launch)
@@ -771,7 +958,9 @@ async function watchRestoredPane(
     if (entry.terminalHost) {
       mayRetryFresh = false
       deps.log(`[restore] ${engine} · agent ${agentId} · did not come back up resuming its session — back to the terminal`)
-      const shell = { ...entry, engine: 'terminal' as const, sessionId: '', subscriptionModel: null }
+      // A shell, not a first launch: with no conversation and the guard's hold its resume carried, the copy would read
+      // as a held first launch, whose build fails it "did not start".
+      const shell = { ...entry, engine: 'terminal' as const, sessionId: '', subscriptionModel: null, launch: undefined }
       const launch = await deps.buildLaunch(shell, { current })
       if (!current() || 'cancelled' in launch) return false
       if ('held' in launch) return holdHere(launch)
@@ -782,8 +971,6 @@ async function watchRestoredPane(
       const dispatchCurrent = () => current() && launch.current?.() !== false
       return inPane(deps, entry, dispatchCurrent, async () => {
         deps.keepAbandoned?.({ ...entry })
-        deps.registry.releaseEngine(agentId)
-        current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
         const owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
         const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent })
         if (!owns()) return false
@@ -791,8 +978,18 @@ async function watchRestoredPane(
           fail('ENGINE_DID_NOT_START', `The terminal could not be reopened: ${spawned.reason ?? 'unknown reason'}`)
           return false
         }
-        deps.registry.setLaunch(agentId, { state: 'ready' })
-        await deps.clearRemainOnExit(runtime)
+        const publication = await deps.registry.confirmEngineExit(agentId, 'shell', {
+          current: owns, refresh: async () => {
+            const pane = await deps.paneState(runtime)
+            if (pane === 'gone' || pane === 'unknown' || pane.dead || await deps.probeProcess(runtime, engine)) {
+              throw new IdentityReadUnavailable('the fallback shell changed before publication')
+            }
+          },
+        })
+        const shell = publication.state === 'confirmed' ? publication.entry : null
+        const committed = () => lifecycle() && !!shell && matchesLaunchReceipt(deps.registry.byAgent(agentId), shell)
+        if (!committed()) return false
+        await deps.clearRemainOnExit(runtime, committed)
         return false
       }, false)
     }
@@ -813,24 +1010,36 @@ async function watchRestoredPane(
       // conversation held here, including when a refused resume falls back to a fresh launch.
       deps.keepAbandoned?.({ ...entry })
       deps.registry.inheritName(entry.sessionId, agentId)
-      deps.registry.unbindSession(entry.sessionId)
-      current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
+      const publication = await deps.registry.confirmSessionUnbound(agentId, entry.sessionId, {
+        current: dispatchCurrent, refresh: async () => {
+          if (await deps.probeProcess(runtime, engine)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+        },
+      })
+      if (publication.state !== 'confirmed' || !publication.entry || !lifecycle()
+        || !matchesLaunchReceipt(deps.registry.byAgent(agentId), publication.entry)) return false
+      // Only this confirmed unbind opens a new first-hook selection for the fresh launch.
+      initial = structuredClone(publication.entry)
+      selectedFirstHook = false
+      current = restoreOwner(deps, publication.entry)
       let owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
       // Renew before dispatch, so discovery cannot bind the new engine before its tmux reply.
       release = deps.holdRoute(key, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(key))
-      const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent, onDispatch: () => {
+      const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent, onDispatch: async () => {
         if (launch.nativeToken) {
-          const committed = deps.registry.setLaunch(agentId, { state: 'starting', nativeToken: launch.nativeToken })
+          const committed = await deps.registry.beginNativeDispatch(agentId, launch.nativeToken, { current: dispatchCurrent })
           if (!committed) throw new Error('Native fallback dispatch could not be committed')
+          if (!lifecycle() || !matchesLaunchReceipt(deps.registry.byAgent(agentId), committed)) throw new RegistryOwnershipChanged('the native fallback owner changed before dispatch')
+          initial = structuredClone(committed)
           current = restoreOwner(deps, committed)
           owns = restoreOwner(deps, committed, !!deps.paneOperation)
         }
       } })
-      if (!owns()) return false
+      if (!owns() && !selectFirstHook(await deps.probeProcess(runtime, engine))) return false
       if (!spawned.ok) {
         fail('ENGINE_DID_NOT_START', `${engine} could not be relaunched fresh: ${spawned.reason ?? 'unknown reason'}`)
         return false
       }
+      grid = launch.grid
       return true
     }, false)
   }
@@ -838,23 +1047,61 @@ async function watchRestoredPane(
     const startedAt = Date.now()
     let delayMs = 50
     while (Date.now() - startedAt < budgetMs) {
-      if (!current()) return
+      if (!current() && !maySelectFirstHook()) return
       const identity = await deps.probeProcess(runtime, engine)
-      if (!current()) return
+      if (!current() && !selectFirstHook(identity)) return
       if (identity) {
-        deps.registry.updateProcessIdentity(agentId, identity)
+        const selected = deps.registry.byAgent(agentId)?.processIdentity
+        if ((initial.processIdentity && (!sameProcessIdentity(initial.processIdentity, identity) || initial.processIdentity.executable !== identity.executable))
+          || (selected && (!sameProcessIdentity(selected, identity) || selected.executable !== identity.executable))) return
+        const expires = performance.now() + Math.min(5_000, Math.max(0, budgetMs - (Date.now() - startedAt)))
+        const changed = 'the restored process changed before publication'
+        let published = identity
+        // Recorded at first sight, before the settle window: the engine's hooks wait for a recorded process
+        // (core/engines/hooks.ts), and recorded only after the window, a turn sent in it was folded as history
+        // and no live turn_ended reached the person (e2e/adopt.e2e.ts, 2026-11-17).
+        const publication = await publishEngine(identity, () => deps.probeProcess(runtime, engine), { gone: changed, changed }, async (process, refresh, expires) => {
+          if (process !== identity) deps.log(`[restore] publication · engine renamed · ${sid(agentId)}`)
+          published = process
+          try { return await deps.registry.confirmLaunch(agentId, { processIdentity: process, grid }, { current, refresh, expires }) }
+          catch (error) {
+            if (!(error instanceof RegistryOwnershipChanged) || !selectFirstHook(process)) throw error
+            await refresh()
+            return deps.registry.confirmLaunch(agentId, { processIdentity: process, grid }, { current, refresh, expires })
+          }
+        }, expires)
+        const ready = publication.state === 'confirmed' ? publication.entry : null
+        if (!lifecycle() || !ready || !matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)) return
+        // From here the watch follows the row it published by its receipt, not `restoreOwner`: a reopened
+        // conversation's own hook stamps `boundAt` in the window, and the watch then ended with the pane held. So did
+        // its engine moving it onto another conversation (a `/clear`, Codex's first prompt naming a new thread): the
+        // receipt is followed there, its conversation and the evidence of it being all that moved.
+        current = () => {
+          const row = deps.registry.byAgent(agentId)
+          return lifecycle() && (matchesLaunchReceipt(row, ready) || !!row && row.sessionId !== ready.sessionId
+            && holdsResumedConversation(row, ready.sessionId, ready.processIdentity)
+            && matchesLaunchReceipt({ ...row, sessionId: ready.sessionId, transcriptPath: ready.transcriptPath,
+              evidenceRevision: ready.evidenceRevision }, ready))
+        }
         // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
         // few seconds later. Keep the pane (and the fallback) for a settling window before handing
         // it over; a pane let go at first sight of the process vanished with the engine and took
         // the agent with it (measured: claude resuming a conversation another client still held).
+        // The pane's and the route's holds keep it through the window, not the record.
         const settled = await waitForSettle(deps, runtime, settleMs)
-        if (!current()) return
+        if (!current() && !selectFirstHook(published)) return
         if (settled === 'gone') {
+          // The row goes back to how it read before this engine was seen. Its process left on it, the guard above
+          // took the fresh engine for a stranger's: the row kept a dead process, no conversation and its pane held.
+          // Its `ready` left on it, the desk read the fresh launch as up before any engine was.
+          deps.registry.clearProcessIdentity(agentId)
+          deps.registry.setLaunch(agentId, { state: 'starting' })
+          current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
           if (!await relaunchFresh()) return
           delayMs = 50
           continue
         }
-        await deps.clearRemainOnExit(runtime)
+        await deps.clearRemainOnExit(runtime, current)
         if (!current()) return
         // Release BEFORE the hint: the pass it triggers is the one that must see this route again.
         release()
@@ -871,8 +1118,13 @@ async function watchRestoredPane(
       const row = deps.registry.byAgent(agentId)
       const nativeToken = row?.launch?.state === 'starting' ? row.launch.nativeToken : undefined
       if (nativeToken && await deps.waitingPane?.(runtime, nativeToken) === true) {
-        if (current()) deps.registry.setLaunch(agentId, { state: 'held', service: 'native', nativeToken,
-          detail: 'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.' })
+        // The guard held this launch: no engine ran under its token.
+        const launch = guardHold(row!, nativeToken)
+        if (launch.state === 'failed') fail(launch.error, launch.detail)
+        else if (current()) {
+          deps.registry.setLaunch(agentId, launch)
+          deps.startAgain?.(agentId)
+        }
         return
       }
       // A pane tmux could not read is asked again, like one still starting.
@@ -896,7 +1148,7 @@ async function watchRestoredPane(
     }
     fail('START_TIMEOUT', `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`)
   } catch (error) {
-    deps.log(`[restore] ${engine} · agent ${agentId} · watch failed · ${error instanceof Error ? error.message : error}`)
+    deps.log(`[restore] ${engine} · agent ${agentId} · watch failed · registry publication unavailable · ${errorKind(error)}`)
   } finally {
     release()
   }

@@ -4,29 +4,13 @@
  * Levels seen: high, xhigh, max.
  */
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
-import type { RuntimeModelOption } from '../facets/runtime.js'
+import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { addOption, record, text } from '../kit/runtime.js'
 import { RUNTIME_EFFORTS } from '../kit/runtime.js'
 
 export function createRuntimeProfileReader(): InlineRuntimeReader {
   return {
     engine: 'omp',
-    transcript(context: InlineRuntimeContext, raw: Record<string, unknown>): void {
-      const message = record(raw.message)
-      const model = raw.type === 'model_change' ? text(raw.model)
-        : raw.type === 'message' && message?.role === 'assistant' ? text(message.model) : ''
-      const effort = raw.type === 'thinking_level_change' ? text(raw.thinkingLevel) : ''
-      if (model) {
-        context.state.model = model
-        context.state.observedAt = Date.now()
-        if (context.control && context.control.target.model === model) context.control.modelConfirmed = true
-      }
-      if (effort && RUNTIME_EFFORTS.has(effort)) {
-        context.state.effort = effort
-        context.state.observedAt = Date.now()
-        if (context.control && context.control.target.effort === effort) context.control.effortConfirmed = true
-      }
-    },
     async models(context: InlineRuntimeContext): Promise<RuntimeModelOption[]> {
       const output: RuntimeModelOption[] = []
       const seen = new Set<string>()
@@ -35,4 +19,16 @@ export function createRuntimeProfileReader(): InlineRuntimeReader {
       return output
     },
   }
+}
+
+/** The model of a `model_change` or an assistant message, and the level of a `thinking_level_change`, read in the other
+ *  engines' worker (engines/others/streams.ts). */
+export function transcriptEvidence(raw: Record<string, unknown>): ProfileEvidence | null {
+  const message = record(raw.message)
+  const model = raw.type === 'model_change' ? text(raw.model)
+    : raw.type === 'message' && message?.role === 'assistant' ? text(message.model) : ''
+  const level = raw.type === 'thinking_level_change' ? text(raw.thinkingLevel) : ''
+  const effort = level && RUNTIME_EFFORTS.has(level) ? level : ''
+  if (!model && !effort) return null
+  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}), confirms: true }
 }

@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../../testing/registryFixtures.js'
 /**
  * The stop of a shared Codex conversation, end to end inside one process: the core's broker (rows, identity,
  * the grant's answers) with Codex's own control in process. These are the recorded cases of the former
@@ -24,8 +25,9 @@ let deps: CodexStopDeps
 let request: ReturnType<typeof vi.fn<(method: string, params?: Record<string, unknown>) => Promise<any>>>
 let close: ReturnType<typeof vi.fn<() => void>>
 let loaded: boolean
-beforeEach(() => {
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp', codexHome: '/tmp/fixture-home' })!
+beforeEach(async () => {
+  row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp', codexHome: '/tmp/fixture-home' }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, { sessionId: 'conversation' })
   loaded = true
   request = vi.fn(async (method: string) => {
@@ -41,7 +43,7 @@ beforeEach(() => {
     connect: vi.fn(async () => ({ request, close })),
   }
 })
-afterEach(() => { for (const entry of registry.list()) registry.removeAgent(entry.agentId) })
+afterEach(async () => { for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId)) })
 it('stops only the named conversation and restores its disk history without restarting it', async () => {
   await stopSharedCodexSession(row, () => true, deps)
   expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/read', 'thread/goal/get', 'thread/goal/set', 'thread/turns/list', 'turn/interrupt', 'thread/archive', 'thread/unarchive', 'thread/read'])

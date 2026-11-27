@@ -39,7 +39,7 @@ class WebDownloadButton extends StatelessWidget {
   /// True fills it like Share: the bar's one filled action when Share is off.
   final bool prominent;
 
-  /// This computer's build, or the `/desktop` page when none suits it.
+  /// This computer's build, or the `/download` page when none suits it.
   static Uri get uri => DesktopDownload.uri;
   static const _text = 'Download app';
 

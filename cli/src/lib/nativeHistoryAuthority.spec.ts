@@ -103,7 +103,7 @@ it.each(['before Stop', 'during Stop', 'during Stop before worktree deletion'])(
   const removed = vi.fn(), deleted = vi.fn()
   const service = new PurgeAgentService({ live: () => live, sessions: () => [row],
     stopped: { get: () => saved, beginResume: () => 'fixture-reservation', finishResume: () => {}, remove: removed },
-    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted,
+    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, worktrees: () => worktrees.worktreeAnswers(worktrees),
   } as unknown as PurgeDeps)
   const request = { agentId: row.agentId, sessionId: ID, createdAt: row.registeredAt }
   const plan = await service.request({ ...request, mode: 'inspect', includeWorktree: worktreeData })

@@ -9,6 +9,7 @@
  * never meets them stays on its old host until it ends.
  */
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { codeOrLength } from '../log.js'
 import type { RegisteredSession } from '../registry.js'
 import type { ActivityState } from '../turnActivity.js'
 import type { MoveGate } from './gate.js'
@@ -115,10 +116,10 @@ export class HostMover {
       } else if (outcome.cancelled) {
         // Someone reached for the agent, or a Stop or delete took it: nothing failed, and once it is quiet again it
         // may move.
-        this.skip(row.agentId, outcome.reason)
+        this.skip(row.agentId, codeOrLength(outcome.reason))
       } else {
         this.failed.add(row.agentId)
-        this.deps.log(`[terminal] move ${row.agentId}: failed (${outcome.reason})`)
+        this.deps.log(`[terminal] move ${row.agentId}: failed (${codeOrLength(outcome.reason)})`)
       }
     } finally {
       this.moving = false
@@ -147,6 +148,7 @@ export class HostMover {
     return null
   }
 
+  /** [reason] is logged as it is: a refusal's fixed words, or a move's reason already through `codeOrLength`. */
   private skip(agentId: string, reason: string): void {
     if (this.skipped.get(agentId) === reason) return
     this.skipped.set(agentId, reason)
@@ -158,13 +160,13 @@ export class HostMover {
  * What a hand-over does first, before its teardown closes the connections held input would be written through: no move
  * starts any more ([mover] stopped: one not yet past its old engine's stop cancels itself there, core/main.ts
  * `eligible`), and a move that holds input is waited for, at most [waitMs]: its own release then writes what was held
- * to the pane that stays. Past the bound, every held input is written to the pane each row names now (`releaseAll`),
+ * to the pane that stays. Past the bound, remaining input is refused and pending moves are revoked (`refuseAll`),
  * within [flushMs], and the hand-over goes on. Nothing held: nothing to wait for. Both bounds and the teardown's own
  * (core/updateHandoff.ts `TEARDOWN_DEADLINE_MS`) fit in the master's hand-over grace (harnessd/supervisor.ts).
  */
 export async function settleMovesForHandOver(o: {
   mover: Pick<HostMover, 'stop' | 'settled'> | null
-  gate: Pick<MoveGate, 'held' | 'releaseAll'>
+  gate: Pick<MoveGate, 'held' | 'refuseAll'>
   log: (line: string) => void
   waitMs?: number
   flushMs?: number
@@ -175,8 +177,8 @@ export async function settleMovesForHandOver(o: {
   if (o.mover) await within(o.mover.settled(), waitMs)
   const held = o.gate.held()
   if (held.length === 0) return
-  o.log(`[terminal] move: a move still holds the input of ${held.join(', ')} after ${waitMs / 1000} s — delivering it to the pane the row names before handing over`)
-  await within(o.gate.releaseAll(), o.flushMs ?? HAND_OVER_FLUSH_MS)
+  o.log(`[terminal] move: a move still holds input after ${waitMs / 1000} s; refusing pending input before handing over`)
+  await within(o.gate.refuseAll(), o.flushMs ?? HAND_OVER_FLUSH_MS)
 }
 
 /** [work], or nothing once [ms] have passed. */

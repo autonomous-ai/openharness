@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentNotifications } from './agentNotifications.js'
+import { AgentNotifications, DONE_QUIET_MS } from './agentNotifications.js'
 import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts } from './commander.js'
 import type { LiveEvent } from './normalize.js'
 
@@ -70,14 +70,25 @@ describe('one completed-result decision for desktop and device', () => {
   it.each(['replay', 'subagent', 'question'] as const)('updates device recaps silently for %s, with no desktop notification', async mode => {
     const { mirror, desktop, device, policy } = setup({ isSubagent: () => mode === 'subagent' })
     mirror.ingest([turn[0]], 's', { replay: mode === 'replay' })
-    if (mode === 'question') {
-      policy.asked('s', 'q')
-      policy.answered('s', 'q')
-    }
+    // A question still open as the turn ends is the person's news instead of this end.
+    if (mode === 'question') policy.asked('s', 'q')
     mirror.ingest(turn.slice(1), 's', { replay: mode === 'replay' })
     await vi.runAllTimersAsync()
     expect(desktop[0].payload.notification).toBeNull()
-    expect(device.at(-1)?.payload.subagent).toBe(true)
+    expect(device.at(-1)?.payload).toMatchObject({ subagent: true, notNews: mode })
+  })
+
+  it('announces a turn that went on after its ask was answered, as any turn', async () => {
+    const { mirror, desktop, device, policy } = setup()
+    mirror.ingest([turn[0]], 's')
+    policy.asked('s', 'q')
+    policy.answered('s', 'q')
+    mirror.ingest(turn.slice(1), 's')
+    await vi.runAllTimersAsync()
+    expect(desktop[0].payload.notification.kind).toBe('done')
+    expect(device.at(-1)?.payload.notification).toEqual(desktop[0].payload.notification)
+    expect(device.at(-1)?.payload).not.toHaveProperty('subagent')
+    expect(device.at(-1)?.payload).not.toHaveProperty('notNews')
   })
 
   it('ignores aborted, duplicate and superseded ends', async () => {
@@ -98,5 +109,152 @@ describe('one completed-result decision for desktop and device', () => {
     mirror.ingest(turn.slice(1), 's')
     await vi.runAllTimersAsync()
     expect(desktop[0].payload.notification.kind).toBe('done')
+  })
+})
+
+describe('Finished after 1.5 s of quiet', () => {
+  it("the dial's summary card and the apps' turn_summary carry the notification only once 1.5 s have passed", async () => {
+    const { mirror, device, desktop } = setup()
+    mirror.ingest(turn, 's')
+    await vi.advanceTimersByTimeAsync(DONE_QUIET_MS - 1)
+    expect(desktop).toEqual([])
+    expect(device.map(f => f.payload.kind)).toEqual(['turn_started', 'processing', 'reply_text', 'done'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(desktop).toHaveLength(1)
+    expect(desktop[0].payload.notification.kind).toBe('done')
+    expect(device.at(-1)?.payload).toMatchObject({ kind: 'summary', notification: desktop[0].payload.notification })
+  })
+
+  it.each([
+    ['no tier', undefined],
+    ['a decided tier', async () => 'alert' as const],
+  ])('a recap the apps cannot be sent after the window (%s) throws nowhere and logs one line', async (_, decideTier) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    onTestFinished(() => error.mockRestore())
+    const { mirror } = setup({ decideTier, sendWeb: () => { throw new Error('socket closed') } })
+    mirror.ingest(turn, 's')
+    await vi.runAllTimersAsync()
+    expect(error.mock.calls.filter(([line]) => String(line).startsWith('[recap]'))).toEqual([['[recap] s recap not sent: Error']])
+  })
+
+  it('a turn held for its sub-agents gets the window from when the hold is let go', async () => {
+    const { mirror, desktop } = setup()
+    mirror.ingest([turn[0], { type: 'tool_start', payload: { id: 'a1', tool: 'Agent', input: { description: 'look around' } } }, turn[2]], 's')
+    await vi.advanceTimersByTimeAsync(60_000)
+    mirror.ingest([
+      { type: 'subagent_finished', payload: { id: 'a1', status: 'completed' } },
+      { type: 'text_delta', payload: { content: 'The fix is complete.' } },
+    ] as LiveEvent[], 's')
+    // The wrap-up lets the hold go 2 s on.
+    await vi.advanceTimersByTimeAsync(2_000 + DONE_QUIET_MS - 1)
+    expect(desktop).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(desktop[0].payload.notification.kind).toBe('done')
+  })
+
+  it("a /goal pass that opens inside the window: the recap is told silent before the next pass's Processing card, and nothing rings", async () => {
+    const decideTier = vi.fn(async () => 'alert' as const)
+    const { mirror, device, desktop } = setup({ decideTier })
+    mirror.ingest(turn, 's')
+    await vi.advanceTimersByTimeAsync(DONE_QUIET_MS / 2)
+    mirror.ingest([turn[0]], 's')
+    await vi.runAllTimersAsync()
+    expect(device.map(f => f.payload.kind)).toEqual(
+      ['turn_started', 'processing', 'reply_text', 'done', 'summary', 'turn_started', 'processing'])
+    expect(device[4].payload).toMatchObject({ notification: null, tier: 'silent' })
+    expect(desktop).toHaveLength(1)
+    expect(desktop[0].payload).toMatchObject({ notification: null, tier: 'silent' })
+    expect(decideTier).not.toHaveBeenCalled()
+  })
+})
+
+describe('a quiet turn', () => {
+  const quietLine: LiveEvent[] = [
+    { type: 'turn_started', payload: { userMessage: 'Your browser is ready: run `harness browser --help`' } },
+    { type: 'text_delta', payload: { content: 'Noted.' } },
+    { type: 'turn_ended', payload: {} },
+  ]
+  const spawning: LiveEvent[] = [
+    quietLine[0],
+    { type: 'tool_start', payload: { id: 'a1', tool: 'Agent', input: { description: 'look around' } } },
+    { type: 'turn_ended', payload: {} },
+  ]
+  const silentTier = { type: 'turn_summary', agentId: 'agent', dbSessionId: 's', payload: { sessionId: 's', tier: 'silent' } }
+
+  it('ends with no recap and no notification: the card goes done, the apps hear a silent tier and nothing else, and nothing is read or cut', async () => {
+    const readLastTurn = vi.fn(async () => ({ userMessage: 'x', assistantText: 'Noted.' }))
+    const { mirror, device, desktop, summarize } = setup({ readLastTurn })
+    mirror.ingest(quietLine, 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(device.map(f => f.payload.kind).at(-1)).toBe('done')
+    expect(device.some(f => f.payload.kind === 'summary')).toBe(false)
+    expect(desktop).toEqual([silentTier])
+    expect(summarize).not.toHaveBeenCalled()
+    expect(readLastTurn).not.toHaveBeenCalled()
+    expect(mirror.busy('s')).toBe(false)
+  })
+
+  it("leaves the agent's last recap as it was", async () => {
+    const { mirror } = setup()
+    mirror.ingest(turn, 's')
+    await vi.runAllTimersAsync()
+    const recent = structuredClone(mirror.recent('s'))
+    const snapshot = structuredClone(mirror.snapshot('s'))
+    mirror.ingest(quietLine, 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(mirror.recent('s')).toEqual(recent)
+    expect(mirror.snapshot('s')).toEqual(snapshot)
+  })
+
+  it('the turn after it tells as any turn does', async () => {
+    const { mirror, desktop } = setup()
+    for (const [events, quiet] of [[turn, false], [quietLine, true], [turn, false]] as const) {
+      mirror.ingest(events, 's', { quiet })
+      await vi.runAllTimersAsync()
+    }
+    expect(desktop.map(f => f.payload.notification?.kind ?? null)).toEqual(['done', null, 'done'])
+  })
+
+  it('an end held for sub-agents stays quiet when it is let go', async () => {
+    const { mirror, device, desktop, summarize } = setup()
+    mirror.ingest(spawning, 's', { quiet: true })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(desktop).toEqual([])
+    mirror.ingest([
+      { type: 'subagent_finished', payload: { id: 'a1', status: 'completed' } },
+      { type: 'text_delta', payload: { content: 'It is done.' } },
+    ] as LiveEvent[], 's')
+    await vi.runAllTimersAsync()
+    expect(desktop).toEqual([silentTier])
+    expect(device.some(f => f.payload.kind === 'summary')).toBe(false)
+    expect(summarize).not.toHaveBeenCalled()
+  })
+
+  it('a quiet mark does not reach a turn that began after a held end', async () => {
+    const { mirror, desktop, summarize } = setup()
+    mirror.ingest(spawning, 's', { quiet: true })
+    mirror.ingest(turn, 's')
+    await vi.runAllTimersAsync()
+    expect(summarize).toHaveBeenCalledTimes(1)
+    expect(desktop).toHaveLength(1)
+    expect(desktop[0].payload.notification.kind).toBe('done')
+  })
+
+  it('a quiet end heard twice is told once', async () => {
+    const { mirror, device, desktop } = setup()
+    mirror.ingest(quietLine, 's', { quiet: true })
+    mirror.ingest([quietLine[2]], 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(desktop).toEqual([silentTier])
+    expect(device.filter(f => f.payload.kind === 'done')).toHaveLength(1)
+  })
+
+  it('an interrupted quiet turn is cancelled as any', async () => {
+    const { mirror, device, desktop, summarize } = setup()
+    mirror.ingest([quietLine[0], quietLine[1], { type: 'turn_ended', payload: { aborted: true } }], 's', { quiet: true })
+    await vi.runAllTimersAsync()
+    expect(device.at(-1)?.payload).toEqual({ kind: 'done', text: 'done' })
+    expect(desktop).toEqual([])
+    expect(summarize).not.toHaveBeenCalled()
   })
 })

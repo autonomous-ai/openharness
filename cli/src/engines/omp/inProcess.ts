@@ -3,4 +3,4 @@
  * (engines/inProcess.ts). It re-exports, and holds no code of its own.
  */
 export { OmpNormalizer, lastOmpTurnText, ompMessagesToEvents, windowOmpLines } from './normalizer.js'
-export { createRuntimeProfileReader } from './profileReader.js'
+export { createRuntimeProfileReader, transcriptEvidence } from './profileReader.js'

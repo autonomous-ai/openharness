@@ -4,7 +4,7 @@ import type { ServiceQueryAuthority } from './serviceLinks.js'
  * in the edge host (quiet-machine QA, handoff extraction). No service receives the registry itself. */
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import type { HandoffDeps } from '../lib/agentHandoff.js'
-import { CONVERSATIONS_OFF, type ConversationReads, type CoreApi } from './api.js'
+import { agentView, CONVERSATIONS_OFF, type ConversationReads, type CoreApi } from './api.js'
 
 export function conversationReads(deps: HandoffDeps): ConversationReads {
   return {
@@ -12,7 +12,7 @@ export function conversationReads(deps: HandoffDeps): ConversationReads {
       if (!deps.publish) throw new HandoffError('HANDOFF_UNAVAILABLE')
       return deps.publish(prepared, permit)
     },
-    resolve: async (id) => (await deps.resolve(id)) ?? null,
+    resolve: async (id) => { const session = await deps.resolve(id); return session ? agentView(session) : null },
     recentAsks: async (id, n) => deps.recentAsks(id, n),
     lastFullText: async (id) => (await deps.lastFullText(id)) ?? null,
     recaps: async (id, n) => (await deps.recaps?.(id, n)) ?? [],

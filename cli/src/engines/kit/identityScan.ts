@@ -6,9 +6,13 @@ export class IdentityReadUnavailable extends Error {
   readonly code = 'IDENTITY_UNAVAILABLE'
   constructor(reason: string, message = `Conversation identity is held: ${reason}.`) { super(message) }
 }
+/** This build carries no usable native helper, so no native read can succeed until Harness is reinstalled.
+ *  The string is the named state the person reads (lib/agentFrame.ts). */
+export const MISSING_HELPER = 'This Harness install is incomplete. Reinstall Harness.'
 /** The engine's executable was replaced on disk (a package manager updated it) while the process kept
- *  running, so the kernel no longer reports its image and no native read can succeed until it restarts. */
-export const REPLACED_PROGRAM = 'the agent\u2019s program was replaced on disk while it was running; restart the agent'
+ *  running, so the kernel no longer reports its image and no native read can succeed until it restarts.
+ *  The string is the named state the person reads (lib/agentFrame.ts). */
+export const REPLACED_PROGRAM = "This agent's program was updated while it ran. Restart the agent."
 /** A conversation was seen and then could not be read: never a reason to stop its process without it
  *  (lib/stopAgentService.ts `withoutConversation`). */
 export class ObservedConversationUnavailable extends IdentityReadUnavailable {

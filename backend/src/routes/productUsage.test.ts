@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const methods = vi.hoisted(() => ({ ingestProductUsage: vi.fn(), ingestSetupUsage: vi.fn(), productUsageChoice: vi.fn(), setProductUsageChoice: vi.fn() }))
 vi.mock('../lib/productUsage.js', () => methods)
 import { productUsageRoutes } from './productUsage.js'
-import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_MAX_COUNT } from '../types/productUsage.js'
+import { LAUNCH_ERROR_FAMILIES, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_MAX_COUNT } from '../types/productUsage.js'
 import { HUB_METRICS, HUB_REPORT_MAX_COUNTERS, HUB_REPORT_MAX_VALUE } from '../lib/hubMetricsContract.js'
 let app: ReturnType<typeof Fastify>
 beforeEach(async () => {
@@ -160,6 +160,13 @@ it('takes the CLI\'s launch codes, late launch failures and first launches by en
       { counters: { launch_late_failed: 1, health_cli_report_unknown_metric: 1 } }))
     expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode, name).toBe(400)
   }
+})
+it('keeps an OpenClaw with no Gateway token and one that did not take its first task as listed codes in every family', async () => {
+  const context = { surface: 'cli', release: '0.6.20', platform: 'macos', channel: 'production' }
+  const counters = Object.fromEntries(LAUNCH_ERROR_FAMILIES.flatMap(family =>
+    ['openclaw_no_token', 'first_task_not_taken'].map(code => [`${family}_${code}`, 1])))
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context, counters })
 })
 
 it('takes a phone build context: its release and iOS or Android, nothing finer', async () => {
@@ -416,4 +423,43 @@ it('takes the Desktop\'s Team account removal outcomes, and keeps no outcome it 
   expect((await submit({ ...good, context, counters: { ui_desktop_team_account_removal_ok: 1, ui_desktop_team_account_removal_kept: 1 } })).statusCode).toBe(200)
   expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
     { ...good, context, counters: { ui_desktop_team_account_removal_ok: 1, health_desktop_report_unknown_metric: 1 } })
+})
+
+// The dial's counts (docs/plans/2026-11-23-dial-usage-counts-design.md) travel in a report of their own from the CLI's gateway.
+const cli = { surface: 'cli', release: '0.6.82', platform: 'macos', channel: 'production' }
+it('takes a report of dial counts only and keeps each name', async () => {
+  const counters = { dial_used_installation_days: 1, dial_voice_delivered: 3 }
+  const response = await submit({ ...good, context: cli, counters })
+  expect(response.statusCode).toBe(200)
+  expect(response.json().data).toEqual({ accepted: true })
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('takes the value from the dial: the counts, their flags and the period flags', async () => {
+  const counters = { dial_value_installation_days: 1, dial_value_ring_answered_2m: 2, dial_value_ring_answered_10m_installation_days: 1,
+    dial_value_ring_away_answered_10m: 1, dial_value_done_away_prompted_10m: 1, dial_value_week_installations: 1,
+    dial_value_28d_installations: 1 }
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('keeps dial names beside product names', async () => {
+  const counters = { turns_started: 2, dial_connected_installation_days: 1, dial_open_ok: 4 }
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('takes the dial skill\'s names', async () => {
+  const counters = Object.fromEntries(['dial_skill_claude_installation_days', 'dial_skill_codex_installation_days',
+    'dial_notice_installation_days', 'dial_notice_claude', 'dial_notice_codex', 'dial_notice_other',
+    'dial_notice_claude_installation_days', 'dial_notice_codex_installation_days', 'dial_notice_other_installation_days',
+    'dial_notice_shown', 'dial_notice_no_dial', 'dial_notice_limited', 'dial_notice_proceeding', 'dial_notice_waiting',
+    'dial_notice_plain', 'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m',
+    'dial_notice_present_roused']
+    .map((name) => [name, 1]))
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('drops a dial name it does not know and keeps the rest', async () => {
+  const response = await submit({ ...good, context: cli, counters: { dial_used_installation_days: 1, dial_future_name: 1 } })
+  expect(response.statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
+    { ...good, context: cli, counters: { dial_used_installation_days: 1, health_cli_report_unknown_metric: 1 } })
 })

@@ -7,10 +7,10 @@
  * harnesses, and a machine that is merely unlinked is never offline.
  */
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { authMe, daemonStatus, linkedPeers, listHarnesses, listMachines, remotePasswordSet, sharedMachines } from './daemon.mjs';
 import { now, readRecord } from './fleet.mjs';
+import { harnessRoots } from './localDaemon.mjs';
 
 /** How many machines are asked for their roster at once. A fleet is small; a relayed dial is not free. */
 const ROSTER_CONCURRENCY = 4;
@@ -87,7 +87,7 @@ async function pooled(items, limit, work) {
 
 /** This computer's own lifetime counters, written by the app. Absent is absent, never zero. */
 export async function localTotals(env = process.env) {
-  const dir = env.HARNESS_APP_DIR || join(homedir(), '.harness', 'desktop-app-v2');
+  const dir = env.HARNESS_APP_DIR || join(harnessRoots(env).data, 'desktop-app-v2');
   try {
     const raw = JSON.parse(await readFile(join(dir, 'harness-stats.json'), 'utf8'));
     const number = value => (Number.isFinite(value) && value >= 0 ? value : null);

@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
-import { planDatabase, profiled, reads, plan } from './plans.test-support.js'
-import { PUSH_DEVICES_PER_PERSON, devicesOf, dropPushDevice, forgetPushDevice, markSandbox, registerPushDevice } from '../src/push/devices.js'
+import { planDatabase } from './plans.test-support.js'
+import { dropPushDevice, type PushPlatform } from '../src/push/devices.js'
 
 // A fresh loopback replica set with the schema pushed; never DATABASE_URL.
 let replica: MongoMemoryReplSet
@@ -13,70 +14,47 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-const NOW = Date.UTC(2026, 10, 5, 9)
 let next = 0
 const person = () => `person-${++next}`
 const token = (n: number) => `${'ab'.repeat(32)}${n}`
 
-describe('Push devices: a phone token belongs to whoever registered it last (task #2905)', () => {
-  it('keeps a registered token for its person', async () => {
-    const a = person()
-    await registerPushDevice(db, a, { platform: 'ios', token: token(1) }, NOW)
-    expect(await devicesOf(db, [a])).toEqual([expect.objectContaining({ userId: a, platform: 'ios', token: token(1), sandbox: false })])
+// Records written by a supported older backend; the current product cannot register a new one.
+async function legacyToken(userId: string, platform: PushPlatform, value: string) {
+  const id = createHash('sha256').update(`${platform}\n${value}`).digest('hex')
+  await db.pushDevice.create({ data: { id, userId, platform, token: value, seenAt: new Date() } })
+  return id
+}
+
+describe('legacy push token cleanup after Swarm removal', () => {
+  it('drops only the requested token belonging to the signed-in person', async () => {
+    const user = person()
+    const id = await legacyToken(user, 'ios', token(1))
+    const kept = await legacyToken(user, 'ios', token(2))
+    expect(await dropPushDevice(db, user, { platform: 'ios', token: token(1) })).toBe(true)
+    expect(await db.pushDevice.findUnique({ where: { id } })).toBeNull()
+    expect(await db.pushDevice.findUnique({ where: { id: kept } })).toMatchObject({ userId: user, token: token(2) })
   })
 
-  it('moves a token to the next person who signs in on that phone, so the first stops hearing the second\'s notices', async () => {
-    const a = person(), b = person()
-    await registerPushDevice(db, a, { platform: 'android', token: token(2) }, NOW)
-    await registerPushDevice(db, b, { platform: 'android', token: token(2) }, NOW + 1000)
-    expect(await devicesOf(db, [a])).toEqual([])
-    expect((await devicesOf(db, [b])).map(d => d.token)).toEqual([token(2)])
+  it('cannot unregister a token belonging to another person', async () => {
+    const owner = person(), other = person()
+    const id = await legacyToken(owner, 'android', token(3))
+    expect(await dropPushDevice(db, other, { platform: 'android', token: token(3) })).toBe(false)
+    expect(await db.pushDevice.findUnique({ where: { id } })).toMatchObject({ userId: owner, token: token(3) })
   })
 
-  it('registering the same token again keeps one row', async () => {
-    const a = person()
-    await registerPushDevice(db, a, { platform: 'ios', token: token(3) }, NOW)
-    await registerPushDevice(db, a, { platform: 'ios', token: token(3) }, NOW + 1000)
-    expect(await devicesOf(db, [a])).toHaveLength(1)
+  it('accepts repeated cleanup without deleting anything else', async () => {
+    const user = person()
+    await legacyToken(user, 'ios', token(4))
+    expect(await dropPushDevice(db, user, { platform: 'ios', token: token(4) })).toBe(true)
+    expect(await dropPushDevice(db, user, { platform: 'ios', token: token(4) })).toBe(false)
   })
 
-  it(`keeps the ${PUSH_DEVICES_PER_PERSON} phones registered last`, async () => {
-    const a = person()
-    for (let i = 0; i <= PUSH_DEVICES_PER_PERSON; i++) await registerPushDevice(db, a, { platform: 'ios', token: token(100 + i) }, NOW + i * 1000)
-    const kept = (await devicesOf(db, [a])).map(d => d.token).sort()
-    expect(kept).toHaveLength(PUSH_DEVICES_PER_PERSON)
-    expect(kept).not.toContain(token(100))
-  })
-
-  it('drops a token only for the person it belongs to', async () => {
-    const a = person(), b = person()
-    await registerPushDevice(db, a, { platform: 'ios', token: token(4) }, NOW)
-    expect(await dropPushDevice(db, b, { platform: 'ios', token: token(4) })).toBe(false)
-    expect(await devicesOf(db, [a])).toHaveLength(1)
-    expect(await dropPushDevice(db, a, { platform: 'ios', token: token(4) })).toBe(true)
-    expect(await devicesOf(db, [a])).toEqual([])
-  })
-
-  it('forgets a dead token and remembers a sandbox one', async () => {
-    const a = person()
-    await registerPushDevice(db, a, { platform: 'ios', token: token(5) }, NOW)
-    await registerPushDevice(db, a, { platform: 'ios', token: token(6) }, NOW)
-    const [first, second] = (await devicesOf(db, [a])).sort((x, y) => x.token.localeCompare(y.token))
-    await forgetPushDevice(db, first!.id)
-    await markSandbox(db, second!.id)
-    expect(await devicesOf(db, [a])).toEqual([expect.objectContaining({ token: token(6), sandbox: true })])
-  })
-
-  it('reads nothing for nobody', async () => {
-    expect(await devicesOf(db, [])).toEqual([])
-  })
-
-  it('reads the told people\'s devices through the userId index', async () => {
-    const people = Array.from({ length: 5 }, person)
-    for (const [i, p] of people.entries()) await registerPushDevice(db, p, { platform: 'ios', token: token(200 + i) }, NOW)
-    const rows = reads(await profiled(db, () => devicesOf(db, people.slice(0, 2))), 'push_devices', ['userId'])
-    expect(rows).toHaveLength(1)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ userId: 1/)
-    expect(rows[0]!.docsExamined).toBe(2)
+  it('keeps the other platform when the token text is the same', async () => {
+    const user = person()
+    const ios = await legacyToken(user, 'ios', token(5))
+    const android = await legacyToken(user, 'android', token(5))
+    expect(await dropPushDevice(db, user, { platform: 'ios', token: token(5) })).toBe(true)
+    expect(await db.pushDevice.findUnique({ where: { id: ios } })).toBeNull()
+    expect(await db.pushDevice.findUnique({ where: { id: android } })).toMatchObject({ platform: 'android', token: token(5) })
   })
 })

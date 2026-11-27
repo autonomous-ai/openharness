@@ -41,8 +41,9 @@ let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
   local sha dirty=""
   sha="$(git -C "$adapter_dir" rev-parse --short HEAD 2>/dev/null || echo nogit)"
   # --porcelain, not `diff --quiet`: an UNTRACKED new source file changes the bundle too. dist/ is
-  # gitignored, so bundling never makes the next run look dirty by itself.
-  [ -z "$(git -C "$adapter_dir" status --porcelain -- "$adapter_dir" 2>/dev/null)" ] || dirty=".dirty"
+  # gitignored, so bundling never makes the next run look dirty by itself. The VS Code extension's
+  # folder too: cli.js carries it.
+  [ -z "$(git -C "$adapter_dir" status --porcelain -- "$adapter_dir" "$adapter_dir/../plugins/harness-device-vscode" 2>/dev/null)" ] || dirty=".dirty"
 
   printf '%s-dev.%s%s' "$core" "$sha" "$dirty"
 }

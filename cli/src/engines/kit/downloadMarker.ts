@@ -21,6 +21,7 @@ import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { harnessPath } from '../../config/harnessHome.js'
 import { probeExecFile } from '../../lib/offThreadExec.js'
 import type { AgentEngine } from '../types.js'
 
@@ -34,7 +35,7 @@ export const DOWNLOAD_HOLD_MS = 600_000
 
 /** Whether Desktop Harness is downloading `engine` now. Never rejects. */
 export async function engineDownloading(engine: AgentEngine, home: string = homedir(), now: () => number = Date.now): Promise<boolean> {
-  const pid = await markedPid(join(home, '.harness', 'run', `downloading-${engine.replace(/[^a-z0-9-]/g, '')}`), now)
+  const pid = await markedPid(join(harnessPath('run', home), `downloading-${engine.replace(/[^a-z0-9-]/g, '')}`), now)
   if (pid === null) return false
   // As `kill -0`: a process of another user answers EPERM, which the pane's check reads as gone too.
   try { process.kill(pid, 0) } catch { return false }

@@ -1,0 +1,319 @@
+diff --git a/lib/logger-v1.js b/lib/logger-v1.js
+deleted file mode 100644
+index 6378ec7c40..0000000000
+--- a/lib/logger-v1.js
++++ /dev/null
+@@ -1,29 +0,0 @@
+-// The old logger: printf-style text lines on stderr. Deprecated: MIGRATION.md moves every package to ./logger.js.
+-import { format } from 'node:util'
+-
+-const LEVELS = ['debug', 'info', 'warn', 'error']
+-const threshold = Math.max(0, LEVELS.indexOf(process.env.LOG_LEVEL ?? 'info'))
+-
+-function write(level, prefix, args) {
+-  if (LEVELS.indexOf(level) < threshold) return
+-  process.stderr.write(`${new Date().toISOString()} ${level.toUpperCase()} ${prefix}${format(...args)}\n`)
+-}
+-
+-function make(prefix) {
+-  return Object.fromEntries(LEVELS.map((level) => [level, (...args) => write(level, prefix, args)]))
+-}
+-
+-export const log = make('')
+-
+-export function scoped(prefix) {
+-  return make(`${prefix} `)
+-}
+-
+-export function timed(label, fn) {
+-  const started = performance.now()
+-  try {
+-    return fn()
+-  } finally {
+-    log.info('%s took %dms', label, Math.round(performance.now() - started))
+-  }
+-}
+diff --git a/packages/auth/src/index.js b/packages/auth/src/index.js
+index ae58f58a77..f066aecaa3 100644
+--- a/packages/auth/src/index.js
++++ b/packages/auth/src/index.js
+@@ -1,17 +1,19 @@
+-import { log } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('auth')
+ 
+ export function parseClaims(token) {
+   try {
+     const [, payload] = token.split('.')
+     return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+   } catch (err) {
+-    log.error('could not parse token claims', err)
++    log.error('claims_parse_failed', { error: err })
+     return null
+   }
+ }
+ 
+ export function isExpired(claims, now = Date.now()) {
+   const expired = claims.exp * 1000 <= now
+-  if (expired) log.info(`token for ${claims.sub} expired`)
++  if (expired) log.info('token_expired', { sub: claims.sub })
+   return expired
+ }
+diff --git a/packages/billing/src/index.js b/packages/billing/src/index.js
+index efd8fe3403..d3c3778bb1 100644
+--- a/packages/billing/src/index.js
++++ b/packages/billing/src/index.js
+@@ -1,10 +1,12 @@
+-import { log } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('billing')
+ 
+ export function charge(customer, cents) {
+   if (!Number.isInteger(cents) || cents <= 0) {
+-    log.error('refused charge for %s: %j is not a whole number of cents', customer, cents)
++    log.error('charge_refused', { customer, cents })
+     throw new RangeError('amount must be a positive whole number of cents')
+   }
+-  log.info('charged %s %d cents', customer, cents)
++  log.info('charged', { customer, cents })
+   return { customer, cents, status: 'charged' }
+ }
+diff --git a/packages/cache/src/index.js b/packages/cache/src/index.js
+index 1d476b43fd..7f7729d8e6 100644
+--- a/packages/cache/src/index.js
++++ b/packages/cache/src/index.js
+@@ -1,10 +1,12 @@
+-import { log } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('cache')
+ 
+ export function createCache(limit) {
+   const entries = new Map()
+   return {
+     get(key) {
+-      log.debug('cache %s for %s', entries.has(key) ? 'hit' : 'miss', key)
++      log.debug(entries.has(key) ? 'cache_hit' : 'cache_miss', { key })
+       return entries.get(key)
+     },
+     set(key, value) {
+diff --git a/packages/geo/src/index.js b/packages/geo/src/index.js
+index 7ece12b936..ad73769dd1 100644
+--- a/packages/geo/src/index.js
++++ b/packages/geo/src/index.js
+@@ -1,5 +1,6 @@
+-import { log, timed } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
+ 
++const log = createLogger('geo')
+ const EARTH_KM = 6371
+ const rad = (deg) => (deg * Math.PI) / 180
+ 
+@@ -7,13 +8,14 @@ const rad = (deg) => (deg * Math.PI) / 180
+ export function distanceKm(a, b) {
+   for (const point of [a, b]) {
+     if (Math.abs(point.lat) > 90) {
+-      log.warn(`latitude ${point.lat} out of range`)
++      log.warn('latitude_out_of_range', { lat: point.lat })
+       return NaN
+     }
+   }
+-  return timed('distance', () => {
+-    const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2
+-      + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lon - a.lon) / 2) ** 2
+-    return 2 * EARTH_KM * Math.asin(Math.sqrt(h))
+-  })
++  const started = performance.now()
++  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2
++    + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lon - a.lon) / 2) ** 2
++  const km = 2 * EARTH_KM * Math.asin(Math.sqrt(h))
++  log.info('distance_measured', { ms: Math.round(performance.now() - started) })
++  return km
+ }
+diff --git a/packages/i18n/src/index.js b/packages/i18n/src/index.js
+index ed84328d57..361d8404c2 100644
+--- a/packages/i18n/src/index.js
++++ b/packages/i18n/src/index.js
+@@ -1,15 +1,15 @@
+-import { scoped } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
+ 
+-const log = scoped('[i18n]')
++const log = createLogger('i18n')
+ 
+ // The message for key in locale, else in English, else the key itself.
+ export function translate(messages, locale, key) {
+   const own = messages[locale]?.[key]
+   const text = own ?? messages.en?.[key]
+   if (text === undefined) {
+-    log.error('missing message %s', key)
++    log.error('message_missing', { locale, key })
+     return key
+   }
+-  if (own === undefined) log.warn('fell back to en', { locale, key })
++  if (own === undefined) log.warn('message_fell_back', { locale, key })
+   return text
+ }
+diff --git a/packages/images/src/index.js b/packages/images/src/index.js
+index 90ec8c7bd2..49b84c45c3 100644
+--- a/packages/images/src/index.js
++++ b/packages/images/src/index.js
+@@ -1,11 +1,12 @@
+-import { log, timed } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('images')
+ 
+ // Scales an image down to fit a square box, never up.
+ export function fit(width, height, box) {
+-  return timed('fit', () => {
+-    const scale = Math.min(box / width, box / height, 1)
+-    const out = { width: Math.round(width * scale), height: Math.round(height * scale) }
+-    log.debug('fit %dx%d into %d: %dx%d', width, height, box, out.width, out.height)
+-    return out
+-  })
++  const started = performance.now()
++  const scale = Math.min(box / width, box / height, 1)
++  const out = { width: Math.round(width * scale), height: Math.round(height * scale) }
++  log.debug('fitted', { width, height, box, out, ms: Math.round(performance.now() - started) })
++  return out
+ }
+diff --git a/packages/mailer/src/index.js b/packages/mailer/src/index.js
+index e25d5d0b50..7908525c58 100644
+--- a/packages/mailer/src/index.js
++++ b/packages/mailer/src/index.js
+@@ -1,12 +1,12 @@
+-import { scoped } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
+ 
+-const log = scoped('[mailer]')
++const log = createLogger('mailer')
+ 
+ export function send(to, subject) {
+   if (!to.includes('@')) {
+-    log.warn(`skipped ${to}: not an address`)
++    log.warn('send_skipped', { to })
+     return false
+   }
+-  log.info(`sent "${subject}" to ${to}`)
++  log.info('sent', { to, subject })
+   return true
+ }
+diff --git a/packages/reports/src/index.js b/packages/reports/src/index.js
+index 513cfbffc5..b2bed0b4a5 100644
+--- a/packages/reports/src/index.js
++++ b/packages/reports/src/index.js
+@@ -1,12 +1,14 @@
+-import { log } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('reports')
+ 
+ export function toCsv(rows) {
+   if (rows.length === 0) {
+-    log.warn('empty report', { rows: 0 })
++    log.warn('report_empty', { rows: 0 })
+     return ''
+   }
+   const columns = Object.keys(rows[0])
+   const lines = rows.map((row) => columns.map((column) => JSON.stringify(row[column] ?? '')).join(','))
+-  log.info('report built', { rows: rows.length, columns: columns.length })
++  log.info('report_built', { rows: rows.length, columns: columns.length })
+   return [columns.join(','), ...lines].join('\n')
+ }
+diff --git a/packages/scheduler/src/index.js b/packages/scheduler/src/index.js
+index f472098ad9..9e009db48e 100644
+--- a/packages/scheduler/src/index.js
++++ b/packages/scheduler/src/index.js
+@@ -1,11 +1,13 @@
+-import { log } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('scheduler')
+ 
+ export function nextRun(everyMinutes, last) {
+   if (everyMinutes < 1) {
+-    log.error('bad interval %d', everyMinutes)
++    log.error('interval_refused', { everyMinutes })
+     throw new RangeError('interval must be at least one minute')
+   }
+   const next = new Date(last.getTime() + everyMinutes * 60_000)
+-  log.debug('next run', { at: next.toISOString() })
++  log.debug('next_run', { at: next.toISOString() })
+   return next
+ }
+diff --git a/packages/search/src/index.js b/packages/search/src/index.js
+index 39f4b1b227..c06c24e86e 100644
+--- a/packages/search/src/index.js
++++ b/packages/search/src/index.js
+@@ -1,7 +1,12 @@
+-import { log, timed } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('search')
+ 
+ export function search(items, query) {
+   const q = query.trim().toLowerCase()
+-  log.debug('search query', { query: q, items: items.length })
+-  return timed('search', () => items.filter((item) => item.toLowerCase().includes(q)))
++  log.debug('search_query', { query: q, items: items.length })
++  const started = performance.now()
++  const hits = items.filter((item) => item.toLowerCase().includes(q))
++  log.info('searched', { hits: hits.length, ms: Math.round(performance.now() - started) })
++  return hits
+ }
+diff --git a/packages/uploads/src/index.js b/packages/uploads/src/index.js
+index c8ec67ebd8..2186ce9166 100644
+--- a/packages/uploads/src/index.js
++++ b/packages/uploads/src/index.js
+@@ -1,17 +1,17 @@
+-import { scoped } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
+ 
+-const log = scoped('[uploads]')
++const log = createLogger('uploads')
+ const MAX_BYTES = 5 * 1024 * 1024
+ 
+ export function accept(file) {
+   if (file.size > MAX_BYTES) {
+-    log.warn('rejected %s: %d bytes', file.name, file.size)
++    log.warn('upload_rejected', { name: file.name, size: file.size, reason: 'size' })
+     return false
+   }
+   if (!/\.(png|jpe?g|pdf)$/i.test(file.name)) {
+-    log.warn(`rejected ${file.name}: type not allowed`)
++    log.warn('upload_rejected', { name: file.name, reason: 'type' })
+     return false
+   }
+-  log.info('accepted', { name: file.name, size: file.size })
++  log.info('upload_accepted', { name: file.name, size: file.size })
+   return true
+ }
+diff --git a/packages/webhooks/src/index.js b/packages/webhooks/src/index.js
+index 7836567ff5..a1e66111a7 100644
+--- a/packages/webhooks/src/index.js
++++ b/packages/webhooks/src/index.js
+@@ -1,15 +1,17 @@
+-import { log } from '../../../lib/logger-v1.js'
++import { createLogger } from '../../../lib/logger.js'
++
++const log = createLogger('webhooks')
+ 
+ export async function deliver(url, body, send) {
+   for (let attempt = 1; attempt <= 3; attempt++) {
+     try {
+       await send(url, body)
+-      log.info(`delivered to ${url} on attempt ${attempt}`)
++      log.info('delivered', { url, attempt })
+       return true
+     } catch (err) {
+-      log.error('delivery failed', err)
++      log.error('delivery_failed', { url, attempt, error: err })
+     }
+   }
+-  log.warn(`gave up on ${url}`)
++  log.warn('delivery_given_up', { url })
+   return false
+ }

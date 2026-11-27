@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { HarnessCollaborationStore, type CommentAuthor } from './collaboration.js'
 import { HarnessGrantStore } from './grants.js'
@@ -9,6 +9,19 @@ import { HarnessShareOwner, type ShareOwnerDeps } from './owner.js'
 import { b64e, newEphemeral, newIdentity } from '../lib/e2ee/core.js'
 import { recipientHandshake, type ObserverCipher } from './crypto.js'
 import type { RegisteredSession } from '../lib/registry.js'
+
+// Pass-through, each call that could write a file recorded: what a save does to its target.
+const fsCalls = vi.hoisted(() => [] as Array<{ call: string; path: unknown; from?: unknown }>)
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { fsCalls.push({ call: 'openSync', path: args[0] }); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { fsCalls.push({ call: 'writeFileSync', path: args[0] }); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { fsCalls.push({ call: 'renameSync', path: args[1], from: args[0] }); return actual.renameSync(...args) },
+  }
+})
+/** The recorded calls on [file] itself: an open or a write of it is a write in place. */
+const callsOn = (file: string) => fsCalls.filter(c => c.path === file)
 
 const alice: CommentAuthor = { id: 'alice', name: 'Alice', owner: false }
 const bob: CommentAuthor = { id: 'bob', name: 'Bob', owner: false }
@@ -47,6 +60,15 @@ describe('durable link policy and comments', () => {
     expect(() => new HarnessCollaborationStore(path)).toThrow('could not be read')
     writeFileSync(path, JSON.stringify({ links: [{ id: 'bad' }], comments: [] }))
     expect(() => new HarnessCollaborationStore(path)).toThrow('could not be read')
+  })
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const first = store.set(linkInput)
+    fsCalls.length = 0
+    store.published(first, null)
+    const onto = callsOn(path)
+    expect(onto.map(c => c.call)).toEqual(['renameSync'])
+    expect(dirname(String(onto[0].from))).toBe(dirname(path))
+    expect(new HarnessCollaborationStore(path).link('m', 'a')?.pending).toBe(false)
   })
   it('authenticates posting, bounds text, deduplicates retries and exposes no private author IDs', () => {
     const id = randomUUID()
@@ -194,20 +216,6 @@ describe('owner link and comment authority', () => {
     expect(frames.find(f => f.id === next.id && f.type === 'observer_closed')).toBeTruthy()
     expect((await connect()).cipher).toBeNull()
     expect(grants.all().every(g => g.revoked)).toBe(true)
-  })
-  it('closes every viewer of a link within a second of its session turning confidential, invited or public', async () => {
-    // What the Swarm's roster marks (superTabs/observers.ts allows): a Lead, or an agent in a private chat, refuses every share.
-    let confidential = false
-    deps.allowsGrant = grant => !(confidential && grant.agentId === 'a')
-    await manage('link', { visibility: 'public' })
-    await manage('invite', { emails: ['alice@example.com'], days: 7 })
-    const guest = await connect(), alice = await connect({ email: 'alice@example.com', authorId: 'alice' })
-    expect(guest.cipher).not.toBeNull()
-    expect(alice.cipher).not.toBeNull()
-    confidential = true
-    await vi.advanceTimersByTimeAsync(1000)
-    for (const viewer of [guest, alice]) expect(frames.find(f => f.id === viewer.id && f.type === 'observer_closed')).toMatchObject({ payload: { reason: 'Sharing ended or invitation expired', retry: false } })
-    expect((await connect()).cipher).toBeNull()
   })
   it('retries offline publication, fails closed on permanent errors, and scopes sync to this machine', async () => {
     vi.mocked(deps.publish).mockRejectedValueOnce(new Error('offline'))

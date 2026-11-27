@@ -5,10 +5,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import {
-  createGuestAccounts, GUEST_ENV_KEYS, GUEST_HELPER_PATH, guestEnvAllowed, GuestHelperError, guestHelperFailure, guestHomeRoot,
-  guestRunCommand, guestUserFor, guestWorkspaceFor, runGuestCommand, type GuestRunner,
-} from './guestAccounts.js'
+import { createGuestAccounts, GUEST_ENV_KEYS, GUEST_HELPER_PATH, guestEnvAllowed, GuestHelperError, guestHelperFailure, guestHomeRoot, guestRunCommand, guestUserFor, guestWorkspaceFor } from './guestAccounts.js'
+import { runGuestCommand, type GuestRunner } from './guestRunner.js'
 import { guestSudoersTemplate } from './guestHelperAssets.js'
 
 const HELPER = fileURLToPath(new URL('../../assets/guest-helper/guest-helper.sh', import.meta.url))

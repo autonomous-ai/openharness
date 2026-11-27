@@ -42,6 +42,8 @@ export class NativeEvidenceBudget {
 export async function nativeProbe(command: 'ps' | 'lsof', args: string[], budget: NativeEvidenceBudget,
   maxBuffer = 512 * 1024,
 ): Promise<string> {
+  // Windows has no lsof, and a `ps` on its PATH (Git's) is not the process table these probes read.
+  if (process.platform === 'win32') nativeUnavailable('the native process probes do not run on Windows')
   const timeout = budget.probe()
   const bytes = await new Promise<Buffer>((resolve, reject) => {
     execFile(command, args, { encoding: 'buffer', timeout, killSignal: 'SIGKILL', maxBuffer,

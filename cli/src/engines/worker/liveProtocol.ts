@@ -2,7 +2,7 @@
 import type { LiveEvent } from '../kit/events.js'
 import type { LiveTurn } from '../facets/live.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { record, sessionEvent } from './protocol.js'
+import { record, sessionEvent, subagentFinished } from './protocol.js'
 import type { RuntimeRecord } from '../facets/runtime.js'
 import { runtimeRecord } from './runtimeProtocol.js'
 import type { TranscriptClose } from '../../lib/transcriptControls.js'
@@ -57,6 +57,9 @@ export interface LiveFrame {
   observe: boolean
   events: LiveEvent[]
   failure?: string
+  /** See `LiveRead.at` and `LiveRead.over`. */
+  at?: number
+  over?: true
   replay: boolean
   turn: LiveTurn
 }
@@ -102,8 +105,7 @@ export function liveEvent(value: unknown): value is LiveEvent {
   const p = value.payload
   if (value.type === 'turn_started') return typeof p.userMessage === 'string'
   if (value.type === 'turn_ended') return p.aborted === undefined || p.aborted === true
-  return value.type === 'subagent_finished' && typeof p.id === 'string' && typeof p.status === 'string'
-    && (p.summary === undefined || typeof p.summary === 'string')
+  return subagentFinished(value)
 }
 
 export function livePage(value: unknown): value is LivePage {
@@ -116,7 +118,8 @@ export function livePage(value: unknown): value is LivePage {
     && value.frames.every(f => record(f) && typeof f.raw === 'string' && typeof f.profile === 'boolean'
       && typeof f.observe === 'boolean' && typeof f.replay === 'boolean' && liveTurn(f.turn)
       && (f.runtime === undefined || f.runtime === null || runtimeRecord(f.runtime))
-      && (f.failure === undefined || typeof f.failure === 'string') && Array.isArray(f.events) && f.events.every(liveEvent))
+      && (f.failure === undefined || typeof f.failure === 'string') && (f.at === undefined || Number.isSafeInteger(f.at))
+      && (f.over === undefined || f.over === true) && Array.isArray(f.events) && f.events.every(liveEvent))
 }
 
 export interface LivePull {

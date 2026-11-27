@@ -17,6 +17,7 @@ import { accessSync, constants, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, sep } from 'node:path'
 import { env as appEnv } from '../config/env.js'
+import { homePath } from '../config/envFields.js'
 import { binaryOnPath } from './binaryOnPath.js'
 import { interactiveEngineShell } from './engineLaunch.js'
 
@@ -24,34 +25,16 @@ import { interactiveEngineShell } from './engineLaunch.js'
 // availability probe uses, so a command name can never be interpolated into shell source.
 const RESOLVE_SCRIPT = 'command -v "$1" 2>/dev/null'
 
+/** Where a binary off the PATH was found, in fixed words a log can print: the folder would name the person's home. */
+export type FoundFrom = 'login shell' | 'managed runtime' | 'standard install location' | 'PATH'
+
 export type TmuxPathOutcome =
   /** Already resolvable; the daemon's PATH was left alone. */
   | { state: 'present'; path?: string }
   /** Found — through the managed runtime or the user's shell — and its directory prepended to PATH. */
-  | { state: 'adopted'; path: string; from: string }
+  | { state: 'adopted'; path: string; from: FoundFrom }
   /** Not resolvable either way — tmux is genuinely absent, or there is no usable login shell. */
   | { state: 'absent'; reason: string }
-
-export type AvailableTmuxPathOutcome = Exclude<TmuxPathOutcome, { state: 'absent' }>
-
-/**
- * Refuse to start over a tmux that cannot be found.
- *
- * ⚠️ NOT used by the daemon any more. A daemon that will not start is a daemon that cannot be fixed
- * — its own updater lives inside the boot it never finishes — and a machine that merely lost tmux
- * from its PATH does not need that. `runForeground` records the reason and runs without a tmux
- * backend instead, which every caller already handles (`TMUX_UNAVAILABLE`). Kept for callers that
- * genuinely have nothing to do without terminals, and for its tests.
- */
-export function requireTmuxAvailable(outcome: TmuxPathOutcome): AvailableTmuxPathOutcome {
-  if (outcome.state === 'absent') {
-    throw new Error(
-      `tmux is required but unavailable: ${outcome.reason}. `
-      + 'Install tmux, verify `tmux -V`, then run `harness start` again.',
-    )
-  }
-  return outcome
-}
 
 /**
  * The tmux the installer put under ~/.harness/runtime, recorded in `current-tmux` exactly as the
@@ -79,7 +62,8 @@ export function tmuxInstallDirectories(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
-  const userBin = env.HARNESS_BIN_DIR || join(env.HOME || homedir(), '.local', 'bin')
+  const home = env.HOME || homedir()
+  const userBin = homePath(env.HARNESS_BIN_DIR ?? '', home) || join(home, '.local', 'bin')
   const brew = platform === 'darwin'
     ? (env.HARNESS_HOMEBREW_PREFIXES ?? '/opt/homebrew /usr/local').split(/\s+/).filter(Boolean)
       .map(prefix => join(prefix, 'bin'))
@@ -184,7 +168,7 @@ export async function ensureTmuxOnPath(
   if (resolved) {
     const dir = dirname(resolved)
     env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
-    return { state: 'adopted', path: resolved, from: dir }
+    return { state: 'adopted', path: resolved, from: 'login shell' }
   }
   const managed = managedTmuxPath(runtimeDir)
   if (managed) {
@@ -192,7 +176,7 @@ export async function ensureTmuxOnPath(
     env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
     return { state: 'adopted', path: managed, from: 'managed runtime' }
   }
-  // install.sh can find Homebrew and install tmux by temporarily evaluating `brew shellenv`.
+  // install.sh finds a Homebrew tmux by putting that prefix's bin on its own PATH, and never runs brew.
   // That PATH belongs only to the installer: a fresh macOS user's rc files do not inherit it.
   // Desktop explicitly checks these locations too. Preserve the user's existing PATH/shell choice
   // above, then verify the installed fallback without invoking Homebrew or changing shell profiles.

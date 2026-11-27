@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
+import { join } from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
+import { env } from '../config/env.js'
 import { RemoteRelayPool } from './remoteRelay.js'
 import { TerminalP2pInitiator } from './terminalP2p.js'
 import { b64e, newIdentity } from './e2ee/core.js'
 import { E2eeManager } from './e2ee/manager.js'
 import { MachinePeerStore } from './e2ee/machinePeers.js'
 import { E2eeStore } from './e2ee/store.js'
+import { StateFileUnreadable } from './secureState.js'
 import { TerminalBinaryKind } from './terminalBinary.js'
 
 /** Minimal fake of the private `Entry` shape `noteTerminalResponse`/`demoteP2p` operate on — exercised
@@ -808,6 +812,37 @@ describe('RemoteRelayPool keeps background (isolated) clients cheap', () => {
     }
   })
 
+  // A watch lives as long as its connection on the other machine (gateway/harnessWatch.ts). Shelved, the connection would
+  // outlive the tool that asked, and the next background client handed it would be told that harness's changes unasked.
+  it('a background session that asked for a harness_watch is closed when its client detaches, never shelved', async () => {
+    const pool = new RemoteRelayPool(...ctorArgs)
+    const made: Array<{ ws: { close: ReturnType<typeof vi.fn>; terminate: ReturnType<typeof vi.fn> }; lingerTimer: ReturnType<typeof setTimeout> | null }> = []
+    const dialSpy = vi.spyOn(RemoteRelayPool.prototype as unknown as { connect: (machineId: string) => Promise<unknown> }, 'connect')
+      .mockImplementation(async function (this: unknown, machineId: string) {
+        const entry = fakeEntry({ attached: new Set(), sink: null, ws: { send: vi.fn(), close: vi.fn(), terminate: vi.fn() }, viewers: { reset: vi.fn(), close: vi.fn() } })
+        made.push(entry as unknown as typeof made[number])
+        ;(this as { entries: Map<string, unknown> }).entries.set(machineId, entry)
+        return entry
+      })
+    try {
+      const watcher = await pool.acquireIsolated('m1', 'env', select, sink(), vi.fn())
+      await watcher.send({ type: 'agents_list', payload: { requestId: 'r' } }).catch(() => {})
+      await watcher.send({ type: 'harness_watch', payload: { requestId: 'w', agentIds: ['a1'] } }).catch(() => {})
+      watcher.detach()
+      expect(pool.idleIsolatedCount('m1')).toBe(0)
+      expect(made[0].ws.close).toHaveBeenCalledWith(1000, 'watch ended')
+      // The next background client dials its own connection.
+      const next = await pool.acquireIsolated('m1', 'env', select, sink(), vi.fn())
+      expect(dialSpy).toHaveBeenCalledTimes(2)
+      next.detach()
+      expect(pool.idleIsolatedCount('m1')).toBe(1)
+      for (const entry of made) clearTimeout(entry.lingerTimer!)
+      pool.invalidateIsolated('m1')
+    } finally {
+      dialSpy.mockRestore()
+    }
+  })
+
   // WebSocket roadmap Phase 1 item 6. The shelf held 4 per machine, and one more was torn down with no close frame, so
   // the backend logged it as a dropped connection (1006) like any network failure, and nothing counted overflows.
   it('the shelf keeps 8 warm background sessions per machine, and closes one more cleanly saying why', async () => {
@@ -1045,9 +1080,83 @@ describe('RemoteRelayPool and agent browser frames from the relay', () => {
     expect(r.inbox.filter(frame => frame.type.startsWith('agent_browser_'))).toEqual([{ type: 'agent_browser_close', payload: { streamId: 'real', reason: 'agent' } }])
   })
 
+  // A harness_event wakes the agent that watches (docs/design/2026-11-12-hachi.md): only the machine it watches says one.
+  it('an unsealed harness_event from the relay is refused; one sealed to this session reaches the tool', async () => {
+    const r = await relayed()
+    r.push({ type: 'harness_event', payload: { agentId: 'forged', state: 'needs_person' } })
+    r.push(r.seal('harness_event', { agentId: 'real', state: 'idle' }))
+    await vi.waitFor(() => expect(r.inbox.some(frame => frame.type === 'harness_event')).toBe(true))
+    expect(r.inbox.filter(frame => frame.type === 'harness_event')).toEqual([{ type: 'harness_event', payload: { agentId: 'real', state: 'idle' } }])
+  })
+
   it('agent_browser_transport_error sent to this viewing machine reaches the app', async () => {
     const r = await relayed()
     r.push({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } })
     await vi.waitFor(() => expect(r.inbox).toContainEqual({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } }))
+  })
+})
+
+describe('RemoteRelayPool when a machine denies this one', () => {
+  const machineId = 'cdefcdefcdefcdefcdefcdefcdefcdef'
+  const pins = join(env.ADAPTER_DATA_DIR, 'e2e', 'machinePeers.json')
+  const torn = '[{"machineId":"' + machineId
+  afterEach(() => { vi.restoreAllMocks(); rmSync(pins, { force: true }) })
+
+  /** One dial through a relay whose machine denies this one; `onHello` runs as the hello reaches it. Settles as
+   *  `acquire` does. */
+  async function deniedDial(peers: MachinePeerStore, opts: { onHello?: () => void; expectsTrust?: (machineId: string, pub: string) => boolean } = {}): Promise<unknown> {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>(resolve => wss.once('listening', resolve))
+    wss.on('connection', ws => ws.on('message', raw => {
+      const frame = JSON.parse(raw.toString()) as { type: string }
+      if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId } }))
+      else if (frame.type === 'e2e_hello') {
+        opts.onHello?.()
+        ws.send(JSON.stringify({ type: 'e2e_denied' }))
+      }
+    }))
+    const pool = new RemoteRelayPool({ accessToken: async () => 'fixture-token' } as never,
+      `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, newIdentity(), peers,
+      { p2p: false, ...(opts.expectsTrust ? { expectsTrust: opts.expectsTrust } : {}) })
+    try {
+      return await pool.acquire(machineId, 'prod', { type: 'machine_select', payload: { machineId } },
+        { sendFrame: () => true, sendBinary: () => true }, () => {})
+    } finally {
+      for (const ws of wss.clients) ws.terminate()
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+    }
+  }
+  const pinned = (): MachinePeerStore => {
+    const peers = new MachinePeerStore()
+    peers.pin(machineId, b64e(newIdentity().pub), 'test remote')
+    return peers
+  }
+
+  // The denial is handled in the socket's message handler, which nothing above catches: a pin file that became
+  // unreadable during the dial (an older build writing it in place) is said, and the dial answers as for any denial.
+  it('a pin that cannot be dropped is said, and the relay goes on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(deniedDial(pinned(), { onHello: () => writeFileSync(pins, torn) })).rejects.toThrow('NO_PEER_LINK')
+    expect(warn).toHaveBeenCalledWith('[relay] could not drop the pin of a machine that denied this one: StateFileUnreadable')
+    expect(readFileSync(pins, 'utf8')).toBe(torn)
+  })
+
+  // A file system error's message names the file's full path, home folder and all.
+  it('a pin that cannot be dropped for another reason is said by its code alone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const peers = pinned()
+    vi.spyOn(peers, 'unlink').mockImplementation(() => { throw Object.assign(new Error(`EACCES: permission denied, open '${pins}'`), { code: 'EACCES' }) })
+    await expect(deniedDial(peers)).rejects.toThrow('NO_PEER_LINK')
+    expect(warn).toHaveBeenCalledWith('[relay] could not drop the pin of a machine that denied this one: EACCES')
+  })
+
+  // The device key log is read in the same handler: one that cannot be read ended the gateway.
+  it('a device log that cannot be read expects no trust: the pin goes as for any denial, and that is said', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const peers = pinned()
+    const expectsTrust = (): boolean => { throw new StateFileUnreadable('devlog.json', 'not valid JSON') }
+    await expect(deniedDial(peers, { expectsTrust })).rejects.toThrow('NO_PEER_LINK')
+    expect(peers.get(machineId)).toBeNull()
+    expect(warn).toHaveBeenCalledWith('[relay] could not tell whether a machine that denied this one will trust it: StateFileUnreadable')
   })
 })

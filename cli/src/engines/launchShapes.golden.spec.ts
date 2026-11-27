@@ -34,7 +34,7 @@ process.env.TZ = 'America/New_York'
 const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tmux: true }))
 vi.mock('../lib/createAgentPane.js', () => ({
   createAndRegisterPane: vi.fn(async (input: Record<string, unknown>) => {
-    pane.calls.push(input)
+    pane.calls.push({ ...input, argv: (input.argv as (attempt: number) => string[])(1) })
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
@@ -123,7 +123,9 @@ beforeAll(async () => {
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   // A zsh user with a startup file of their own: the plain launch.
   process.env.ZDOTDIR = join(root, 'zdotdir')
-  for (const dir of ['data', 'zdotdir', 'home/.grok/sessions', 'home/.pi/agent/skills', 'home/.codex']) mkdirSync(join(root, dir), { recursive: true })
+  // A home Harness ran in before the XDG move (`~/.harness` is in it), so a launch on linux names `$HOME/.harness/…` as on
+  // darwin and the record holds for both; lib/engineLaunch.spec.ts checks the text on a moved home.
+  for (const dir of ['data', 'zdotdir', 'home/.grok/sessions', 'home/.pi/agent/skills', 'home/.codex', 'home/.harness']) mkdirSync(join(root, dir), { recursive: true })
   writeFileSync(join(root, 'zdotdir', '.zshrc'), '')
   // A saved API's model list, as an OpenAI-compatible API answers it, only for the key saved now.
   server = createServer((request, response) => {
@@ -148,7 +150,7 @@ beforeAll(async () => {
   const { launchShapes } = await import('../testing/launchShapes.js')
   shapes = (machine) => launchShapes({
     dataDir: join(root, 'data'), machine: () => ({ ...machine }), capabilities: async () => ({ sessionEnv: pane.tmux }),
-    readCodexConfig: () => null, setGridLaunch: () => {},
+    readCodexConfig: () => null, setGridLaunch: () => {}, projectsRoot: join(root, 'work'),
   })
 })
 
@@ -177,7 +179,7 @@ const pending = { agentId: 'created', sessionId: '', engine: 'claude' } as Regis
 const rest = () => ({
   createBackend: { capabilities: async () => ({ sessionEnv: pane.tmux }) } as never, registry: { setLaunch: () => pending } as never,
   adoptableSession: async () => ({ ok: false, error: 'UNUSED' }) as never, heldBy: async () => 'none' as const, takeOverWhenIdle: async () => {},
-  watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {}, hookPort: 4242, hooksDisabled: true,
+  watchNewPane: (async () => {}) as never, announceSession: () => {}, attach: () => {}, hookPort: 4242, hooksDisabled: true,
   installOpencodePlugin: async () => true, terminalHintMachineName: () => 'this-mac', blocksFolder: () => false, gridSetup: () => null,
   privateGridName: async () => null,
 })

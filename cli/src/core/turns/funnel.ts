@@ -16,11 +16,11 @@ import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
-import { WHOLE_TEXT_ENGINES, type TurnEnds } from './ends.js'
 import type { TurnRecaps } from './recaps.js'
+import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
-import { preview, sid } from '../../lib/log.js'
+import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -46,6 +46,9 @@ export interface FunnelDeps {
   agentIdFor: (sessionId: string) => string
   turnActivity: Pick<TurnActivity, 'observe' | 'snapshot'>
   isSubagentSession: (sessionId: string) => boolean
+  /** Whether the turn open in a session was started by a quiet delivery (core/turns/recaps.ts `quietTurnOpen`): a line
+   *  the daemon typed for the agent alone, as Hachi's wake is. Absent, none is. */
+  quietTurnOpen?: (sessionId: string) => boolean
   clients: Pick<FunnelClients, 'send'>
   search: { touch(sessionId: string): void } | null | undefined
   turnStartedAt: Map<string, number>
@@ -68,9 +71,9 @@ export interface FunnelDeps {
   /** Each live turn's start and end, never a re-read: the short-turn guard holds automatic input to an agent that
    *  loops (shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'started' | 'ended'>
-  /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts), which is told each turn as it goes: that is how
-   *  an end says which turn it was, and what the turn answered. */
-  ends?: Pick<TurnEnds, 'started' | 'said' | 'worked' | 'ended' | 'compacted'>
+  /** Each live turn's start, told before the input can say a quiet delivery started it: an agent's quiet stretch ends there, and a
+   *  title its engine gives after it may name it again (core/agents/quietTitles.ts). */
+  quietTitles?: Pick<QuietTitles, 'turnStarted'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -102,7 +105,7 @@ export function outsideConsumers(options: {
       const at = now()
       const last = said.get(consumer)
       if (last && at - last.at < 60_000) { last.quiet++; return }
-      log(`[${prefix}] ${consumer} failed · ${error instanceof Error ? error.message : String(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
+      log(`[${prefix}] ${consumer} failed · ${errorKind(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
       said.set(consumer, { at, quiet: 0 })
     }
   }
@@ -111,7 +114,8 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns, ends,
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns,
+  quietTitles, quietTurnOpen,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -122,8 +126,10 @@ export function funnelFor({
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
       if (!replay && isProgressEvent(event.type)) working?.(agentId)
-      if (!replay && event.type === 'turn_started') shortTurns?.started(sessionId, agentId)
-      else if (!replay && event.type === 'turn_ended') shortTurns?.ended(sessionId)
+      if (!replay && event.type === 'turn_started') {
+        shortTurns?.started(sessionId, agentId)
+        quietTitles?.turnStarted(agentId)
+      } else if (!replay && event.type === 'turn_ended') shortTurns?.ended(sessionId)
       const frame = correlateAgentEvent({ ...event, payload: { ...event.payload, activity: turnActivity.snapshot(sessionId) } }, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
       // re-read from a transcript that was already on disk — says so in the clear, beside `agentId`
@@ -144,6 +150,10 @@ export function funnelFor({
       if (event.type === 'turn_ended') {
         if (opts?.resumed || opts?.replay) frame.replay = true
         if (isSubagentSession(sessionId)) frame.subagent = true
+        // A turn the daemon started with a line of its own (a quiet delivery, as Hachi's wake is) is no one's news either:
+        // the person did not ask for it, so the window makes no unread mark or done notice of it
+        // (docs/design/2026-11-12-hachi.md, "Hachi's own turns"). Read before the recaps hear this batch, which ends the mark.
+        else if (!replay && quietTurnOpen?.(sessionId)) frame.subagent = true
       }
       clients.send(withoutOutputTail(frame))
       if (event.type === 'turn_started' || event.type === 'turn_ended') search?.touch(sessionId)
@@ -158,9 +168,6 @@ export function funnelFor({
         outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
-        // A turn the daemon picks up at attach is told as one whose first part it never saw, and so is one of an engine whose texts are
-        // not whole messages; a re-read of history is not told at all.
-        if (!opts?.replay) outside('turn-ends', () => ends?.started(sessionId, event.payload.userMessage, !!opts?.resumed || !WHOLE_TEXT_ENGINES.has(usageSession?.engine ?? '')))
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
         // daemon is picking back up at attach: a dialog on the pane then is THIS turn's, still waiting,
         // and marking it pre-turn is how a restarted daemon never announced a question Codex had open.
@@ -188,17 +195,6 @@ export function funnelFor({
         // Do NOT stop the heartbeat here: the turn is closed but its recap is just being cut (the recaps
         // hear the batch below and say its card is busy). The timer keeps beating for the device's card and
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
-        // Whoever answers a person at a turn's end (the Swarm host, superTabs/agentReplies.ts) hears every live end, the one before
-        // a queued follow-up included: each message is its own turn. Never one re-read from disk.
-        if (!replay) outside('turn-ends', () => ends?.ended({ agentId, sessionId, aborted: event.payload.aborted === true }))
-      } else if (event.type === 'text_delta') {
-        if (!replay) outside('turn-ends', () => ends?.said(sessionId, event.payload.content, event.payload.commentary === true))
-      } else if (event.type === 'tool_start' && !event.payload.parentToolUseId) {
-        // A tool a sub-agent calls is not the turn's own: what the turn said stays what it said.
-        if (!replay) outside('turn-ends', () => ends?.worked(sessionId))
-      } else if (event.type === 'context_compact') {
-        // Its agent's context was compacted: the end of this turn, or of its next, says so (core/turns/ends.ts).
-        if (!replay) outside('turn-ends', () => ends?.compacted(sessionId))
       }
     }
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
@@ -231,7 +227,7 @@ export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClie
     message: string,
     deviceMessage = message,
   ): void => {
-    console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${preview(message)}`)
+    console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${codeOrLength(message)}`)
     clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
     clients.sendCommander({
       type: 'commander_event',

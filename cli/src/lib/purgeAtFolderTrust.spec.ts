@@ -1,16 +1,18 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { PurgeAgentService } from './purgeAgentService.js'
+import { WORKSPACES_OFF } from '../core/api.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
-import { terminateDeletedAgent } from './deleteAgentFallback.js'
+import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn() }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
@@ -29,11 +31,11 @@ let atEmptyComposer: typeof atFolderTrust
 let stopNative: ReturnType<typeof vi.fn<StopAgentServiceDeps['stopNative']>>
 
 const purge = () => new PurgeAgentService({
-  live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()], stopped,
+  live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()], stopped, worktrees: () => WORKSPACES_OFF,
   checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust, atEmptyComposer,
   stop: createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
-    backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
-    forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative }),
+    backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
+    forgetSession: async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative }),
 })
 const target = () => ({ agentId: row.agentId, sessionId: null, createdAt: row.registeredAt })
 async function deleteIt(service: PurgeAgentService) {
@@ -41,11 +43,13 @@ async function deleteIt(service: PurgeAgentService) {
   return service.request({ ...target(), mode: 'delete', reviewId: String(review.reviewId) })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-purge-trust-'))
   stopped = new StoppedAgentStore(join(root, 'stopped'))
-  row = registry.openPendingAgent({ engine: 'codex', cwd: join(root, 'worktree'), runtimes: [{ backend: 'tmux', paneId: '%44' }] })!
+  row = (await registry.openPendingAgent({ engine: 'codex', cwd: join(root, 'worktree'), runtimes: [{ backend: 'tmux', paneId: '%44' }] }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, { launch: { state: 'ready' }, processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
+  expect(registry.byAgent(row.agentId)?.processIdentity).toEqual(row.processIdentity)
   kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   atFolderTrust = vi.fn(async () => true)
   atEmptyComposer = vi.fn(async () => true)
@@ -56,14 +60,17 @@ beforeEach(() => {
   // This machine could not read the process (the native helper): the conversation is held, not absent.
   vi.mocked(captureResumeIdentity).mockReset().mockRejectedValue(new IdentityReadUnavailable('the native control helper is unavailable'))
   vi.mocked(terminateDeletedAgent).mockReset().mockResolvedValue('gone')
+  vi.mocked(checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture process ended' })
 })
-afterEach(() => { for (const entry of registry.list()) registry.removeAgent(entry.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
+afterEach(async () => { for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId)); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 
 it('deletes a Codex agent held at its folder-trust question, which has no conversation to keep', async () => {
+  const publish = vi.spyOn(registry, 'confirmEngineExit')
   expect(await deleteIt(purge())).toMatchObject({ deleted: true })
   expect(kill).toHaveBeenCalledTimes(1)
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(atFolderTrust).toHaveBeenCalled()
+  expect(publish).toHaveBeenCalledWith(row.agentId, 'remove', expect.objectContaining({ current: expect.any(Function), refresh: expect.any(Function) }))
 })
 
 it('deletes it on a machine that can read the process too, where only the shared server holds it', async () => {
@@ -82,7 +89,7 @@ it('still refuses an agent that is not at the trust question, as before', async 
 it('does not take a bound conversation for an unused chat, whatever the screen shows', async () => {
   Object.assign(row, { sessionId: 'bound' })
   const stop = vi.fn(async () => {})
-  const service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [], stopped,
+  const service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [], stopped, worktrees: () => WORKSPACES_OFF,
     checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust,
     inspect: async () => ({ bytes: 0 }), stop })
   const review = await service.request({ agentId: row.agentId, sessionId: 'bound', createdAt: row.registeredAt, mode: 'inspect' })
@@ -110,7 +117,8 @@ it.each([
   ['it was bound', { boundAt: 7 }],
   ['it has a transcript', { transcriptPath: '/codex/sessions/rollout.jsonl' }],
   ['a hook awaits admission', { admissionHold: 'pending native hook' }],
-  ['an adoption is in flight', { externalResume: { phase: 'pending' } as never }],
+  ['an adoption is in flight', { externalResume: { token: '12345678-1234-1234-1234-123456789012',
+    request: { engine: 'codex', sessionId: 'external' }, takeOver: null, phase: 'waiting' } as const }],
   ['it is not a Claude Code or Codex row', { engine: 'opencode' as const }],
   ['it is not ready', { launch: { state: 'failed', error: 'RESUME_FAILED' } as never }],
 ])('still refuses a restored agent when %s', async (_why, over) => {

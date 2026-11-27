@@ -16,6 +16,12 @@ import {
 // computer use's default leaves OpenCode's own config alone (agentClient/computerUse.ts applyOpencode).
 const child = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn(), execFileSync: vi.fn(() => { throw new Error('no opencode here') }) }))
 vi.mock('node:child_process', () => child)
+// The sign-in's child goes through spawnTied, which takes the tied path where its file exists and the plain one where it
+// does not (/usr/bin/gh is on the Linux runner, not on a Mac): handed to the same fake, every case reads alike on both.
+vi.mock('../lib/tied.js', async (real) => ({
+  ...await real<typeof import('../lib/tied.js')>(),
+  spawnTied: (...args: unknown[]) => child.spawn(...args),
+}))
 // Harness OS's computer-use tools are files under /usr/lib/harness-os, on no test machine: a test may say they are there.
 vi.mock('../agentClient/computerUse.js', async (real) => {
   const actual = await real<typeof import('../agentClient/computerUse.js')>()
@@ -332,7 +338,7 @@ describe('the Harness OS computer, managed from the phone', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { ask } = service({ exec: vi.fn(async () => { throw new Error('nmcli: not found') }) })
     expect(await ask({ action: 'wifi_scan' })).toEqual({ error: 'FAILED', message: 'Could not list Wi-Fi networks: nmcli: not found' })
-    expect(error).toHaveBeenCalledWith('[os-device] wifi_scan failed:', 'Could not list Wi-Fi networks: nmcli: not found')
+    expect(error).toHaveBeenCalledWith('[os-device] wifi_scan failed:', 'Error')
   })
 
   it('joins another network detached, the password on stdin alone', async () => {
@@ -474,7 +480,7 @@ describe('the Harness OS computer, managed from the phone', () => {
       await ask({ action: 'github', state: 'sign_in' })
       signInAs('octo')
       login.end()
-      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[os-device] gh auth setup-git failed:', 'gh: git not found'))
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[os-device] gh auth setup-git failed:', 'Error'))
       expect(await ask({ action: 'github' })).toEqual({ login: 'octo' })
     })
 
@@ -690,7 +696,7 @@ describe('the defaults that run commands', () => {
     expect(proc.unref).toHaveBeenCalled()
     stdin.emit('error', new Error('EPIPE'))
     proc.emit('error', new Error('spawn sudo ENOENT'))
-    expect(error).toHaveBeenCalledWith('[os-device] could not start sudo:', 'spawn sudo ENOENT')
+    expect(error).toHaveBeenCalledWith('[os-device] could not start sudo:', 'Error')
     expect(JSON.stringify(error.mock.calls)).not.toContain('secret-pass')
     const bare = Object.assign(new EventEmitter(), { unref: vi.fn() })
     child.spawn.mockReturnValueOnce(bare)

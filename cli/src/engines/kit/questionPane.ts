@@ -142,6 +142,11 @@ const APPROVE_RE = /^(yes|allow|approve|accept|proceed|run|continue)\b/i
 // row is "Tell Claude what to change". Keep `tell ... what to change` narrow so
 // an ordinary numbered list beginning with "Tell" cannot become an approval.
 const REJECT_RE = /^(no|reject|deny|decline|cancel|skip|don'?t|stop)\b|^tell\b.*\bwhat to change\b/i
+
+/** Rows shaped as an approval's: the first approves, another declines. */
+export function offersApproval(rows: readonly QuestionRow[]): boolean {
+  return rows.length > 0 && APPROVE_RE.test(rows[0].label) && rows.some((row) => REJECT_RE.test(row.label))
+}
 /** The solid rule that opens the frame. Deliberately NOT the dashed one (`\u254c`) that brackets an edit diff,
  *  which sits BELOW the header and would cost the title. */
 const FRAME_RULE_RE = /^\s*[\u2500\u2501\u2550]{6,}\s*$/
@@ -225,7 +230,7 @@ export function parsePermissionPane(lines: string[]): { view: QuestionView; inde
     if (row.number === '1') { start = i; break }
   }
   if (start < 0 || rows.length < 2) return null
-  if (!APPROVE_RE.test(rows[0].label) || !rows.some((row) => REJECT_RE.test(row.label))) return null
+  if (!offersApproval(rows)) return null
 
   let hinted = false
   for (let i = end + 1; i < lines.length && i - end <= 4; i++) {
@@ -374,14 +379,20 @@ function dialogAbove(lines: string[], start: number, footer: number): string {
 /**
  * A dialog that asks to RUN or CHANGE something (an approval), whichever parser read it: a framed
  * permission prompt, or a footer dialog whose first row approves, whose rows include a rejection, and
- * which names a command (`$ …`) or asks "would you like to run / make …". What the pair's floor treats as
- * a permission prompt (pair/classify.ts); nothing else reads it.
+ * which names a command (`$ …`), asks "would you like to run / make …", or carries the title Hermes or
+ * Copilot gives an approval that boxes its command with neither: Hermes's `Dangerous Command`, Copilot's
+ * `Copilot is attempting to access the following URL:` (words read from lib/__fixtures__/permission-hermes.txt
+ * and permission-copilot.txt). What the pair's floor treats as a permission prompt (pair/classify.ts), the
+ * screen's `permission_open`, and a question's `permission` notice. A title more than 12 lines above the rows
+ * is out of the dialog, so a rule that must never miss an approval also asks offersApproval
+ * (lib/questionController.ts `keepsIdByWords`).
  */
 export function isApprovalDialog(view: QuestionView): boolean {
   if (view.permission) return true
-  if (!view.rows.length || !APPROVE_RE.test(view.rows[0].label) || !view.rows.some((row) => REJECT_RE.test(row.label))) return false
+  if (!offersApproval(view.rows)) return false
   const text = view.dialog ?? view.question
   return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
+    || /(^|\n)\W*Dangerous Command\b/.test(text) || /\bis attempting to [^:\n]{0,60}:/i.test(text)
 }
 
 /** Match an answer to a row. The device stores option labels in an 80-byte buffer, so a long label comes

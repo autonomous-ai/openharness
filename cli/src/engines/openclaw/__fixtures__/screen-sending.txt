@@ -1,0 +1,45 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session plain
+
+ session agent:main:plain
+
+
+Say hello from scenario warm 1795077253223
+
+
+ ⠋ sending • 0s | connected
+ agent main | session plain | deepseek/deepseek-v4.1-flash | deliver:off | tokens ?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -37,9 +37,13 @@ import { launchDetached, type LaunchOutcome } from './windows/launcher.js'
  * and sign-in live, its port, its environment file, and a local build's update pin. Without them a
  * definition written from a shell with ADAPTER_DATA_DIR set would run a master on the default folder,
  * whose pid file that shell's `harness start` would wait on in vain. Anything else belongs in the file
- * HARNESS_ENV_FILE names.
+ * HARNESS_ENV_FILE names. The XDG folders too, on Linux, the one platform where they place Harness's folders: a daemon
+ * systemd starts must find the roots this shell finds.
  */
-export const CARRIED_ENV = ['ADAPTER_DATA_DIR', 'ADAPTER_CLI_DIR', 'HARNESS_AUTH_DIR', 'PORT', 'HARNESS_ENV_FILE', 'ADAPTER_UPDATE_DISABLE'] as const
+export const CARRIED_ENV = [
+  'ADAPTER_DATA_DIR', 'ADAPTER_CLI_DIR', 'HARNESS_AUTH_DIR', 'PORT', 'HARNESS_ENV_FILE', 'ADAPTER_UPDATE_DISABLE',
+  'XDG_DATA_HOME', 'XDG_STATE_HOME',
+] as const
 
 /** How long a start through the platform waits for the master to claim the pid file, which it does once
  *  its core has bound: as long as `harness start` waits for one it spawned (daemonLaunch BIND_WAIT_MS). */
@@ -111,14 +115,15 @@ export function serviceDefinition(options: {
   platform?: NodeJS.Platform; launcherPath?: string
 }): ServiceDefinition {
   const source = options.source ?? process.env
+  const platform = options.platform ?? process.platform
   const carried: Record<string, string> = {}
   for (const name of CARRIED_ENV) {
     const value = source[name]
-    if (value) carried[name] = value
+    if (value && (platform === 'linux' || !name.startsWith('XDG_'))) carried[name] = value
   }
   // Windows: the build `cli\current` names (there is no cli\cli.js), started by the launcher in bin\. Without the
   // launcher the task could not be written at all (B3.12's review: `harness service install` threw).
-  const windows = (options.platform ?? process.platform) === 'win32'
+  const windows = platform === 'win32'
   const root = dirname(env.ADAPTER_CLI_DIR)
   return {
     nodePath: options.nodePath ?? managedNodePath(),

@@ -32,7 +32,9 @@ with tempfile.TemporaryDirectory(prefix='hnv-', dir='/tmp') as tmp:
         opener = bin_dir / name
         opener.write_text('#!' + sys.executable + '\nimport json,os,sys,time\nwith open(os.environ["HN_VIEWER_OPENER_LOG"],"a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\ntime.sleep(float(os.environ.get("HN_VIEWER_OPENER_DELAY","0")))\nsys.exit(int(os.environ.get("HN_VIEWER_OPENER_EXIT","0")))\n')
         opener.chmod(0o700)
-    env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE', 'HN_SOCKET', 'SSH_TTY', 'SSH_CONNECTION', 'SSH_CLIENT')}
+    # Nothing that names a Harness folder outside this home: hn and the mock find it by HOME alone.
+    env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE', 'HN_SOCKET', 'SSH_TTY', 'SSH_CONNECTION', 'SSH_CLIENT',
+                                                          'ADAPTER_DATA_DIR', 'XDG_DATA_HOME', 'XDG_STATE_HOME')}
     env.update(HOME=tmp, PORT=str(port), HN_SOCKET_NAME=prefix, HN_TMPDIR=tmp,
                HARNESS_TUI_DESK='off', HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off',
                HN_VIEWER_OPENER_LOG=str(log), PATH=str(bin_dir) + os.pathsep + env.get('PATH', ''),

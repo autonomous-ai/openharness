@@ -38,7 +38,7 @@ void main() {
     test('no build goes to the page that lists them all', () {
       expect(
         desktopDownloadUri(null).toString(),
-        'https://harness.autonomous.ai/desktop',
+        'https://harness.autonomous.ai/download',
       );
     });
   });

@@ -5,7 +5,7 @@
  */
 export interface PoolDefaults { maxPoolSize: number; serverSelectionTimeoutMS: number }
 
-/** The Swarm benchmark's one process reached 10 server connections at its peak, the default pool's size (roadmap 2.8). A
+/** A benchmark's one process reached 10 server connections at its peak, the default pool's size (roadmap 2.8). A
  *  request that finds no primary fails after 10 s instead of 30, so its client retries rather than requests piling up. */
 export const POOL_DEFAULTS: PoolDefaults = { maxPoolSize: 20, serverSelectionTimeoutMS: 10_000 }
 

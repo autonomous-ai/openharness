@@ -12,7 +12,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/empty_state.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/web_download_button.dart';
 import 'shared_agent_location.dart';

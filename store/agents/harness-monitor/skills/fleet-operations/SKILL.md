@@ -31,7 +31,8 @@ sessions. The row's × button is an explicit single-session stop and may interru
 The daemon owns process identity, stopping and open configuration on local and linked machines.
 Do not signal PIDs, reconstruct engine flags, respawn a tmux pane, or edit the registry. After a timeout,
 read the original open receipt; do not invent a new operation to compensate. Explain refusals and
-uncertain outcomes. Receipts are recorded in `~/.harness/monitor/log.jsonl`.
+uncertain outcomes. Receipts are recorded in `~/.harness/monitor/log.jsonl` (on Linux
+`~/.local/state/harness/monitor/log.jsonl`).
 
 ## Close harnesses outside tabs
 

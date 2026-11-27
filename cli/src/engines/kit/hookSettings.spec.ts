@@ -1,18 +1,44 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
+import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
+import { harnessPath } from '../../config/harnessHome.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
-import { defaultHookHome, installHookSettings } from './hookSettings.js'
-import { HOOK_SCRIPT } from './notifyHooks.js'
+import { defaultHookHome, harnessRules, installHookSettings } from './hookSettings.js'
+import { command, HOOK_SCRIPT, type HookBlock } from './notifyHooks.js'
 import type { HookPreparationProof } from './nativeHookFiles.js'
-import { messagesCommand } from './messagesHook.js'
+import { isMessagesBlock, messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import * as preparations from './nativeHookFiles.js'
 import { reviewHash, reviewRecords } from './hookReview.js'
-import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS } from '../facets/hooks.js'
+import * as hookReview from './hookReview.js'
+import { hashOf } from '../../lib/log.js'
+import { HARNESS_AGENT_TOOLS } from '../facets/hooks.js'
+
+// How the watched path is changed: opened for writing in place, or a file renamed onto it.
+const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  const writes = (flags: unknown) => typeof flags === 'number' ? (flags & 3) !== 0 : typeof flags === 'string' && flags !== 'r'
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (args[0] === disk.watch && writes(args[1])) disk.changes.push('write')
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (args[0] === disk.watch) disk.changes.push('write')
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (args[1] === disk.watch) disk.changes.push('rename')
+      return actual.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { disk.watch = ''; disk.changes = [] })
 
 // What every case writes and logs is engines/hookInstallers.golden.spec.ts; these are the kit's own edges.
 let root = ''
@@ -33,12 +59,12 @@ it.each(['claude', 'codex'] as const)('publishes one current %s proof after both
   expect(await installHookSettings(engine, settings, 19473, home, { confirmed: proof => { proofs.push(proof) } })).toBe(true)
   expect(proofs).toHaveLength(1)
   expect(proofs[0]!.current()).toBe(true)
-  const content = JSON.parse(readFileSync(join(home, settings.file), 'utf8'))
+  const content = JSON.parse(readFileSync(join(home, settings.fileName), 'utf8'))
   expect(content.hooks[settings.inbox!.event]?.some((block: { hooks: { command: string }[] }) => block.hooks.some(hook => hook.command === messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR)))).toBe(true)
 })
 
 it.each(['both current', 'follower revoked', 'owner revoked'] as const)('joins the complete Messages stage with caller authority: %s', async state => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   const inspect = preparations.inspectHookFile
   let enter!: () => void, release!: () => void
   const entered = new Promise<void>(done => { enter = done })
@@ -69,7 +95,7 @@ it.each(['both current', 'follower revoked', 'owner revoked'] as const)('joins t
 })
 
 it.each(['peer edit', 'another port'] as const)('holds when %s changes required hook authority during publication', async change => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   const run = preparations.runHookPreparation
   let intercepted = false, peerBytes = ''
   vi.spyOn(preparations, 'runHookPreparation').mockImplementation((files, work, options) => run(files, attempt => work({
@@ -101,7 +127,7 @@ it('preserves marker-only commands and foreign siblings of the exact Messages ho
   const owned = { type: 'command', command: messagesCommand('/fixture/old') }
   const blocks = [{ hooks: [foreign] }, { matcher: 'custom', annotation: 'retain this', hooks: [owned, sibling] },
     { hooks: [{ ...owned, command: owned.command + '; echo foreign' }] }]
-  const file = join(home, codex.settings.file), event = codex.settings.inbox!.event
+  const file = join(home, codex.settings.fileName), event = codex.settings.inbox!.event
   writeFileSync(file, JSON.stringify({ hooks: { [event]: blocks } }))
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
   const settings = JSON.parse(readFileSync(file, 'utf8'))
@@ -115,7 +141,7 @@ it('preserves marker-only commands and foreign siblings of the exact Messages ho
 it('approves the required Codex hook when an earlier optional hook uses the same event', async () => {
   const home = join(root, 'codex'); mkdirSync(home)
   const previous = { hooks: [{ type: 'command', command: messagesCommand('/fixture/previous') }] }
-  const file = join(home, codex.settings.file)
+  const file = join(home, codex.settings.fileName)
   writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [previous] } }))
   const confirmed = vi.fn()
   expect(await installHookSettings('codex', codex.settings, 19473, home, { confirmed })).toBe(true)
@@ -123,7 +149,7 @@ it('approves the required Codex hook when an earlier optional hook uses the same
   expect(settings.hooks.SessionStart[0]).toEqual(previous)
   const required = settings.hooks.SessionStart[1]
   expect(required.hooks[0].command).toContain('notify.mjs')
-  const config = readFileSync(join(home, codex.settings.reviewed!.file), 'utf8')
+  const config = readFileSync(join(home, codex.settings.reviewed!.fileName), 'utf8')
   const key = `${realpathSync(file)}:session_start:1:0`
   const hash = reviewHash(codex.settings.reviewed!, 'SessionStart', required.matcher, required.hooks[0])
   expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}`)
@@ -131,14 +157,58 @@ it('approves the required Codex hook when an earlier optional hook uses the same
   expect(confirmed.mock.calls[0]![0].current()).toBe(true)
 })
 
-it('names a home literally in its log lines, whatever characters the path holds', async () => {
+// Codex keys a hook's review by its place: put after the person's when its command changes (the move, a Node update), ours
+// moved theirs, and Codex asked for its review again.
+it('an updated Codex hook of Harness\'s keeps its place, and the person\'s beside it its review', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'codex'); mkdirSync(home)
+  const file = join(home, codex.settings.fileName), config = join(home, codex.settings.reviewed!.fileName)
+  expect(await installHookSettings('codex', codex.settings, 19474, home)).toBe(true)
+  const theirs = { hooks: [{ type: 'command', command: 'my-own-hook', timeout: 7 }] }
+  const settings = JSON.parse(readFileSync(file, 'utf8'))
+  settings.hooks.Stop.push(theirs)
+  writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+  const at = (block: number) => `${realpathSync(file)}:${codex.settings.reviewed!.events.Stop}:${block}:0`
+  const trusted = reviewHash(codex.settings.reviewed!, 'Stop', undefined, theirs.hooks[0]!)
+  writeFileSync(config, `${readFileSync(config, 'utf8')}\n[hooks.state.${JSON.stringify(at(1))}]\ntrusted_hash = ${JSON.stringify(trusted)}\n`)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  const stop = JSON.parse(readFileSync(file, 'utf8')).hooks.Stop
+  expect(stop[0].hooks[0].command).toContain('--port 19473')
+  expect(stop.slice(1)).toEqual([theirs])
+  const state = (parseToml(readFileSync(config, 'utf8')) as { hooks: { state: Record<string, { trusted_hash: string }> } }).hooks.state
+  expect(state[at(0)]?.trusted_hash).toBe(reviewHash(codex.settings.reviewed!, 'Stop', stop[0].matcher, stop[0].hooks[0]))
+  expect(state[at(1)]?.trusted_hash).toBe(trusted)
+})
+
+it('names a home by its hash in its log lines, whatever characters the path holds', async () => {
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   // `$&` and `$1` mean something to String.replace with a string replacement, and {port} to the templates.
   const home = join(root, 'a$&b$1{port}{file}')
   const file = join(home, 'settings.json')
   await installHookSettings('claude', { ...claude.settings, messages: { ...claude.settings.messages, installed: '{file}|{script}|{port}' } }, 19473, home)
-  expect(log.mock.calls[0]).toEqual([`${file}|${HOOK_SCRIPT}|19473`])
+  // The test's root is not under the worker's home (vitest.setup.ts): the tag says so.
+  expect(log.mock.calls[0]).toEqual([`${hashOf(file)} (outside the home)|${hashOf(HOOK_SCRIPT)}|19473`])
   expect(JSON.parse(readFileSync(file, 'utf8')).hooks.Stop[0].hooks[0].command).toContain('--port 19473')
+})
+
+// A path names the person's home, and Export logs sends the log off the machine: each line names the file, and the
+// hook script, by a hash, and says when the file is outside the home, which the end-to-end harness checks
+// (e2e/harness/daemon.ts `hooksOutside`). The test's root is not under the worker's home (vitest.setup.ts).
+it.each(['claude', 'codex'] as const)('a hook install names its file by a hash, never its path, and says it is outside the home: %s', async engine => {
+  const lines: string[] = []
+  for (const level of ['log', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
+  const settings = engine === 'claude' ? claude.settings : codex.settings
+  const home = mkdtempSync(join(root, 'sentinel-')), file = join(home, engine === 'claude' ? 'settings.json' : 'hooks.json')
+  expect(await installHookSettings(engine, settings, 19473, home)).toBe(true)
+  expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
+  expect(await installHookSettings(engine, settings, 19474, home)).toBe(true)
+  expect(lines.join('\n')).not.toContain('sentinel')
+  expect(lines).toContain(engine === 'claude'
+    ? `[hooks] installed Claude Code session, turn, wait and subagent hooks → ${hashOf(file)} (outside the home)`
+    : `[hooks] installed Codex session and turn hooks → ${hashOf(file)} (outside the home)`)
+  expect(lines).toContain(engine === 'claude'
+    ? `[hooks] updated (path/port changed) → ${hashOf(HOOK_SCRIPT)} --port 19474 in ${hashOf(file)} (outside the home)`
+    : `[hooks] Codex session and turn hooks already installed → ${hashOf(file)} (outside the home)`)
 })
 
 it('reports a held malformed file even when an engine declares no malformed-file lines', async () => {
@@ -148,23 +218,33 @@ it('reports a held malformed file even when an engine declares no malformed-file
   writeFileSync(join(home, 'hooks.json'), '{not-json')
   const { malformed: _, ...messages } = codex.settings.messages
   expect(await installHookSettings('codex', { ...codex.settings, messages }, 19473, home)).toBe(false)
-  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, expect.any(SyntaxError))
+  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, 'SyntaxError')
   expect(readFileSync(join(home, 'hooks.json'), 'utf8')).toBe('{not-json')
 })
 
+/** The agent verbs, in order: each with an MCP tool, then `browser`, a shell command only. */
+const AGENT_VERBS: string[] = [...Object.keys(HARNESS_AGENT_TOOLS), 'browser']
+const toolOf = (verb: string): string | undefined => (HARNESS_AGENT_TOOLS as Record<string, string>)[verb]
+
+/** The launcher as macOS and Linux have it, and as Windows does (lib/windows/installLayout.ts). */
+const POSIX = join(env.HARNESS_BIN_DIR, 'harness')
+const WIN = win32.join(harnessPath('bin', homedir(), 'win32'), 'harness.exe')
+
 /** Every rule Harness adds to Claude Code's allow list on this computer, in order: `harness --help`, then each verb's
- *  commands, then its tool. */
-const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean } = {}): string[] => [
-  ...(skip.help ? [] : ['Bash(harness --help)', 'Bash(harness -h)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} --help)`]),
-  ...HARNESS_AGENT_VERBS.flatMap((verb) => [
-    ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} ${verb}:*)`]),
-    ...(skip.mcp?.includes(verb) ? [] : [`mcp__harness__${HARNESS_AGENT_TOOLS[verb]}`, `mcp__plugin_harness_harness__${HARNESS_AGENT_TOOLS[verb]}`]),
+ *  commands, then its tool where it has one, then `harness device notify` as exactly its three words. [launcher]: the
+ *  platform's. */
+const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean; commands?: boolean } = {}, launcher = POSIX): string[] => [
+  ...(skip.help ? [] : ['Bash(harness --help)', 'Bash(harness -h)', `Bash(${launcher} --help)`]),
+  ...AGENT_VERBS.flatMap((verb) => [
+    ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${launcher} ${verb}:*)`]),
+    ...(skip.mcp?.includes(verb) || !toolOf(verb) ? [] : [`mcp__harness__${toolOf(verb)}`, `mcp__plugin_harness_harness__${toolOf(verb)}`]),
   ]),
+  ...(skip.commands ? [] : ['Bash(harness device notify:*)', `Bash(${launcher} device notify:*)`]),
 ]
 
 it('allows Harness\'s agent commands and MCP tools in Claude Code beside the person\'s own rules, once', async () => {
   const home = join(root, 'claude'); mkdirSync(home)
-  const file = join(home, claude.settings.file)
+  const file = join(home, claude.settings.fileName)
   writeFileSync(file, JSON.stringify({ permissions: { allow: ['Bash(npm test:*)'], deny: ['Bash(rm:*)'], defaultMode: 'auto' } }))
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
   const first = readFileSync(file, 'utf8')
@@ -178,7 +258,7 @@ it('allows Harness\'s agent commands and MCP tools in Claude Code beside the per
 it('adds the rules an earlier release did not have to a Claude Code list that has harness send alone', async () => {
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-  const file = join(home, claude.settings.file)
+  const file = join(home, claude.settings.fileName)
   const settings = JSON.parse(readFileSync(file, 'utf8'))
   settings.permissions.allow = ['Bash(harness send:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} send:*)`]
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
@@ -190,7 +270,7 @@ it('adds the rules an earlier release did not have to a Claude Code list that ha
 
 it('never allows what the person denied or asked for in Claude Code, in any spelling, and keeps their rules as they are', async () => {
   const home = join(root, 'claude'); mkdirSync(home)
-  const file = join(home, claude.settings.file)
+  const file = join(home, claude.settings.fileName)
   // A deny for `harness close` keeps out the launcher's `close` as well, which Claude Code does not count as the same;
   // an ask for one MCP tool keeps out that tool under both server names; a broader ask keeps out a whole verb.
   const permissions = { deny: ['Bash(harness close:*)', 'mcp__harness__harness_start'], ask: [`Bash(${join(env.HARNESS_BIN_DIR, 'harness')} new --mode:*)`, 'Bash(harness wai*)'] }
@@ -211,22 +291,106 @@ it('never allows what the person denied or asked for in Claude Code, in any spel
 it('allows only Harness\'s own MCP tools, not every tool of a server that is also called harness', async () => {
   const home = join(root, 'claude')
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
-  expect(allow.filter((rule) => rule.startsWith('mcp__'))).toEqual(HARNESS_AGENT_VERBS.flatMap((verb) =>
-    [`mcp__harness__${HARNESS_AGENT_TOOLS[verb]}`, `mcp__plugin_harness_harness__${HARNESS_AGENT_TOOLS[verb]}`]))
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.fileName), 'utf8')).permissions.allow
+  expect(allow.filter((rule) => rule.startsWith('mcp__'))).toEqual(Object.values(HARNESS_AGENT_TOOLS).flatMap((tool) =>
+    [`mcp__harness__${tool}`, `mcp__plugin_harness_harness__${tool}`]))
   expect(allow.some((rule) => rule.includes('*') && rule.startsWith('mcp__'))).toBe(false)
+})
+
+it('allows harness browser in Claude Code by name and by the launcher\'s path, and no MCP tool for it', async () => {
+  const home = join(root, 'claude')
+  expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.fileName), 'utf8')).permissions.allow
+  expect(allow).toContain('Bash(harness browser:*)')
+  expect(allow).toContain(`Bash(${join(env.HARNESS_BIN_DIR, 'harness')} browser:*)`)
+  // Exactly `harness browser …`: nothing broader of Harness's, and no rule of a tool it does not have.
+  expect(allow.filter((rule) => rule.includes('browser'))).toEqual(['Bash(harness browser:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} browser:*)`])
+  expect(allow.filter((rule) => /undefined|\{tool\}|\{verb\}/.test(rule))).toEqual([])
+})
+
+it('a deny or an ask for harness browser keeps its allow out in both spellings', async () => {
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  for (const permissions of [{ deny: ['Bash(harness browser:*)'] }, { ask: [`Bash(${launcher} browser navigate:*)`] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+    const written = JSON.parse(readFileSync(file, 'utf8')).permissions
+    expect(written.allow).toEqual(claudeRules({ bash: ['browser'] }))
+    expect(written.allow.some((rule: string) => rule.includes('browser'))).toBe(false)
+  }
+})
+
+it('harnessRules gives a verb with no tool its commands alone, and no empty group', () => {
+  const groups = harnessRules(claude.settings.allow && 'list' in claude.settings.allow ? claude.settings.allow.rules : [])
+  expect(groups.every((group) => group.length > 0)).toBe(true)
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  expect(groups.filter((group) => group.some((rule) => rule.includes('browser')))).toEqual([['Bash(harness browser:*)', `Bash(${launcher} browser:*)`]])
+  expect(groups.flat().filter((rule) => /undefined|\{tool\}|\{verb\}/.test(rule))).toEqual([])
+})
+
+it('allows exactly harness device notify in Claude Code, by name and by the launcher\'s path', async () => {
+  const home = join(root, 'claude')
+  expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.fileName), 'utf8')).permissions.allow
+  // Never the whole `device` word: `harness device claude enable` and the rest of `device` still ask.
+  expect(allow.filter((rule) => rule.includes('device'))).toEqual(['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`])
+})
+
+it('a deny or an ask for harness device notify, or for all of harness device, keeps it out in both spellings and nothing else', async () => {
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  for (const permissions of [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${launcher} device notify --json:*)`] }, { deny: ['Bash(harness device:*)'] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+    const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
+    expect(allow).toEqual(claudeRules({ commands: true }))
+    expect(allow).toContain('Bash(harness --help)')
+  }
+})
+
+it('a deny for another device command leaves harness device notify allowed', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ permissions: { deny: ['Bash(harness device claude enable:*)'] } }))
+  expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).permissions.allow).toEqual(claudeRules())
+})
+
+it('the rule is a prefix of three literal words in each engine', async () => {
+  const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex')
+  expect(await installHookSettings('claude', claude.settings, 19473, claudeHome)).toBe(true)
+  expect(await installHookSettings('codex', codex.settings, 19473, codexHome)).toBe(true)
+  const notify = (JSON.parse(readFileSync(join(claudeHome, claude.settings.fileName), 'utf8')).permissions.allow as string[]).filter((rule) => rule.includes('device'))
+  expect(notify).toHaveLength(2)
+  // A wildcard, a separator or an expansion of its own would let the rule approve more than the three words.
+  for (const rule of notify) {
+    expect(rule.endsWith(' device notify:*)')).toBe(true)
+    expect(rule.slice(0, -':*)'.length)).not.toMatch(/[*;&$]/)
+  }
+  // Codex matches argv: no rule for `harness device` alone, and `device` is not one of the verbs.
+  const lines = readFileSync(join(codexHome, 'rules', 'harness.rules'), 'utf8').split('\n')
+  expect(lines.filter((line) => line.includes('"device"'))).toEqual(['prefix_rule(pattern=["harness", "device", "notify"], decision="allow")'])
+})
+
+it('harnessRules gives a command a group of its own', () => {
+  const rules = (settings: typeof claude.settings) => settings.allow ? settings.allow.rules : []
+  const groups = harnessRules(rules(claude.settings))
+  expect(groups.filter((group) => group.some((rule) => rule.includes('device'))))
+    .toEqual([['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]])
+  expect([...groups, ...harnessRules(rules(codex.settings))].flat().filter((rule) => /undefined|\{command\}|\{words\}/.test(rule))).toEqual([])
 })
 
 /** Harness's Codex rules file on this computer, byte for byte. */
 const codexRulesFile = (): string => {
-  const verbs = '["whoami", "ps", "search", "machines", "show", "wait", "new", "close", "send", "tell"]'
-  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell)\n"
+  const verbs = '["whoami", "ps", "search", "machines", "show", "wait", "new", "close", "send", "tell", "browser"]'
+  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell, browser, device notify)\n"
     + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
     + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
     // Only the launcher's path counts as `harness` by its last part: not a `harness` an agent wrote elsewhere.
     + `host_executable(name="harness", paths=[${JSON.stringify(join(env.HARNESS_BIN_DIR, 'harness'))}])\n`
     + `prefix_rule(pattern=["harness", ${verbs}], decision="allow")\n`
     + `prefix_rule(pattern=[${JSON.stringify(managedNodePath())}, ${JSON.stringify(join(env.ADAPTER_CLI_DIR, 'cli.js'))}, ${verbs}], decision="allow")\n`
+    + 'prefix_rule(pattern=["harness", "device", "notify"], decision="allow")\n'
 }
 
 it('allows Harness\'s agent commands in a Codex rules file of its own, leaving the person\'s rules alone', async () => {
@@ -246,6 +410,25 @@ it('allows Harness\'s agent commands in a Codex rules file of its own, leaving t
   expect(statSync(rules).ino).toBe(written)
 })
 
+it('the Codex rules file goes through a temporary file renamed onto it', async () => {
+  const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
+  mkdirSync(join(home, 'rules'), { recursive: true })
+  writeFileSync(rules, '# an older release\n', { mode: 0o600 })
+  disk.watch = rules
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(disk.changes).toEqual(['rename'])
+  expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
+})
+
+it('a file at the Codex rules file\'s old temporary name is left alone', async () => {
+  const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
+  mkdirSync(join(home, 'rules'), { recursive: true })
+  writeFileSync(`${rules}.${process.pid}.tmp`, 'planted')
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(readFileSync(`${rules}.${process.pid}.tmp`, 'utf8')).toBe('planted')
+  expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
+})
+
 it('rewrites the Codex rules file an earlier release wrote for harness send alone', async () => {
   const home = join(root, 'codex'), rules = join(home, 'rules', 'harness.rules')
   mkdirSync(join(home, 'rules'), { recursive: true })
@@ -255,9 +438,147 @@ it('rewrites the Codex rules file an earlier release wrote for harness send alon
   expect(readFileSync(rules, 'utf8')).toBe(codexRulesFile())
 })
 
+// Windows: an agent there stopped on a permission question nobody at the dial sees, before `harness device notify`
+// too (docs/plans/2026-11-22-needs-you-notify-design.md). Agent Messages' block is a POSIX shell line: it stays off.
+it('on Windows, allows Harness\'s agent commands in Claude Code by name and by the Windows launcher, and writes no Messages block', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  rmSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'), { force: true })
+  expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+  const written = JSON.parse(readFileSync(file, 'utf8'))
+  const allow: string[] = written.permissions.allow
+  expect(allow).toEqual(claudeRules({}, WIN))
+  expect(allow).toEqual(expect.arrayContaining(['Bash(harness device notify:*)', `Bash(${WIN} device notify:*)`, 'Bash(harness ps:*)', `Bash(${WIN} --help)`]))
+  expect(allow.filter((rule) => rule.includes(POSIX))).toEqual([])
+  expect(Object.values(written.hooks as Record<string, HookBlock[]>).flat().filter(isMessagesBlock)).toEqual([])
+  expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(false)
+})
+
+it('on Windows, writes the Codex rules file with the Windows launcher', async () => {
+  const home = join(root, 'codex')
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  rmSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'), { force: true })
+  expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+  const lines = readFileSync(join(home, 'rules', 'harness.rules'), 'utf8').split('\n')
+  // The path as a Starlark string's contents: each backslash written twice.
+  expect(lines).toContain(`host_executable(name="harness", paths=["${JSON.stringify(WIN).slice(1, -1)}"])`)
+  expect(lines).toContain('prefix_rule(pattern=["harness", "device", "notify"], decision="allow")')
+  expect(lines.filter((line) => line.includes(JSON.stringify(POSIX).slice(1, -1)))).toEqual([])
+  expect(warn).not.toHaveBeenCalled()
+  const { hooks } = JSON.parse(readFileSync(join(home, codex.settings.fileName), 'utf8'))
+  expect(Object.values(hooks as Record<string, HookBlock[]>).flat().filter(isMessagesBlock)).toEqual([])
+  expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(false)
+})
+
+it('on Windows, a second install leaves Claude Code\'s settings.json and Codex\'s harness.rules as they were', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex')
+  const install = async () => {
+    expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'win32')).toBe(true)
+    expect(await installHookSettings('codex', codex.settings, 19473, codexHome, {}, 'win32')).toBe(true)
+    return [readFileSync(join(claudeHome, claude.settings.fileName)), readFileSync(join(codexHome, 'rules', 'harness.rules'))]
+  }
+  const first = await install()
+  expect(await install()).toEqual(first)
+})
+
+// There Codex has no Agent Messages block and its allowance is a file of its own: nothing more goes in hooks.json.
+it('on Windows, records Codex\'s hooks as reviewed once, with its hooks', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const prepare = vi.spyOn(hookReview, 'prepareReviewed')
+  expect(await installHookSettings('codex', codex.settings, 19473, join(root, 'codex'), {}, 'win32')).toBe(true)
+  expect(prepare).toHaveBeenCalledTimes(1)
+})
+
+it('on Windows, a deny or an ask for harness device notify, or for all of harness device, keeps it out in both spellings and nothing else', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  for (const permissions of [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${WIN} device notify --json:*)`] }, { deny: ['Bash(harness device:*)'] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
+    expect(allow).toEqual(claudeRules({ commands: true }, WIN))
+    expect(allow).toContain(`Bash(${WIN} --help)`)
+  }
+})
+
+// Windows finds a program in any case and without its suffix, and a person names it by any path: a deny in one of
+// those spellings is still a deny for Harness's.
+it('on Windows, a deny or an ask for harness device notify in another spelling of the program keeps it out', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  for (const permissions of [{ deny: ['Bash(harness.exe device notify:*)'] }, { ask: ['Bash(Harness device notify:*)'] },
+    { deny: ['Bash(/c/Users/u/.harness/bin/harness device notify:*)'] }, { deny: ['Bash(C:/Users/u/.harness/bin/HARNESS.EXE device notify:*)'] },
+    { ask: ['Bash(C:\\Users\\u\\.harness\\bin\\harness.cmd device notify --json:*)'] }, { deny: ['Bash("C:\\Program Files\\Harness\\harness.exe" device notify:*)'] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8')).permissions.allow).toEqual(claudeRules({ commands: true }, WIN))
+  }
+})
+
+it('on Windows, a deny for every command of harness.exe adds no Bash rule', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ permissions: { deny: ['Bash(harness.exe:*)'] } }))
+  expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+  const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
+  expect(allow).toEqual(claudeRules({ help: true, bash: AGENT_VERBS, commands: true }, WIN))
+  expect(allow.filter((rule) => rule.startsWith('Bash'))).toEqual([])
+})
+
+it('a deny or an ask that names the program by another path keeps its allow out', async () => {
+  for (const [permissions, kept] of [
+    [{ deny: ['Bash(~/.local/bin/harness device notify:*)'] }, claudeRules({ commands: true })],
+    [{ ask: ['Bash(/opt/homebrew/bin/harness close:*)'] }, claudeRules({ bash: ['close'] })],
+  ] as const) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+    expect(JSON.parse(readFileSync(file, 'utf8')).permissions.allow).toEqual(kept)
+  }
+})
+
+// Claude Code runs `harness device notify` on Harness's allow when the person's deny names it another way, so a deny
+// added after the allow was written wins at the next write as one there before it (the Windows check of #4545).
+it.each([
+  ['macOS and Linux', undefined, POSIX, [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${POSIX} device notify --json:*)`] },
+    { deny: ['Bash(~/.local/bin/harness device notify:*)'] }]],
+  ['Windows', 'win32', WIN, [{ deny: ['Bash(harness.exe device notify:*)'] }, { deny: ['Bash(harness device notify:*)'] },
+    { ask: ['Bash(C:/Users/u/.harness/bin/harness.exe device notify:*)'] }]],
+] as const)('on %s, a deny or an ask added after Harness\'s allow takes its rules out at the next write, and leaves the rest', async (_, platform, launcher, added) => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  // The person's own allow for the same command is theirs: only the exact rules Harness writes go.
+  const own = ['Bash(npm test:*)', 'Bash(harness device notify --json:*)']
+  for (const permissions of added) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.fileName)
+    writeFileSync(file, JSON.stringify({ permissions: { allow: own } }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, platform)).toBe(true)
+    const settings = JSON.parse(readFileSync(file, 'utf8'))
+    Object.assign(settings.permissions, permissions)
+    writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, platform)).toBe(true)
+    const written = readFileSync(file, 'utf8')
+    expect(JSON.parse(written).permissions).toEqual({ allow: [...own, ...claudeRules({ commands: true }, launcher)], ...permissions })
+    disk.watch = file
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, platform)).toBe(true)
+    expect(disk.changes).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe(written)
+    disk.watch = ''
+  }
+})
+
+it('harnessRules fills {launcher} for the platform it is given', () => {
+  const rules = ['Bash({launcher} --help)']
+  expect(harnessRules(rules, 'win32')).toEqual([[`Bash(${WIN} --help)`]])
+  expect(harnessRules(rules, 'darwin')).toEqual([[`Bash(${POSIX} --help)`]])
+  expect(harnessRules(rules, 'linux')).toEqual([[`Bash(${POSIX} --help)`]])
+})
+
 it('allows the agent commands where an engine has no inbox, and holds nothing when that fails', async () => {
   const settings = { ...claude.settings, inbox: undefined }
-  const home = join(root, 'claude'), file = join(home, settings.file)
+  const home = join(root, 'claude'), file = join(home, settings.fileName)
   expect(await installHookSettings('claude', settings, 19473, home)).toBe(true)
   const written = JSON.parse(readFileSync(file, 'utf8'))
   expect(written.permissions.allow).toEqual(claudeRules())
@@ -274,7 +595,7 @@ it('allows the agent commands where an engine has no inbox, and holds nothing wh
     return path === file && ++calls === 3 ? { ...observed, content: JSON.stringify({ hooks: [] }) } : observed
   })
   expect(await installHookSettings('claude', settings, 19473, home)).toBe(true)
-  expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+  expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands in Claude Code's settings.json (the engine asks before each one):"])
 })
 
 it('launches Codex when its rules file cannot be written, and says so', async () => {
@@ -282,12 +603,12 @@ it('launches Codex when its rules file cannot be written, and says so', async ()
   const home = join(root, 'codex'); mkdirSync(home)
   writeFileSync(join(home, 'rules'), 'a file where the folder goes')
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
-  expect(warn).toHaveBeenCalledWith(`[hooks] could not allow Harness's agent commands in ${join(home, 'rules', 'harness.rules')} (the engine asks before each one):`, expect.any(String))
+  expect(warn).toHaveBeenCalledWith("[hooks] could not allow Harness's agent commands in Codex's rules/harness.rules (the engine asks before each one):", expect.stringMatching(/^[A-Za-z_$][\w$]*( [A-Z][A-Z0-9_]+)?$/))
   expect(JSON.parse(readFileSync(join(home, 'hooks.json'), 'utf8')).hooks.PostToolUse[0].hooks[0].command).toBe(messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR))
 })
 
 it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-only file already has the hook', async () => {
-  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
   const settings = JSON.parse(readFileSync(file, 'utf8')); delete settings.permissions
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n'); chmodSync(file, 0o444)
@@ -295,7 +616,89 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-    expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+    expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands in Claude Code's settings.json (the engine asks before each one):"])
     expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(true)
   } finally { chmodSync(file, 0o644) }
+})
+
+/** Claude Code's contract as a release that declares only [events]: no Agent Messages, no allowance. */
+const declaring = (events: typeof claude.settings.events) => ({ ...claude.settings, events, inbox: undefined, allow: undefined })
+const oursAt = (port: number) => ({ hooks: [{ type: 'command', command: command(port, 'claude'), timeout: 5 }] })
+
+// Codex caps an Interrupt hook at 3 s and hashes the capped value (facts-codex §1): written with the contract's 5,
+// its review record would never match.
+it('writes a declared event\'s own timeout in place of the contract\'s, and the contract\'s for the others', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'Stop', timeout: 3 }]), 19473, home)).toBe(true)
+  const { hooks } = JSON.parse(readFileSync(file, 'utf8'))
+  expect(hooks).toEqual({ SessionStart: [oursAt(19473)], Stop: [{ hooks: [{ ...oursAt(19473).hooks[0], timeout: 3 }] }] })
+  expect(claude.settings.timeout).toBe(5)
+})
+
+it('takes Harness\'s block out of an event its engine no longer declares, and leaves the person\'s', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  const ours = oursAt(19473), theirs = { matcher: 'auto', hooks: [{ type: 'command', command: 'echo compacting' }] }
+  const shared = { matcher: 'mcp', hooks: [...ours.hooks, { type: 'command', command: 'echo asked' }] }
+  writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { PreCompact: [ours, theirs], SubagentStop: [ours], Elicitation: [shared], PreToolUse: [theirs] }, statusLine: 'mine' }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe(JSON.stringify({
+    model: 'opus',
+    hooks: { PreCompact: [theirs], Elicitation: [{ matcher: 'mcp', hooks: [{ type: 'command', command: 'echo asked' }] }], PreToolUse: [theirs], SessionStart: [ours] },
+    statusLine: 'mine',
+  }, null, 2) + '\n')
+})
+
+it('a second install writes nothing', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ hooks: { SubagentStop: [oursAt(19474)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  const written = readFileSync(file, 'utf8'), before = statSync(file, { bigint: true })
+  expect(Object.keys(JSON.parse(written).hooks)).toEqual(['SessionStart'])
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  const after = statSync(file, { bigint: true })
+  expect(readFileSync(file, 'utf8')).toBe(written)
+  expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs])
+})
+
+// Codex reads hooks.json with serde_json, which refuses a BOM: Harness's own text after one ran no hooks while Harness
+// found them current.
+it('writes Codex\'s hooks.json again without the BOM a Windows tool saved before Harness\'s own text', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'codex'), file = join(home, codex.settings.fileName)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  const written = readFileSync(file, 'utf8')
+  writeFileSync(file, `\uFEFF${written}`)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe(written)
+})
+
+it('leaves Agent Messages\' block where it is', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  const messages = { hooks: [{ type: 'command', command: messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR), timeout: 5 }] }
+  writeFileSync(file, JSON.stringify({ hooks: { PostToolUse: [messages, oursAt(19473)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).hooks.PostToolUse).toEqual([messages])
+})
+
+it('leaves an event it does not declare alone when nothing of Harness\'s is in it, whatever its shape', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  mkdirSync(home)
+  const odd = [null, 'text', { hooks: 'no' }, { hooks: [null, { command: 5 }] }]
+  writeFileSync(file, JSON.stringify({ hooks: { PreCompact: odd, SubagentStop: [oursAt(19473)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).hooks).toEqual({ PreCompact: odd, SessionStart: [oursAt(19473)] })
+})
+
+it('on Windows, prunes the forms Harness writes there', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'PreCompact' }]), 19473, home, {}, 'win32')).toBe(true)
+  const execForm = JSON.parse(readFileSync(file, 'utf8')).hooks.PreCompact[0].hooks[0]
+  expect(execForm.command).toBe(managedNodePath())
+  expect(execForm.args).toEqual(expect.arrayContaining(['--port', '19473']))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home, {}, 'win32')).toBe(true)
+  expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).hooks)).toEqual(['SessionStart'])
 })

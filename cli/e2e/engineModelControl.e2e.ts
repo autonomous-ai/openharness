@@ -37,6 +37,11 @@ describe('engine model-control workers', () => {
 
   it.each([false, true])('switches Claude Code model and effort with inline=%s', async inline => {
     const { d, c, agent, selected, turn, commands } = await fresh('claude', inline ? { env: { HARNESSD_SERVICES: 'none' } } : {})
+    // Claude Code's own `/model` list reaches the picker, each row with its line: fresh()'s ask may be answered from the
+    // aliases past models()'s 1 s, but the read goes on and fills the cache. Without this a fake that never answered
+    // the read passed every test on the aliases.
+    await until('Claude Code\'s own model list', async () => (await c.request('models_list', { agentId: agent.id }, 15_000)).models
+      ?.some((option: { id: string; description?: string }) => option.id === selected && option.description === 'For everyday tasks'), 15_000, 200)
     const result = await c.request('agent_update', { agentId: agent.id, selectedModel: selected }, 45_000)
     expect(result.error, JSON.stringify(result)).toBeUndefined()
     expect(result.agent.selectedModel).toBe(selected)
@@ -49,6 +54,33 @@ describe('engine model-control workers', () => {
     await turn('after model control')
     expect(d.coresStarted()).toBe(1)
     expect(!!harnessdProcesses(d).get('engine-claude')).toBe(!inline)
+    // Since #4413 a Claude Code list read slower than the worker's 5 s deadline made engine-claude exit and be
+    // restarted on every models_list. Inline there is no engine-claude service, so this can only match out of it.
+    expect(d.log()).not.toMatch(/service engine-claude started \(pid \d+\) · restart/)
+  })
+
+  // Its endpoint is in its own environment, which only its hook reads: the hook says it is routed through OpenRouter,
+  // never where, and the daemon offers no model of the person's own login for it.
+  it('a Claude Code typed in with an OpenRouter endpoint is display-only from its first hook', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    onTestFailed(() => console.log(d.log()))
+    await d.start()
+    const c = client = await LocalClient.connect(d)
+    const typedIn = async (command: string) => {
+      const opened = await c.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+      expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+      const tile = await until('the terminal tile', async () => (await c.request('agents_list', {})).agents
+        .find((row: any) => row.id === opened.agent.id && row.status === 'active' && row.tmuxPane), 60_000, 100)
+      await d.tmux.run('send-keys', '-t', tile.tmuxPane, '-l', command)
+      await d.tmux.run('send-keys', '-t', tile.tmuxPane, 'Enter')
+      await until(`${command} bound`, async () => (await c.request('agents_list', {})).agents
+        .find((row: any) => row.id === tile.id && row.engine === 'claude' && row.sessionId), 60_000, 100)
+      const offered = await c.request('models_list', { agentId: tile.id }, 15_000)
+      expect(offered.error, JSON.stringify(offered)).toBeUndefined()
+      return (offered.models as Array<{ id: string }>).filter(option => option.id.startsWith(`runtime-v1:${tile.id}:claude:`))
+    }
+    expect(await typedIn('ANTHROPIC_BASE_URL=https://openrouter.ai/api claude')).toEqual([])
+    expect((await typedIn('claude')).length).toBeGreaterThan(0)
   })
 
   it.each(['claude', 'codex'] as const)('revokes an interrupted %s model change, keeps the CLI alive, and accepts a new intent after recovery', async engine => {

@@ -56,8 +56,6 @@ class _App extends AppNotifier {
       memoryTotalBytes: 32000000000,
       memoryPressure: 'normal',
       swapUsedBytes: 0,
-      diskFreeBytes: 320000000000,
-      diskTotalBytes: 500000000000,
       gpus: [
         MachineGpu(id: 'apple', name: 'Apple GPU', utilizationPercent: 10),
       ],

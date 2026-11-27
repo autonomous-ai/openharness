@@ -25,6 +25,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 
 let daemon: IsolatedDaemon | undefined
@@ -77,8 +78,8 @@ it('starts an OpenCode that prints its help to standard error, with its permissi
   const d = await boot((d) => {
     const binary = join(d.root, 'bin', 'opencode'), launches = join(d.root, 'launches.jsonl')
     d.env.OPENCODE_PATH = binary
-    d.env.OPENCODE_DATA_DIR = join(d.root, 'opencode', 'data')
-    d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+    d.env.OPENCODE_DATA_DIR = join(d.env.HOME!, 'opencode', 'data')
+    d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
     // OpenCode 1.19.0 as measured: `--help` writes 4,285 bytes to standard error, none to standard output, exits 0.
     writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs'), args = process.argv.slice(2);
@@ -183,11 +184,13 @@ const notBare = (): boolean => SYSTEM.some((dir) => ['codex', 'npm', 'node'].som
  * as an offline npm does while `npm-offline` exists.
  */
 function withoutCodex(d: IsolatedDaemon): void {
-  const bin = join(d.root, 'bin'), tools = join(d.root, 'tools'), installed = join(d.root, 'codex-package')
+  const bin = join(d.root, 'bin'), tools = join(d.root, 'tmux-only'), installed = join(d.root, 'codex-package')
   const offline = join(d.root, 'npm-offline'), seconds = join(d.root, 'npm-seconds')
   renameSync(join(bin, 'codex'), installed)
   delete d.env.CODEX_PATH
-  symlinkSync(process.execPath, join(bin, 'node'))
+  // The run's Node, not the worker's: Node names itself by the real path behind a link, and the product looks beside
+  // that path for engines (audit of 2026-11-16, docs/plans/2026-11-16-e2e-isolation-3-design.md).
+  symlinkSync(process.env.E2E_NODE_PATH!, join(bin, 'node'))
   writeFileSync(join(bin, 'npm'), `#!/bin/sh
 case "$1" in
   prefix) printf '%s\\n' "\${npm_config_prefix:-$HOME/.local}"; exit 0 ;;
@@ -249,7 +252,9 @@ it('waits for the Desktop\'s own download of Codex, rather than installing it be
     const npm = join(d.root, 'bin', 'npm'), script = readFileSync(npm, 'utf8').split('\n')
     writeFileSync(npm, [script[0], `printf '%s\\n' "$*" >> ${JSON.stringify(join(d.root, 'npm-calls'))}`, ...script.slice(1)].join('\n'), { mode: 0o755 })
   })
-  const home = d.env.HOME!, bin = join(home, '.local', 'bin'), run = join(home, '.harness', 'run')
+  // Harness's run folder as the Desktop finds it by the root rule, read after the start: on a fresh Linux home the
+  // start makes the XDG roots Harness's, and the marker goes in the state root.
+  const home = d.env.HOME!, bin = join(home, '.local', 'bin'), run = harnessPath('run', home, process.platform, thisComputer(d.env))
   mkdirSync(bin, { recursive: true }); mkdirSync(run, { recursive: true })
   // What npm has linked before it has written the package the launcher needs (a brand-new Mac, 2026-10-16).
   writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nconsole.error("Error: Cannot find module '@openai/codex-darwin-arm64'");\nprocess.exit(1)\n`, { mode: 0o755 })

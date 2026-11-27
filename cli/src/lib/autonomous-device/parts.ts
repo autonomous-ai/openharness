@@ -1,3 +1,5 @@
+import { errorKind } from '../log.js'
+
 /**
  * The Wi-Fi device's pieces, as the core starts them: each one, or none.
  *
@@ -11,7 +13,7 @@ export function startDevicePart<T>(what: string, build: () => T): T | undefined 
   try {
     return build()
   } catch (error) {
-    console.warn(`[device] the ${what} could not be started, and this daemon runs without it: ${error instanceof Error ? error.message : String(error)}`)
+    console.warn(`[device] the ${what} could not be started, and this daemon runs without it: ${errorKind(error)}`)
     return undefined
   }
 }

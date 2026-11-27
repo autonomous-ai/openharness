@@ -1,12 +1,27 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { recordedProcessDead, START_SLACK_MS, startedNoLaterThan } from './processProof.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { pidAlive, recordedProcessDead, START_SLACK_MS, startedNoLaterThan } from './processProof.js'
 
 const filetime = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
 const dirs: string[] = []
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })))
+afterEach(() => { vi.restoreAllMocks() })
+
+describe('pidAlive', () => {
+  it('is true when kill succeeds or says EPERM, false on ESRCH', () => {
+    const fault = (code: string) => () => { throw Object.assign(new Error(code), { code }) }
+    const kill = vi.spyOn(process, 'kill')
+    kill.mockImplementationOnce(() => true)
+    expect(pidAlive(4242)).toBe(true)
+    kill.mockImplementationOnce(fault('EPERM'))
+    expect(pidAlive(4242)).toBe(true)
+    kill.mockImplementationOnce(fault('ESRCH'))
+    expect(pidAlive(4242)).toBe(false)
+    expect(kill.mock.calls).toEqual([[4242, 0], [4242, 0], [4242, 0]])
+  })
+})
 
 describe('recordedProcessDead', () => {
   it('is proven by a pid that runs nothing, a table without it, or a process started after its file was written', async () => {

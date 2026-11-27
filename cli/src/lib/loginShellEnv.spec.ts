@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +14,7 @@ import {
   resetLoginShellEnvironmentCache,
   warmLoginShellEnvironment,
 } from './loginShellEnv.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const realShell = process.env.SHELL
 
@@ -67,8 +68,7 @@ describe('loginShellEnvironment', () => {
     try {
       const shell = join(dir, 'fake-shell')
       // Takes `-lic <script>` as a shell does, with one variable only a profile would have exported.
-      writeFileSync(shell, '#!/bin/sh\nexport HARNESS_LOGIN_SHELL_PROBE=from-the-profile\nexec /bin/sh -c "$2"\n')
-      chmodSync(shell, 0o755)
+      writeExecutable(shell, '#!/bin/sh\nexport HARNESS_LOGIN_SHELL_PROBE=from-the-profile\nexec /bin/sh -c "$2"\n')
       account.shell = shell
       delete process.env.SHELL
       resetLoginShellEnvironmentCache()

@@ -429,10 +429,10 @@ void main() {
       );
       expect(full.search.capacity, 0);
       expect(full.search.rows, isEmpty);
+      // The footer says so once; the empty list says nothing.
+      expect(find.textContaining('This tab is full'), findsOneWidget);
       expect(
-        find.text(
-          'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.',
-        ),
+        find.text('This tab is full. Open a new tab to add more.'),
         findsOneWidget,
       );
       await key(tester, LogicalKeyboardKey.enter);

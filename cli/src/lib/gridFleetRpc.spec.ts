@@ -1,16 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GridFleetRpc, GridOutputCapture, parseGridFleetRequest } from './gridFleetRpc.js'
 import { withGridCallsPaused } from './gridCalls.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 function fixture(body: string) {
   const dir = mkdtempSync(join(tmpdir(), 'grid-fleet-rpc-')); directories.push(dir)
-  const file = join(dir,'grid'); writeFileSync(file,`#!${process.execPath}\n${body}\n`); chmodSync(file,0o700)
+  const file = join(dir,'grid'); writeExecutable(file,`#!${process.execPath}\n${body}\n`)
   return new GridFleetRpc({ ...process.env, HARNESS_GRID_BIN: file })
 }
 describe('paired Grid fleet commands', () => {

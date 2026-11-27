@@ -1,7 +1,10 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, openSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { requireWindowsStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import {
+  atomicWriteFile, pauseSync, READ_TRIES, READ_WAIT_MS, requireWindowsStateFile, secureStateDirectory, StateFileUnreadable,
+  type TrustFile,
+} from './secureState.js'
 
 const FILE_NAME = 'hook-credential'
 /**
@@ -41,6 +44,17 @@ export function loadOrCreateHookToken(dataDir: string): string {
   return loadOrCreateSecret(dataDir, hookTokenPath(dataDir))
 }
 
+/** Both files, for whoever names the trust files that cannot be read. */
+export function hookSecretFiles(dataDir: string): TrustFile[] {
+  return [{ file: hookCredentialPath(dataDir), parse: parseSecret }, { file: hookTokenPath(dataDir), parse: parseSecret }]
+}
+
+function parseSecret(text: string): string {
+  const value = text.trim()
+  if (!TOKEN_RE.test(value)) throw new TypeError('not a hook credential')
+  return value
+}
+
 function readSecret(dataDir: string, file: string): string | null {
   let fd: number | null = null
   try {
@@ -56,8 +70,7 @@ function readSecret(dataDir: string, file: string): string | null {
     // the next create was EEXIST and the daemon's second start ended in safe mode (Task 23, the VM E2E). There the
     // file's protection is the folder's ACL, which secureDataDirectory checked by location (secureState.ts).
     if (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600) return null
-    const value = readFileSync(fd, 'utf8').trim()
-    return TOKEN_RE.test(value) ? value : null
+    return parseSecret(readFileSync(fd, 'utf8'))
   } catch {
     return null
   } finally {
@@ -74,23 +87,14 @@ function loadOrCreateSecret(dataDir: string, file: string): string {
     throw new Error('hook credential directory has unsafe owner, mode, or type')
   }
   const value = randomBytes(32).toString('base64url')
-  let fd: number
-  try {
-    fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  } catch (error) {
+  if (atomicWriteFile(file, `${value}\n`, 'trust', { exclusive: true })) return value
+  // Another daemon made it first. An older build fills its file after creating it, so it may still be empty.
+  for (let attempt = 1; ; attempt++) {
     const raced = readSecret(dataDir, file)
     if (raced) return raced
-    throw error
+    if (attempt === READ_TRIES) throw new StateFileUnreadable(basename(file), 'unexpected content')
+    pauseSync(READ_WAIT_MS)
   }
-  try {
-    writeFileSync(fd, `${value}\n`)
-    fchmodSync(fd, 0o600)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-  syncStateDirectory(dataDir)
-  return value
 }
 
 export function hookCredentialMatches(expected: string, supplied: unknown): boolean {

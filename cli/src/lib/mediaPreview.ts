@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
 import { open, realpath } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, extname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { tempRoots, withinRoots } from './pathContainment.js'
+import { agentTmpRoot } from './agentTmp.js'
+import { withinRoots } from './pathContainment.js'
 
 // Base64 inside an E2EE JSON envelope stays below 256 KiB per reply. The client
 // requests bounded chunks, so neither machine holds an entire video in memory.
@@ -97,6 +98,17 @@ export interface MediaPreviewChunk {
   offset: number
   revision: string
   contentBase64: string
+}
+
+/**
+ * Where agents drop the files they make. macOS gives each user a private `/var/folders/…` as
+ * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots, beside the folder
+ * Harness keeps for its agents' files (./agentTmp.ts), which the daemon's `tmpdir()` is not. Here, beside its one
+ * reader, so the folder's code stays out of every process that checks a path (./pathContainment.ts).
+ */
+export function tempRoots(): string[] {
+  const agents = agentTmpRoot()
+  return [tmpdir(), '/tmp', ...agents ? [agents] : []]
 }
 
 /**

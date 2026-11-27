@@ -1,24 +1,30 @@
 /**
  * Discovery: what the reconciler's scans of the terminal backends and their processes mean for the
  * registry. A process no row owns opens an agent; a row's own process updates it (runtimes, identity,
- * permissions, profile homes, DSH) and wakes a dormant one; a row whose engine exited keeps its
- * conversation or goes dormant; a row whose pane is gone is removed, unless restore never ran.
+ * permissions, profile homes, DSH), is looked at again for the services that follow agents (its DSH's viewer, a
+ * browser its person left on), and wakes a dormant one; a row whose engine exited keeps its conversation or goes
+ * dormant; a row whose pane is gone is removed, unless restore never ran. A new agent that takes the pane its previous
+ * agent ended in (an engine typed into the shell an exit left, or a process opened over a bound agent) is said to have
+ * taken it, and what went with the pane goes to it (decision 19; core/agentLife.ts `taken`).
  *
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
-import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
+import { OPENCLAW_FIRST_TASK, OPENCLAW_STATES, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { externalResumePending } from '../../lib/externalResume.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import { sameGridAssignment } from '../../lib/gridAssignmentWire.js'
-import { sid } from '../../lib/log.js'
-import type { registry, RegisteredSession } from '../../lib/registry.js'
+import { errorKind, sid } from '../../lib/log.js'
+import { matchesLaunchReceipt, type registry, type RegisteredSession, type RegistryAuthority, type LaunchPublication } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
+import type { AbsenceReason } from '../../lib/terminalAgentReconciler.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { primaryRuntime, sameProcessIdentity, sameTerminalPlacement, terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
@@ -26,10 +32,13 @@ import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/proces
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
     'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'reinstateArchived' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
-    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
-    | 'terminalAvailable' | 'setTerminalAvailable'>
-  attachDsh: (session: RegisteredSession) => void
-  forgetSession: (id: string, opts?: { force?: boolean; agentId?: string }) => void
+    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'byAgent' | 'setLaunch' | 'setActive'
+    | 'terminalAvailable' | 'setTerminalAvailable' | 'byRuntimeTerminal' | 'confirmLaunch'>
+  /** A look at a running agent, for services following the generic lifecycle. */
+  attach: (session: RegisteredSession) => void
+  /** The new committed agent took the previous agent's pane. */
+  taken: (from: string, to: RegisteredSession) => void
+  forgetSession: (id: string, opts?: { force?: boolean; agentId?: string; captured?: RegisteredSession }) => Promise<void>
   announceSession: (session: RegisteredSession) => void
   bindObservedAgent: (observed: DiscoveredTerminalAgent) => Promise<void>
   syncRecapPool: () => void
@@ -39,8 +48,9 @@ export interface DiscoveryDeps {
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   stopHeartbeat: (sessionId: string) => void
-  retainExitedSession: (agent: RegisteredSession, announce: boolean) => void
-  stoppedAgents: Pick<StoppedAgentStore, 'finishResume' | 'list' | 'remove' | 'resumeReservedAt'>
+  retainExitedSession: (agent: RegisteredSession, announce: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
+  current?: (agentId: string) => boolean
+  stoppedAgents: Pick<StoppedAgentStore, 'finishResume' | 'get' | 'list' | 'remove' | 'resumeReservedAt'>
   /** The app: a terminal row that gave its pane back to an archived harness is gone, and names it as its successor. */
   send: (frame: { type: string; payload: Record<string, unknown> }) => void
   /** Whether restore did not get to this agent this boot (it did not run, or could not look at its row):
@@ -51,10 +61,34 @@ export interface DiscoveryDeps {
 }
 
 export function createDiscoveryHandlers({
-  registry, attachDsh, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
+  registry, attach, taken, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
-  stoppedAgents, send, restoreDegraded, terminals,
+  stoppedAgents, send, restoreDegraded, terminals, current: operationCurrent,
 }: DiscoveryDeps) {
+  const observedAuthority = (observed: DiscoveredTerminalAgent, selected?: RegisteredSession) => {
+    const proof = structuredClone(observed)
+    const runtime = proof.runtimes.find(route => terminalRouteKey(route) === proof.primaryRuntimeKey) ?? proof.runtimes[0]!
+    const backend = terminals.backendFor(runtime)
+    const owners = new Map(proof.runtimes.flatMap(route => {
+      const row = registry.byRuntimeTerminal(route)
+      return row ? [[row.agentId, structuredClone(row)] as const] : []
+    }))
+    if (selected) owners.set(selected.agentId, structuredClone(selected))
+    const nativeCurrent = () => !!backend && terminals.backendFor(runtime) === backend
+      && [...owners.keys()].every(id => operationCurrent?.(id) !== false)
+    return {
+      current: () => nativeCurrent() && [...owners].every(([id, row]) => matchesLaunchReceipt(registry.byAgent(id), row)),
+      refresh: async () => {
+        if (!backend || !nativeCurrent()) throw new IdentityReadUnavailable('the observed terminal changed before publication')
+        const fresh = await resolvePaneEngineProcess(backend, runtime, proof.engine)
+        if (!sameProcessIdentity(fresh, proof.processIdentity) || fresh?.executable !== proof.processIdentity.executable) {
+          throw new IdentityReadUnavailable('the observed process changed before publication')
+        }
+      },
+      committed: (row: RegisteredSession) => nativeCurrent() && operationCurrent?.(row.agentId) !== false
+        && matchesLaunchReceipt(registry.byAgent(row.agentId), row),
+    }
+  }
   /**
    * The archived harness whose own engine process this is, in this same pane: archived as exited by a restore that
    * could not see it (registry.ts `reinstateArchived`), its pane left to [terminal]. Pid and start time are the
@@ -72,13 +106,27 @@ export function createDiscoveryHandlers({
   const archivedOwner = (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): RegisteredSession | undefined => {
     let archived: RegisteredSession[]
     try { archived = stoppedAgents.list() } catch (error) {
-      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${error instanceof Error ? error.message : error}`)
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${errorKind(error)}`)
       return undefined
     }
     return archived.find((saved) => saved.engine === observed.engine
       && sameProcessIdentity(saved.processIdentity, observed.processIdentity)
       && saved.runtimes.some((runtime) => terminal.runtimes.some((own) => sameTerminalPlacement(runtime, own)))
       && stoppedAgents.resumeReservedAt(saved.agentId) === null)
+  }
+  /**
+   * The agent the shell an exit left named ([previous]) has a new agent, [adopted], in its pane: it takes what went with
+   * the pane. Not while a resume of it is under way (what went with the pane comes back with it), and not once it is
+   * purged (no saved record).
+   */
+  const paneTaken = (previous: string, adopted: RegisteredSession): void => {
+    if (stoppedAgents.resumeReservedAt(previous) !== null) return
+    let saved: RegisteredSession | null
+    try { saved = stoppedAgents.get(previous) } catch (error) {
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${errorKind(error)}`)
+      return
+    }
+    if (saved) taken(previous, adopted)
   }
   /**
    * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
@@ -96,7 +144,8 @@ export function createDiscoveryHandlers({
     const launching = observed.runtimes
       .map((runtime) => registry.byRuntimeEngine(runtime, observed.engine))
       .find((entry) => entry?.launch?.state !== 'ready')
-    const opened = registry.openProcessAgent({
+    const authority = observedAuthority(observed)
+    const opened = await registry.openProcessAgent({
       engine: observed.engine,
       runtimes: observed.runtimes,
       primaryRuntimeKey: observed.primaryRuntimeKey,
@@ -105,12 +154,11 @@ export function createDiscoveryHandlers({
       gateway: observed.gateway,
       grid: observed.grid,
       codexHome: observed.codexHome,
-      dsh: observed.dsh,
-    })
-    if (!opened) return
-    if (opened.entry.dsh) attachDsh(opened.entry)
-    if (opened.evicted) {
-      console.log(`[discovery] ${observed.primaryRuntimeKey} replaced ${sid(opened.evicted.agentId)}`)
+    }, authority)
+    if (!opened || !authority.committed(opened.entry)) return
+    attach(opened.entry)
+    for (const evicted of opened.evicted) {
+      console.log(`[discovery] ${observed.primaryRuntimeKey} replaced ${sid(evicted.agentId)}`)
       // ⚠️ THE REGISTRY ALREADY DROPPED IT; NOBODY HAD TOLD THE CLIENTS. That
       // is the whole bug behind "two sessions, one of them frozen": resuming
       // an engine in a pane another agent owned takes the pane away, and an
@@ -118,11 +166,16 @@ export function createDiscoveryHandlers({
       // row until someone hit Reload machines by hand, and opening it landed
       // on TERMINAL FROZEN. This is the same call the hook path already makes
       // for the same situation (see onRegistered below).
-      forgetSession(opened.evicted.sessionId || opened.evicted.agentId, {
+      await forgetSession(evicted.sessionId || evicted.agentId, {
         force: true,
-        agentId: opened.evicted.agentId,
+        agentId: evicted.agentId,
+        captured: evicted,
       })
     }
+    if (!authority.committed(opened.entry)) return
+    // Tell the pane takeover only after every displaced owner's cleanup and the final authority check.
+    const predecessor = opened.evicted[0]
+    if (opened.isNew && predecessor) taken(predecessor.agentId, opened.entry)
 
     if (opened.isNew || launching) {
       console.log(`[discovery] ${sid(opened.entry.agentId)} opened · engine=${observed.engine} · terminal=${observed.primaryRuntimeKey}`)
@@ -132,10 +185,14 @@ export function createDiscoveryHandlers({
   }
   const onObserved = async (observed: DiscoveredTerminalAgent, current: RegisteredSession): Promise<void> => {
     if (externalResumePending(current.externalResume)) return
+    // A first task OpenClaw never took failed the launch while its TUI ran on (bind.ts): confirming that same process
+    // would make the agent ready again and hide why. A new process in the pane is a new start, confirmed as any.
+    if (current.launch?.state === 'failed' && current.launch.error === OPENCLAW_FIRST_TASK.error
+      && sameProcessIdentity(current.processIdentity, observed.processIdentity)) return
     if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
-    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
-    // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.
+    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the command
+    // line says nothing of the grid, which never counts as a move (lib/gridAssignmentWire.ts `gridAssignmentEvidence`).
     const gridMoved = observed.grid !== undefined
       && !sameGridAssignment(current.grid ?? null, observed.grid)
     const wasLaunching = current.launch?.state !== undefined && current.launch.state !== 'ready'
@@ -145,10 +202,22 @@ export function createDiscoveryHandlers({
     const holder = !isTerminalEngine(observed.engine) && (isTerminalEngine(current.engine)
       || (!!current.terminalHost && !current.sessionId && current.engine === observed.engine))
     const owner = holder && firstLook(current, observed) ? archivedOwner(current, observed) : undefined
-    const revived = owner ? registry.reinstateArchived(current.agentId, owner, observed.processIdentity) : null
+    const authority = observedAuthority(observed, current)
+    let revived: RegisteredSession | null = null
+    if (owner) {
+      try { revived = await registry.reinstateArchived(current.agentId, owner, observed.processIdentity, authority) }
+      catch (error) {
+        looked.delete(`${current.agentId}\u0000${observed.processIdentity.pid}\u0000${observed.processIdentity.startMarker}`)
+        throw error
+      }
+      if (!revived || !authority.committed(revived)) {
+        looked.delete(`${current.agentId}\u0000${observed.processIdentity.pid}\u0000${observed.processIdentity.startMarker}`)
+        return
+      }
+    }
     if (revived) {
       try { stoppedAgents.remove(revived.agentId) } catch (error) {
-        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${error instanceof Error ? error.message : error}`)
+        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${errorKind(error)}`)
       }
       console.log(`[discovery] ${sid(revived.agentId)} back from the archive · its ${observed.engine} never stopped`
         + ` · ${observed.primaryRuntimeKey} · terminal ${sid(current.agentId)} gone`)
@@ -160,26 +229,38 @@ export function createDiscoveryHandlers({
     // same pane — and from here on is handled exactly like one the app launched: bound by its
     // hooks, watched for turns, listed on the dial. `adopted` makes the announce below
     // unconditional, since the engine changing is the one fact the app must not miss.
-    const adopted = isTerminalEngine(current.engine) && !isTerminalEngine(observed.engine)
-      ? registry.adoptEngine(current.agentId, observed.engine, observed.processIdentity)
+    // The agent whose engine ended in this pane, read before the adopt takes it off the row.
+    const previous = current.previousAgentId
+    const adopting = isTerminalEngine(current.engine) && !isTerminalEngine(observed.engine)
+    const adopted = adopting
+      ? await registry.adoptEngine(current.agentId, observed.engine, observed.processIdentity, authority, {
+        runtimes: observed.runtimes, primaryRuntimeKey: observed.primaryRuntimeKey, gateway: observed.gateway, grid: observed.grid })
       : null
+    if (adopting && (!adopted || !authority.committed(adopted))) return
+    if (adopted) current = registry.byAgent(adopted.agentId)!
+    if (wasLaunching && !adopted) {
+      const publication = await registry.confirmLaunch(current.agentId, { processIdentity: observed.processIdentity,
+        runtimes: observed.runtimes, primaryRuntimeKey: observed.primaryRuntimeKey, gateway: observed.gateway, grid: observed.grid }, authority)
+      if (publication.state !== 'confirmed' || !publication.entry || !authority.committed(publication.entry)) return
+      current = registry.byAgent(publication.entry.agentId)!
+    }
     if (adopted) console.log(`[discovery] ${sid(current.agentId)} terminal → ${observed.engine} · ${observed.primaryRuntimeKey}`)
-    registry.updateRuntimes(current.agentId, observed.runtimes, observed.primaryRuntimeKey)
-    registry.updateProcessIdentity(current.agentId, observed.processIdentity, observed.gateway, observed.grid)
+    if (adopted && previous) paneTaken(previous, adopted)
+    if (!wasLaunching && !adopted) {
+      registry.updateRuntimes(current.agentId, observed.runtimes, observed.primaryRuntimeKey)
+      registry.updateProcessIdentity(current.agentId, observed.processIdentity, observed.gateway, observed.grid)
+    }
     // The live argv is the truth about the bypass flag, and this is the one place every running
     // agent passes through — so a row written before the flag was persisted at all (or by a build
     // that did not yet) learns it here, before any pane recreation ever needs it.
     // `observed.engine`, not `current.engine`: for a terminal that just adopted one, the row's
     // engine was `terminal` a line ago, which has no bypass flag and would read every launch as "no".
-    // Not a Swarm agent's (task #4215): its mode is the one its person chose, or none. One Harness started in full mode
-    // before then still runs with that flag until it relaunches, and read back the relaunch would skip permissions again.
-    const own = !current.swarmSkill
-    if (own) registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
+    registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
     // And the exact MODE, fill-only: a row that recorded one at create is authoritative, and one
     // that never did (adopted from a terminal, written by an older build, created by a path that
     // passes no mode) learns it from the same argv — so its restart brings back
     // `--dangerously-skip-permissions`, not the auto mode `bypassPermission` alone would pick.
-    if (own && !current.permissionMode) {
+    if (!current.permissionMode) {
       const mode = permissionModeFromArgv(observed.engine, observed.args)
       if (mode) registry.setPermissionMode(current.agentId, mode)
     }
@@ -187,14 +268,17 @@ export function createDiscoveryHandlers({
     // under learns it from the process, before the hook path validates a transcript against it.
     // Fill-only — a profile the row already knows is never re-derived.
     if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
-    // …and a Hermes home the same way, when the process names one. A row that learns it here never
-    // has to look its session up store by store (openharness#191).
-    if (observed.hermesHome && !current.hermesHome) registry.setHermesHome(current.agentId, observed.hermesHome)
-    // And the DSH: a row minted by discovery (or written before the field existed) learns it from
-    // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
-    if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
-    const withDsh = registry.byAgent(current.agentId)
-    if (withDsh?.dsh) attachDsh(withDsh)
+    // …and a Hermes home the same way, from the store its process holds open. A row that learns it here never
+    // has to look its session up store by store (openharness#191). The daemon's path of a sandbox's home is marked, so
+    // a relaunch does not export it. A home the row has is never marked: a descriptor cannot tell an older daemon's
+    // row from one Harness launched by name, whose relaunch must export it.
+    if (observed.hermesHome && !current.hermesHome) {
+      registry.setHermesHome(current.agentId, observed.hermesHome, observed.hermesHomeDerived === true)
+    }
+    // And it is looked at again for the services that follow agents: whatever path brought this agent back to running,
+    // it passes here (decision 14), and a viewer follows its harness's update. The registry's row now, not the scan's.
+    const live = registry.byAgent(current.agentId)
+    if (live) attach(live)
     // This live process, in this row's own pane, is what "started" means — for a resumed row as
     // much as any other. A resume used to be held back here until its `SessionStart` hook landed,
     // on the grounds that only the hook proves WHICH conversation reopened. Two things were wrong
@@ -203,9 +287,8 @@ export function createDiscoveryHandlers({
     // of them sat at "Starting" for 19 hours over a pane its owner could type in — re-attached and
     // re-announced every 5s for the whole time, because `wasLaunching` stays true for a row that
     // nothing will ever mark ready (openharness#189). And nothing was actually protected by the
-    // wait: the wrong-conversation guard in `registry.register` keys on `lastHookAt`, not on this
-    // launch state, so it stays armed until the first hook whatever is written here.
-    if (wasLaunching) registry.setLaunch(current.agentId, { state: 'ready' })
+    // wait: a hook of the resumed process that names another conversation binds it as a rotation
+    // (`registry.register`), whatever is written here.
     await bindObservedAgent(observed)
     if (wasDormant || wasLaunching || adopted) {
       const active = registry.byAgent(current.agentId)
@@ -229,7 +312,7 @@ export function createDiscoveryHandlers({
         syncRecapPool()
         announceSession(active)
       }).catch((err) => {
-        console.error(`[discovery] ${sid(active.agentId)} attach failed:`, err instanceof Error ? err.message : err)
+        console.error(`[discovery] ${sid(active.agentId)} attach failed:`, errorKind(err))
       })
       return
     }
@@ -243,8 +326,12 @@ export function createDiscoveryHandlers({
     const refreshed = registry.byAgent(current.agentId)
     if (refreshed) announceSession(refreshed)
   }
-  const onDormant = async (agent: RegisteredSession, reason: string): Promise<void> => {
+  const onDormant = async (agent: RegisteredSession, reason: AbsenceReason): Promise<void> => {
     if (!agent.active || agent.launch?.state === 'held') return
+    const selected = structuredClone(agent), runtime = primaryRuntime(selected)
+    const backend = terminals.backendFor(runtime)
+    const current = () => operationCurrent?.(selected.agentId) !== false
+      && terminals.backendFor(runtime) === backend && matchesLaunchReceipt(registry.byAgent(selected.agentId), selected)
     invalidateTerminalControl(agent.agentId)
     input.forget(agent.agentId)
     deviceInput.forget(agent.agentId)
@@ -252,19 +339,35 @@ export function createDiscoveryHandlers({
       questionWatcher.stop(agent.sessionId)
       stopHeartbeat(agent.sessionId)
     }
+    // An OpenClaw TUI whose config has no Gateway token prints so and exits, before it binds a session. Its launch
+    // failed, saying what to run, and the agent stays for show to find instead of becoming a terminal.
+    if (agent.engine === 'openclaw' && !agent.sessionId) {
+      const read = await backend?.capture(runtime)
+      if (read?.state === 'succeeded' && readOpenclawScreen(read.value).state === 'no-token') {
+        if (!current()) return
+        const failed = registry.setLaunch(agent.agentId, { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken })
+        if (failed) announceSession(failed)
+        console.log(`[discovery] ${sid(agent.agentId)} failed · ${OPENCLAW_STATES.noToken}`)
+        return
+      }
+    }
     // Preserve the conversation's public identity and give the surviving shell its own row.
     // A starting install is not an exited engine; strict uncertain starts keep their reservation.
     if (agent.resumeOnly && agent.launch?.state === 'failed') {
-      const runtime = primaryRuntime(agent)
       // No backend to ask is a pane nobody could read: it stays, like one tmux could not answer for.
-      const pane = await terminals.backendFor(runtime)?.paneState(runtime) ?? 'unknown'
+      const pane = await backend?.paneState(runtime) ?? 'unknown'
       // An unconfirmed install/startup can still be about to launch the engine. Do not
       // turn its live shell into permission to start another one. A pane that is gone is the
       // reconciler's to remove, and one tmux could not read says nothing: both stay as they are.
       if (typeof pane === 'string' || (!pane.dead && pane.engineExit == null)) return
     }
     if (agent.launch?.state !== 'starting') {
-      retainExitedSession(agent, true)
+      const retained = await retainExitedSession(selected, true, { current, refresh: async () => {
+        if (!backend || !current() || await resolvePaneEngineProcess(backend, runtime, selected.engine)) {
+          throw new IdentityReadUnavailable('the observed engine exit changed before publication')
+        }
+      } })
+      if (retained.state !== 'confirmed') return
       if (agent.resumeOnly) stoppedAgents.finishResume(agent.agentId)
       console.log(`[discovery] ${sid(agent.agentId)} retained · ${reason}`)
       return
@@ -273,7 +376,7 @@ export function createDiscoveryHandlers({
     console.log(`[discovery] ${sid(agent.agentId)} dormant · ${reason}`)
     announceSession(agent)
   }
-  const onRemoved = (agent: RegisteredSession, reason: string): void => {
+  const onRemoved = async (agent: RegisteredSession, reason: AbsenceReason): Promise<void> => {
     // A missing waiting shell does not end the conversation held for preparation/recovery.
     if (agent.launch?.state === 'held') {
       registry.setActive(agent.agentId, false)
@@ -291,7 +394,7 @@ export function createDiscoveryHandlers({
       return
     }
     console.log(`[discovery] ${sid(agent.agentId)} removed · ${reason}`)
-    forgetSession(agent.agentId, { force: true })
+    await forgetSession(agent.agentId, { force: true, captured: structuredClone(agent) })
   }
   const onTerminalAvailability = (agent: RegisteredSession, available: boolean): void => {
     const changed = registry.terminalAvailable(agent.agentId) !== available

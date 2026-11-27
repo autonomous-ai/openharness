@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error — the tool server's helpers are plain ESM, run by Node inside the browser's container.
-import { connectWithRetry, roleSnapshot, withTimeout } from '../../../assets/browser/browser-tools-lib.mjs'
+import { answer, connectWithRetry, roleSnapshot, setWindow, withTimeout } from '../../../assets/browser/browser-tools-lib.mjs'
 
 describe('roleSnapshot', () => {
   it('gives each interactive line a ref', () => {
@@ -67,5 +67,52 @@ describe('withTimeout', () => {
   it('passes the work\'s own answer and failure through', async () => {
     await expect(withTimeout(Promise.resolve(7), 1000, 'x')).resolves.toBe(7)
     await expect(withTimeout(Promise.reject(new Error('boom')), 1000, 'x')).rejects.toThrow('boom')
+  })
+})
+
+describe('answer', () => {
+  const handlers = () => ({
+    call: async (params: unknown) => ({ called: params }),
+    window: async (params: unknown) => ({ sized: params }),
+  })
+
+  it('routes tools/call to call and window to window', async () => {
+    const params = { name: 'browser_click', arguments: { ref: 'e1' }, _harness: { human: 'auto' } }
+    await expect(answer({ id: 1, method: 'tools/call', params }, handlers())).resolves.toEqual({ called: params })
+    await expect(answer({ id: 2, method: 'window', params: { width: 1280, height: 800 } }, handlers()))
+      .resolves.toEqual({ sized: { width: 1280, height: 800 } })
+  })
+
+  it('initialize, tools/list and ping are unknown methods', async () => {
+    for (const method of ['initialize', 'tools/list', 'ping', 'resources/list']) {
+      await expect(answer({ id: 3, method, params: {} }, handlers()), method).resolves.toBeNull()
+    }
+  })
+})
+
+describe('setWindow', () => {
+  it('asks for the window, sets it at 0,0 with the size and windowState normal, and answers the bounds Chrome reports', async () => {
+    const sent: Array<[string, unknown]> = []
+    const send = async (method: string, params?: unknown) => {
+      sent.push([method, params])
+      if (method === 'Browser.getWindowForTarget') return { windowId: 7, bounds: { left: 40, top: 30, width: 1920, height: 1080, windowState: 'maximized' } }
+      if (method === 'Browser.getWindowBounds') return { bounds: { left: 0, top: 0, width: 1920, height: 1040, windowState: 'normal' } }
+      return {}
+    }
+    // Chrome keeps the window inside the screen: the answer is its size, not the one asked for.
+    await expect(setWindow(send, { width: 2400, height: 1400 })).resolves.toEqual({ width: 1920, height: 1040 })
+    expect(sent).toEqual([
+      ['Browser.getWindowForTarget', undefined],
+      ['Browser.setWindowBounds', { windowId: 7, bounds: { left: 0, top: 0, width: 2400, height: 1400, windowState: 'normal' } }],
+      ['Browser.getWindowBounds', { windowId: 7 }],
+    ])
+  })
+
+  it('passes a CDP failure on', async () => {
+    const send = async (method: string) => {
+      if (method === 'Browser.setWindowBounds') throw new Error('Protocol error (Browser.setWindowBounds): Browser window not found')
+      return { windowId: 7, bounds: {} }
+    }
+    await expect(setWindow(send, { width: 1280, height: 800 })).rejects.toThrow('Browser window not found')
   })
 })

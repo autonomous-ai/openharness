@@ -19,7 +19,7 @@ import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import { ensureGuestEngine, guestNodeDir, type GuestEngineBackend, type GuestEngineResult } from '../../lib/windows/guestEngine.js'
-import { guestHostHome, WINDOWS_GUEST_SETUP_VERSION } from '../../lib/windows/guestRequests.js'
+import { guestHostHome, WINDOWS_GUEST_SETUP_VERSION } from '../../lib/windows/guestTree.js'
 import { windowsEngineArgv, windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -52,6 +52,8 @@ const NOT_FOR_GUESTS: ReadonlyArray<readonly [string, string]> = [
   ['dsh', 'On a computer shared with you, you can start Claude Code or Codex, not harnesses from the Store.'],
   ['resumeSessionId', 'On a computer shared with you, start a new conversation.'],
   ['agent', 'On a computer shared with you, start Claude Code or Codex itself, not a named agent.'],
+  // Dropped, it would run on the owner's shared OpenClaw folder with nothing said.
+  ['openclawLocal', 'On a computer shared with you, --local is not available.'],
 ]
 
 export function createGuestCreate(deps: GuestCreateDeps) {
@@ -143,7 +145,7 @@ export function createGuestCreate(deps: GuestCreateDeps) {
       // its PATH is the owner's, which the guest may not read).
       ...(launch.guestHostUser ? { paneLaunch: { cwd: launch.workspace, afterExit: windowsAfterExit(engine) } } : {}),
       sessionLabel: label,
-      argv,
+      argv: () => argv,
       env: launch.env,
       bypassPermission,
       permissionMode,

@@ -7,6 +7,7 @@
  * Same owner guards and reply contract after the quiet-machine QA move into the edge host.
  */
 import { ENGINES } from '../engines/types.js'
+import { errorKind } from '../lib/log.js'
 
 /** What the handoff is asked for, and what it answers (lib/agentHandoff.ts). */
 export type HandoffRequest = { agentId: string; changeId: string; targetEngine: string }
@@ -39,7 +40,7 @@ export function createHandoffRequest({ prepare }: { prepare: ((req: HandoffReque
         const known = (e as { name?: unknown } | null)?.name === 'HandoffError' && typeof code === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(code)
         // Name and errno code only: a message can quote the project path or, from a parser, a
         // slice of the transcript it choked on.
-        if (!known) console.error(`[handoff] prepare failed: ${e instanceof Error ? e.name : typeof e}${typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? ` ${code}` : ''}`)
+        if (!known) console.error(`[handoff] prepare failed: ${errorKind(e)}`)
         const held = known && ['IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'TIMEOUT', 'BUSY'].includes(code)
         // Only a hold the clients know goes on the wire, as a code: a program replaced while it ran needs a restart.
         const hold = known && (e as { hold?: unknown }).hold === 'PROGRAM_REPLACED' ? 'PROGRAM_REPLACED' : undefined

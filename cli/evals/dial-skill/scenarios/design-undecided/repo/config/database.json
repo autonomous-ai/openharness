@@ -1,0 +1,8 @@
+{
+  "host": "db.accounts.invalid",
+  "port": 5432,
+  "database": "accounts",
+  "user": "accounts_app",
+  "password": "pgpw_FAKE_k3Vn8Qe2",
+  "pool": 10
+}

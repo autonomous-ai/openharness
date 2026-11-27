@@ -8,21 +8,18 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { errorKind } from '../log.js'
 import type { ProcessRow } from '../processTable.js'
-import { CLI_POINTER, STABLE_NOTIFY, writePointer } from './installLayout.js'
+import { atomicWriteFile } from '../secureState.js'
+import { CLI_POINTER, writePointer } from './installLayout.js'
+import { STABLE_NOTIFY, VERSION_FOLDER } from './installNames.js'
 import { windowsProcessRows } from './processTable.js'
 
-/** A build's folder name under cli\: its version, as the release names it (`0.5.0`, `0.5.1-dev.ab12`). Semver's
- *  identifiers, none empty: Windows drops a name's trailing dot, and the pointer refuses `..` (./installLayout.ts). */
-export const VERSION_FOLDER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
 const CLI = 'cli.js'
 const NOTIFY = 'notify.mjs'
 const PACKAGE = 'package.json'
 const RUNTIME_PACKAGE = `${JSON.stringify({ type: 'module' })}\n`
-/** A hook reads notify.mjs for a moment; Defender scans a new file for longer. */
-export const REPLACE_TRIES = 5
-export const REPLACE_PAUSE_MS = 100
 
 export function isVersionFolder(cliDir: string, version: string): boolean {
   return VERSION_FOLDER.test(version) && existsSync(join(cliDir, version, CLI)) && existsSync(join(cliDir, version, NOTIFY))
@@ -52,9 +49,10 @@ export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buff
     mkdirSync(cliDir, { recursive: true })
     rmSync(temporary, { recursive: true, force: true })
     mkdirSync(temporary)
+    // not a state file: a version folder staged under a temporary name, then renamed in whole
     writeFileSync(join(temporary, PACKAGE), RUNTIME_PACKAGE)
-    writeFileSync(join(temporary, CLI), cliBuf)
-    writeFileSync(join(temporary, NOTIFY), notifyBuf)
+    writeFileSync(join(temporary, CLI), cliBuf) // not a state file: the staged version folder
+    writeFileSync(join(temporary, NOTIFY), notifyBuf) // not a state file: the staged version folder
     if (existsSync(folder)) renameSync(folder, join(cliDir, `.${version}.${Date.now()}.old`))
     renameSync(temporary, folder)
   } catch (error) {
@@ -62,33 +60,6 @@ export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buff
     throw error
   }
   return folder
-}
-
-const pause = (ms: number): void => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
-
-/** Replace [file] whole, by a file beside it and a rename, tried again while Windows says it is busy (a hook has it
- *  open, or an antivirus scan). */
-export function replaceFile(
-  file: string, bytes: Buffer, rename: (from: string, to: string) => void = renameSync, tries = REPLACE_TRIES, pauseMs = REPLACE_PAUSE_MS,
-): void {
-  const temporary = `${file}.${process.pid}.tmp`
-  try {
-    writeFileSync(temporary, bytes)
-    for (let attempt = 1; ; attempt++) {
-      try {
-        rename(temporary, file)
-        return
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        if (attempt >= tries || (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES')) throw error
-        pause(pauseMs * attempt)
-      }
-    }
-  } catch (error) {
-    // Also a file the write left half-written (a full disk).
-    rmSync(temporary, { force: true })
-    throw error
-  }
 }
 
 /**
@@ -99,9 +70,10 @@ export function replaceFile(
 export function switchTo(cliDir: string, version: string, log: (line: string) => void = (line) => console.error(line)): void {
   writePointer(cliDir, CLI_POINTER, version)
   try {
-    replaceFile(join(cliDir, STABLE_NOTIFY), readFileSync(join(cliDir, version, NOTIFY)))
+    // Whole, and tried again while Windows says the file is busy (a hook has it open, or an antivirus scan).
+    atomicWriteFile(join(cliDir, STABLE_NOTIFY), readFileSync(join(cliDir, version, NOTIFY)), 'cache')
   } catch (error) {
-    log(`[update] the hooks' notify.mjs could not be refreshed yet (${error instanceof Error ? error.message : String(error)}) — they keep the one before until the next update`)
+    log(`[update] the hooks' notify.mjs could not be refreshed yet (${errorKind(error)}) — they keep the one before until the next update`)
   }
 }
 
@@ -158,7 +130,7 @@ export async function retireUnused(
       deps.remove(join(cliDir, name))
       removed.push(name)
     } catch (error) {
-      deps.log(`[update] ${name} could not be removed yet (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}) — trying again later`)
+      deps.log(`[update] ${name} could not be removed yet (${errorKind(error)}) — trying again later`)
     }
   }
   return removed

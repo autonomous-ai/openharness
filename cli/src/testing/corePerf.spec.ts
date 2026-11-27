@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-async function start(role: '__run' | '__harnessd' | '__service') {
+async function start(role: '__run' | '__harnessd' | '__service', env: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), 'core-perf-probe-'))
   roots.push(root)
   // A real child does measurable work. The sampler must include its CPU, not the runner's.
@@ -34,7 +34,7 @@ async function start(role: '__run' | '__harnessd' | '__service') {
     });
     console.log('ready');
   `, '--', role], {
-    env: { HOME: root, HARNESS_E2E_PERF_DIR: root, HARNESS_E2E_PERF_TOKEN: token },
+    env: { HOME: root, HARNESS_E2E_PERF_DIR: root, HARNESS_E2E_PERF_TOKEN: token, ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   children.push(child)
@@ -48,6 +48,13 @@ async function start(role: '__run' | '__harnessd' | '__service') {
 it.each(['__harnessd', '__service'] as const)('does not start a perf endpoint in %s', async role => {
   const { root } = await start(role)
   expect(readdirSync(root)).toEqual([])
+})
+
+it('measures the devices service when asked, and not without HARNESS_E2E_PERF_DEVICES', async () => {
+  const unasked = await start('__service', { HARNESSD_SERVICE: 'devices' })
+  const asked = await start('__service', { HARNESSD_SERVICE: 'devices', HARNESS_E2E_PERF_DEVICES: '1' })
+  await vi.waitFor(() => expect(existsSync(join(asked.root, `core-${asked.child.pid}.json`))).toBe(true), { timeout: 3_000 })
+  expect(readdirSync(unasked.root)).toEqual([])
 })
 
 it('measures the owned core, rejects overlapping windows, and keeps heap pauses out of them', async () => {

@@ -53,6 +53,15 @@ export const OPENCODE_SESSION_MODEL = {
   },
 } as const
 
+/** Plain text: whether this OpenCode's own endpoint variables name OpenRouter. The URL stays in the engine's process. */
+const PLUGIN_GATEWAY = `const harnessGateway = () => {
+  for (const name of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE"]) {
+    try { if (/(?:^|\\.)openrouter\\.ai$/i.test(new URL(process.env[name] || "").hostname)) return "ori" } catch {}
+  }
+  return "none"
+}
+`
+
 /** Native source runs in the engine process; the daemon only renders and installs these bytes. */
 export const OPENCODE_LEGACY_PLUGIN = {
   file: hookPath(hookEnvironment.OPENCODE_PLUGIN_DIR, 'launcher-register.js'),
@@ -69,6 +78,7 @@ const hookToken = () => { try { return readFileSync(`,
 `, "utf8").trim() } catch { return "" } }
 `,
 ...PLUGIN_FETCH,
+PLUGIN_GATEWAY,
 `export const MachineRegister = async ({ directory, worktree, project, client }) => {
   const seen = new Set()
   const post = async (sessionID) => {
@@ -83,7 +93,7 @@ const hookToken = () => { try { return readFileSync(`,
 { argument: 'port' },
 `/api/hook/session-start", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-harness-hook-token": token },
+        headers: { "content-type": "application/json", "x-harness-hook-token": token, "x-harness-hook-gateway": harnessGateway() },
         body: JSON.stringify({
           engine: "`,
 "opencode",
@@ -141,6 +151,7 @@ const hookToken = () => { try { return readFileSync(`,
 `, "utf8").trim() } catch { return "" } }
 `,
 ...PLUGIN_FETCH,
+PLUGIN_GATEWAY,
 `export default {
   id: "harness-session-register",
   setup(ctx) {
@@ -163,7 +174,7 @@ const hookToken = () => { try { return readFileSync(`,
 { argument: 'port' },
 `/api/hook/session-start", {
           method: "POST",
-          headers: { "content-type": "application/json", "x-harness-hook-token": token },
+          headers: { "content-type": "application/json", "x-harness-hook-token": token, "x-harness-hook-gateway": harnessGateway() },
           body: JSON.stringify({
             engine: "opencode",
             pluginVersion: `,

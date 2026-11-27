@@ -1,11 +1,9 @@
 import { createServer } from 'node:http'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest'
 import { loadOrCreateHookCredential } from './hookAuth.js'
-import { legacyDaemonStatus, localDaemonCall, localDaemonStatus, saveDaemonPort, savedDaemonPort } from './daemonEndpoint.js'
-import { readDaemonRecord } from './daemonRecord.js'
+import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './daemonEndpoint.js'
 import { listenLocalSocket, localSocketPath } from './localSocket.js'
 import type { PipeTarget } from './windows/pipeClient.js'
 
@@ -59,51 +57,6 @@ describe('per-user daemon discovery', () => {
     expect(await localDaemonStatus(dir, port)).toBeNull()
     body = '{}'; status = 503
     expect(await localDaemonStatus(dir, port)).toBeNull()
-  })
-
-  it('persists separate TCP port records per user and configured endpoint', () => {
-    const a = directory(), b = directory()
-    expect(savedDaemonPort(a, 18473)).toBe(18473)
-    saveDaemonPort(a, 18473, 24567)
-    expect(savedDaemonPort(a, 18473)).toBe(24567)
-    expect(savedDaemonPort(b, 18473)).toBe(18473)
-    expect(savedDaemonPort(a, 18474)).toBe(18474)
-    const file = join(a, 'daemon-18473.json')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ port: 24567 })
-    for (const body of ['broken', '{}', '{"port":-1}', '{"port":65536}', '{"port":"24567"}']) {
-      writeFileSync(file, body)
-      expect(savedDaemonPort(a, 18473)).toBe(18473)
-    }
-  })
-
-  it('records the Windows pipe and the core\'s pid beside the port, and reads only a pipe name back', () => {
-    // os.tmpdir(), not directory()'s /tmp: this case runs on Windows too.
-    const dir = mkdtempSync(join(tmpdir(), 'hn-record-'))
-    cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
-    const pipe = `\\\\.\\pipe\\harness-${'a'.repeat(32)}`
-    saveDaemonPort(dir, 18473, 24567, { pipe, pid: 4242 })
-    expect(JSON.parse(readFileSync(join(dir, 'daemon-18473.json'), 'utf8'))).toEqual({ port: 24567, pipe, pid: 4242 })
-    expect(readDaemonRecord(dir, 18473)).toEqual({ port: 24567, pipe, pid: 4242 })
-    expect(savedDaemonPort(dir, 18473)).toBe(24567)
-    writeFileSync(join(dir, 'daemon-18473.json'), JSON.stringify({ port: 24567, pipe: 'C:\\evil', pid: -1 }))
-    expect(readDaemonRecord(dir, 18473)).toEqual({ port: 24567, pipe: null, pid: null })
-    saveDaemonPort(dir, 18473, 24568)
-    expect(readDaemonRecord(dir, 18473)).toEqual({ port: 24568, pipe: null, pid: null })
-    expect(readDaemonRecord(dir, 18474)).toBeNull()
-  })
-
-  it('on Windows, reads back only a local Harness pipe, never a file or another computer\'s pipe', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hn-record-'))
-    cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
-    const id = 'b'.repeat(32)
-    const pipe = `\\\\.\\pipe\\harness-${id}`
-    saveDaemonPort(dir, 18473, 24567, { pipe, pid: 4242 })
-    expect(readDaemonRecord(dir, 18473, 'win32')).toEqual({ port: 24567, pipe, pid: 4242 })
-    for (const other of [`C:\\x\\harness-${id}`, `\\\\host\\pipe\\harness-${id}`, `\\\\.\\pipe\\evilharness-${id}`]) {
-      writeFileSync(join(dir, 'daemon-18473.json'), JSON.stringify({ port: 24567, pipe: other, pid: 4242 }))
-      expect(readDaemonRecord(dir, 18473, 'win32')).toEqual({ port: 24567, pipe: null, pid: 4242 })
-    }
   })
 
   it('accepts legacy CLI status only when both the saved PID and computer identity match', async () => {

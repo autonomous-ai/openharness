@@ -10,7 +10,7 @@
  */
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { join, extname, basename } from 'node:path'
+import { join, extname, basename, dirname } from 'node:path'
 
 const root = fileURLToPath(new URL('../src/lib/connectors/', import.meta.url))
 const assets = join(root, 'assets')
@@ -34,7 +34,9 @@ export function render() {
 }
 
 /** The desktop app's copy: the same icons as assets, and their names by code. */
-const desktop = fileURLToPath(new URL('../../desktop/', import.meta.url))
+// The copies it writes, named in full: the CLI's tests import render() and read none of them (scripts/ci-plan.py DEPENDS).
+const desktopIcons = fileURLToPath(new URL('../../desktop/assets/connector-icons/', import.meta.url))
+const desktopDart = fileURLToPath(new URL('../../desktop/lib/connectors/connector_icons.dart', import.meta.url))
 export function renderDesktop() {
   const names = readdirSync(join(assets, 'web/icons')).filter(name => ['.png', '.svg'].includes(extname(name))).sort()
   const map = names.map(name => `  '${basename(name, extname(name))}': 'assets/connector-icons/${name}',`).join('\n')
@@ -49,7 +51,8 @@ export function renderDesktop() {
  * takes its PNG rendering from assets/mobile-icons: 64 px, transparent, made once from the SVG beside it
  * (headless Chrome, or `rsvg-convert -w 64 -h 64 --keep-aspect-ratio`) when that icon changes.
  */
-const mobile = fileURLToPath(new URL('../../mobile/', import.meta.url))
+const mobileIcons = fileURLToPath(new URL('../../mobile/assets/connector-icons/', import.meta.url))
+const mobileDart = fileURLToPath(new URL('../../mobile/lib/phone/connector_icons.dart', import.meta.url))
 export function renderMobile() {
   const icons = {}
   for (const name of readdirSync(join(assets, 'web/icons')).sort()) {
@@ -83,16 +86,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } else {
     mkdirSync(out, { recursive: true })
     for (const [name, body] of Object.entries(files)) writeFileSync(join(out, name), body)
-    rmSync(join(desktop, 'assets/connector-icons'), { recursive: true, force: true })
-    mkdirSync(join(desktop, 'assets/connector-icons'), { recursive: true })
-    for (const [name, data] of Object.entries(app.icons)) writeFileSync(join(desktop, 'assets/connector-icons', name), data)
-    writeFileSync(join(desktop, 'assets/connector-icons/NOTICE.txt'), NOTICE)
-    mkdirSync(join(desktop, 'lib/connectors'), { recursive: true })
-    writeFileSync(join(desktop, 'lib/connectors/connector_icons.dart'), app.dart)
-    rmSync(join(mobile, 'assets/connector-icons'), { recursive: true, force: true })
-    mkdirSync(join(mobile, 'assets/connector-icons'), { recursive: true })
-    for (const [name, data] of Object.entries(phone.icons)) writeFileSync(join(mobile, 'assets/connector-icons', name), data)
-    writeFileSync(join(mobile, 'assets/connector-icons/NOTICE.txt'), NOTICE)
-    writeFileSync(join(mobile, 'lib/phone/connector_icons.dart'), phone.dart)
+    rmSync(desktopIcons, { recursive: true, force: true })
+    mkdirSync(desktopIcons, { recursive: true })
+    for (const [name, data] of Object.entries(app.icons)) writeFileSync(join(desktopIcons, name), data)
+    writeFileSync(join(desktopIcons, 'NOTICE.txt'), NOTICE)
+    mkdirSync(dirname(desktopDart), { recursive: true })
+    writeFileSync(desktopDart, app.dart)
+    rmSync(mobileIcons, { recursive: true, force: true })
+    mkdirSync(mobileIcons, { recursive: true })
+    for (const [name, data] of Object.entries(phone.icons)) writeFileSync(join(mobileIcons, name), data)
+    writeFileSync(join(mobileIcons, 'NOTICE.txt'), NOTICE)
+    writeFileSync(mobileDart, phone.dart)
   }
 }

@@ -3,7 +3,8 @@ import { VERSION } from '../version.js'
 import type { GatewayAccount, GatewayMachines, HttpAnswer } from '../core/api.js'
 import { MachineListCache } from '../device/machineList.js'
 import { AuthSessionError } from '../lib/authSession.js'
-import { backendHttpBase, GRID_MINT_TIMEOUT_MS, PROXY_BACKEND_TIMEOUT_MS } from '../lib/controlPlane.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
+import { GRID_MINT_TIMEOUT_MS, PROXY_BACKEND_TIMEOUT_MS } from '../lib/controlPlane.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 
 interface AccountHttpDeps {

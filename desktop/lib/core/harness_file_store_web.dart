@@ -1,16 +1,14 @@
 import 'package:web/web.dart' as web;
 
 import 'browser_lock.dart';
+import 'harness_home.dart';
 import 'local_key_value_store.dart';
 
 /// The browser adapter behind the same state-store entry point as desktop.
 /// Sign-in, machine identity, links, and preferences persist on this origin.
 /// OAuth transactions stay tab-local in DirectLogin. Storage failures propagate.
 class HarnessFileStore
-    implements
-        BatchLocalKeyValueStore,
-        SynchronizedLocalKeyValueStore,
-        KeyListingLocalKeyValueStore {
+    implements BatchLocalKeyValueStore, SynchronizedLocalKeyValueStore {
   static final HarnessFileStore shared = HarnessFileStore();
   static const _prefix = 'harness.web.v1.';
   static const _migrated = '${_prefix}persistent_credentials';
@@ -58,7 +56,7 @@ class HarnessFileStore
     };
   }
 
-  @override
+  /// The keys this origin holds, without their values.
   Future<List<String>> keys() async {
     await _ready();
     final local = web.window.localStorage;
@@ -104,6 +102,13 @@ class HarnessFileStore
     }
   }
 
+  /// Removes [keys], as [delete] does each.
+  Future<void> deleteAll(Iterable<String> keys) async {
+    for (final key in keys) {
+      await delete(key);
+    }
+  }
+
   @override
   Future<T> synchronized<T>(String scope, Future<T> Function() action) =>
       withBrowserLock(scope, action);
@@ -111,6 +116,7 @@ class HarnessFileStore
   /// Native-only services must never turn a browser path into a local file.
   static String defaultDirectoryPath({
     Map<String, String>? environment,
-    String? name,
+    HarnessEntry? entry,
+    HomeLook? look,
   }) => throw UnsupportedError('The browser has no Harness home directory.');
 }

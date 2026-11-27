@@ -1,0 +1,11 @@
+--- a/src/cart.js
++++ b/src/cart.js
+@@ -9,7 +9,7 @@
+ export async function checkout(lines) {
+   const items = lines.reduce((count, line) => count + line.qty, 0)
+   const subtotal = lines.reduce((sum, line) => sum + line.qty * line.unitCents, 0)
+-  const discount = items > BULK_MIN_ITEMS ? Math.round(subtotal * BULK_DISCOUNT) : 0
++  const discount = items >= BULK_MIN_ITEMS ? Math.round(subtotal * BULK_DISCOUNT) : 0
+   const tax = Math.round((subtotal - discount) * TAX_RATE)
+   const total = subtotal - discount + tax
+   await track('checkout', { items, total })

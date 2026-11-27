@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 /** Healthy resume composition recorded from the former code, with no host engine or terminal. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,7 +8,11 @@ import { afterAll, expect, it, vi } from 'vitest'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the resume golden') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  return { exec: forbidden, execSync: forbidden,
+    execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
+      if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
+      done(null, 'fixture-start')
+    }, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -17,8 +22,11 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: async () => ({ state: 'gone', reason: 'fixture' }) }))
-vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: async () => ({ state: 'alive' }),
+// The engine this fake stands for never exits, so there is no settle time to wait out; the rule is tested in
+// `resumeStoppedAgent.spec.ts`.
+vi.mock('./paneEngineProcess.js', async (real) => ({ ...await real<object>(), checkSessionRuntime: async () => ({ state: 'alive' }),
   resolvePaneEngineProcess: async () => ({ pid: 7001, executable: '<engine>', startMarker: 'fixture-start' }),
+  ENGINE_SETTLE_MS: 0,
 }))
 vi.mock('./engineLaunch.js', async original => ({ ...await original<object>(),
   buildEngineLaunchArgv: (engine: string, options: { resumeSessionId?: string }) => [
@@ -39,6 +47,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
   const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'control-resume-golden-')))
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  let owned: typeof import('./registry.js')['registry'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...descriptor, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T08:00:00Z') })
@@ -52,6 +61,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
     writeFileSync(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')
     vi.resetModules()
     const { registry } = await import('./registry.js')
+    owned = registry
     const { StoppedAgentStore } = await import('./stoppedAgents.js')
     const { AgentRestartCoordinator } = await import('./restartAgent.js')
     const { createResumeAgentService } = await import('./resumeAgentService.js')
@@ -64,10 +74,10 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       writeFileSync(file, JSON.stringify(engine === 'codex'
         ? { type: 'session_meta', payload: { id: ID, cwd: root, source: 'cli' } }
         : { type: 'user', sessionId: ID, cwd: root, isSidechain: false }) + '\n')
-      const original = registry.openPendingAgent({ engine, cwd: root, runtimes: [{ backend: 'tmux', paneId: `%${++pane}` }] })!
+      const original = (await registry.openPendingAgent({ engine, cwd: root, runtimes: [{ backend: 'tmux', paneId: `%${++pane}` }] }))!
       const saved = { ...original, sessionId: engine === 'terminal' ? '' : ID, transcriptPath: engine === 'terminal' ? null : file,
         processIdentity: { pid: 7000, executable: '<engine>', startMarker: 'prior-process' } }
-      registry.removeAgent(saved.agentId)
+      ;(await removeRegistryAgent(registry, saved.agentId))
       const stopped = new StoppedAgentStore(join(root, 'saved', engine)); stopped.save(saved)
       const events: unknown[] = []
       const terminal: ResumeAgentServiceDeps['createBackend'] & ReturnType<ResumeAgentServiceDeps['backendFor']> = {
@@ -83,8 +93,8 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
         announceSession: session => { events.push(['announce', session.engine, session.sessionId, session.launch?.state]) },
         relaunchOverrides: async session => { events.push(['launch-prepare', session.engine, session.sessionId]);
           return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } } },
-        prepareSessionResume: session => { events.push(['history-prepare', session.sessionId]) },
-        refreshGridWebSearch: () => { events.push(['grid']) }, clearDeleted: () => {}, attachDsh: () => {},
+        prepareSessionResume: async session => { events.push(['history-prepare', session.sessionId]); return false },
+        refreshGridWebSearch: () => { events.push(['grid']) }, clearDeleted: () => {}, attach: () => {},
         attachSession: async session => { events.push(['attach', session.sessionId]); return true },
       })
       const result = await resume(saved.agentId)
@@ -95,9 +105,10 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
         sessionId: result.session.sessionId, source: result.session.source, launch: result.session.launch },
       reserved: stopped.resumeReservedAt(saved.agentId) !== null }
       if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
-      registry.removeAgent(saved.agentId)
+      ;(await removeRegistryAgent(registry, saved.agentId))
     }
   } finally {
+    await owned?.flush({ exiting: true }).catch(() => {})
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', descriptor)
     rmSync(root, { recursive: true, force: true })

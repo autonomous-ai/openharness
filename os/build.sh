@@ -55,9 +55,10 @@ EOF
 # Use the same source-versioned identity as its update-channel package. An ISO
 # installation should not immediately be offered this identical build again.
 python3 tools/build-package.py --runtime "$RUNTIME_DIR" --compositor "$COMPOSITOR_DIR" --output "$BUILD_DIR/repo" --development
-# The newest OpenCode Arch has now, not the snapshot's: pacman reads this build's repository first.
-# Only the image takes it; an OS update never changes OpenCode (installer.py IgnorePkg).
-OPENCODE_PACKAGE=$(python3 tools/opencode_package.py --output "$BUILD_DIR/repo" ${HARNESS_OS_OPENCODE_VERSION:+--version "$HARNESS_OS_OPENCODE_VERSION"})
+# The OpenCode lock.json pins, not the snapshot's: pacman reads this build's repository first. Only the image takes it;
+# an OS update never changes OpenCode (installer.py IgnorePkg).
+OPENCODE_VERSION=$(python3 -c 'import json; print(json.load(open("lock.json"))["opencode"])')
+OPENCODE_PACKAGE=$(python3 tools/opencode_package.py --output "$BUILD_DIR/repo" --version "$OPENCODE_VERSION")
 PROFILE_ARGS=(--profile "$PROFILE" --platform "$PLATFORM")
 if [[ $PLATFORM == apple-t2 ]]; then
     [[ -n ${HARNESS_OS_T2_BUNDLE:-} ]] || { echo 'Prepare the pinned T2 kernel bundle first.' >&2; exit 1; }

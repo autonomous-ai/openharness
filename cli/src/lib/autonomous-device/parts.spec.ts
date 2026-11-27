@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AutonomousDeviceDirect, type DirectDeviceHost } from './direct.js'
-import { autonomousDeviceLocalRequest } from '../deviceManagementHttp.js'
+import { autonomousDeviceLocalRequest } from './localHttp.js'
 import { runningDevicePart, startDevicePart } from './parts.js'
 import { DeviceResultJournal } from './resultJournal.js'
 import { AutonomousDeviceService } from './service.js'
@@ -34,9 +34,9 @@ describe('the Wi-Fi device pieces the core starts', () => {
     expect(startDevicePart('Wi-Fi device service', service)).toBeUndefined()
     expect(startDevicePart('test piece', () => { throw 'not an Error' })).toBeUndefined()
     expect(warn.mock.calls.map((call) => call[0])).toEqual([
-      '[device] the Wi-Fi device link could not be started, and this daemon runs without it: Invalid device connection metadata',
-      expect.stringMatching(/^\[device\] the Wi-Fi device service could not be started, and this daemon runs without it: /),
-      '[device] the test piece could not be started, and this daemon runs without it: not an Error',
+      '[device] the Wi-Fi device link could not be started, and this daemon runs without it: Error',
+      '[device] the Wi-Fi device service could not be started, and this daemon runs without it: SyntaxError',
+      '[device] the test piece could not be started, and this daemon runs without it: string',
     ])
   })
 

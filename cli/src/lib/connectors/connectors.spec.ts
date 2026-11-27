@@ -8,6 +8,7 @@ import { createServer, request as httpRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { hashOf } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
 import { bridgeKey, harnessKey, resetProfileCache, sync, syncProfileHome } from './agents.js'
@@ -17,7 +18,7 @@ import { addApiKey, addCustom, cards, customCode, disconnect, finish, Flows, sig
 import * as gateway from './gateway.js'
 import { LocalSignIn, probe } from './oauth.js'
 import { forgetPage, PAGE_BUILD, PageServer, rememberPage, runningPage } from './page.js'
-import { refresh } from './renew.js'
+import { keepAlive, KEEP_ALIVE_S, refresh } from './renew.js'
 import { call, OFFICIAL_HOSTS } from './call.js'
 import { connectionsCommand } from './command.js'
 import { readPrivate, Store, writePrivate, type Token } from './store.js'
@@ -196,6 +197,65 @@ describe('the bridge', () => {
     expect(answer.headers['www-authenticate']).toBeUndefined()
     expect(JSON.parse(answer.body).error.message).toContain('connected again')
     expect(vault.status('linear', 'Linear', vault.token('linear')).state).toBe('reconnect')
+  })
+
+  it('logs a refused renewal by the service\'s hash and the refusal\'s kind, never the service\'s words', async () => {
+    vault.save('linear', { ...vault.token('linear')!, expires_at: Math.floor(Date.now() / 1000) + 60 })
+    fake.revoked = true
+    const issuer = vault.token('linear')!.issuer!
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(refresh(vault, 'linear')).rejects.toThrow('connected again')
+      const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
+      expect(said).toMatch(new RegExp(`^\\[connections\\] linear: ${hashOf(issuer)} refused to renew it \\(SignInError HTTP_400, issued \\d{4}-`))
+      expect(said).not.toContain(issuer)
+      expect(said).not.toContain('invalid_grant')
+      expect(said).not.toContain('refresh-1')
+    } finally { warn.mockRestore() }
+  })
+
+  it('tells a renewal this computer cannot ask for from the service\'s refusal, by its code', async () => {
+    vault.save('linear', { ...vault.token('linear')!, issuer: 'https://unregistered.example', expires_at: Math.floor(Date.now() / 1000) + 60 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(refresh(vault, 'linear')).rejects.toThrow('connected again')
+      const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
+      expect(said).toMatch(new RegExp(`^\\[connections\\] linear: ${hashOf('https://unregistered.example')} refused to renew it \\(SignInError NO_CLIENT_OR_REFRESH_TOKEN, issued \\d{4}-`))
+    } finally { warn.mockRestore() }
+  })
+
+  it('logs a custom server\'s refused renewal as custom: its code is made from the name the person gave it', async () => {
+    vault.save('sentinel-server', { ...vault.token('linear')!, source: 'custom', label: 'Sentinel server', expires_at: Math.floor(Date.now() / 1000) + 60 })
+    fake.revoked = true
+    const issuer = vault.token('sentinel-server')!.issuer!
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(refresh(vault, 'sentinel-server')).rejects.toThrow('connected again')
+      const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
+      expect(said).toMatch(new RegExp(`^\\[connections\\] custom: ${hashOf(issuer)} refused to renew it \\(SignInError HTTP_400, issued \\d{4}-`))
+      expect(said).not.toMatch(/sentinel/i)
+    } finally { warn.mockRestore() }
+  })
+
+  it('keeps a self-signed-in connection alive when it has gone unrenewed for a day, used or not', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    vault.save('linear', { ...vault.token('linear')!, obtained_at: now - 3600, expires_at: now + 3600 })
+    expect(await keepAlive(vault, KEEP_ALIVE_S)).toEqual({})
+    expect(vault.token('linear')!.access_token).toBe('access-1')
+    vault.save('linear', { ...vault.token('linear')!, obtained_at: now - KEEP_ALIVE_S - 1 })
+    expect(await keepAlive(vault, KEEP_ALIVE_S)).toEqual({})
+    expect(vault.token('linear')).toMatchObject({ access_token: 'access-2', refresh_token: 'refresh-2' })
+    expect(vault.token('linear')!.obtained_at).toBeGreaterThanOrEqual(now)
+    // Left alone: a connection already waiting for Reconnect, and the gateway's, which the gateway keeps.
+    vault.save('linear', { ...vault.token('linear')!, obtained_at: now - KEEP_ALIVE_S - 1, needs_reconnect: true })
+    vault.save('github', { access_token: 'gho', refresh: true, source: 'gateway', obtained_at: now - KEEP_ALIVE_S - 1, expires_at: now + 60 })
+    expect(await keepAlive(vault, KEEP_ALIVE_S)).toEqual({})
+    expect(vault.token('linear')!.access_token).toBe('access-2')
+    // A refusal is reported, not thrown.
+    vault.save('linear', { ...vault.token('linear')!, needs_reconnect: false })
+    fake.revoked = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try { expect(Object.keys(await keepAlive(vault, KEEP_ALIVE_S))).toEqual(['linear']) } finally { warn.mockRestore() }
   })
 })
 
@@ -476,6 +536,24 @@ describe('the connector gateway', () => {
     expect(vault.token('github')).toBeUndefined()
   }, 15_000)
 
+  it('logs a grant the gateway no longer holds by the gateway\'s code', async () => {
+    const fake = await signedIn()
+    const due = { access_token: 'gho-old', refresh: true, source: 'gateway' as const, expires_at: Math.floor(Date.now() / 1000) + 60 }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (const code of ['NOT_CONNECTED', 'INVALID_GRANT']) {
+        vault.save('github', due)
+        fake.fail = { status: 404, code, message: 'The grant of someone@example.com is gone.' }
+        await expect(refresh(vault, 'github')).rejects.toThrow('connected again')
+      }
+      const said = warn.mock.calls.map(([line]) => String(line)).filter(line => line.includes('refused to renew'))
+      expect(said).toHaveLength(2)
+      expect(said[0]).toMatch(/^\[connections\] github: gateway refused to renew it \(GatewayError NOT_CONNECTED\)$/)
+      expect(said[1]).toMatch(/^\[connections\] github: gateway refused to renew it \(GatewayError INVALID_GRANT\)$/)
+      expect(said.join('\n')).not.toContain('someone')
+    } finally { warn.mockRestore() }
+  })
+
   it('takes no caught redirect for a gateway sign-in, which the gateway finishes', async () => {
     await signedIn()
     const flows = new Flows(vault, env)
@@ -599,6 +677,33 @@ describe('the page', () => {
     expect((await ask('/icons/linear')).headers.get('content-type')).toMatch(/^image\//)
     await ask('/api/disconnect', { method: 'POST', headers: auth(), body: '{"connector":"linear"}' })
     expect(vault.token('linear')).toBeUndefined()
+  })
+
+  it('offers Gmail, Calendar and Drive through the Claude Code and Codex this computer has', async () => {
+    const asked: string[] = []
+    const viaPage = new PageServer(vault, env, {
+      binary: (name) => (name === 'codex' ? '/bin/codex' : null),
+      run: async (_command, args) => { asked.push(args.join(' ')); return '{"installed": [{"pluginId": "gmail@openai-curated-remote"}]}' },
+    })
+    await viaPage.listen()
+    closers.push(() => viaPage.close())
+    const headers = { 'X-Harness-Connections': viaPage.key, Origin: viaPage.origin, 'Content-Type': 'application/json' }
+    const status = await (await fetch(viaPage.origin + '/api/elsewhere', { headers })).json()
+    expect(status).toMatchObject({ engines: { claude: false, codex: true }, connections: { gmail: { codex: 'installed' } } })
+    const post = (path: string, body: unknown) => fetch(viaPage.origin + path, { method: 'POST', headers, body: JSON.stringify(body) })
+    expect(await (await post('/api/connect_via', { connector: 'google_drive', via: 'codex' })).json()).toEqual({ url: 'https://chatgpt.com/#settings/Connectors' })
+    // Removed here, and nothing to open.
+    expect(await (await post('/api/disconnect_via', { connector: 'gmail', via: 'codex' })).json()).toEqual({})
+    const list = 'plugin list --json --marketplace openai-curated-remote'
+    expect(asked).toEqual([list, 'plugin add google-drive@openai-curated-remote', list, 'plugin remove gmail@openai-curated-remote'])
+    // One of Microsoft 365's plugins, named: that one alone.
+    asked.length = 0
+    await post('/api/connect_via', { connector: 'microsoft_365', via: 'codex', plugin: 'sharepoint@openai-curated-remote' })
+    expect(asked).toEqual(['plugin add sharepoint@openai-curated-remote', list])
+    const refused = await post('/api/connect_via', { connector: 'gmail', via: 'claude' })
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toEqual({ error: 'Claude Code is not installed on this computer.' })
+    expect((await fetch(viaPage.origin + '/api/elsewhere')).status).toBe(403)
   })
 
   it('adds a custom server with its own headers, and refuses bad ones', async () => {

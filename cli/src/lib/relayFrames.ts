@@ -41,7 +41,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * `agent_browser_transport_error` is the relay saying it dropped one of this machine's browser frames
  * (core/browserStreams.ts): forged, it would close every relayed browser stream here.
  */
-export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'super_tab_deliveries', 'swarm_host_changed', 'swarm_changed', 'devlog_append_result', 'agent_browser_transport_error'])
+export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'devlog_append_result', 'agent_browser_transport_error'])
 
 /** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
  *  and escaped rather than trusted not to carry a newline that forges the next line. */

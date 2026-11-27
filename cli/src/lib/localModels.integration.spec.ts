@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalModels } from './localModels.js'
+import { writeExecutable } from '../testing/executableFixture.js'
+import { wholeLines } from '../testing/wholeLines.js'
 
 it('discovers, downloads, starts, verifies, stops and restarts across real subprocesses and HTTP', async () => {
   const root = await mkdtemp(join(tmpdir(), 'models-pipeline-'))
@@ -43,7 +45,7 @@ it('discovers, downloads, starts, verifies, stops and restarts across real subpr
     await mkdir(gridHome)
     await writeFile(join(gridHome, 'credentials.toml'), `session_token = 'catalog-fixture'\napi_url = '${base}'\n`)
     const executable = join(root, 'grid.mjs')
-    await writeFile(executable, `#!${process.execPath}
+    writeExecutable(executable, `#!${process.execPath}
 import { mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 const home = process.env.GRID_HOME, args = process.argv.slice(2);
@@ -63,7 +65,7 @@ else if (args.includes('leave')) { rmSync(record); rmSync(registered); }
 else if (args.includes('info') && args.includes('--json')) result({ grid: 'home', status: 'running' });
 else if (args.includes('info')) console.log("export OPENAI_BASE_URL='${base}/v1'\\nexport OPENAI_API_KEY='inference-fixture'");
 else process.exitCode = 2;
-`, { mode: 0o700 })
+`)
     // The grid's own answer, as the credential-less reader would give it: the engine is listed while its
     // run record exists (the fake's `join` writes it, `leave` removes it).
     const record = join(gridHome, 'run', 'engines', 'fixture-grid', 'remote.json')
@@ -83,7 +85,7 @@ else process.exitCode = 2;
     expect((await stat(join(gridHome, 'models', 'tiny.gguf'))).size).toBe(64)
     await service.act('home', modelId, 'start'); await service.settled()
     expect((await service.list('home')).models[0].state).toBe('running')
-    const calls = (await readFile(join(gridHome, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[])
+    const calls = wholeLines(join(gridHome, 'calls.jsonl')).map(line => JSON.parse(line) as string[])
     expect(calls.filter(args => args[0] === 'pull')).toHaveLength(1)
     expect(calls.filter(args => args.includes('sync'))).toHaveLength(2)
     expect(calls.filter(args => args[0] === 'engine')).toHaveLength(1)
@@ -116,7 +118,7 @@ it('cancels a download that hangs: the real grid process ends, and what it wrote
     await writeFile(join(gridHome, 'credentials.toml'), `session_token = 'catalog-fixture'\napi_url = '${base}'\n`)
     const executable = join(root, 'grid.mjs')
     // `grid pull` as it hung when its connection stopped sending: a `.part` written, then nothing, forever.
-    await writeFile(executable, `#!${process.execPath}
+    writeExecutable(executable, `#!${process.execPath}
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const home = process.env.GRID_HOME, args = process.argv.slice(2);
@@ -124,7 +126,7 @@ if (args[0] === 'device-info') console.log(JSON.stringify({ usable_bytes: 16 * 1
 else if (args.includes('ls')) console.log(JSON.stringify([{ grid: 'home', id: 'fixture-grid' }]));
 else if (args[0] === 'pull') { writeFileSync(join(home, 'models', 'tiny.gguf.part'), Buffer.alloc(24)); writeFileSync(join(home, 'pulling'), String(process.pid)); setInterval(() => {}, 1000); }
 else process.exitCode = 2;
-`, { mode: 0o700 })
+`)
     const inventory = async () => ({ state: 'awake' as const, status: 'running', nodes: [] })
     service = new LocalModels({ stateDir, processEnv: { GRID_HOME: gridHome, HARNESS_GRID_BIN: executable, PATH: root }, inventory })
     await service.act('home', modelId, 'download')

@@ -2,6 +2,7 @@
 //! CLI/daemon/agent data stays. The final script requires positive launcher absence.
 use super::system::System;
 use super::{DISPLAY_NAME, EXIT_FAILED, EXIT_OK, Paths, registry};
+use crate::harness_home::harness_roots;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Write};
@@ -269,10 +270,13 @@ fn install_identity(install: &Path, profile: &Path) -> Result<(ResolvedPath, Pat
     if contains_or_same(&install.path, &profile)? {
         return Err("your profile is in it".into());
     }
-    let protected = resolve_path(&profile.join(".harness"))?.path;
-    if contains_or_same(&protected, &install.path)? || contains_or_same(&install.path, &protected)?
-    {
-        return Err("the install overlaps the command line's files".into());
+    for root in harness_roots(&profile) {
+        let protected = resolve_path(&root)?.path;
+        if contains_or_same(&protected, &install.path)?
+            || contains_or_same(&install.path, &protected)?
+        {
+            return Err("the install overlaps the command line's files".into());
+        }
     }
     check_chain(&install.path, !install.exists)?;
     Ok((install, profile))
@@ -322,14 +326,17 @@ fn prepare(paths: &Paths, place: &ScriptPlace) -> Result<Prepared, String> {
 pub fn remove_app_state(profile: &Path) -> Vec<PathBuf> {
     match resolve_path(profile) {
         Ok(profile) => remove_state_at(&profile.path),
-        Err(_) => vec![profile.join(".harness")],
+        Err(_) => harness_roots(profile),
     }
 }
 fn remove_state_at(profile: &Path) -> Vec<PathBuf> {
-    let root = profile.join(".harness");
+    let roots = harness_roots(profile);
     if check_chain(profile, true).is_err() {
-        return vec![root];
+        return roots;
     }
+    roots.into_iter().flat_map(remove_state_in).collect()
+}
+fn remove_state_in(root: PathBuf) -> Vec<PathBuf> {
     match fs::symlink_metadata(&root) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
         Ok(meta) if meta.is_dir() && !link(&meta) => {}

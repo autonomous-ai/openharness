@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectSocket, openDaemon, whereFor, type ClientSocket } from './daemon.js'
-import { saveDaemonPort } from '../lib/daemonEndpoint.js'
+import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { WebSocketServer } from 'ws'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
@@ -95,7 +95,7 @@ it('where no socket can exist, dials the port this user recorded when another da
     if (typeof unusedAddress !== 'object' || unusedAddress === null) throw new Error('No configured port')
     const configuredPort = unusedAddress.port
     await new Promise<void>((resolve) => unused.close(() => resolve()))
-    saveDaemonPort(dataDir, configuredPort, address.port)
+    writeDaemonRecord(dataDir, configuredPort, address.port)
     const socket = await connectSocket({ port: configuredPort, dataDir, machineId: 'm1' }, { platform: 'linux' })
     await new Promise<void>((resolve, reject) => {
       socket.on('open', resolve)
@@ -129,7 +129,7 @@ it.each([false, true])('never sends the local credential to TCP when the Windows
     const address = server.address()
     if (typeof address !== 'object' || address === null) throw new Error('No test port')
     writeFileSync(join(dataDir, 'hook-credential'), `${'A'.repeat(43)}\n`)
-    if (withRecord) saveDaemonPort(dataDir, address.port, address.port)
+    if (withRecord) writeDaemonRecord(dataDir, address.port, address.port)
     const where = { port: address.port, dataDir, machineId: 'm1' }
     const result = await openDaemon(where, 'm1', (target) => connectSocket(target, {
       platform: 'win32', pipe: async () => null,
@@ -228,7 +228,7 @@ describe('a request too large for the daemon', () => {
   it('refuses one past 512 KiB by name, with its size and the limit, and sends nothing', async () => {
     const { sent, socket } = line()
     const daemon = await openDaemon(where, 'm1', () => socket)
-    const refused = daemon.request('super_tabs', { text: 'x'.repeat(600 * 1024) })
+    const refused = daemon.request('agent_input', { text: 'x'.repeat(600 * 1024) })
     await expect(refused).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE',
       // Its size as sent: the words and the request around them.
       message: 'This request is 601 KiB, and Harness takes at most 512 KiB in one: nothing was sent. Put the rest in a file and send its path.' })
@@ -256,5 +256,105 @@ describe('a request too large for the daemon', () => {
     const waiting = daemon.request('agents_list')
     socket.emit('close', 1009)
     await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE' })
+  })
+})
+
+// `harness wait` and `watch` follow what the daemon pushes for the harnesses they named (core/toolWatches.ts), and a
+// daemon too old to push answers `agents_watch` UNSUPPORTED: they then look every 3 s, as before.
+describe('a line that follows pushed state events', () => {
+  const line = (answer: Record<string, unknown>) => {
+    const sent: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const socket = new EventEmitter() as unknown as ClientSocket & EventEmitter
+    const push = (frame: unknown) => socket.emit('message', Buffer.from(JSON.stringify(frame)), false)
+    Object.assign(socket, {
+      send: (text: string) => {
+        const frame = JSON.parse(text)
+        sent.push(frame)
+        if (frame.type === 'machine_select') setImmediate(() => push({ type: 'connected', payload: {} }))
+        if (frame.type === 'agents_watch') setImmediate(() => push({ type: 'agents_watch_result', payload: { requestId: frame.payload.requestId, ...answer } }))
+      },
+      close: vi.fn(),
+    })
+    setImmediate(() => socket.emit('open'))
+    return { sent, push, socket }
+  }
+  const where = { port: 1, dataDir: '/nowhere', machineId: 'm1' }
+
+  it('names the harnesses, and hears each pushed state event of one of them', async () => {
+    const { sent, push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: string[] = []
+    expect(await daemon.watch!(['a', 'b'], (agentId) => heard.push(agentId))).toBe(true)
+    expect(sent.at(-1)).toMatchObject({ type: 'agents_watch', payload: { agentIds: ['a', 'b'] } })
+    push({ type: 'agent_activity', agentId: 'a', payload: { agentId: 'a', state: 'working' } })
+    push({ type: 'turn_ended', agentId: 'b', payload: { agentId: 'b', state: 'idle' } })
+    push({ type: 'commander_question', agentId: 'a', payload: { agentId: 'a', requestId: 'q' } })
+    push({ type: 'commander_question_close', agentId: 'a', payload: { agentId: 'a', requestId: 'q' } })
+    push({ type: 'agent_deleted', agentId: 'b', payload: { agentId: 'b' } })
+    // What is not a state event, names no harness, or is binary is not heard.
+    push({ type: 'text_delta', agentId: 'a', payload: { agentId: 'a' } })
+    push({ type: 'turn_ended', payload: {} })
+    socket.emit('message', Buffer.from('{}'), true)
+    expect(heard).toEqual(['a', 'b', 'a', 'a', 'b'])
+    daemon.close()
+  })
+
+  it('hears a harness\'s start, failed launch or hold changing, which the daemon pushes as its id alone', async () => {
+    const { push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: unknown[] = []
+    await daemon.watch!(['a'], (agentId, event) => heard.push([agentId, event]))
+    push({ type: 'agent_synced', agentId: 'a', payload: { agentId: 'a' } })
+    expect(heard).toEqual([['a', { type: 'agent_synced', payload: { agentId: 'a' } }]])
+    daemon.close()
+  })
+
+  it('hands each pushed event on whole, its type and payload, for a listener that tells them apart', async () => {
+    const { push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: unknown[] = []
+    await daemon.watch!(['a'], (agentId, event) => heard.push([agentId, event]))
+    push({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a', state: 'idle', subagent: true } })
+    expect(heard).toEqual([['a', { type: 'turn_ended', payload: { agentId: 'a', state: 'idle', subagent: true } }]])
+    daemon.close()
+  })
+
+  it('follows harnesses on another machine by what it pushes (harness_watch), with what each is doing now', async () => {
+    const sent: Array<Record<string, any>> = []
+    const socket = Object.assign(new EventEmitter(), {
+      send: (text: string) => {
+        const frame = JSON.parse(text)
+        sent.push(frame)
+        const push = (f: unknown) => socket.emit('message', Buffer.from(JSON.stringify(f)), false)
+        if (frame.type === 'machine_select') setImmediate(() => push({ type: 'connected', payload: {} }))
+        if (frame.type === 'harness_watch') setImmediate(() => push({ type: 'harness_watch_result', payload: { requestId: frame.payload.requestId, leaseMs: 300_000, agents: [{ agentId: 'far', state: 'working' }] } }))
+      },
+      close: vi.fn(),
+    })
+    setImmediate(() => socket.emit('open'))
+    const daemon = await openDaemon(where, 'm2', () => socket as never)
+    const heard: unknown[] = []
+    expect(await daemon.harnessWatch!(['far'], (agentId, event) => heard.push([agentId, event.payload]))).toMatchObject({ agents: [{ agentId: 'far', state: 'working' }] })
+    expect(sent.at(-1)).toMatchObject({ type: 'harness_watch', payload: { agentIds: ['far'] } })
+    socket.emit('message', Buffer.from(JSON.stringify({ type: 'harness_event', payload: { agentId: 'far', state: 'idle' } })), false)
+    expect(heard).toEqual([['far', { agentId: 'far', state: 'idle' }]])
+    daemon.close()
+  })
+
+  it('says no from a daemon too old to push, and hears nothing then', async () => {
+    const { push, socket } = line({ error: 'UNSUPPORTED' })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const heard: string[] = []
+    expect(await daemon.watch!(['a'], (agentId) => heard.push(agentId))).toBe(false)
+    push({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a' } })
+    expect(heard).toEqual([])
+    daemon.close()
+  })
+
+  it('hears nothing before it asked', async () => {
+    const { push, socket } = line({ ok: true })
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    push({ type: 'turn_ended', agentId: 'a', payload: { agentId: 'a' } })
+    daemon.close()
   })
 })

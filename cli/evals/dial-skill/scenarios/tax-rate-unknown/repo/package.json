@@ -1,0 +1,10 @@
+{
+  "name": "invoicing",
+  "version": "4.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "preview": "node scripts/preview.js"
+  }
+}

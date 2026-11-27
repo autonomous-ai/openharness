@@ -13,9 +13,9 @@
  * - A new core under another machine (a sign-in since) starts Share again: its saved shares are that machine's.
  */
 import { emptyPorts, SHARE_REQUESTS, type DaemonAddress, type ServiceRequests, type SharingPort } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
-import type { SwarmServices } from '../serviceProcess.js'
 import { startSharing } from './sharing.js'
 import { watchLink } from './watchLink.js'
 
@@ -34,8 +34,6 @@ export interface SharingServiceOptions {
   /** Swapped in tests for a Share that keeps nothing on disk and starts no browser. */
   start?: typeof startSharing
   now?: () => number
-  /** The Swarm's side of this service, while the Swarm is on (serviceProcess.ts, superTabs/inServices.ts). */
-  swarm?: Pick<SwarmServices, 'observerSource'>
 }
 
 export function runSharingService(options: SharingServiceOptions): ServiceProcess {
@@ -68,7 +66,7 @@ export function runSharingService(options: SharingServiceOptions): ServiceProces
 
   const build = () => {
     const ports = emptyPorts()
-    const requests = (options.start ?? startSharing)(api, ports, options.swarm ? { observers: options.swarm.observerSource } : {})
+    const requests = (options.start ?? startSharing)(api, ports)
     return { requests, port: ports.sharing! }
   }
   let built: { requests: ServiceRequests; port: SharingPort } = build()
@@ -89,7 +87,7 @@ export function runSharingService(options: SharingServiceOptions): ServiceProces
     const turn = (inLine.get(connId) ?? Promise.resolve())
       .then(() => ready())
       .then(() => current().port.observer(connId, type, payload))
-      .catch((error: unknown) => console.warn(`[service sharing] an observer's frame failed · ${error instanceof Error ? error.message : String(error)}`))
+      .catch((error: unknown) => console.warn(`[service sharing] an observer's frame failed · ${errorKind(error)}`))
       .finally(() => { if (inLine.get(connId) === turn) inLine.delete(connId) })
     inLine.set(connId, turn)
     return turn

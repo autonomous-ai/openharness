@@ -8,22 +8,12 @@
 import { parse as parseToml } from 'smol-toml'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
+import { failure, type HookFileRemoval } from './hookRemovalOutcome.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import { reviewRecords, withoutReviewRecords } from './hookReview.js'
-import { IdentityReadUnavailable } from './identityScan.js'
 import { isMessagesBlock } from './messagesHook.js'
-import { foreignHookBlocks, isManagedHookCommand, isOurs, type HookBlock, type Settings } from './notifyHooks.js'
+import { isManagedHookCommand, isOurs, withoutOwnHooks, type HookBlock, type Settings } from './notifyHooks.js'
 import { hostPlatform } from './windowsFiles.js'
-
-export interface HookFileRemoval {
-  file: string
-  /** How many of Harness's entries (hooks, rules, approvals, or the file itself) went. */
-  removed: number
-  /** Why the file was left as it was. */
-  failed?: string
-  /** A file at a path of ours that is somebody else's. */
-  kept?: string
-}
 
 export interface JsonHookRemoval {
   schema: 'nested' | 'entries' | 'file' | 'named'
@@ -56,26 +46,21 @@ export function withoutHarnessHooks(text: string | null, rule: JsonHookRemoval, 
   const events = settings[member]
   let removed = 0
   if (events !== undefined) {
-    if (!object(events)) throw new HookPreparationHeld(`the ${member} member is not an object`)
-    for (const [event, list] of Object.entries(events)) {
+    if (!object(events)) {
+      // Fixed words, which the log prints (architecture.hookHolds.spec.ts): a named block is a contract's member.
+      if (rule.schema === 'named') throw new HookPreparationHeld('the hook block\'s member is not an object')
+      throw new HookPreparationHeld('the hooks member is not an object')
+    }
+    if (rule.schema === 'nested') removed = withoutOwnHooks(events, owns, () => true)
+    else for (const [event, list] of Object.entries(events)) {
       if (!Array.isArray(list)) continue
-      let kept: unknown[], gone: number
-      if (rule.schema === 'nested') {
-        const blocks = list as HookBlock[]
-        // foreignHookBlocks refuses a block of unconfirmed shape before anything is counted as removed.
-        kept = foreignHookBlocks(blocks, owns)
-        gone = blocks.reduce((n, b) => n + b.hooks.filter((hook) => owns({ hooks: [hook] })).length, 0)
-      } else {
-        kept = list.filter((entry) => !(object(entry) && isManagedHookCommand(entry.command, platform)))
-        gone = list.length - kept.length
-      }
-      // Replaced only when something of Harness's went (a shared block keeps its length), so an untouched event keeps
-      // its exact value; a replaced one keeps its place among the keys.
-      if (gone) {
-        removed += gone
-        if (kept.length) events[event] = kept
-        else delete events[event]
-      }
+      const kept = list.filter((entry) => !(object(entry) && isManagedHookCommand(entry.command, platform)))
+      // Replaced only when something of Harness's went, so an untouched event keeps its exact value; a replaced one
+      // keeps its place among the keys.
+      if (kept.length === list.length) continue
+      removed += list.length - kept.length
+      if (kept.length) events[event] = kept
+      else delete events[event]
     }
     if (rule.schema === 'named' && Object.keys(events).length === 0 && removed > 0) delete settings[member]
   }
@@ -96,17 +81,6 @@ export function withoutHarnessHooks(text: string | null, rule: JsonHookRemoval, 
   const hooksLeft = object(settings.hooks) ? Object.keys(settings.hooks).length : 0
   if (rule.ownedFile && hooksLeft === 0 && Object.keys(settings).every((key) => key === 'hooks' || key === 'version')) return { kind: 'delete', removed }
   return { kind: 'write', text: JSON.stringify(settings, null, 2) + '\n', removed }
-}
-
-/**
- * Why a file was left, as the end of a sentence a person reads in uninstall's report: a held preparation's reason
- * without its "Hook preparation is waiting" prefix, which is the installers' wording, and a refused route's reason
- * without the identity reader's.
- */
-export function failure(error: unknown): string {
-  if (error instanceof HookPreparationHeld) return error.reason
-  if (error instanceof IdentityReadUnavailable) return error.message.replace(/^Conversation identity is held: (.*?)\.?$/s, '$1')
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** Harness's entries out of one settings file. */
@@ -151,7 +125,8 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
  * alone, any of the hooks Harness writes there now ([held.now]), which finds them again on a second uninstall after
  * one that stopped between the hooks and their records. [held.now] is worked out here, inside the preparation: a hook
  * line Harness cannot write for this computer now (a path its quoting refuses, notifyHooks.ts `quoteHookCommand`) finds
- * none, and only the records of the hooks in [held.before] go. The rest of the config stays byte for byte.
+ * none, and only the records of the hooks in [held.before] go. The rest of the config stays byte for byte, but for a
+ * BOM it had, which the rewrite leaves out (nativeHookFiles.ts `inspectHookFile`).
  *
  * The limit: Codex keys a record by the hook's place in the settings file (block, hook) and holds its hash, which
  * covers the whole command. A record for a hook of Harness's that is no longer in the file, written by another
@@ -159,7 +134,7 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
  */
 export async function removeReviewedHooks(record: HookReviewRecord, home: string, settingsFile: string,
   held: { before: Settings | null; now: () => Settings }, platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
-  const config = join(home, record.file)
+  const config = join(home, record.fileName)
   try {
     return await runHookPreparation([config], async (attempt) => {
       const observed = inspectHookFile(config, 0o600)

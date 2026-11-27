@@ -249,11 +249,8 @@ class _TerminalPaletteScope
 /// hex literals, and resolves per [AppTheme.brightness].
 abstract final class AppPalette {
   // Approved Swarms canvas and native tab-strip palette.
-  static Color get swarmField => AppTheme.palette.value.workspace;
   static Color get swarmTabBar => AppTheme.palette.value.tabBar;
   static Color get swarmAccent => AppTheme.palette.value.accent;
-  // Shared with the native search field for a continuous input/results surface.
-  static Color get swarmSearchSurface => AppTheme.palette.value.search;
 
   // the conversation / content area — pure white in light, like Codex.
   //
@@ -360,8 +357,7 @@ abstract final class AppPalette {
   static Color get avatarFill =>
       AppTheme.pick(const Color(0xFF5369AC), avatarFillDark);
 
-  /// [avatarFill] in the dark theme. A person in a Swarm chat wears it in
-  /// both themes.
+  /// [avatarFill] in the dark theme.
   static const avatarFillDark = Color(0xFF4B5F9B);
 
   /// The colours a member's circle is drawn in, one per person — see

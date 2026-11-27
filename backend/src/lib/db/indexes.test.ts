@@ -19,24 +19,24 @@ function db(collMod: () => unknown) {
 describe('ensureIndex', () => {
   it('sets a missing expiry with collMod and builds nothing', async () => {
     const { db: fake, calls } = db(() => ({ ok: 1 }))
-    await expect(ensureIndex(fake, 'SuperTabReadMark', SPEC)).resolves.toBe('ready')
+    await expect(ensureIndex(fake, 'product_usage_receipts', SPEC)).resolves.toBe('ready')
     expect(calls.map(call => Object.keys(call)[0])).toEqual(['listIndexes', 'collMod'])
   })
 
   it('warns and carries on when the database user may not run collMod (10-29: the worker crash-looped)', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger)
     const { db: fake, calls } = db(() => {
-      throw new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "SuperTabReadMark" }`')
+      throw new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "product_usage_receipts" }`')
     })
-    // The caller hears it, so it can remove what the expiry would have (superTabs/readMarks.ts startReadMarkSweep).
-    await expect(ensureIndex(fake, 'SuperTabReadMark', SPEC)).resolves.toBe('expiry-refused')
+    // The caller hears it, so it can remove what the expiry would have (lib/productUsageReceiptSweep.ts).
+    await expect(ensureIndex(fake, 'product_usage_receipts', SPEC)).resolves.toBe('expiry-refused')
     expect(calls.map(call => Object.keys(call)[0])).toEqual(['listIndexes', 'collMod'])
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('collMod'), expect.objectContaining({ collection: 'SuperTabReadMark', index: 'read_mark_expiry' }))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('collMod'), expect.objectContaining({ collection: 'product_usage_receipts', index: 'read_mark_expiry' }))
     warn.mockRestore()
   })
 
   it('still fails on any other collMod error', async () => {
     const { db: fake } = db(() => { throw new Error('Raw query failed. Code: `27`. Message: `index not found`') })
-    await expect(ensureIndex(fake, 'SuperTabReadMark', SPEC)).rejects.toThrow('index not found')
+    await expect(ensureIndex(fake, 'product_usage_receipts', SPEC)).rejects.toThrow('index not found')
   })
 })

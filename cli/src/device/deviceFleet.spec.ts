@@ -299,7 +299,7 @@ describe('DeviceFleet', () => {
 
 
   // #2648's review (Orion): the emit dropped the tier the other machine's recaps decided, so the dial decided again here
-  // with no agent list for that machine, and a Swarm agent on another of the person's Macs alerted.
+  // with no agent list for that machine, and an agent on another of the person's Macs alerted.
   it('carries the tier the other machine decided on its summary card, and only a real one', () => {
     const { fleet, say } = make()
     const seen: FleetEvent[] = []
@@ -308,6 +308,42 @@ describe('DeviceFleet', () => {
     say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', tier: 'loud' } })
     say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'processing', text: 'go', tier: 'alert' } })
     expect(seen.map((e) => (e as { tier?: string }).tier)).toEqual(['silent', undefined, undefined])
+  })
+
+  // A recap of a turn that ended unseen (CommanderMirror.catchUp) carries no tier and no sub-agent's mark: read as
+  // news, this dial decided it again and rang for history after the other machine's daemon restarted.
+  it('draws another machine\'s restored recap silent, as this computer\'s, and says so', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', notification: null, restored: true } })
+    expect(seen).toEqual([{ machineId: 'm1', kind: 'summary', agentId: 'a1', text: 'done', recap: 'Built.', subagent: true, notNews: 'restored' }])
+  })
+
+  // That machine's recaps name why its silent end is not news (lib/agentNotifications.ts): dropped here, this dial logged
+  // every one of them as a sub-agent's.
+  it('carries why another machine\'s silent card is not news, and no word that is not a reason', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', subagent: true, notNews: 'question' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', subagent: true, notNews: 'loud' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', subagent: true } })
+    expect(seen[0]).toEqual({ machineId: 'm1', kind: 'summary', agentId: 'a1', text: 'done', recap: 'Built.', subagent: true, notNews: 'question' })
+    expect(seen.map((e) => (e as { notNews?: string }).notNews)).toEqual(['question', undefined, undefined])
+  })
+
+  // A cloud harness's card carries no tier (core/agents/cloud.ts): this dial decides it, and a failed turn rings in Needs you
+  // only when the card still says it failed.
+  it('carries a summary\'s failed, and only a summary\'s true one', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Broke.', text: 'done', failed: true } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Broke.', text: 'done', failed: 'yes' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'done', text: 'done', failed: true } })
+    expect(seen[0]).toEqual({ machineId: 'm1', kind: 'summary', agentId: 'a1', text: 'done', recap: 'Broke.', failed: true })
+    expect(seen.map((e) => (e as { failed?: boolean }).failed)).toEqual([true, undefined, undefined])
   })
 
   it('ignores card kinds the dial has no use for', () => {

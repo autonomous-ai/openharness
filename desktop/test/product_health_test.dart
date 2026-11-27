@@ -636,6 +636,32 @@ void main() {
     );
   });
 
+  test('Hachi\'s counters are their names alone, once a CLI forwards them, '
+      'at 10', () async {
+    await usage.flush();
+    for (final measure in HachiMeasure.values) {
+      usage.hachiCounted(measure);
+    }
+    usage.proxyVocabulary = 9;
+    await usage.flush();
+    expect(totals().keys.where((k) => k.contains('hachi')), isEmpty);
+    usage.proxyVocabulary = 10;
+    usage.hachiCounted(HachiMeasure.openShortcut);
+    await usage.flush();
+    expect(totals()['ui_desktop_hachi_open_shortcut'], 2);
+    expect(totals().keys.where((k) => k.contains('hachi')).toSet(), {
+      'ui_desktop_hachi_switch_on',
+      'ui_desktop_hachi_switch_off',
+      'ui_desktop_hachi_open_shortcut',
+      'ui_desktop_hachi_open_tab',
+      'ui_desktop_hachi_open_palette',
+      'ui_desktop_hachi_open_welcome',
+      'hachi_notice_goal_done',
+      'hachi_open_failed_home_asleep',
+      'hachi_open_failed_create_failed',
+    });
+  });
+
   group('Add Phone', () {
     test(
       'returning flow, every skip and pairing way wait for vocabulary 6',

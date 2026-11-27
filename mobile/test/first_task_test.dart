@@ -21,12 +21,32 @@ void main() {
       isNotNull,
       reason: 'FIRST_PROMPT_ARGS moved or changed shape',
     );
+    // An entry's value, as the CLI writes it: `null` (no first task), an argument list (`[`), `'typed'` (the task is
+    // typed into the session once it opens), or an engine contract's field (`OPENCLAW_LAUNCH.firstPrompt`), read from
+    // that engine's contract.ts. Any other shape fails here, so a new one is read on purpose, never guessed. The
+    // desktop's test reads them the same way.
+    bool takes(String engine, String value) {
+      if (value == 'null') return false;
+      if (value.startsWith('[') || value == "'typed'") return true;
+      final field = RegExp(r'^([A-Z_]+)\.firstPrompt$').firstMatch(value);
+      expect(field, isNotNull, reason: '$engine: $value is a new shape');
+      final declared =
+          RegExp(
+            'export const ${field!.group(1)} = \\{.*?\\n\\s*firstPrompt:\\s*([^,\\n]+),',
+            dotAll: true,
+          ).firstMatch(
+            File('../cli/src/engines/$engine/contract.ts').readAsStringSync(),
+          );
+      expect(declared, isNotNull, reason: '$engine: ${field.group(1)} moved');
+      return takes(engine, declared!.group(1)!.trim());
+    }
+
     final entries = {
       for (final m in RegExp(
-        r'^\s*([a-z]+):\s*(null|\[)',
+        r'^\s*([a-z]+):\s*([^,\n]+),',
         multiLine: true,
       ).allMatches(table!.group(1)!))
-        m.group(1)!: m.group(2) != 'null',
+        m.group(1)!: takes(m.group(1)!, m.group(2)!.trim()),
     };
     // Engines whose launch moved into an engine contract (cli/src/engines/<id>/launch.ts) are
     // spread into the table from there; read them where they are declared.
@@ -41,11 +61,11 @@ void main() {
       );
       for (final id in launches!.group(1)!.split(',').map((s) => s.trim())) {
         if (id.isEmpty) continue;
-        final contract = RegExp(r'firstPromptArgs:\s*(null|\[)').firstMatch(
+        final contract = RegExp(r'firstPromptArgs:\s*([^,\n]+),').firstMatch(
           File('../cli/src/engines/$id/launch.ts').readAsStringSync(),
         );
         expect(contract, isNotNull, reason: '$id has no firstPromptArgs');
-        entries.putIfAbsent(id, () => contract!.group(1) != 'null');
+        entries.putIfAbsent(id, () => takes(id, contract!.group(1)!.trim()));
       }
     }
     expect(entries, isNotEmpty);

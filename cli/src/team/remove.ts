@@ -4,15 +4,16 @@
  * (lib/windows/elevated.ts). Desktop asks the person when it finds one (`harness __remove-team-account`, run hidden) and
  * shows what this answers.
  *
- * Why: Team accounts went with Swarm v3 (#4221) and their daemons only stopped themselves; the owner asked for them to be
+ * Why: Team accounts went in #4221 and their daemons only stopped themselves; the owner asked for them to be
  * removed (anh Dee, 2026-11-10). Root owns what setup made, so only the person's administrator password can take it away.
  *
  * Everything that touches the system goes through [TeamRemovalDeps]; the specs never run osascript, pkexec or PowerShell.
  */
 import { existsSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import { runGuestCommand, type GuestRunner } from '../lib/guestAccounts.js'
+import { runGuestCommand, type GuestRunner } from '../lib/guestRunner.js'
 import type { RunAdmin } from '../lib/windows/elevated.js'
+import { systemProgram } from '../lib/windows/powershell.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from '../lib/windows/whoami.js'
 import { readTeamConfig, teamConfigFile } from './config.js'
 import { REMOVE_REFUSED, buildLinuxRemoveScript, buildRemoveScript, type RemoveScriptInput } from './removeScript.js'
@@ -116,7 +117,7 @@ async function runAsRoot(deps: TeamRemovalDeps, script: string): Promise<RootRun
 
 async function runOnWindows(deps: TeamRemovalDeps, target: TeamRemovalTarget): Promise<RootRun> {
   // The owner's SID from this process's own token, for the staging folder's ACL: a bare name could be another account's.
-  const who = await deps.runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
+  const who = await deps.runner(systemProgram('whoami.exe'), WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
   const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
   if (!ownerSid) return { ok: false, cancelled: false, message: 'Could not read this account\'s SID (whoami /user).', status: null }
   // Loaded only here: the PowerShell builders are Windows' alone.

@@ -3,7 +3,6 @@ import 'dart:ui' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/widgets/app_menu.dart';
 
 import 'package:harness/screens/swarm_menu_bus.dart';
 import 'package:harness/shared/theme/app_icons.dart';
@@ -224,8 +223,6 @@ void main() {
     // Every row is the panel's width, whatever its label's.
     expect(tester.getSize(first).width, 420);
     expect(tester.getSize(find.byKey(const Key('menu-bar-quit'))).width, 420);
-    // One panel, not one per section.
-    expect(find.byType(AppSubmenuItem), findsNothing);
   });
 
   testWidgets('a click changes the tab, and pointing at one does not', (

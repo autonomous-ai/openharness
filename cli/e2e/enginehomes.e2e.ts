@@ -14,8 +14,9 @@ import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
-import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { assertHooksContained, CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemon.js'
 import { sharedCodex } from './harness/sharedCodex.js'
+import { Store } from '../src/lib/connectors/store.js'
 
 type Engine = 'claude' | 'codex'
 type Row = Record<string, any>
@@ -78,7 +79,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('keeps readiness and a terminal available while a moved-home write is held, then retries and restores it', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-durable'), fault = join(d.root, 'adoption-unavailable')
+    const home = join(d.env.HOME!, 'codex-durable'), fault = join(d.root, 'adoption-unavailable')
     mkdirSync(home, { mode: 0o700 })
     writeFileSync(fault, 'hold', { mode: 0o600 })
     d.env.HARNESS_HOME_ADOPTION_FAULT_FILE = fault
@@ -114,9 +115,8 @@ describe('the person\'s engines keeping their data elsewhere', () => {
 
   it.each(['claude', 'codex'] as const)('%s model picker follows the login shell home', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, `${engine}-models`)
+    const home = join(d.env.HOME!, `${engine}-models`)
     mkdirSync(home)
     const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
@@ -159,7 +159,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     delete d.env.SHELL
-    const home = join(d.root, 'codex-no-shell')
+    const home = join(d.env.HOME!, 'codex-no-shell')
     mkdirSync(home, { mode: 0o700 })
     for (const profile of ['.zshrc', '.bash_profile']) writeFileSync(join(d.env.HOME!, profile), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     await d.start()
@@ -168,11 +168,10 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     await until('the moved home to receive hooks', () => existsSync(join(home, 'hooks.json')), 30_000)
   })
 
-  it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s when process environment discovery is unavailable', async operation => {
+  it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s', async operation => {
     const d = await IsolatedDaemon.create(); daemon = d
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-shared')
+    const home = join(d.env.HOME!, 'codex-shared')
     mkdirSync(home)
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     // Older Codex releases have a shared server and no --no-daemon flag. Keep the actual CLI probe.
@@ -215,9 +214,8 @@ describe('the person\'s engines keeping their data elsewhere', () => {
 
   it('a moved Codex home supplies the thread name shown on its agent', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-names')
+    const home = join(d.env.HOME!, 'codex-names')
     mkdirSync(home)
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     await d.start()
@@ -240,7 +238,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it('a moved Codex home repairs a parent overwritten by its child when the daemon restarts', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, 'codex-parent')
+    const home = join(d.env.HOME!, 'codex-parent')
     mkdirSync(home)
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
     await d.start()
@@ -260,7 +258,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const child = readdirSync(folder).find(file => file.endsWith('.jsonl') && !file.includes(agent.sessionId))!
     // Reproduce the on-disk damage an older hook left; current hooks already reject child bindings.
     parent.transcriptPath = join(folder, child)
-    parent.codexHome = null // A legacy row from before successful process-environment discovery.
+    parent.codexHome = null // A legacy row with no home.
     writeFileSync(registryFile, JSON.stringify(saved), { mode: 0o600 })
     await d.start()
     expect(d.log()).toContain(`[registry] repaired Codex parent ${agent.sessionId.slice(0, 8)}`)
@@ -328,7 +326,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   it.each(['claude', 'codex'] as const)('search finds external %s conversations in the moved home after startup', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
-    const home = join(d.root, `${engine}-search`)
+    const home = join(d.env.HOME!, `${engine}-search`)
     mkdirSync(home)
     const variable = engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
@@ -367,7 +365,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ env: { DISABLE_HOOK_INSTALL: 'false', HOOK_INSTALL_ENGINES: 'claude,codex' } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, folder)
+    const home = join(d.env.HOME!, folder)
     mkdirSync(home, { recursive: true })
     // The profile every shell the daemon starts reads; the daemon itself never sees this variable.
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
@@ -405,7 +403,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: hooked } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, `${engine}-work`)
+    const home = join(d.env.HOME!, `${engine}-work`)
     mkdirSync(home, { recursive: true })
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
     const cwd = join(d.projectsDir, `typed-resume-${engine}`)
@@ -455,7 +453,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: hooked } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, `${engine}-work`)
+    const home = join(d.env.HOME!, `${engine}-work`)
     mkdirSync(home, { recursive: true })
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export ${variable}=${JSON.stringify(home)}\n`)
     const cwd = join(d.projectsDir, `typed-new-${engine}`)
@@ -477,6 +475,74 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     }, 45_000, 500)
     expect(back.sessionId).toBe(sessionId)
     expect(back.status).toBe('active')
+    client.close()
+  }, 300_000)
+
+  // A home named on the command line alone (`CODEX_HOME=<profile> codex`), which no shell profile names: the daemon
+  // learns it from what the engine says of itself, its hook's header or the rollout its process holds open. Here the
+  // header alone: this Codex holds no rollout open (the next case is the rollout's).
+  it('a Codex typed in with a CODEX_HOME of its own binds from its hook and keeps that home', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const profile = join(d.env.HOME!, 'codex-typed-hooked')
+    mkdirSync(profile, { recursive: true })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    // An agent on the profile puts Harness's hooks there; once it is gone, its conversation goes with it, so the
+    // profile holds only the one typed in.
+    const first = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, codexHome: profile, bypassPermission: true }, 90_000)
+    expect(first.error, JSON.stringify(first)).toBeUndefined()
+    await until('the profile agent to bind', async () => (await row(client, first.agent.id))?.sessionId, 45_000)
+    expect(existsSync(join(profile, 'hooks.json'))).toBe(true)
+    const deleted = await client.request('agent_delete', { agentId: first.agent.id }, 60_000)
+    expect(deleted.error, JSON.stringify(deleted)).toBeUndefined()
+    await until('the profile agent to stop', async () => (await row(client, first.agent.id))?.status === 'stopped' || null, 45_000, 500)
+    rmSync(join(profile, 'sessions'), { recursive: true, force: true })
+    // Whole or not at all: the daemon may run `codex` while it is written.
+    const wrapper = join(d.root, 'bin', 'codex')
+    writeFileSync(`${wrapper}.new`, fakeEngineShim('codex', { ...d.engineConfig, holdsRollout: false }), { mode: 0o755 })
+    renameSync(`${wrapper}.new`, wrapper)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && now.tmuxPane ? now : null
+    }, 60_000, 250)
+    await type(d, tile.tmuxPane, `CODEX_HOME=${profile} codex`)
+    const sessionId = await until('the conversation to be written in the profile', async () => conversationIn('codex', profile), 30_000, 250)
+    const back = await until('the tile to bind from its hook', async () => {
+      const now = await row(client, tile.id)
+      return now?.engine === 'codex' && now.sessionId ? now : null
+    }, 45_000, 500)
+    expect(back.sessionId).toBe(sessionId)
+    expect(back.codexHome).toBe(profile)
+    expect(d.log()).toContain(`[hooks] ${sessionId.slice(0, 8)} `)
+    client.close()
+  }, 300_000)
+
+  // npm's Codex: the wrapper the pane started, and the child that holds the rollout (fakeEngine.mjs `codexWrapper`).
+  it('a Codex typed in under a CODEX_HOME with no hook in it binds from the rollout it holds open', async () => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude' } }); daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const profile = join(d.env.HOME!, 'codex-typed-unhooked')
+    mkdirSync(profile, { recursive: true })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && now.tmuxPane ? now : null
+    }, 60_000, 250)
+    await type(d, tile.tmuxPane, `CODEX_HOME=${profile} codex`)
+    const sessionId = await until('the conversation to be written in the profile', async () => conversationIn('codex', profile), 30_000, 250)
+    const back = await until('the tile to bind from the rollout its process holds', async () => {
+      const now = await row(client, tile.id)
+      return now?.engine === 'codex' && now.sessionId ? now : null
+    }, 45_000, 500)
+    expect(back.sessionId).toBe(sessionId)
+    expect(back.codexHome).toBe(profile)
+    expect(d.log()).not.toContain(`[hooks] ${sessionId.slice(0, 8)} `)
     client.close()
   }, 300_000)
 
@@ -508,8 +574,11 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     writeFileSync(faultFile, '{', { mode: 0o600 })
     await d.start()
     client = await LocalClient.connect(d)
-    await until('the binding hold with its reason', () => d.log().includes(`binding held · Conversation identity is held: ${reason}`))
-    const held = await row(client, tile.id)
+    // The log names the hold's kind; its reason is on the agent's row, which clients are sent.
+    await until('the binding hold', () => d.log().includes('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'))
+    const held = await until('the hold\'s reason on the row', async () => {
+      const now = await row(client, tile.id); return now?.identityHold?.includes(reason) ? now : null
+    })
     expect(held?.engine).toBe('claude')
     expect(held?.sessionId).toBeFalsy()
     expect(held?.status).toBe('active')
@@ -539,7 +608,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const fault = join(d.root, 'optional-native-discovery-unavailable')
     writeFileSync(fault, 'hold', { mode: 0o600 })
     d.env.HARNESS_NATIVE_DISCOVERY_FAULT_FILE = fault
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.mjs')).href}`
+    d.env.NODE_OPTIONS = `--require=${JSON.stringify(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.cjs'))}`
     await d.start()
     const client = await LocalClient.connect(d)
     const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
@@ -563,7 +632,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     const fault = join(d.root, 'native-descriptors-unavailable')
     d.env.HARNESS_DESCRIPTOR_FAULT_FILE = fault
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.mjs')).href}`
+    d.env.NODE_OPTIONS = `--require=${JSON.stringify(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.cjs'))}`
     await d.start()
     let client = await LocalClient.connect(d)
     const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
@@ -577,8 +646,11 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     writeFileSync(fault, 'hold', { mode: 0o600 })
     await d.start()
     client = await LocalClient.connect(d)
-    await until('the descriptor binding hold after readiness', () => /binding held · Conversation identity is held: the native (?:lsof|descriptor)/.test(d.log()), 45_000)
-    const held = await row(client, tile.id)
+    // The log names the hold's kind; its reason is on the agent's row, which clients are sent.
+    await until('the descriptor binding hold after readiness', () => d.log().includes('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'), 45_000)
+    const held = await until('the descriptor hold\'s reason on the row', async () => {
+      const now = await row(client, tile.id); return /the native (?:lsof|descriptor)/.test(now?.identityHold ?? '') ? now : null
+    })
     expect(held).toMatchObject({ engine: 'codex', status: 'active' })
     expect(held?.sessionId).toBeFalsy()
     const sibling = await client.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 90_000)
@@ -607,7 +679,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create()
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, 'codex-work')
+    const home = join(d.env.HOME!, 'codex-work')
     mkdirSync(home, { recursive: true })
     writeFileSync(join(home, 'config.toml'), 'model_provider = "azure"\n')
     writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
@@ -658,7 +730,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const d = await IsolatedDaemon.create({ trustPrompt: true })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    const home = join(d.root, `${engine}-work`)
+    const home = join(d.env.HOME!, `${engine}-work`)
     mkdirSync(home, { recursive: true })
     // The engine has run there before: its config exists, which is when the daemon adds to it.
     const config = join(home, engine === 'claude' ? '.claude.json' : 'config.toml')
@@ -683,4 +755,30 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(readFileSync(config, 'utf8')).toContain(engine === 'claude' ? JSON.stringify(folder) : `[projects.${JSON.stringify(folder)}]`)
     client.close()
   }, 300_000)
+
+  // The connections an agent on a profile home reads are written there by connected services in the edge host
+  // (core/connectorsLink.ts), not by the core; when that fails the agent starts with the config as it was.
+  it.each([
+    ['gets the connections there from the edge host', ''],
+    ['starts all the same when they cannot be written', 'connectors.syncProfileHome'],
+  ])('an agent on a Claude profile %s', async (_, faults) => {
+    const d = await IsolatedDaemon.create({ env: { HARNESS_CONNECTIONS_PORT: '0', ...(faults ? { HARNESSD_TEST_FAULTS: faults } : {}) } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    // A connection made in Connections, and a Claude profile Claude Code has run in.
+    const vault = new Store(join(d.env.HOME!, '.harness', 'connections'))
+    mkdirSync(vault.root, { recursive: true, mode: 0o700 })
+    vault.save('linear', { access_token: 'e2e-not-a-credential', source: 'dcr', mcp_entry: { url: 'https://mcp.linear.example/mcp', headers: {} } })
+    const profile = join(d.env.HOME!, '.claude-work')
+    mkdirSync(profile)
+    writeFileSync(join(profile, '.claude.json'), '{}')
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const created = await client.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true, claudeHome: profile }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const servers = JSON.parse(readFileSync(join(profile, '.claude.json'), 'utf8')).mcpServers
+    if (faults) expect(servers).toBeUndefined()
+    else expect(Object.keys(servers)).toEqual(['linear'])
+    client.close()
+  }, 120_000)
 })

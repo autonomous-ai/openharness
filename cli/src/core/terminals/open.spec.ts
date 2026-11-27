@@ -26,9 +26,11 @@ describe('the core terminal launch call', () => {
     expect(await open({ argv, cwd: '/work/project' })).toEqual({ ok: true, agentId: 'shell' })
     expect(createAndRegisterPane).toHaveBeenCalledWith({
       tmuxBackend: deps.createBackend, registry: deps.registry, engine: 'terminal', cwd: '/work/project',
-      spawnCwd: '/work/project', argv, sessionLabel: expect.stringMatching(/^harness-shell-[\da-f-]+$/), bypassPermission: false,
+      spawnCwd: '/work/project', argv: expect.any(Function), sessionLabel: expect.stringMatching(/^harness-shell-[\da-f-]+$/), bypassPermission: false,
     })
-    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv).not.toBe(argv)
+    const paneArgv = vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv(1)
+    expect(paneArgv).toEqual(argv)
+    expect(paneArgv).not.toBe(argv)
     expect(deps.createBackend!.releaseHold).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%42' })
     expect(deps.registry.setLaunch).toHaveBeenCalledWith('shell', { state: 'ready' })
     expect(deps.announceSession).toHaveBeenCalledWith(row)

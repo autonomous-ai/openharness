@@ -11,10 +11,11 @@
  * there, in the registry row (`RegisteredSession.gridLaunch`), never in these files.
  */
 
-import { lstat, mkdir, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readlink, rm, stat, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { removeLink } from './removePath.js'
+import { atomicWriteFileAsync } from './secureState.js'
 import type { GridConfigFile, GridConfigLink } from './gridLaunchWire.js'
 
 /** Everything this module owns lives under one root, so pruning can be confident about what it is. */
@@ -90,9 +91,8 @@ export async function writeGridConfigDir(
   await mkdir(dir, { recursive: true, mode: 0o700 })
   // Best-effort and never in the way: a failed prune must not cost a launch.
   await prune(root).catch(() => {})
-  for (const file of files) {
-    await writeFile(join(dir, file.name), file.content, { mode: 0o600 })
-  }
+  // Whole or not at all: an engine relaunched over a torn provider file would start without its grid.
+  for (const file of files) await atomicWriteFileAsync(join(dir, file.name), file.content, 'cache')
   for (const link of links) {
     await linkInto(dir, link.name, link.target)
   }

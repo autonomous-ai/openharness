@@ -151,7 +151,7 @@ describe('Codex\'s shared server, from the core', () => {
     await expect(isolated(hostile.value).core.stop(row(), () => true)).rejects.toThrow(NATIVE_UNCONFIRMED)
     const down = isolated(control().value, { call: async () => ({ error: 'SERVICE_UNAVAILABLE' }) })
     await expect(down.core.stop(row(), () => true)).rejects.toThrow(NATIVE_UNCONFIRMED)
-    expect(down.log).toHaveBeenCalledWith(expect.stringContaining('the codex worker did not answer the stop'))
+    expect(down.log).toHaveBeenCalledWith(expect.stringMatching(/the codex worker did not answer the stop.* · EngineReadError ENGINE_UNAVAILABLE$/))
   })
 
   it('revokes the stop when it is no longer wanted, and refuses every question after, a check that throws included', async () => {
@@ -213,7 +213,7 @@ describe('Codex\'s shared server, from the core', () => {
   })
 
   it('logs a repair that failed, or that no worker could be asked for, and forgets it either way', async () => {
-    for (const [failure, words] of [['refused', 'could not restore'], ['unreachable', 'could not ask']] as const) {
+    for (const [failure, words] of [['refused', /could not restore/], ['unreachable', /could not ask.* · EngineReadError ENGINE_UNAVAILABLE$/]] as const) {
       let t!: ReturnType<typeof isolated>
       const engine = control(async host => {
         await host.pending()
@@ -225,7 +225,7 @@ describe('Codex\'s shared server, from the core', () => {
       await expect(t.core.stop(row(), () => true)).rejects.toThrow(NATIVE_UNCONFIRMED)
       if (failure === 'unreachable') t.call.mockImplementation(async () => ({ error: 'SERVICE_UNAVAILABLE' }))
       t.core.connected('engine-codex')
-      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining(words)))
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringMatching(words)))
     }
   })
 

@@ -20,12 +20,15 @@
  *   `connected {userId}`, `machine_select` binds it to one machine (`connected {machineId}`, then that
  *   machine's `node_status`), and from then on what it sends goes down to the machine's node under its
  *   own connection id. A broadcast from the node reaches every web client of that machine unless it is
- *   `webEligible: false`; a frame targeted at a connection reaches that one only. A web client leaving
+ *   `webEligible: false`; a frame targeted at a connection reaches that one only. A daemon's background relay
+ *   (`machine_select { relayIsolation: true }`) hears no broadcast, only what is targeted at it, and is no app; with
+ *   `uiGate` on, `__clients` counts the machine's apps and offers the viewer gate. A web client leaving
  *   is `__client_disconnected` to the node, and the node coming and going is `node_status {online}` to
  *   the machine's web clients, as the real backend's node role publishes them.
  *
  * Like the real relay it is blind: the machines seal everything between them end to end, and a frame
  * for a machine whose node is not connected is simply never answered, as the real hub's would not be.
+ * - `POST /api/voice/stt`: what `speech` says, for any upload, once a test sets it.
  * - `PUT`/`DELETE /api/harness-links/:id` and `/api/harness-shares/:id`: Share publishing a link or an
  *   invitation, answered 200; what a node sends to one of Share's observers (`observer:` connections) is
  *   kept in `targeted`, so a test can open what Share sealed for it.
@@ -90,6 +93,9 @@ interface WebClient {
   machineId: string | null
   /** Who opened it: a machine's daemon (its account's), or a phone of FAKE_ACCOUNT. */
   by: FakeMachine
+  /** A daemon's background relay (`machine_select { relayIsolation: true }`): as the real hub, it hears only the frames
+   *  addressed to it and is no app (backend lib/registry.ts `relayIsolated`). */
+  isolated?: boolean
 }
 
 /** One device socket: a commander on every machine of the account, one connection id per machine. */
@@ -103,15 +109,19 @@ const json = (value: unknown): string => JSON.stringify(value)
 const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? Buffer.concat(raw) : raw instanceof ArrayBuffer ? raw : Buffer.from(raw))
 
 export class FakeBackend {
-  /** Optional Super Tab control-plane fixture. Native creation, input and relay
-   * still go through the real daemon; database policy has its own integration suite. */
-  superTabs: ((method: string, path: string, body: Record<string, any>, machine: FakeMachine) => Promise<{
-    status?: number; data?: unknown; error?: { code: string; message: string }
-  }>) | null = null
+  /** `POST /api/auth/refresh`: each refresh token the backend takes, and what it renews to. Each is taken once, as the
+   *  real one rotates them; one it does not know is a 401 `REFRESH_TOKEN_INVALID`. */
+  readonly renewals = new Map<string, { token: string; refreshToken?: string; expiresIn?: number }>()
   /** What `GET /api/auth/me` answers: the signed-in person; null, a 404 as before. */
   me: { id: string; email: string } | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
-  productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean } | null = null
+  productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean; busySeconds?: number } | null = null
+  /** The paths answered with what reached the backend: its method, path and query, content type and body as sent. For
+   *  tests of what the daemon forwards, after the sign-in is checked. */
+  echo: RegExp | null = null
+  /** What `POST /api/voice/stt` hears in any upload, as the real route answers it (backend routes/voice.ts); null, a 404 as
+   *  before. Speech to text runs only on production, so a test that speaks to a dial hears it here. */
+  speech: string | null = null
   /** `POST /api/route/jev`, Harness's hosted Jev. Unset answers 503 JEV_BUSY, which callers treat as unavailable. */
   jev: ((body: Record<string, any>) => Record<string, unknown>) | null = null
   readonly seen: string[] = []
@@ -135,6 +145,10 @@ export class FakeBackend {
   private down = false
   /** How long everything relayed between a machine and its web clients is held, ms. */
   latencyMs = 0
+  /** On: `__clients` counts the machine's apps and offers the viewer gate, as the real backend does (backend lib/hub.ts
+   *  `recomputeAndSendClients`), so a machine holds its live events while no app views it. Off by default: the fleets
+   *  written before the gate expect every event relayed. */
+  uiGate = false
   /** How long what each machine sends up to the devices' lanes is held, ms, by machine id: a machine slow to answer
    *  (Diego's, 10-30), not a slow relay. Its handshakes and replies come late alike; what goes down to it does not. */
   readonly slowUp = new Map<string, number>()
@@ -164,19 +178,39 @@ export class FakeBackend {
     const backend = new FakeBackend(server, address.port)
     server.on('request', (req, res) => {
       backend.seen.push(`${req.method} ${req.url}`)
+      // A renewal carries its refresh token in its body, not a token to sign in with.
+      if (req.method === 'POST' && req.url?.split('?')[0] === '/api/auth/refresh') {
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          res.setHeader('content-type', 'application/json')
+          if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'AUTH_SERVICE_UNAVAILABLE' } })); return }
+          let body: { refreshToken?: unknown }
+          try { body = JSON.parse(raw || '{}') as { refreshToken?: unknown } } catch { res.statusCode = 400; res.end(json({ success: false, error: { code: 'BAD_JSON' } })); return }
+          const asked = String(body.refreshToken ?? '')
+          const renewed = backend.renewals.get(asked)
+          backend.renewals.delete(asked)
+          if (!renewed) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'REFRESH_TOKEN_INVALID' } })); return }
+          res.end(json({ success: true, data: renewed }))
+        })
+        return
+      }
       const machine = backend.byToken(req)
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
-      if (backend.superTabs && req.url?.startsWith('/api/super-tabs')) {
-        const handler = backend.superTabs
+      if (backend.echo?.test(req.url?.split('?')[0] ?? '')) {
         let raw = ''
-        req.on('data', chunk => { raw += chunk })
+        req.on('data', chunk => { raw += String(chunk) })
+        req.on('end', () => res.end(json({ success: true, data: { method: req.method, url: req.url, type: req.headers['content-type'] ?? null, ...(raw ? { body: raw } : {}) } })))
+        return
+      }
+      if (backend.speech !== null && req.method === 'POST' && req.url?.split('?')[0] === '/api/voice/stt') {
+        const transcript = backend.speech
+        req.resume()
         req.on('end', () => {
-          void Promise.resolve().then(() => handler(req.method!, req.url!, JSON.parse(raw || '{}'), machine)).then(result => {
-            res.statusCode = result.status ?? 200
-            res.end(json({ success: !result.error, data: result.data, error: result.error }))
-          }, error => { res.statusCode = 500; res.end(json({ success: false, error: { code: 'FIXTURE', message: String(error) } })) })
+          const lang = new URL(req.url!, backend.httpUrl).searchParams.get('lang')
+          res.end(json({ success: true, data: { transcript, lang } }))
         })
         return
       }
@@ -189,6 +223,13 @@ export class FakeBackend {
       }
       if (usage && req.method === 'POST' && ['/api/product-usage/settings', '/api/product-usage/report'].includes(req.url ?? '')) {
         if (usage.stallReports && req.url === '/api/product-usage/report') { req.resume(); return }
+        if (usage.busySeconds !== undefined && req.url === '/api/product-usage/report') {
+          req.resume()
+          res.statusCode = 429
+          res.setHeader('retry-after', String(usage.busySeconds))
+          res.end(json({ success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }))
+          return
+        }
         let body = ''
         req.on('data', chunk => { body += String(chunk) })
         req.on('end', () => {
@@ -627,8 +668,8 @@ export class FakeBackend {
       return
     }
     if (envelope.commanderEligible) for (const device of this.devices) this.upToDevice(device, machineId, tagged)
-    // The real hub: web clients get every broadcast that is not device-only.
-    if (envelope.webEligible !== false) this.toWebClients(machineId, envelope.frame)
+    // The real hub: web clients get every broadcast that is not device-only, but a background relay none (lib/hub.ts).
+    if (envelope.webEligible !== false) for (const client of this.webClients) if (client.machineId === machineId && !client.isolated) this.toWeb(client, envelope.frame)
   }
 
   /** The real hub strips only the hop header; the terminal body stays sealed.
@@ -671,9 +712,10 @@ export class FakeBackend {
 
   private sendClients(machineId: string): void {
     const commanders = [...this.devices].filter((device) => device.ws.readyState === WebSocket.OPEN).length
+    const ui = [...this.webClients].filter((client) => client.machineId === machineId && !client.isolated).length
     this.sendNode(machineId, '', {
       type: '__clients',
-      payload: { commander: commanders, commanderActive: commanders, commanderJoinGeneration: this.generation },
+      payload: { commander: commanders, commanderActive: commanders, commanderJoinGeneration: this.generation, ...(this.uiGate ? { ui, uiGate: true } : {}) },
     })
   }
 
@@ -691,6 +733,7 @@ export class FakeBackend {
       this.webClients.delete(client)
       const machineId = client.machineId
       if (machineId) this.relay(() => this.sendNode(machineId, client.connId, { type: '__client_disconnected', payload: {} }))
+      if (machineId && this.uiGate) this.sendClients(machineId)
     })
   }
 
@@ -707,6 +750,8 @@ export class FakeBackend {
         return
       }
       client.machineId = machineId
+      client.isolated = frame.payload?.relayIsolation === true
+      if (this.uiGate) this.sendClients(machineId)
       client.ws.send(json({ type: 'connected', payload: { machineId, p2p: null } }))
       client.ws.send(json({ type: 'node_status', payload: { online: this.nodeUp(machineId) } }))
       return

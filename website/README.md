@@ -10,8 +10,9 @@ retired; only the host routes below were kept.
 
 | Route | What |
 |---|---|
-| `/`, `/s/:id`, `/auth/callback`, `/callback` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`); `/` is the workspace and the front door (owner, 2026-10-26), where sign-in returns (`src/lib/webApp.ts`), and an `hn view` link (`/?machine=…&agent=…`) opens its viewer |
-| `/web` | Redirects (307) to `/`, keeping the query: the workspace's address from 2026-10-13 to 2026-10-26, when the Hub was the front door |
+| `/` | Redirects (307) to `/device`, keeping the query: the Harness Device guide is the home page (owner, 2026-11-20). An `hn view` link (`/?viewer=1&machine=…&agent=…`) stays on the Flutter app's viewer |
+| `/s/:id`, `/auth/callback`, `/callback`, `/?viewer=1&…` | The Flutter app (`public/harness-web/index.html`, via `rewrites()` in `next.config.js`) |
+| `/web` | Redirects (307) to `/` (and so to the guide), keeping the query: the workspace's address from 2026-10-13 to 2026-10-26, when the Hub was the front door |
 | `/download` (and `/install` → it) | Install page: CLI command and desktop downloads |
 | `/app` | The phone app's download code: an iPhone or iPad is redirected to the App Store and an Android device to Google Play, by user agent (`src/lib/phoneApp.ts`); anything else gets both stores |
 | `/pair` | Phone setup guidance — the mobile app and the desktop "add phone" dialog link here |
@@ -19,7 +20,7 @@ retired; only the host routes below were kept.
 | `/agents` | Harness for agents: install, the agent commands with examples and exit codes, the plugin and skill. One plain HTML file, `public/agents/index.html`, with no script |
 | `/llms.txt` | The [llms.txt](https://llmstxt.org) summary for agents, `public/llms.txt` |
 | `/os/latest` | Redirect to the newest complete published OS release; OS tags only, stable preferred, five-minute server lookup cache |
-| `/desktop` | Desktop download page; offers the build for the visitor's OS and CPU (`src/lib/desktopPlatform.ts`), with links to every other build and the CLI command |
+| `/desktop` | Redirects (308) to `/device`: the Harness Device guide replaced the desktop download page (owner, 2026-11-20). `/desktop/download*` and `/desktop/install.sh` below stay |
 | `/hub`, `/hub/following`, `/hub/yours` | Public three-column gallery, followed creators, and your publications; `?q=`, `?category=` and `?sort=popular` narrow and order them |
 | `/hub/:id` | Full-page output viewer (full screen) beside the published conversation, comments or source files, with likes, a copyable link and the harness's public forks |
 | `/hub/:id/fork`, `/hub/:id/download` | Desktop handoff fallback and an optional project ZIP |
@@ -28,8 +29,13 @@ retired; only the host routes below were kept.
 | `/hub/publish` | Review and explicitly publish one portable session snapshot |
 | `/api/community/*` | Same-origin proxy for the backend's community API |
 | `/desktop/download-macos`, `/desktop/download/{macos-arm64,linux-x64,linux-arm64}` | Redirect to the latest build in the desktop manifest (`download-macos` is the Intel build, which every Mac runs; `macos-arm64` the Apple silicon one) |
+| `/device` | The Harness Device guide: set up, use, works with, help, and the release's notes and downloads read from the live device manifest (`src/lib/deviceRelease.ts`, revalidated every minute) |
+| `/device/download-macos` | 302 to the dmg in the device manifest (`harness/device/metadata.json`, field `device-macos-dmg`); 503 until the first release |
+| `/device/download-windows` | 302 to the installer (`device-windows-x64-exe` or `device-windows-arm64-exe`) in the device manifest, the arch from the request's Client Hints, x64 otherwise; 503 until a release carries it |
+| `/device/download-linux` | 302 to the AppImage (`device-linux-x64-appimage` or `device-linux-arm64-appimage`) in the device manifest, the arch from the request's Client Hints (and its user agent), x64 otherwise; 503 until a release carries it |
 | `/flash-circle.sh` | The dial firmware flasher script |
 | `/install.sh`, `/cli/install.sh`, `/desktop/install.sh` | Redirect to the installers on `cdn.autonomous.ai` |
+| `/device/install.sh` | The Harness Device installer on `cdn.autonomous.ai`, served in place (a rewrite, not a redirect) |
 | `ac.autonomous.ai`, `fleet.autonomous.ai` | Redirect to `harness.autonomous.ai` |
 
 `/agents` and `/llms.txt` describe commands agents run as written. `scripts/agents-site.spec.ts` checks every
@@ -39,6 +45,8 @@ both unchanged. Change them with the CLI and the [harness skill](../plugins/harn
 
 The CLI installer is `cli/scripts/install.sh`. The desktop installer's source is
 `scripts/desktop-install.sh` here, published with `scripts/upload-desktop-install-sh.sh`.
+The Harness Device installer's source is `scripts/device-install.sh`, published by
+`release-device.yml` with every release that carries Linux.
 
 ## Releasing
 

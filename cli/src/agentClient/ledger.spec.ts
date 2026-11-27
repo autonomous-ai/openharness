@@ -1,8 +1,34 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync, type PathLike } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { Ledger, ledgerPath, parsePending, parseStarted, PENDING_WITHIN_MS, ROTATE_BYTES, type Pending, type Started } from './ledger.js'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Ledger, LedgerBusyError, ledgerPath, parseHanded, parsePending, parseStarted, PENDING_WITHIN_MS, ROTATE_BYTES, type Closed, type Pending, type Started, type Told } from './ledger.js'
+
+// Every file opened for writing and every rename, in order; each call passes through (lib/secureState.ts imports
+// node:fs too).
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]> }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { O_WRONLY, O_RDWR } = actual.constants
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1]
+      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') disk.calls.push(['write', String(args[0])])
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.calls.push(['write', String(args[0])])
+      return actual.writeFileSync(...args)
+    },
+    appendFileSync: (...args: Parameters<typeof actual.appendFileSync>) => {
+      if (typeof args[0] !== 'number') disk.calls.push(['write', String(args[0])])
+      return actual.appendFileSync(...args)
+    },
+    renameSync: (from: PathLike, to: PathLike) => { disk.calls.push(['rename', String(from), String(to)]); return actual.renameSync(from, to) },
+  }
+})
 
 const dirs: string[] = []
 const fresh = (): Ledger => {
@@ -10,7 +36,7 @@ const fresh = (): Ledger => {
   dirs.push(dir)
   return new Ledger(ledgerPath(dir))
 }
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { disk.calls = []; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 const row = (by: string, child: string, depth = 1, at = 1): Started => ({
   at, depth,
@@ -96,5 +122,143 @@ describe('the ledger of who started which harness', () => {
     for (const bad of ['', 'null', JSON.stringify({ ...line, depth: 0 }), JSON.stringify({ ...line, creation: { machineId: 'm' } }), JSON.stringify({ ...line, creation: undefined })]) {
       expect(parsePending(bad), bad).toBeNull()
     }
+  })
+})
+
+describe('one lock for every writer of the ledger', () => {
+  const ME = { machineId: 'm', agentId: 'lead' }
+  const KID = { machineId: 'm', agentId: 'kid' }
+  const STARTED = row('lead', 'kid')
+  const told = (agentId: string, probe: string): Told => ({ at: 1, by: ME, told: { machineId: 'm', agentId }, probe })
+  const CLOSED: Closed = { at: 1, by: ME, closed: KID }
+  const lines = (...rows: unknown[]): string => rows.map((r) => typeof r === 'string' ? r : JSON.stringify(r)).join('\n') + '\n'
+  const placed = (): Ledger => {
+    const ledger = fresh()
+    mkdirSync(dirname(ledger.path), { recursive: true })
+    return ledger
+  }
+  // Another process's writer: it writes the lock naming itself, and lets go 300 ms later.
+  const HOLD_LOCK = `const fs = require('node:fs'); const lock = process.argv[1]
+fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startMarker: '' }), { flag: 'wx', mode: 0o600 })
+setTimeout(() => fs.unlinkSync(lock), 300)`
+  const until = (ok: () => boolean): Promise<true> => vi.waitUntil(ok, { timeout: 10_000, interval: 5 })
+  const exited = async (child: ChildProcess): Promise<number | null> => child.exitCode ?? (await once(child, 'exit'))[0] as number | null
+  // A process that ran and was reaped: its pid names no one.
+  const deadPid = (): number => spawnSync(process.execPath, ['-e', '']).pid
+
+  it('forgets what a harness was told, in both files, and keeps every other line', () => {
+    const ledger = placed()
+    writeFileSync(ledger.previous, lines(STARTED, told('kid', 'email zanzibar'), told('other', 'keep me')))
+    writeFileSync(ledger.path, lines(CLOSED, told('kid', 'again'), 'not json'))
+    expect(ledger.forgetTold('kid')).toBe(2)
+    const text = readFileSync(ledger.previous, 'utf8') + readFileSync(ledger.path, 'utf8')
+    expect(text).not.toContain('zanzibar'); expect(text).not.toContain('again')
+    expect(text).toContain('keep me'); expect(text).toContain('not json')
+    // Every other line, byte for byte.
+    expect(readFileSync(ledger.previous, 'utf8')).toBe(lines(STARTED, told('other', 'keep me')))
+    expect(readFileSync(ledger.path, 'utf8')).toBe(lines(CLOSED, 'not json'))
+    expect(ledger.parentOf(KID)).not.toBeNull()
+    expect(ledger.closedBy(ME, KID)).not.toBeNull()
+    expect(ledger.toldBy(ME, KID)).toBeNull()
+    expect(statSync(ledger.path).mode & 0o777).toBe(0o600)
+    expect(existsSync(`${ledger.path}.lock`)).toBe(false)
+    // Nothing to forget, and no file at all: nothing written.
+    expect(ledger.forgetTold('kid')).toBe(0)
+    const none = fresh()
+    expect(none.forgetTold('kid')).toBe(0)
+    expect(existsSync(none.path)).toBe(false)
+  })
+
+  it('the rewrite goes through a temporary file renamed onto the ledger', () => {
+    const ledger = placed()
+    writeFileSync(ledger.path, lines(STARTED, told('kid', 'email zanzibar')))
+    disk.calls = []
+    expect(ledger.forgetTold('kid')).toBe(1)
+    expect(disk.calls.filter(([op, path]) => op === 'write' && path === ledger.path)).toEqual([])
+    const renames = disk.calls.filter(([op, , to]) => op === 'rename' && to === ledger.path)
+    expect(renames).toHaveLength(1)
+    expect(renames[0][1]).not.toBe(ledger.path)
+    expect(dirname(renames[0][1])).toBe(dirname(ledger.path))
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const ledger = placed()
+    writeFileSync(ledger.path, lines(STARTED, told('kid', 'email zanzibar')))
+    writeFileSync(`${ledger.path}.tmp`, 'another writer')
+    expect(ledger.forgetTold('kid')).toBe(1)
+    expect(readFileSync(`${ledger.path}.tmp`, 'utf8')).toBe('another writer')
+    expect(readFileSync(ledger.path, 'utf8')).toBe(lines(STARTED))
+  })
+
+  it('an append made while another process holds the lock lands once it is released', async () => {
+    const ledger = placed()
+    const holder = spawn(process.execPath, ['-e', HOLD_LOCK, `${ledger.path}.lock`])
+    await until(() => existsSync(`${ledger.path}.lock`))
+    ledger.append(STARTED)
+    expect(ledger.all()).toHaveLength(1)
+    // The append returned after the holder let go, and the holder removed its own lock: it was waited for, not taken.
+    expect(existsSync(`${ledger.path}.lock`)).toBe(false)
+    expect(await exited(holder)).toBe(0)
+  })
+
+  it('takes over a lock whose owner is gone', () => {
+    const ledger = placed()
+    writeFileSync(`${ledger.path}.lock`, JSON.stringify({ pid: deadPid(), startMarker: '' }))
+    ledger.append(STARTED)
+    expect(ledger.all()).toHaveLength(1)
+    expect(existsSync(`${ledger.path}.lock`)).toBe(false)
+  })
+
+  // A writer makes the lock, then writes its name into it: one that reads it between the two must not take it.
+  it('waits for a lock that names no one yet, and takes it over only once it is old', () => {
+    const path = placed().path
+    writeFileSync(`${path}.lock`, '')
+    expect(() => new Ledger(path, 50).append(STARTED)).toThrow(new LedgerBusyError())
+    expect(existsSync(`${path}.lock`)).toBe(true)
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(`${path}.lock`, old, old)
+    new Ledger(path, 50).append(STARTED)
+    expect(new Ledger(path).all()).toHaveLength(1)
+    expect(existsSync(`${path}.lock`)).toBe(false)
+  })
+
+  it('gives up after its wait with nothing written, an append and a rewrite alike', () => {
+    const path = placed().path
+    const held = new Ledger(path, 50)
+    writeFileSync(`${path}.lock`, JSON.stringify({ pid: process.ppid, startMarker: '' }))
+    expect(() => held.append(STARTED)).toThrow(new LedgerBusyError())
+    expect(() => held.forgetTold('kid')).toThrow('The agent ledger is busy. Try again.')
+    expect(existsSync(path)).toBe(false)
+    // A live owner's lock is its own.
+    expect(existsSync(`${path}.lock`)).toBe(true)
+  })
+})
+
+describe('a harness handed to the person', () => {
+  it('has no starter from its hand-over on: not its starter\'s child, no depth, until a start newer than the hand-over', () => {
+    const ledger = fresh()
+    const hachi = { machineId: 'm', agentId: 'hachi' }, kid = { machineId: 'm', agentId: 'kid' }, other = { machineId: 'm2', agentId: 'other' }
+    ledger.append({ ...row('hachi', 'kid', 1, 1), by: { ...row('hachi', 'kid').by, hachi: true } })
+    ledger.append({ ...row('hachi', 'other', 1, 2), child: { ...other, name: 'other' } })
+    expect(ledger.handedAt(kid)).toBeNull()
+    ledger.append({ at: 5, from: hachi, handed: kid })
+    expect(ledger.parentOf(kid)).toBeNull()
+    expect(ledger.depthOf(kid)).toBe(0)
+    expect(ledger.handedAt(kid)).toBe(5)
+    expect(ledger.childrenOf(hachi).map((r) => r.child.agentId)).toEqual(['other'])
+    // Started again by an agent after it was handed over (a new start of the same id): that start counts.
+    ledger.append(row('lead', 'kid', 1, 9))
+    expect(ledger.parentOf(kid)?.by.agentId).toBe('lead')
+    expect(ledger.handedAt(kid)).toBeNull()
+  })
+
+  it('reads a starter\'s Hachi mark, and checks every hand-over line it reads', () => {
+    expect(parseStarted(JSON.stringify({ ...row('hachi', 'kid'), by: { ...row('hachi', 'kid').by, hachi: true } }))?.by.hachi).toBe(true)
+    expect(parseStarted(JSON.stringify({ ...row('hachi', 'kid'), by: { ...row('hachi', 'kid').by, hachi: 'yes' } }))?.by).not.toHaveProperty('hachi')
+    for (const bad of [{ at: 'x', from: { machineId: 'm', agentId: 'a' }, handed: { machineId: 'm', agentId: 'b' } }, { at: 1, from: {}, handed: { machineId: 'm', agentId: 'b' } },
+      { at: 1, from: { machineId: 'm', agentId: 'a' } }, null, 'nope']) {
+      expect(parseHanded(JSON.stringify(bad))).toBeNull()
+    }
+    expect(parseHanded('{')).toBeNull()
   })
 })

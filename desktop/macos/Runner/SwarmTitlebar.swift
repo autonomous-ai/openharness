@@ -138,10 +138,6 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
         self.strip.update(state)
         self.statusMenu?.update(state)
-        // What needs the person in their Swarms; none, or no workspace, clears it.
-        let badge = state["dockBadge"] as? Int ?? 0
-        let label: String? = badge > 0 ? String(badge) : nil
-        if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
         self.statusBarHeight?.constant = self.strip.preferredStatusBarHeight
         // A new background repaints the whole window, title bar included: only on a change.
         if let window = self.window, window.backgroundColor != self.strip.palette.tabBar {
@@ -2609,12 +2605,11 @@ private final class SwarmTabStrip: NSView {
       tab.selected = id == activeId
       tab.keyboardFocus = tabsFocused && id == activeId
       tab.actionsEnabled = actionsEnabled
-      tab.quiet = row["quiet"] as? Bool == true
       tab.attention = (row["attention"] as? Int ?? 0) > 0
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
       tab.canInvitePeople = row["canInvitePeople"] as? Bool == true
-      tab.superTabPaused = row["superTabPaused"] as? Bool
+      tab.fixed = row["fixed"] as? Bool == true
       tab.applyShared(row["shared"] as? [String: Any])
       tab.emit = { [weak self, weak tab] method, args in
         guard let self, let tab, self.actionsEnabled,
@@ -3054,8 +3049,11 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var canInvitePeople = false {
     didSet { if canInvitePeople != oldValue { updateMessagesItems() } }
   }
-  var superTabPaused: Bool? { didSet { updateMessagesItems() } }
-  private var pauseSuperTabItem: NSMenuItem?
+  /// Hachi's tab (docs/design/2026-11-12-hachi.md): first, with no ×, and not renamed, moved or closed here.
+  var fixed = false {
+    didSet { if fixed != oldValue { updateMessagesItems(); updateAccessoryVisibility() } }
+  }
+  private var fixedItems: [NSMenuItem] = []
   func applyShared(_ shared: [String: Any]?) {
     let count = shared?["count"] as? Int
     let role = count == nil ? nil : shared?["role"] as? String
@@ -3097,8 +3095,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var preferredWidth: CGFloat { Self.maximumLayoutWidth }
   var selected = false { didSet { if selected != oldValue { invalidateLabel(); updateAccessibility() } } }
   var attention = false { didSet { if attention != oldValue { invalidateLabel(); updateAccessibility() } } }
-  /// A Swarm's tab: its name alone, bold while something there needs you.
-  var quiet = false { didSet { if quiet != oldValue { invalidateLabel(); updateAccessibility() } } }
   var activity: HarnessNativeActivity? {
     didSet { if activity != oldValue { invalidateLabel(); updateAccessibility() } }
   }
@@ -3110,7 +3106,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   // Keep the old question payload useful for an older Flutter fixture/runner.
   private var activityLabel: String? { activity?.label ?? (attention ? "Needs your input" : nil) }
   private var activityMark: String? {
-    if quiet { return nil }
     if let activity { return activity.symbol(frame: activityFrame) }
     return attention ? "?" : nil
   }
@@ -3224,8 +3219,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       menu.addItem(item)
       return item
     }
-    _ = item("Rename Tab…", #selector(renameSwarm))
-    pauseSuperTabItem = item("Pause new work", #selector(pauseSuperTab))
+    fixedItems.append(item("Rename Tab…", #selector(renameSwarm)))
     let separator = NSMenuItem.separator()
     menu.addItem(separator)
     messagesSeparator = separator
@@ -3236,8 +3230,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     shareItems["stopSharingTab"] = item("Stop Sharing Tab", #selector(stopSharing))
     shareItems["moveTabHere"] = item("Move Here", #selector(moveHere))
     shareItems["leaveTab"] = item("Leave Tab", #selector(leaveTab))
-    menu.addItem(.separator())
-    _ = item("Close Tab", #selector(closeSwarm))
+    let closeSeparator = NSMenuItem.separator()
+    menu.addItem(closeSeparator)
+    fixedItems += [closeSeparator, item("Close Tab", #selector(closeSwarm))]
     self.menu = menu
     updateMessagesItems()
     updateAccessibility()
@@ -3277,7 +3272,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// Hovering reveals the tab's ×; at rest it shows its name and status.
   var isRevealed: Bool { actionsEnabled && hovered }
   private func updateAccessoryVisibility() {
-    closeButton.isHidden = !isRevealed
+    closeButton.isHidden = !isRevealed || fixed
   }
   /// Whether each sharing row applies: Invite People… for an unshared tab or the owner's; Stop Sharing Tab and
   /// Move Here (another of the owner's computers) for the owner; Leave Tab for a member.
@@ -3293,10 +3288,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// The menu's Show Agent Messages (only where the tab has a log), its sharing rows, and their separator when any
   /// of them shows.
   private func updateMessagesItems() {
-    pauseSuperTabItem?.isHidden = superTabPaused == nil
-    pauseSuperTabItem?.title = superTabPaused == true ? "Resume new work" : "Pause new work"
     for item in messagesItems { item.isHidden = !canShowAgentMessages }
     for (action, item) in shareItems { item.isHidden = !offers(action) }
+    for item in fixedItems { item.isHidden = fixed }
     messagesSeparator?.isHidden = (messagesItems + Array(shareItems.values)).allSatisfy(\.isHidden)
   }
   private func invalidateLabel() {
@@ -3316,9 +3310,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     paragraph.lineBreakMode = .byTruncatingTail
     paragraph.alignment = .center
     let label = MeasuredLabel(NSAttributedString(string: displayLabel,
-      attributes: [.font: quiet && attention
-          ? NSFont.systemFont(ofSize: labelFont.pointSize, weight: .semibold) : labelFont,
-        .foregroundColor: foreground, .paragraphStyle: paragraph]))
+      attributes: [.font: labelFont, .foregroundColor: foreground, .paragraphStyle: paragraph]))
     cachedLabel = label
     return label
   }
@@ -3465,7 +3457,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
     // AppKit's click count can span different controls, especially after a
     // close shifts the next tab under the pointer. Rename only when this tab
     // owned the first press as well.
-    if event.clickCount == 2, let first,
+    if event.clickCount == 2, !fixed, let first,
        event.timestamp - first.time <= NSEvent.doubleClickInterval,
        hypot(event.locationInWindow.x - first.point.x,
              event.locationInWindow.y - first.point.y) <= 4 {
@@ -3487,12 +3479,12 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   }
   override func otherMouseUp(with event: NSEvent) {
     defer { middleDown = false }
-    guard middleDown, event.buttonNumber == 2, actionsEnabled else { return }
+    guard middleDown, event.buttonNumber == 2, actionsEnabled, !fixed else { return }
     guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
     emit?("close", ["id": swarmId])
   }
   override func mouseDragged(with event: NSEvent) {
-    guard actionsEnabled else { return }
+    guard actionsEnabled, !fixed else { return }
     if hypot(event.locationInWindow.x - downPoint.x, event.locationInWindow.y - downPoint.y) < 5 { return }
     let item = NSPasteboardItem()
     item.setString(swarmId, forType: swarmPasteboardType)
@@ -3511,9 +3503,6 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   @objc private func selectSwarm() { if actionsEnabled { emit?("select", ["id": swarmId]) } }
   @objc private func closeSwarm() { if actionsEnabled { emit?("close", ["id": swarmId]) } }
   @objc private func renameSwarm() { if actionsEnabled { emit?("rename", ["id": swarmId]) } }
-  @objc private func pauseSuperTab() {
-    if actionsEnabled && superTabPaused != nil { emit?("pauseSuperTab", ["id": swarmId]) }
-  }
   @objc private func showMessages() {
     if actionsEnabled && canShowAgentMessages { emit?("showAgentMessages", ["id": swarmId]) }
   }

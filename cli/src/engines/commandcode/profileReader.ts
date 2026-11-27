@@ -1,7 +1,8 @@
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
-import type { RuntimeModelOption } from '../facets/runtime.js'
+import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { effortLabel, encodeRuntimeProfile, readJson, record, runtimeModelLabel, text, RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -60,18 +61,6 @@ class ProfileReader {
     }
   }
 
-  transcript(context: InlineRuntimeContext, raw: Record<string, unknown>): void {
-    const { state } = context
-    const before = state.model
-    const model = text(raw.model)
-    if (!model) return
-    state.model = shortCommandcodeModel(model)
-    // Effort is NOT touched here: it comes from the CLI config (ingestConfig), and stamping 'auto' on every
-    // assistant line would wipe a configured level a second after it was read.
-    state.observedAt = Date.now()
-    if (state.model !== before) context.refreshConfig()
-  }
-
   target(sessionId: string, profileId: string): CommandcodeModelTarget | null {
     return this.commandcodeTargets.get(sessionId)?.get(profileId) ?? null
   }
@@ -122,7 +111,7 @@ class ProfileReader {
       })
       entries = commandcode.parseCommandcodeModelsOutput(result.stdout)
     } catch (err) {
-      console.warn('[runtime-profile] Command Code model catalog failed:', err instanceof Error ? err.message : err)
+      console.warn('[runtime-profile] Command Code model catalog failed:', errorKind(err))
     }
     this.commandcodeCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries
@@ -138,3 +127,13 @@ class ProfileReader {
 }
 
 export function createRuntimeProfileReader(): InlineRuntimeReader & { engine: 'commandcode' } { return new ProfileReader() }
+
+/**
+ * The model an assistant record names, short, read in the other engines' worker (engines/others/streams.ts). Effort is
+ * NOT here: it comes from the CLI config (ingestConfig), and stamping 'auto' on every assistant line would wipe a
+ * configured level a second after it was read. A model that changed reads that config again.
+ */
+export function transcriptEvidence(raw: Record<string, unknown>): ProfileEvidence | null {
+  const model = text(raw.model)
+  return model ? { model: shortCommandcodeModel(model), refresh: true } : null
+}

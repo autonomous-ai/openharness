@@ -7,6 +7,7 @@ import { readLastCodexTurnText } from './lastTurn.js'
 import { tailFile } from '../../lib/transcriptTail.js'
 import { CommanderMirror, type CommanderFrame } from '../../lib/commander.js'
 import { deriveTurnSummary } from '../../lib/deviceRecap.js'
+import { DONE_QUIET_MS } from '../../lib/agentNotifications.js'
 
 const event = (payload: unknown) => JSON.stringify({ type: 'event_msg', payload })
 const ask = (message: string) => event({ type: 'user_message', message })
@@ -17,7 +18,7 @@ const goal = JSON.stringify({ type: 'response_item', payload: { type: 'message',
 describe('Codex recap from the latest file turn', () => {
   let directory: string, file: string
   beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'codex-recap-')); file = join(directory, 'rollout.jsonl') })
-  afterEach(() => rmSync(directory, { recursive: true, force: true }))
+  afterEach(() => { vi.useRealTimers(); rmSync(directory, { recursive: true, force: true }) })
 
   const cases = [
     [ask('old'), answer('old answer'), ask('latest'), answer('on it', 'commentary'), answer('done', 'final_answer')],
@@ -89,11 +90,16 @@ describe('Codex recap from the latest file turn', () => {
     const options = { dataDir: directory, send: (frame: CommanderFrame) => device.push(frame),
       sendWeb: (frame: Record<string, unknown>) => web.push(frame), hasDevice: () => true,
       summarize, summarizeIsLocal: true, readLastTurn: () => readLastCodexTurnText(file) }
+    vi.useFakeTimers()
     const mirror = new CommanderMirror(options)
     try {
       const normalizer = new CodexNormalizer('live')
       mirror.ingest(latest.flatMap(line => normalizer.ingest(line)), 'session')
-      await vi.waitFor(() => expect(web.some(frame => frame.type === 'turn_summary')).toBe(true))
+      // The recap is told once the turn's end stays quiet for DONE_QUIET_MS (lib/agentNotifications.ts), a window
+      // armed with the done card: wait for the file read and summary to reach it, then let the window pass.
+      await vi.waitFor(() => expect(device.some(frame => frame.payload.kind === 'done')).toBe(true))
+      await vi.advanceTimersByTimeAsync(DONE_QUIET_MS)
+      expect(web.some(frame => frame.type === 'turn_summary')).toBe(true)
       expect(summarize).toHaveBeenCalledExactlyOnceWith('Latest answer.', expect.any(AbortSignal), prompt, 'session', undefined)
       expect(device.at(-1)?.payload).toMatchObject({ kind: 'summary', notification: { kind: 'done' } })
       expect(mirror.recent('session')[0].fullText).toBe('Latest answer.')

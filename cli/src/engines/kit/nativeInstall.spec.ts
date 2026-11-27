@@ -334,13 +334,35 @@ it('keeps its history when a reboot renumbers the disk', async () => {
   expect(restarted.dispatch).not.toHaveBeenCalled()
 })
 
-it('logs why a failed check holds, which the person never sees', async () => {
+it('keeps its history when Harness\'s folder moves, and never replays an installer left unsettled there', async () => {
+  // As Linux's move to the XDG paths (#4469) renames it: the history, its authority and its dispatch witnesses.
+  const move = (from: string, to: string) => {
+    mkdirSync(to, { mode: 0o700 })
+    for (const name of readdirSync(from).filter(name => name.startsWith('claims'))) renameSync(join(from, name), join(to, name))
+    return join(to, 'claims')
+  }
+  await controller().ensure('opencode', recipe, environment, 'request', () => true)
+  complete()
+  const dispatch = vi.fn()
+  const moved = createNativeInstallations({ directory: move(root, join(root, 'moved')), node: () => process.execPath, dispatch })
+  expect(await moved.status('opencode', 'request', () => true)).toEqual({ complete: true })
+  expect(await moved.status('opencode', 'new-request', () => true)).toBeNull()
+  // A new installer claims after the moved history, and never settles before the folder moves again.
+  expect(await moved.ensure('codex', recipe, environment, 'later', () => true)).toMatchObject({ complete: false, running: true })
+  expect(dispatch).toHaveBeenCalledOnce()
+  const again = createNativeInstallations({ directory: move(join(root, 'moved'), join(root, 'again')), node: () => process.execPath, dispatch })
+  expect(await again.ensure('codex', recipe, environment, 'later', () => true)).toMatchObject({ complete: false })
+  expect(await again.status('codex', 'later', () => true)).toMatchObject({ complete: false })
+  expect(dispatch).toHaveBeenCalledOnce()
+})
+
+it('logs the kind of a failed check that holds, which the person never sees', async () => {
   await controller().ensure('opencode', recipe, environment, 'request', () => true)
   complete()
   unlinkSync(`${directory}.00000000.dispatch`)
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   expect(await controller().status('codex', 'other', () => true)).toEqual({ complete: false, detail: 'Waiting to confirm durable engine installation ownership.' })
-  expect(warn).toHaveBeenCalledWith('[native-install] codex held:', 'Missing installation dispatch witness')
+  expect(warn).toHaveBeenCalledWith('[native-install] codex held:', 'Error')
 })
 
 it('confirms a readable result durably before crediting it or dispatching its successor', async () => {

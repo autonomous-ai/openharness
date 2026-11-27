@@ -124,16 +124,6 @@ describe('the handoff in the edge host', () => {
     expect(Object.keys(vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests)).toEqual([...HANDOFF_REQUESTS])
   })
 
-  // HARNESS_SWARM: a member's replacement is recorded by the Swarm's side, which its process loads only while it is on.
-  it('hands the change-agent handoff the Swarm\'s record while it is on, and none without it', () => {
-    const start = vi.fn((..._args: Parameters<typeof startHandoff>) => ({}))
-    const recordReplacement = vi.fn()
-    const base = { dataDir: '/data', socketPath: '/s', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }), start }
-    runHandoffService({ ...base, swarm: { recordReplacement } })
-    runHandoffService(base)
-    expect(start.mock.calls.map(call => call[3])).toEqual([recordReplacement, undefined])
-  })
-
   it('reads SQLite only for a store-backed conversation and hands that one over', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'handoff-store-'))
     try {
@@ -157,19 +147,21 @@ describe('the handoff in the edge host', () => {
       // The eager SQLite module does not open a database for a file-backed conversation.
       expect(core.transcripts.databaseHistory(agents.claude as never)).toBeUndefined()
       expect(core.transcripts.databaseHistory({ ...agents.claude, engine: 'codex' } as never)).toBeUndefined()
-      const prepare = startHandoff(core, undefined, undefined, undefined, LOADED_HANDOFF_LIMITS).agent_handoff_prepare!
+      const prepare = startHandoff(core, undefined, undefined, LOADED_HANDOFF_LIMITS).agent_handoff_prepare!
       const asker = { local: true, owner: true }
       await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([])
       // OpenCode reads through the same binding and hands over the turn the store holds: OpenCode 2's
       // session_message first, and for an OpenCode 1 conversation, which has no rows there, its message rows.
+      // Whether the store keeps OpenCode 2.4's session_part is asked of it once.
       const database = join(env.OPENCODE_DATA_DIR, 'opencode.db')
       const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([
-        { path: database, sql: expect.stringContaining('FROM session_message m'), params: ['ses_handoff1'] },
-        { path: database, sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] },
+        { path: database, sql: expect.stringMatching(/\bFROM sqlite_master\b.*'session_part'/), params: [] },
+        { path: database, sql: expect.stringMatching(/\bFROM session_message\b/), params: ['ses_handoff1'] },
+        { path: database, sql: expect.stringMatching(/\bFROM message\b/), params: ['ses_handoff1'] },
       ])
       expect(publicationErrors).toEqual([])
       expect(handed).toMatchObject({ file: expect.any(String) })
@@ -177,7 +169,7 @@ describe('the handoff in the edge host', () => {
       // An OpenCode 2 conversation is handed over from session_message alone.
       binding.reads.length = 0
       const handed2 = await prepare({ agentId: 'opencode-2', changeId: 'b'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
-      expect(binding.reads).toEqual([{ path: database, sql: expect.stringContaining('FROM session_message m'), params: ['ses_handoff2'] }])
+      expect(binding.reads).toEqual([{ path: database, sql: expect.stringMatching(/\bFROM session_message\b/), params: ['ses_handoff2'] }])
       expect(publicationErrors).toEqual([])
       expect(readFileSync(join(ws, handed2.file!), 'utf8')).toContain('add a search box')
     } finally { rmSync(ws, { recursive: true, force: true }) }

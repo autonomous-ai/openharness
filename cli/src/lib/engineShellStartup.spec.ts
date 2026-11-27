@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { writeExecutable } from '../testing/executableFixture.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, commandAvailableInInteractiveShell, commandSupportsFlagInInteractiveShell } from './engineLaunch.js'
@@ -37,7 +38,7 @@ export HARNESS_RC_LOADED=yes
   writeFileSync(join(dir, '.zprofile'), 'export HARNESS_LOGIN_LOADED=yes\n')
   const binary = join(dir, "engine with 'quotes")
   const result = join(dir, 'result.json')
-  writeFileSync(binary, `#!${process.execPath}
+  writeExecutable(binary, `#!${process.execPath}
 // Node 26 runs an extensionless script as an ES module, where require is undefined; this works as either.
 const fs = process.getBuiltinModule('node:fs');
 if (process.argv.includes('--help')) { console.log('--no-daemon --auto'); process.exit(0); }
@@ -51,7 +52,7 @@ if (process.stdin.isTTY) {
   process.stdin.setRawMode(true);
   process.stdin.on('data', data => console.log('INPUT:' + data.toString()));
 }
-`, { mode: 0o755 })
+`)
   vi.stubEnv('ZDOTDIR', dir)
   vi.stubEnv('DISABLE_AUTO_UPDATE', 'false')
   return {
@@ -91,7 +92,7 @@ describe.skipIf(!zsh)('agent startup in a real zsh login shell', () => {
 describe.skipIf(!zsh || process.env.RUN_REAL_TMUX_DISCOVERY !== '1' || !resolveBinaryOnPath('tmux'))('startup prompts in an isolated real tmux terminal', () => {
   it.each(engines)('%s starts and accepts input even when the normal shell would wait for an update', async engine => {
     const f = fixture()
-    server = await isolatedTmux()
+    server = await isolatedTmux({ ZDOTDIR: f.dir, DISABLE_AUTO_UPDATE: 'false' })
     const pane = await server.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'startup', zsh!, '-lic', 'echo SHOULD_NOT_RUN')
     const screen = () => server!.run('capture-pane', '-p', '-t', pane)
     const waitFor = async (text: string) => {

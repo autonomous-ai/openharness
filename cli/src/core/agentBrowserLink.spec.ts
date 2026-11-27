@@ -5,134 +5,188 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createAgentBrowserLink, wakeAgentBrowser } from './agentBrowserLink.js'
+import { createAgentLife } from './agentLife.js'
+import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 
 const row = (agentId: string, browser = true) => ({ agentId, sessionId: `s-${agentId}`, ...(browser ? { browser: true } : {}) }) as RegisteredSession
 
 function setup(live: RegisteredSession[] = []) {
   const sync = vi.fn()
   const count = vi.fn()
-  const ids = vi.fn(async () => ({ live: ['a1'], stopped: ['a2'] }))
-  const ofPane = vi.fn(async (pane: string) => (pane === '%7' ? 'a1' : null))
-  const core = fakeCore({ count, agents: { sync, ids, ofPane, live: () => live, byAgent: (agentId: string) => live.find(s => s.agentId === agentId) } })
-  const notify = vi.fn(() => true)
+  const ofPane = vi.fn(async (pane: string, _ancestors?: number[]) => (pane === '%7' ? { agentId: 'a1', guest: false } : pane === '%8' ? { agentId: 'kim', guest: true } : null))
+  const browserFrame = vi.fn((..._frame: [connId: string, type: string, payload: Record<string, unknown>]) => true)
+  const browserBytes = vi.fn((_frame: Uint8Array) => true)
+  // What happens to agents, as the core tells whoever follows them (core/agentLife.ts).
+  const hub = createAgentLife({ live: () => live, notify: () => true, hears: {} })
+  const core = fakeCore({ count, agents: { sync, ofPane, live: () => live, byAgent: (agentId: string) => live.find(s => s.agentId === agentId), follow: hub.follow }, clients: { browserFrame, browserBytes } })
+  const notify = vi.fn((..._frame: [frame: { type: string, payload?: unknown }, opts?: { untilDelivered?: boolean }]) => true)
+  const notifyBinary = vi.fn((_bytes: Uint8Array) => true)
   const want = vi.fn()
-  const link = createAgentBrowserLink({ core, notify, want })
-  return { link, core, sync, count, notify, want, ids, ofPane }
+  const streamsGone = vi.fn()
+  const link = createAgentBrowserLink({ core, notify, notifyBinary, want, streamsGone })
+  const unfollow = link.follow()
+  return { link, core, sync, count, notify, notifyBinary, want, streamsGone, ofPane, browserFrame, browserBytes, hub, unfollow }
 }
+/** A link whose core answers what the test gives, and tells nobody anything. */
+const bareLink = (core = fakeCore()) => createAgentBrowserLink({ core, notify: () => true, notifyBinary: () => true, want: () => {}, streamsGone: () => {} })
 
 describe('the agent browser in its own process, as the core sees it', () => {
-  it('tells the process of an agent with a browser, and asks for the process until it is there', () => {
-    const { link, notify, want } = setup()
-    link.port.attached(row('plain', false))
+  it('has no wake subscription when the API provides none', () => {
+    const core = fakeCore(); core.agents.follow = undefined
+    expect(bareLink(core).follow()()).toBeUndefined()
+  })
+  it('does not accept tokenless legacy frame publications', async () => {
+    expect(await bareLink().answer('browser_state', { agentId: 'a', state: { state: 'ready' } })).toEqual({ error: 'UNKNOWN_QUERY' })
+  })
+  // What happens to agents the process hears as every service that follows agents does (core/agentLife.ts).
+  it('tells the process nothing of agents itself', () => {
+    const { notify, hub } = setup()
+    hub.running(row('a1'))
+    hub.ended('a1')
+    hub.purged('a1', ['s-a1'])
     expect(notify).not.toHaveBeenCalled()
-    expect(want).not.toHaveBeenCalled()
-    link.port.attached(row('a1'))
-    expect(want).toHaveBeenCalledTimes(1)
-    // An attach it misses is said again when it connects, so it is never held.
-    expect(notify).toHaveBeenCalledWith({ type: 'service_event', payload: { kind: 'attached', session: row('a1') } }, undefined)
-    link.connected()
-    link.port.attached(row('a1'))
-    expect(want).toHaveBeenCalledTimes(1)
-    link.disconnected()
-    link.port.attached(row('a1'))
-    expect(want).toHaveBeenCalledTimes(2)
   })
 
-  it('holds a stop and a delete until the process hears them', () => {
-    const { link, notify } = setup()
-    link.port.stopped('a1')
-    link.port.deleted('a2')
-    expect(notify.mock.calls).toEqual([
-      [{ type: 'service_event', payload: { kind: 'stopped', agentId: 'a1' } }, { untilDelivered: true }],
-      [{ type: 'service_event', payload: { kind: 'deleted', agentId: 'a2' } }, { untilDelivered: true }],
+  // A Desktop from before Browser left New agent still sets the row's flag at a create, which only the process takes in
+  // (services/agentBrowser.ts `adopt`). Delete on or after 2026-12-18, with the flag.
+  it('asks for the process for an agent whose row still carries the flag from before, until it is there', () => {
+    const { link, want, hub } = setup()
+    hub.running(row('plain', false))
+    expect(want).not.toHaveBeenCalled()
+    hub.running(row('a1'))
+    expect(want).toHaveBeenCalledTimes(1)
+    link.connected()
+    hub.running(row('a2'))
+    expect(want).toHaveBeenCalledTimes(1)
+    link.disconnected()
+    hub.running(row('a3'))
+    expect(want).toHaveBeenCalledTimes(2)
+    // As the core starts, the flagged rows it restored ask for it too.
+    expect(setup([row('restored')]).want).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes a viewer\'s frames on as events and its bytes as binary frames, once the process has said it takes streams', async () => {
+    const { link, notify, notifyBinary } = setup()
+    const asker = { local: true, owner: true }
+    const stream = '11111111-2222-4333-8444-555555555555'
+    // A process that has not said so (one from before 2026-11-13) is told nothing: the open is refused at once
+    // (core/browserStreams.ts), never left unanswered.
+    link.connected()
+    notify.mockClear()
+    expect(link.port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, asker)).toBe(false)
+    expect(link.port.streamInput(stream, Uint8Array.of(1))).toBe(false)
+    link.port.streamClosed('local:w')
+    link.port.streamRoute(stream, 'direct')
+    link.port.streamTransportError()
+    link.port.streamRefused(stream)
+    expect(notify).not.toHaveBeenCalled()
+    expect(notifyBinary).not.toHaveBeenCalled()
+
+    expect(await link.answer('streams', {})).toEqual({ ok: true })
+    expect(link.port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, asker)).toBe(true)
+    // An ack is the stream's own: nobody asking goes with it.
+    expect(link.port.stream('local:w', 'agent_browser_ack', { streamId: stream, bytes: 9 })).toBe(true)
+    // A connection's end the process hears from the core's service links itself, as every service does.
+    link.port.streamClosed('local:w')
+    link.port.streamRoute(stream, 'direct')
+    link.port.streamRoute(stream, null)
+    link.port.streamTransportError()
+    link.port.streamRefused(stream)
+    expect(notify.mock.calls.map(([frame]) => frame)).toEqual([
+      { type: 'service_event', payload: { kind: 'stream', connId: 'local:w', type: 'agent_browser_open', payload: { requestId: 'r-1', agentId: 'a1' }, asker } },
+      { type: 'service_event', payload: { kind: 'stream', connId: 'local:w', type: 'agent_browser_ack', payload: { streamId: stream, bytes: 9 } } },
+      { type: 'service_event', payload: { kind: 'stream_route', streamId: stream, route: 'direct' } },
+      { type: 'service_event', payload: { kind: 'stream_route', streamId: stream, route: null } },
+      { type: 'service_event', payload: { kind: 'stream_transport_error' } },
+      { type: 'service_event', payload: { kind: 'stream_refused', streamId: stream } },
     ])
+    // None is held for a process that is down: a frame told late would open a stream nobody waits for.
+    expect(notify.mock.calls.every(([, opts]) => opts === undefined)).toBe(true)
+    // A viewer's bytes ride a terminal's plain frame, which names the stream and no connection.
+    expect(link.port.streamInput(stream, Uint8Array.of(7, 8))).toBe(true)
+    expect(decodeTerminalLocal(notifyBinary.mock.calls[0]![0])).toEqual({ kind: TerminalBinaryKind.browser, streamId: stream, seq: 0, bytes: Uint8Array.of(7, 8), compressed: false })
+    // Bytes for a stream that cannot be one make no frame, and bytes the link would not take did not reach it: the core
+    // ends that stream (core/browserStreams.ts).
+    expect(link.port.streamInput('not-a-stream', Uint8Array.of(1))).toBe(false)
+    expect(notifyBinary).toHaveBeenCalledTimes(1)
+    notifyBinary.mockReturnValueOnce(false)
+    expect(link.port.streamInput(stream, Uint8Array.of(9))).toBe(false)
+    // A frame the process is not there to take says so.
+    notify.mockReturnValueOnce(false)
+    expect(link.port.stream('local:w', 'agent_browser_ack', { streamId: stream, bytes: 1 }, asker)).toBe(false)
+  })
+
+  it('hands the process\'s answers and the screen\'s bytes to the core\'s streams, which hold them to their connection', () => {
+    const { link, browserFrame, browserBytes } = setup()
+    const stream = '11111111-2222-4333-8444-555555555555'
+    link.notice({ kind: 'stream_frame', connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', streamId: stream } })
+    link.notice({ kind: 'stream_frame', connId: 'local:w', type: 'agent_browser_close' })
+    expect(browserFrame.mock.calls).toEqual([
+      ['local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: stream }],
+      ['local:w', 'agent_browser_close', {}],
+    ])
+    // Not a stream's frame, or one that names no connection or type: nothing is handed on.
+    for (const payload of [{ kind: 'viewer', connId: 'local:w', type: 'agent_browser_close' }, { kind: 'stream_frame', type: 'agent_browser_close' }, { kind: 'stream_frame', connId: 'local:w' }, { kind: 'stream_frame', connId: 7, type: 'x' }]) link.notice(payload)
+    expect(browserFrame).toHaveBeenCalledTimes(2)
+
+    // The screen's bytes name their stream and no connection: whose it is, is the core's to say, and which frames are a
+    // screen's (core/browserStreams.ts, which reads each in place and sends it on as it came).
+    const frame = encodeTerminalLocal({ kind: TerminalBinaryKind.browser, streamId: stream, seq: 3, bytes: Uint8Array.of(4, 5), compressed: false })!
+    link.binary(frame)
+    expect(browserBytes).toHaveBeenCalledOnce()
+    expect(browserBytes.mock.calls[0]![0]).toBe(frame)
+    // A core that offers a service no streams hands nothing on, and does not fail.
+    const bare = bareLink()
+    bare.notice({ kind: 'stream_frame', connId: 'local:w', type: 'agent_browser_close', payload: {} })
+    bare.binary(frame)
+  })
+
+  it('takes no streams from a process that went, until the next one says it does, and tells the core its streams are gone', async () => {
+    const { link, notify, streamsGone } = setup()
+    const asker = { local: true, owner: true }
+    link.connected()
+    await link.answer('streams', {})
+    streamsGone.mockClear()
+    link.disconnected()
+    expect(streamsGone).toHaveBeenCalledOnce()
+    notify.mockClear()
+    link.connected()
+    expect(link.port.stream('local:w', 'agent_browser_open', { requestId: 'r-1' }, asker)).toBe(false)
+    expect(notify).not.toHaveBeenCalled()
     expect(link.port.stop()).toBeUndefined()
   })
 
-  it('says every agent with a browser again each time the process connects', () => {
-    const { link, notify } = setup([row('a1'), row('plain', false)])
+  // A link that is replaced by a newer one is closed without a word (core/serviceLinks.ts): the process that connects
+  // is the only sign the one before it went. Its streams' panels would show a still screen for good.
+  it('a process that connects over one never said gone: the streams of the one before are gone, and it has said nothing yet', async () => {
+    const { link, notify, streamsGone } = setup()
+    const asker = { local: true, owner: true }
     link.connected()
-    expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'attached', session: row('a1') } }, undefined]])
+    await link.answer('streams', {})
+    expect(link.port.stream('local:w', 'agent_browser_open', { requestId: 'r-1' }, asker)).toBe(true)
+    streamsGone.mockClear()
+    notify.mockClear()
+    link.connected()
+    expect(streamsGone).toHaveBeenCalledOnce()
+    expect(link.port.stream('local:w', 'agent_browser_open', { requestId: 'r-2' }, asker)).toBe(false)
+    expect(notify).not.toHaveBeenCalled()
+    await link.answer('streams', {})
+    expect(link.port.stream('local:w', 'agent_browser_open', { requestId: 'r-3' }, asker)).toBe(true)
   })
 
-  it('keeps what the process says of an attached agent\'s browser, for its frame, and sends the frame again', async () => {
-    const { link, sync } = setup([row('a1')])
-    link.port.attached(row('a1'))
-    expect(await link.answer('browser_state', { agentId: 'a1', state: { state: 'setup', step: 'building' } })).toEqual({ ok: true })
-    expect(link.port.frameContext('a1')).toEqual({ state: 'setup', step: 'building' })
-    expect(sync).toHaveBeenCalledWith(row('a1'))
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'failed', error: 'podman_old', extra: 'dropped' } })
-    expect(link.port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_old' })
-    await link.answer('browser_state', { agentId: 'a1' })
-    expect(link.port.frameContext('a1')).toBeUndefined()
-    // What it says of an agent the core did not attach, or has since stopped, brings nothing back.
-    await link.answer('browser_state', { agentId: 'other', state: { state: 'ready' } })
-    expect(link.port.frameContext('other')).toBeUndefined()
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' } })
-    link.port.stopped('a1')
-    expect(link.port.frameContext('a1')).toBeUndefined()
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' } })
-    expect(link.port.frameContext('a1')).toBeUndefined()
-    link.port.attached(row('a1'))
-    link.port.deleted('a1')
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' } })
-    expect(link.port.frameContext('a1')).toBeUndefined()
-    // A state that is no state is refused.
-    link.port.attached(row('a1'))
-    for (const state of [{ state: 'flying' }, 'ready', { state: 'setup', step: 7 }, { state: 'failed', error: null }]) {
-      expect(await link.answer('browser_state', { agentId: 'a1', state }), JSON.stringify(state)).toEqual({ error: 'INVALID_REQUEST' })
+  // Out of its process, a stop sent the windows nothing: the Browser panel kept the browser's last state, ready or
+  // starting, until something else about the agent changed (CLI 0.6.40, 2026-11-12).
+  it('answers the agent of a pane, whether it is a guest\'s, held to the parents it was given, and nothing of a browser\'s switch', async () => {
+    const { link, ofPane } = setup()
+    expect(await link.answer('agent_of_pane', { pane: '%7', ancestors: [4242, 1] })).toEqual({ agentId: 'a1', guest: false })
+    expect(await link.answer('agent_of_pane', { pane: '%8', ancestors: [4343] })).toEqual({ agentId: 'kim', guest: true })
+    expect(await link.answer('agent_of_pane', { pane: '%9', ancestors: [4242] })).toEqual({ agentId: null })
+    expect(ofPane.mock.calls).toEqual([['%7', [4242, 1]], ['%8', [4343]], ['%9', [4242]]])
+    // The core keeps no Browser switch and no list of its own for it, and answers nothing else any service may ask.
+    for (const query of ['agent_ids', 'set_browser', 'move_browser', 'live', 'hachi_goal_done']) {
+      expect(await link.answer(query, { agentId: 'a1', on: true, from: 'a', to: 'b' })).toEqual({ error: 'UNKNOWN_QUERY' })
     }
-    expect(await link.answer('browser_state', { state: { state: 'ready' } })).toEqual({ error: 'INVALID_REQUEST' })
-    // An agent the registry no longer has gets no frame.
-    const gone = setup([])
-    gone.link.port.attached(row('a9'))
-    await gone.link.answer('browser_state', { agentId: 'a9', state: { state: 'ready' } })
-    expect(gone.sync).not.toHaveBeenCalled()
-  })
-
-  // A viewer's open is answered in line (core/browserStreams.ts), from what the process last said of the browser.
-  it('streamCommand answers from the last state and command the process told', async () => {
-    const { link } = setup([row('a1')])
-    const argv = ['/opt/podman/bin/podman', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
-    expect(link.port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
-    link.port.attached(row('a1'))
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'starting' } })
-    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
-    // Ready without a command it can run is not ready.
-    expect(await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: [1] })).toEqual({ error: 'INVALID_REQUEST' })
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' } })
-    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: argv })
-    expect(link.port.streamCommand('a1')).toEqual({ argv })
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'failed', error: 'browser_stopped' } })
-    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
-    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: argv })
-    link.port.stopped('a1')
-    expect(link.port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
-  })
-
-  it('a stop and a delete close the browser\'s viewers at once', () => {
-    const { link } = setup()
-    const closed: string[] = []
-    link.port.onCloseViewers(agentId => closed.push(agentId))
-    link.port.stopped('a1')
-    link.port.deleted('a2')
-    expect(closed).toEqual(['a1', 'a2'])
-  })
-
-  it('answers the ids of its agents and the agent of a pane', async () => {
-    const { link, ids, ofPane } = setup()
-    expect(await link.answer('agent_ids', {})).toEqual({ live: ['a1'], stopped: ['a2'] })
-    expect(ids).toHaveBeenCalled()
-    expect(await link.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: 'a1' })
-    expect(await link.answer('agent_of_pane', { pane: '%9' })).toEqual({ agentId: null })
-    expect(await link.answer('agent_of_pane', {})).toEqual({ error: 'INVALID_REQUEST' })
-    expect(ofPane).toHaveBeenCalledTimes(2)
-    expect(await link.answer('anything', {})).toEqual({ error: 'UNKNOWN_QUERY' })
-    // A core without the calls has no answer to give.
-    const bare = createAgentBrowserLink({ core: fakeCore(), notify: () => true, want: () => {} })
-    expect(await bare.answer('agent_ids', {})).toEqual({ error: 'UNSUPPORTED' })
-    expect(await bare.answer('agent_of_pane', { pane: '%7' })).toEqual({ agentId: null })
+    expect(await link.answer('agents', {})).toEqual({ agents: [] })
   })
 
   it('hands on the agent browser\'s own counters, and no other', async () => {

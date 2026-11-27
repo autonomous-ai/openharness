@@ -32,21 +32,20 @@ describe('an account name a person sets for themselves', () => {
     expect(parseAccountName('a'.repeat(61))).toMatchObject({ ok: false })
   })
 
-  // Outside a Swarm the account name meets no clash check (store reviews, community comments, shares, terminal observers),
-  // so it keeps the Swarm name's own refusals (superTabs/personNames.ts nameRefusal): review 1 of #2917.
+  // The account name meets no clash check (store reviews, community comments, shares, terminal observers): review 1 of #2917.
   it('is refused as a web address, which would show as a link', () => {
     for (const input of ['https://ev.il', 'see http://x.y', 'www.example.com', 'ＷＷＷ.example.com']) {
       expect(parseAccountName(input), input).toEqual({ ok: false, code: 'INVALID_NAME', message: 'Use a name, not a web address.' })
     }
   })
 
-  it('is refused as a role\'s or the Swarm\'s own name, numbered or in wide letters too', () => {
+  it('is refused as a role\'s or Harness\'s own name, numbered or in wide letters too', () => {
     for (const input of ['Product Manager', 'PM', 'Lead', 'Lead 2', 'Engineer', 'Reviewer', 'Harness', 'admin', 'System-3', 'Ｈａｒｎｅｓｓ', 'Someone', 'you']) {
       expect(parseAccountName(input), input).toEqual({ ok: false, code: 'NAME_RESERVED', message: `${input} is a role's name. Choose another.` })
     }
   })
 
-  // Shares, the leaderboard and community comments show the name alone where people tell each other apart by email, so an
+  // Shares and community comments show the name alone where people tell each other apart by email, so an
   // email-shaped name could pose as another person: review 2 of #2917.
   it('is refused with an @, so it never reads as someone\'s email', () => {
     for (const input of ['ken15@autonomous.ai', 'Ken @ Autonomous', '@ken', 'ken\uFF20autonomous.ai']) {

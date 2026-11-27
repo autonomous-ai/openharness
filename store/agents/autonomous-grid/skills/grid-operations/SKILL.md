@@ -49,7 +49,8 @@ and `"$GRID_FLEET" init` (it records it); still null → say in one line that th
 not be found — never pick one from `ls`.
 Connect with
 `"$GRID_FLEET" connect --mode remote --grid NAME --remember` to select a verified grid and reuse it
-in future workspaces. `--remember` writes this controller's `~/.harness/grid-fleet/default.json`;
+in future workspaces. `--remember` writes this controller's `~/.harness/grid-fleet/default.json` (on Linux
+`~/.local/share/harness/grid-fleet/default.json`);
 existing workspace selections remain independent. Changing this workspace's mode never requires
 changing Grid's global mode.
 

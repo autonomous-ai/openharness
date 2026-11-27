@@ -7,6 +7,8 @@ import type { ReviewedAnswer } from '../cable/questionInbox.js'
 // dial parked on the local machine — which is where it sits most of the time — holds no socket at all.
 import { isTerminalEngine } from '../engines/types.js'
 import { isTier } from '../lib/notifyTier.js'
+import { notNewsOf, silentCard } from '../lib/agentNotifications.js'
+import { errorKind } from '../lib/log.js'
 import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { CableAgent } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
@@ -295,7 +297,7 @@ export class DeviceFleet implements MachineFleet {
     // The far end owns what the profile means; this only reassembles the opaque string it round-trips.
     const selectedModel = `runtime-v1:${agentId}:claude:${model}@${effort || 'auto'}`
     void this.rpc(machineId, 'agent_update', { agentId, selectedModel })
-      .catch((err) => this.opts.log(`device: agent_update failed (${(err as Error).message})`))
+      .catch((err) => this.opts.log(`device: agent_update failed (${errorKind(err)})`))
   }
 
   async forkAgent(machineId: string, agentId: string): Promise<string> {
@@ -368,7 +370,7 @@ export class DeviceFleet implements MachineFleet {
 
       return turns
     } catch (err) {
-      this.opts.log(`device: agent_recent ${agentId} failed (${(err as Error).message})`)
+      this.opts.log(`device: agent_recent ${agentId} failed (${errorKind(err)})`)
       return []
     }
   }
@@ -391,7 +393,7 @@ export class DeviceFleet implements MachineFleet {
       const agents = await this.listAgents(machineId)
       for (const a of agents) await this.recentSummaries(machineId, a.id)
     } catch (err) {
-      this.opts.log(`device: recap prefetch failed (${(err as Error).message})`)
+      this.opts.log(`device: recap prefetch failed (${errorKind(err)})`)
     }
   }
 
@@ -417,6 +419,7 @@ export class DeviceFleet implements MachineFleet {
     if (frame.type === 'commander_event' && frame.agentId) {
       const kind = payload.kind
       if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return
+      const notNews = notNewsOf(payload)
       this.emit({
         machineId: from,
         kind,
@@ -425,11 +428,16 @@ export class DeviceFleet implements MachineFleet {
         text: typeof payload.text === 'string' ? payload.text : '',
         recap: typeof payload.recap === 'string' ? payload.recap : '',
         ...(kind === 'processing' && typeof payload.update === 'string' ? { update: payload.update } : {}),
-        // A specialist on another Mac is as silent here as one on this one.
-        ...(payload.subagent === true ? { subagent: true } : {}),
+        // A card silent on another Mac is silent here, by this computer's rule (lib/agentNotifications.ts `silentCard`):
+        // decided again here, it rang for history.
+        ...(silentCard(payload) ? { subagent: true } : {}),
+        // Why it is not news, for this dial's log, read as this computer's (lib/agentNotifications.ts `notNewsOf`).
+        ...(notNews ? { notNews } : {}),
         // How loudly it ends, decided by that machine's recaps, which know its agents: this dial has no list of them, and
-        // decided again here a Swarm agent on another of the person's Macs alerted (#2648's review).
+        // decided again here an agent on another of the person's Macs that ends quietly alerted (#2648's review).
         ...(kind === 'summary' && isTier(payload.tier) ? { tier: payload.tier } : {}),
+        // A card with no tier is decided on this dial, where Needs you lowers a turn unless it failed.
+        ...(kind === 'summary' && payload.failed === true ? { failed: true } : {}),
       })
       return
     }

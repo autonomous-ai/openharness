@@ -23,7 +23,7 @@
  * `MIGRATION_FROM=<folder>/cli.js E2E_BUNDLE=1 npm run test:e2e -- migration`. Or build a release tag's
  * bundle (`node build-bundle.mjs` in a checkout of it).
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -148,9 +148,14 @@ describe.skipIf(!FROM)('upgrading a machine from a released build', () => {
     })
     if (fromHasMaster) {
       // Asked of the bundle itself, as reexec.e2e.ts does: a timeout or a broken probe must fail here, not
-      // pass as a release from before re-executing. Those reject the private command by name.
+      // pass as a release from before re-executing. Those reject the private command by name: exit 1, their stderr
+      // ending with that line, after whatever Node said first (a deprecation warning, which names its pid).
       const probe = await runProbe(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], daemon.env).result
-      if (!probe.ok) expect(probe.detail).toBe(`Unknown command: ${PROBE_COMMAND}`)
+      if (!probe.ok) {
+        expect(probe.ended).toMatch(/^exit 1 · stderr \d+ B$/)
+        const refused = spawnSync(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], { env: daemon.env, encoding: 'utf8', timeout: 30_000 })
+        expect({ status: refused.status, refusal: refused.stderr.endsWith(`Unknown command: ${PROBE_COMMAND}\n`) }, refused.stderr).toEqual({ status: 1, refusal: true })
+      }
       fromCanReexec = probe.ok
     }
     // A released build may say nothing when it is ready, and has no request gate: its port is the sign.

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  ts, sid, preview, installTimestampedConsole, logFrame,
+  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf, fileTag, outsideHome, exitOnFatal,
   adoptLegacyLog, prepareLogFile, trimLogFile, LOG_MAX_BYTES,
 } from './log.js'
 
@@ -193,5 +195,149 @@ describe('log file cap', () => {
     prepareLogFile(file, legacy, 10_000)
     expect(existsSync(legacy)).toBe(false)
     expect(statSync(file).size).toBeLessThanOrEqual(10_000)
+  })
+})
+
+describe('errorKind', () => {
+  class Held extends Error { readonly code = 'IDENTITY_UNAVAILABLE' }
+  class Changed extends Held {}
+  class Unconfirmed extends Error { constructor(cause: unknown) { super('unconfirmed', { cause }) } }
+  const disk = (code: string) => Object.assign(new Error(`${code}: refused, open '/Users/dee/.harness/cli/data/registry.json'`), { code })
+
+  it.each([
+    ['a Node fs error is its code', disk('EACCES'), 'EACCES'],
+    ['a typed error with a fixed code is both', new Changed('the owner changed in /Users/dee/work'), 'Changed IDENTITY_UNAVAILABLE'],
+    ['a built-in type is its name', new TypeError("Cannot read properties of undefined (reading 'secret')"), 'TypeError'],
+    ['a type with a code is both', Object.assign(new TypeError('The "path" argument must be of type string'), { code: 'ERR_INVALID_ARG_TYPE' }), 'TypeError ERR_INVALID_ARG_TYPE'],
+    ['a plain Error is Error', new Error('could not read /Users/dee/notes.txt'), 'Error'],
+    ['an abort is its name, not its number', new DOMException('aborted', 'AbortError'), 'AbortError'],
+    ['a wrapper shows the disk code on its cause', new Unconfirmed(disk('ENOSPC')), 'Unconfirmed ENOSPC'],
+    ['two causes deep', new Unconfirmed(new Error('storage', { cause: { code: 'EDQUOT' } })), 'Unconfirmed EDQUOT'],
+    ['a thrown string is its type', 'reader failed on /Users/dee/x', 'string'],
+    ['undefined', undefined, 'undefined'],
+    ['null', null, 'object'],
+    ['a thrown object is its type, whatever it holds', { code: 'ENOENT', message: '/Users/dee/x' }, 'object'],
+  ])('%s', (_, thrown, kind) => expect(errorKind(thrown)).toBe(kind))
+
+  it.each([['a number', 1], ['lower case', 'enoent'], ['words', 'no such file /Users/dee/x'], ['41 characters', `E${'X'.repeat(40)}`], ['one letter', 'E']])(
+    'a code that is %s is not printed', (_, code) => expect(errorKind(Object.assign(new Error('x'), { code }))).toBe('Error'))
+
+  it('a name that is not a type name is not printed', () => {
+    expect(errorKind(Object.assign(new Error('x'), { name: 'Could not read /Users/dee/x' }))).toBe('Error')
+    expect(errorKind(Object.assign(new TypeError('x'), { name: 'a b' }))).toBe('TypeError')
+    // One word that is not a class name's shape can be a file's or a person's name.
+    expect(errorKind(Object.assign(new Error('x'), { name: 'someone' }))).toBe('Error')
+  })
+
+  it('a cause that loops ends', () => {
+    const looped = new Error('x'); Object.defineProperty(looped, 'cause', { value: looped })
+    expect(errorKind(looped)).toBe('Error')
+  })
+
+  it('never throws: a getter that throws reads Error', () => {
+    for (const field of ['name', 'code', 'cause']) {
+      const hostile = new TypeError('x'); Object.defineProperty(hostile, field, { get() { throw new Error('no') } })
+      expect(errorKind(hostile)).toBe('Error')
+    }
+  })
+
+  it('the release bundle keeps class names, which a typed error\'s kind is', () =>
+    expect(readFileSync(join(__dirname, '..', '..', 'build-bundle.mjs'), 'utf8')).toMatch(/keepNames: true/))
+})
+
+describe('codeOrLength', () => {
+  it.each([
+    ['a code', 'SERVICE_UNAVAILABLE', 'SERVICE_UNAVAILABLE'],
+    ['a lower-case word', 'peer_failed', 'text(11)'],
+    ['a sentence with a path', 'could not read /Users/sentinel/notes', 'text(36)'],
+    ['41 characters', `E${'X'.repeat(40)}`, 'text(41)'],
+    ['one letter', 'E', 'text(1)'],
+    ['empty', '', 'text(0)'],
+    ['a number', 5, 'number'],
+    ['undefined', undefined, 'undefined'],
+    ['null', null, 'object'],
+    ['an object', { code: 'ENOENT' }, 'object'],
+  ])('a value that is %s reads %s', (_, value, shown) => expect(codeOrLength(value)).toBe(shown))
+})
+
+describe('exitOnFatal', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'exit-on-fatal-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('exitOnFatal writes one line with the tag and the kind and exits 1', () => {
+    const file = join(dir, 'harness.log')
+    const fd = openSync(file, 'a')
+    const listeners = new Map<string, (error: unknown) => void>()
+    const exits: number[] = []
+    exitOnFatal('[service gateway]', fd, (event, listener) => { listeners.set(event, listener) }, (code) => { exits.push(code) })
+    expect([...listeners.keys()]).toEqual(['uncaughtException', 'unhandledRejection'])
+    listeners.get('uncaughtException')!(new TypeError('/sentinel'))
+    listeners.get('unhandledRejection')!('/sentinel')
+    closeSync(fd)
+    const stamp = String.raw`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}`
+    // Its kind, never its words or its stack: Export logs sends the log off the machine.
+    expect(readFileSync(file, 'utf8')).toMatch(new RegExp(`^${stamp} \\[service gateway\\] stopped on an uncaught error: TypeError\n`
+      + `${stamp} \\[service gateway\\] stopped on an unhandled rejection: string\n$`))
+    expect(exits).toEqual([1, 1])
+    // A log it can no longer write costs the line, never the exit.
+    listeners.get('uncaughtException')!(new Error('again'))
+    expect(exits).toEqual([1, 1, 1])
+    // As a process runs it: on this process, through process.exit.
+    const on = vi.spyOn(process, 'on').mockImplementation((() => process) as never)
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    try {
+      exitOnFatal('[service gateway]', fd)
+      expect(on.mock.calls.map(([event]) => event)).toEqual(['uncaughtException', 'unhandledRejection'])
+      ;(on.mock.calls[1]![1] as (error: unknown) => void)('real')
+      expect(exit).toHaveBeenCalledWith(1)
+    } finally { on.mockRestore(); exit.mockRestore() }
+  })
+})
+
+describe('hashOf', () => {
+  const path = '/Users/sentinel/.claude/settings.json'
+
+  it('a tag is 8 hex, the same each time in this process, and holds none of the text', () => {
+    expect(hashOf(path)).toMatch(/^[0-9a-f]{8}$/)
+    expect(hashOf(path)).toBe(hashOf(path))
+    expect(hashOf('/Users/sentinel/a')).not.toBe(hashOf('/Users/sentinel/b'))
+  })
+
+  // A plain hash of a guessed path (`/Users/<name>/…`) or a short name would confirm the guess from an exported log.
+  it('a tag is not the text\'s plain SHA-256, and another process tags the same text differently', () => {
+    expect(hashOf(path)).not.toBe(createHash('sha256').update(path).digest('hex').slice(0, 8))
+    const script = `const { hashOf } = await import(${JSON.stringify(new URL('./log.ts', import.meta.url).href)})\n`
+      + `process.stdout.write(hashOf(${JSON.stringify(path)}))`
+    const other = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { timeout: 10_000, encoding: 'utf8' })
+    expect(other).toMatch(/^[0-9a-f]{8}$/)
+    expect(other).not.toBe(hashOf(path))
+  })
+
+  // A spec that resets its modules loads this one again beside the code it tests, in the same process.
+  it('a second load in the same process tags alike', async () => {
+    vi.resetModules()
+    expect((await import('./log.js')).hashOf(path)).toBe(hashOf(path))
+  })
+})
+
+// The home as os.homedir() reads it: HOME, and USERPROFILE on Windows.
+describe('fileTag and outsideHome', () => {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  const home = join(process.platform === 'win32' ? 'C:\\' : '/', 'people', 'sentinel')
+  beforeEach(() => { process.env.HOME = home; process.env.USERPROFILE = home })
+  afterEach(() => { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE })
+
+  it('names a file in the home by its tag alone', () => {
+    const file = join(home, '.claude', 'settings.json')
+    expect(fileTag(file)).toBe(hashOf(file))
+    expect(outsideHome(file)).toBe('')
+  })
+
+  it('says a file is outside the home after its tag, never where', () => {
+    for (const file of [join(home, '..', 'other', 'hooks.json'), join(`${home}-twin`, 'hooks.json'), join(home, '..', '..', 'etc', 'hooks.json')]) {
+      expect(fileTag(file), file).toBe(`${hashOf(file)} (outside the home)`)
+      expect(outsideHome(file), file).toBe(' (outside the home)')
+    }
   })
 })

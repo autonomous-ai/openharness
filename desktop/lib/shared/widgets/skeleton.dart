@@ -209,7 +209,6 @@ class SkeletonListTile extends StatelessWidget {
     this.subtitle = true,
     this.titleFactor = 0.42,
     this.subtitleFactor = 0.68,
-    this.padding = const EdgeInsets.symmetric(vertical: 8),
   });
 
   /// Size of the leading slot; 0 for none.
@@ -222,11 +221,10 @@ class SkeletonListTile extends StatelessWidget {
   final bool subtitle;
   final double titleFactor;
   final double subtitleFactor;
-  final EdgeInsets padding;
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: padding,
+    padding: const EdgeInsets.symmetric(vertical: 8),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

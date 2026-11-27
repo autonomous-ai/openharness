@@ -4,6 +4,10 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/harness_cli_runner.dart';
+import 'package:harness/core/harness_home.dart';
+import 'package:path/path.dart' as p;
+
+import 'support/scratch_home_look.dart';
 
 void main() {
   late Directory scratch;
@@ -173,4 +177,130 @@ void main() {
     expect(result.fingerprint, '1234ABCD');
     expect(result.setAt, DateTime.fromMillisecondsSinceEpoch(1700000000000));
   });
+
+  test('reads the XDG variables of the environment it is handed', () {
+    expect(
+      HarnessCliRunner(
+        environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+        isWindows: false,
+      ).harnessHome.path,
+      // Off Linux the rule reads no variable.
+      Platform.isLinux ? '/x/harness' : '/home/t/.harness',
+    );
+  }, skip: Platform.isWindows);
+
+  test('a Windows profile keeps the .harness layout on a Linux host', () {
+    expect(
+      HarnessCliRunner(
+        look: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path for Windows'),
+        ),
+        environment: const {'USERPROFILE': r'C:\Users\me'},
+        isWindows: true,
+      ).harnessHome.path,
+      p.join(r'C:\Users\me', '.harness'),
+    );
+  });
+
+  group('on Linux', () {
+    late Directory home;
+    late String data, state, legacy;
+
+    setUp(() {
+      home = Directory('${scratch.path}/home')..createSync();
+      data = '${home.path}/.local/share/harness';
+      state = '${home.path}/.local/state/harness';
+      legacy = '${home.path}/.harness';
+    });
+
+    HarnessCliRunner runner({Directory? harnessHome}) => HarnessCliRunner(
+      harnessHome: harnessHome,
+      look: scratchHomeLook(scratch.path),
+      environment: {'HOME': home.path, 'PATH': '/usr/bin'},
+      isWindows: false,
+    );
+
+    /// A Node at [node], named by `<runtime>/current-node`, and `<cli>/cli.js`.
+    File install({
+      required String runtime,
+      required String node,
+      required String cli,
+    }) {
+      File(node).createSync(recursive: true);
+      File('$runtime/current-node')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('$node\n');
+      return File('$cli/cli.js')..createSync(recursive: true);
+    }
+
+    test(
+      'the runner finds cli.js in the data root and the node in the state root',
+      () async {
+        final node = '$state/runtime/node-v22/bin/node';
+        final cli = install(
+          runtime: '$state/runtime',
+          node: node,
+          cli: '$data/cli',
+        );
+
+        final invocation = await runner().resolve(['version']);
+
+        expect(invocation.source, HarnessCliSource.managed);
+        expect(invocation.executable, node);
+        expect(invocation.arguments, [cli.path, 'version']);
+      },
+    );
+
+    test(
+      'current-node must name a file under the state root\'s runtime',
+      () async {
+        // A Node left in the old tree, which only the bridge still serves.
+        install(
+          runtime: '$state/runtime',
+          node: '$legacy/runtime/node-v22/bin/node',
+          cli: '$data/cli',
+        );
+        File('$data/.harness-root').writeAsStringSync('1\n');
+
+        final invocation = await runner().resolve(['version']);
+
+        expect(invocation.source, HarnessCliSource.path);
+      },
+    );
+
+    test('on a legacy home both come from ~/.harness', () async {
+      final node = '$legacy/runtime/node-v22/bin/node';
+      final cli = install(
+        runtime: '$legacy/runtime',
+        node: node,
+        cli: '$legacy/cli',
+      );
+
+      final invocation = await runner().resolve(['version']);
+
+      expect(invocation.source, HarnessCliSource.managed);
+      expect(invocation.executable, node);
+      expect(invocation.arguments, [cli.path, 'version']);
+    });
+
+    test('a home handed in by a test is both roots', () async {
+      Directory(data).createSync(recursive: true);
+      final fixed = '${scratch.path}/fixed';
+      final node = '$fixed/runtime/node-v22/bin/node';
+      final cli = install(
+        runtime: '$fixed/runtime',
+        node: node,
+        cli: '$fixed/cli',
+      );
+
+      final invocation = await runner(harnessHome: Directory(fixed))
+          .resolve(['version']);
+
+      expect(invocation.source, HarnessCliSource.managed);
+      expect(invocation.executable, node);
+      expect(invocation.arguments, [cli.path, 'version']);
+    });
+  }, skip: Platform.isWindows);
 }

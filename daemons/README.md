@@ -27,8 +27,8 @@ clients and the server build against.
 | `tools/bake.mjs` | Bakes every plate a client shows, daemons' and eggs', and the colour rules every client follows (`plateColor`, `eggColor`, `individualColor`). |
 | `plates.json` | Generated (by `generate.mjs`, through `bake.mjs`). Every species plate frame, as text, and every egg frame with its material rows. Baked again only when a model, the shader, the egg kinds or what `rules.plate` says about frames changes; a bake takes minutes. |
 | `desktop/lib/daemons/plates.g.dart`, `mobile/lib/daemons/plates.g.dart` | Generated. `plates.json` as a Dart raw string. |
-| `cli/src/pair/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)); and `awayMinutes`, how long an absence makes a finished turn an away turn. |
-| `cli/src/pair/plates/*.g.ts` | Generated. The shader, every plate species' model and the reference renderer, copied as they are (type checks off), with `PLATE_MODELS`, `PLATE_ROSTER` and `PLATE_SOURCE`: harnessd draws each individual with them (see "Individual art"). |
+| `companions/src/companion/roster.g.ts` | Generated. Ids, line templates, lore, first words and family: the pair brain's voice and the pair harness's persona ([BRAIN.md](BRAIN.md)); and `awayMinutes`, how long an absence makes a finished turn an away turn. |
+| `companions/src/companion/plates/*.g.ts` | Generated. The shader, every plate species' model and the reference renderer, copied as they are (type checks off), with `PLATE_MODELS`, `PLATE_ROSTER` and `PLATE_SOURCE`: harnessd draws each individual with them (see "Individual art"). |
 
 `hn` (the Rust terminal client) reads `roster.json` and `plates.json` with `include_str!` and tests against `frames.json`.
 
@@ -201,7 +201,7 @@ Deploy the backend settings routes and CLI proxy before the desktop update that 
   writes the zoo and no socket subscribes to `zoo_changed`. On, `HARNESS_DAEMONS_USERS` (comma-separated
   user ids or emails; empty is everyone) limits which accounts may opt in; any other gets the same 404
   before its collection is read or written.
-- **harnessd** (`cli/src/lib/daemonsSwitch.ts`). Idle until `GET /api/zoo` answers 200: no `zoo.turn`
+- **harnessd** (`companions/src/companion/daemonsSwitch.ts`). Idle until `GET /api/zoo` answers 200: no `zoo.turn`
   reporter, no `zoo.lesson` credit, no PairSensor or journal, no brain, no learning (signals, distilling,
   usage, lessons in launches), no pair harness, no pair.jsonc tick — no timers, no files, no model warm-up,
   and one request, the probe: at startup (a sign-in restarts harnessd), at most every 6 hours after that
@@ -254,7 +254,7 @@ request sees them; every other client learns the same thing by re-reading the zo
 
 `harnessd` proxies `/api/zoo` for local clients exactly as it proxies `/api/desk`.
 
-`zoo_changed` goes out only when something a client draws changed (`lib/zoo.ts` `shownZoo`: the daemons
+`zoo_changed` goes out only when something a client draws changed (`backend/src/lib/zoo.ts` `shownZoo`: the daemons
 but not their xp alone, eggs, pair, dial, consent, habits, the first and setup eggs). A report that only
 tallied — turns, days, batch ids, xp short of a level — still moves the revision, and reaches the other
 clients on their next read of the zoo.
@@ -430,7 +430,7 @@ prompt here.
 Work earns eggs; the server decides. `harnessd` reports turns, the server counts them under
 `rules.earn`, grants eggs, and grows the paired daemon under `rules.bond` (`backend/src/lib/zoo.ts`).
 
-**What counts as a turn** (`cli/src/lib/zooTurns.ts`). A turn counts when `turn_ended` arrives for a
+**What counts as a turn** (`companions/src/companion/zooTurns.ts`). A turn counts when `turn_ended` arrives for a
 turn whose `turn_started` harnessd saw live: the engine normalizers' prompt record, which already
 leaves out tool results, injected context, compaction summaries and interrupts. Never counted: a
 replayed transcript or a turn picked up at attach, a sub-agent's turn (an Orchestrator specialist, or
@@ -683,7 +683,7 @@ blink, unlike any other daemon's); a fidgety one steps its work frames at half `
 markings and the odd eye do not show there. Centre it on `baseWidth` of `individualDaemon`.
 
 **Individual art.** An individual's plates are drawn on the person's machine by harnessd, with the
-same shader and models (`generate.mjs` copies them into `cli/src/pair/plates`): `bakeModel(
+same shader and models (`generate.mjs` copies them into `companions/src/companion/plates`): `bakeModel(
 PLATE_MODELS[id].model, PLATE_ROSTER.rules, { traits: rollTraits(PLATE_ROSTER, id, seed), mats: true
 })` has the shape of a species plate, `[size][version][mood]`, each frame `{ rows, mats }`: `m` a
 marking, `a` the extra, `e` the odd eye, `.` the body. harnessd caches them per individual (species,

@@ -63,8 +63,14 @@ export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeCon
   if (s.engine !== engine || !label(s.agentId) || !text(s.sessionId, 200) || !nullable(s.model) || !nullable(s.cliVersion)
     || (s.transcriptPath !== null && !path(s.transcriptPath)) || (s.cwd !== null && !path(s.cwd))
     || (s.codexHome != null && !path(s.codexHome))) return null
+  const launched = s.launchModel
+  const launchModel = launched === undefined ? undefined
+    : record(launched) && nullable(launched.model) && nullable(launched.effort)
+      ? { model: launched.model, effort: launched.effort } : null
+  if (launchModel === null) return null
   const session: RuntimeSession = { agentId: s.agentId, sessionId: s.sessionId, engine, model: s.model, cliVersion: s.cliVersion,
-    cwd: s.cwd, transcriptPath: s.transcriptPath, ...(s.codexHome === undefined ? {} : { codexHome: s.codexHome }) }
+    cwd: s.cwd, transcriptPath: s.transcriptPath, ...(s.codexHome === undefined ? {} : { codexHome: s.codexHome }),
+    ...(launchModel ? { launchModel } : {}) }
   const control = controlOf(value.control, session)
   if (control === null) return null
   const { model, effort, mode, cliVersion, observedAt, settingsEffort } = value.state
@@ -108,7 +114,8 @@ export function runtimeAnswer(value: unknown, context: RuntimeContext, operation
   const control = controlOf(value.control, context.session)
   if (control === null || !!control !== !!context.control
     || (control && (control.target.id !== context.control!.target.id || control.before !== context.control!.before))) return false
-  if (operation.kind === 'models') return Array.isArray(value.models) && value.models.every(m => record(m) && profile(m.id) && text(m.displayName, 32_768))
+  if (operation.kind === 'models') return Array.isArray(value.models) && value.models.every(m => record(m) && profile(m.id) && text(m.displayName, 32_768)
+    && (m.description === undefined || text(m.description, 256)))
   if (operation.kind === 'catalog') return Array.isArray(value.catalog) && value.catalog.every(m => record(m) && label(m.slug)
     && text(m.displayName) && typeof m.listed === 'boolean' && text(m.defaultEffort) && Array.isArray(m.efforts) && m.efforts.every(label))
   return operation.kind !== 'effort' || typeof value.effortAllowed === 'boolean'

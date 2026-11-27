@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from desktop_publication_fixture import ROOT, artifact_upload_script, make_parts, publisher
+from desktop_publication_fixture import ROOT, FixtureSigner, artifact_upload_script, make_parts, publisher
 
 URI = "gs://fixture-bucket/harness/desktop/metadata.json"
 GCLOUD = r'''#!/usr/bin/env python3
@@ -53,12 +53,18 @@ save()
 
 
 class DesktopPublicationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(folder.cleanup)
+        cls.signer = FixtureSigner(folder.name)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.parts = self.root / "parts"
-        self.entries = make_parts(self.parts, "1.2.2", "https://fixture.invalid/1.2.2")
+        self.entries = make_parts(self.parts, "1.2.2", "https://fixture.invalid/1.2.2", self.signer)
         bindir = self.root / "bin"
         bindir.mkdir()
         client = bindir / "gcloud"
@@ -88,6 +94,8 @@ class DesktopPublicationTests(unittest.TestCase):
         live = json.loads(state["objects"][URI]["data"])
         self.assertEqual(live["other-product"], {"keep": True})
         self.assertEqual({key: live[key] for key in self.entries}, self.entries)
+        for key, part in (("desktop-linux-x64", "linux-x64.json"), ("desktop-linux-arm64", "linux-arm64.json")):
+            self.assertEqual(live[key]["signature"], json.loads((self.parts / part).read_text())[key]["signature"])
         writes = [call for call in state["calls"] if call[:2] == ["storage", "cp"]]
         self.assertEqual(len(writes), 1)
         self.assertEqual(state["objects"][URI]["generation"], 8)
@@ -113,10 +121,10 @@ class DesktopPublicationTests(unittest.TestCase):
         self.assertEqual(state["objects"][URI]["generation"], 7)
 
     def test_missing_extra_wrong_platform_and_mixed_version_parts_fail_before_gcs(self):
-        for change in ("missing", "extra", "wrong-platform", "mixed-version", "bad-hash", "bad-size"):
+        for change in ("missing", "extra", "wrong-platform", "mixed-version", "bad-hash", "bad-size", "no-signature"):
             with self.subTest(change=change):
                 self.seed()
-                make_parts(self.parts, "1.2.2", "https://fixture.invalid/1.2.2")
+                make_parts(self.parts, "1.2.2", "https://fixture.invalid/1.2.2", self.signer)
                 path = self.parts / "linux-arm64.json"
                 part = json.loads(path.read_text())
                 if change == "missing":
@@ -128,6 +136,7 @@ class DesktopPublicationTests(unittest.TestCase):
                     if change == "mixed-version": part["desktop-linux-arm64"]["version"] = "1.2.1"
                     if change == "bad-hash": part["desktop-linux-arm64"]["sha256"] = "invalid"
                     if change == "bad-size": part["desktop-linux-arm64"]["size"] = False
+                    if change == "no-signature": del part["desktop-linux-arm64"]["signature"]
                     path.write_text(json.dumps(part))
                 result, state = self.run_publisher()
                 self.assertNotEqual(result.returncode, 0)

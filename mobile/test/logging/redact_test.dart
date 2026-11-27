@@ -131,36 +131,35 @@ void main() {
     });
   });
 
-  group('a Swarm join link, by its text', () {
+  group('a join link, by its text', () {
     final token = 'Ab3_' * 10 + 'xyz';
 
-    /// What a computer answers the phone's read of a Swarm's sharing, as
-    /// `WsConn.request` logs it (`← super_tabs …`).
+    /// An answer carrying a join link, as `WsConn.request` logs it.
     Map<String, dynamic> answer(String tabId) => {
       'value': {
         'revision': 3,
         'access': {'mode': 'link', 'role': 'viewer'},
-        'joinUrl': 'harness://swarm/join/$tabId?token=$token',
+        'joinUrl': 'https://h.invalid/join/$tabId?token=$token',
       },
     };
 
     test(
       'its token never reaches the line, under a field not named for it',
       () {
-        final line = '← super_tabs ${summariseForLog(answer('tab-1'))}';
+        final line = '← share ${summariseForLog(answer('tab-1'))}';
         expect(line, isNot(contains(token)));
         expect(line, isNot(contains(token.substring(0, 8))));
         expect(
           line,
-          contains('joinUrl: harness://swarm/join/tab-1?token=<redacted>'),
+          contains('joinUrl: https://h.invalid/join/tab-1?token=<redacted>'),
         );
       },
     );
 
-    test('a long Swarm id: the clipped link keeps none of its token', () {
+    test('a long id: the clipped link keeps none of its token', () {
       // The token starts just before the 120th character, where a value is
       // clipped.
-      final line = summariseForLog(answer('a' * 80));
+      final line = summariseForLog(answer('a' * 78));
       expect(line, isNot(contains(token.substring(0, 6))));
       expect(line, contains('?token=<redacted>'));
     });

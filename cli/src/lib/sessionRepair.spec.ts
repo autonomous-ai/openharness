@@ -1,7 +1,7 @@
 import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 import { darwinProcessImages } from '../testing/darwinProcessImages.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
@@ -519,6 +519,10 @@ describe('session repair — Codex profiles', () => {
 })
 
 describe('session repair — a Codex process names its own rollout', () => {
+  // On a Mac the live cases need the process-image helper, compiled once by the release's builder: 1.5 s of a compiler
+  // idle, more loaded, inside the first live case's budget, and nothing the cases are about. Linux has no helper to
+  // build. A build that fails is said by the live cases, which ask for it again; the others never need it.
+  beforeAll(() => { if (process.platform === 'darwin') try { darwinProcessImages() } catch { /* said by the live cases */ } }, 120_000)
   it('reads the native child of the npm launcher, never another launcher or a nested tool', async () => {
     const { processFilesOf } = await import('./sessionRepair.js')
     const own = '/tmp/profile/sessions/rollout-own.jsonl'
@@ -875,6 +879,42 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   if (['bad json', 'different cwd', 'missing start', 'missing cwd', 'missing id', 'invalid id'].includes(mode)) {
     await expect(result).rejects.toThrow('Conversation identity is held')
   } else await expect(result).resolves.toBeNull()
+})
+
+// Claude Code on Windows writes no `procStart`: its record names the process's creation time as a decimal FILETIME
+// (`procStartFt`, 100 ns ticks since 1601). Every such record was held as invalid, so no Windows Claude agent was
+// identified by its own record. It names this process only at this start, to the millisecond, and never another's.
+describe('Claude Code\'s Windows process record (procStartFt)', () => {
+  const id = '11111111-2222-4333-8444-555555555555'
+  const filetime = (ms: number, ticks = 0n) => String((BigInt(ms) + 11_644_473_600_000n) * 10_000n + ticks)
+  const FT = filetime(STARTED_AT, 4_321n)
+  async function find(fields: Record<string, unknown>, startedAt = STARTED_AT) {
+    const home = tempRoot(); const root = join(home, 'projects')
+    // A busy project: a scan by folder alone names neither, so only the record can.
+    writeTranscript(root, 'project', id, CWD, STARTED_AT)
+    writeTranscript(root, 'project', 'another-session', CWD, STARTED_AT)
+    mkdirSync(join(home, 'sessions'))
+    writeFileSync(join(home, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, ...fields }))
+    const { findLiveSession } = await load(root)
+    return findLiveSession('claude', CWD, startedAt, { pid: 77, bornOnly: true })
+  }
+
+  it('finds the session a record with only procStartFt names for this process', async () => {
+    await expect(find({ procStartFt: FT })).resolves.toMatchObject({ sessionId: id })
+  })
+
+  it('never binds a procStartFt record of another start or another pid', async () => {
+    await expect(find({ procStartFt: FT }, STARTED_AT + 1)).resolves.toBeNull()
+    await expect(find({ pid: 78, procStartFt: FT })).resolves.toBeNull()
+  })
+
+  it.each([['non-numeric', '12x'], ['overlong', '1'.repeat(21)], ['not text', 7]])('holds the identity on a %s procStartFt', async (_, value) => {
+    await expect(find({ procStartFt: value })).rejects.toThrow('Conversation identity is held')
+  })
+
+  it('reads procStartFt as the start when the record also has procStart', async () => {
+    await expect(find({ procStartFt: filetime(STARTED_AT + 1_000), procStart: new Date(STARTED_AT).toUTCString() })).resolves.toBeNull()
+  })
 })
 
 // Claude Code names its session in the record at once but writes the transcript only with the first prompt: a

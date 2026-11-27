@@ -6,7 +6,6 @@ export default defineConfig({
   test: {
     ...base.test,
     include: ['src/dsh/**/*.spec.ts', 'src/backendSocket.dsh.spec.ts', 'src/backendSocket.models.spec.ts', 'src/lib/newAgentModel.spec.ts', 'src/lib/launchOverrides.spec.ts', 'src/lib/createAgentPane.spec.ts', 'src/lib/registry.spec.ts'],
-    testTimeout: 30_000,
     coverage: {
       provider: 'v8', enabled: true,
       include: ['src/lib/newAgentModel.ts', 'src/dsh/adapters.ts', 'src/dsh/compatibility.ts', 'src/dsh/runtime.ts', 'src/dsh/launch.ts', 'src/dsh/materialize.ts'],

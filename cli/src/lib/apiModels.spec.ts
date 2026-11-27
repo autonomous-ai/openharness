@@ -112,12 +112,12 @@ describe('an API as a model source', () => {
   })
 
   it('reports an agent moved onto a saved API as on its model, and a stranger endpoint as not', async () => {
-    const env = { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', ANTHROPIC_MODEL: 'z-ai/glm-5' }
+    const argv = (url: string) => `-c model_providers.grid.base_url="${url}" -m z-ai/glm-5`
     const saved = store.save({ provider: 'openrouter', apiKey: secret })
-    expect(classifyGridAssignment('claude', { ...env, ANTHROPIC_BASE_URL: 'https://other.example.test/api' })).toBeNull()
+    expect(classifyGridAssignment('codex', argv('https://other.example.test/api'))).toBeNull()
     await resolveApiTarget(store, saved.id, 'z-ai/glm-5', { fetch: answering(listing) })
-    expect(classifyGridAssignment('claude', env)).toEqual({ baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-5' })
-    expect(classifyGridAssignment('codex', {}, '-c model_providers.grid.base_url="https://openrouter.ai/api/v1" -m z-ai/glm-5'))
+    expect(classifyGridAssignment('codex', argv('https://openrouter.ai/api'))).toEqual({ baseUrl: 'https://openrouter.ai/api', model: 'z-ai/glm-5' })
+    expect(classifyGridAssignment('codex', argv('https://openrouter.ai/api/v1')))
       .toEqual({ baseUrl: 'https://openrouter.ai/api/v1', model: 'z-ai/glm-5' })
   })
 
@@ -258,10 +258,10 @@ describe('agent_retarget onto an API model', () => {
     const socket = socketWithModels()
     vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     socket.onRetargetAgent = vi.fn(async () => ({ ok: true as const }))
-    const env = { ANTHROPIC_BASE_URL: 'https://far.example.test', ANTHROPIC_MODEL: 'm' }
-    expect(classifyGridAssignment('claude', env)).toBeNull()
+    const argv = '-c model_providers.grid.base_url="https://far.example.test" -m m'
+    expect(classifyGridAssignment('codex', argv)).toBeNull()
     await retarget(socket, { apiConnection: 'far', apiModel: 'm' })
-    expect(classifyGridAssignment('claude', env)).toEqual({ baseUrl: 'https://far.example.test', model: 'm' })
+    expect(classifyGridAssignment('codex', argv)).toEqual({ baseUrl: 'https://far.example.test', model: 'm' })
     await socket.stop()
   })
 })

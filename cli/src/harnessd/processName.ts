@@ -5,7 +5,9 @@
  * `node`. A symlink does not help either — the kernel takes the name of the file it resolves to (Claude
  * Code shows as `2.1.291`, its binary's file name). A hard link does: same inode, no extra disk, the same
  * code signature, and the name it was exec'd under. So each process is started through a hard link of
- * the managed node named after it (`harnessd`, `harnessd-core`, `harnessd-search`…).
+ * the managed node named after it (`harnessd`, `harnessd-core`, `harnessd-search`…). The link is the only
+ * name: no process sets `process.title`, which on macOS put its environment where `pgrep -f` reads its
+ * arguments (../architecture.processTitle.spec.ts).
  *
  * The links live in `<runtime>/node-…/libexec/harnessd/`, never in `bin/`: that folder is put on agent
  * panes' PATH (lib/engineLaunch.ts `npmRuntimePrelude`), where `harnessd-core` would be a command. Only a
@@ -15,6 +17,7 @@
  */
 import { linkSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { errorKind } from '../lib/log.js'
 
 export { baseNode } from './baseNode.js'
 
@@ -92,6 +95,6 @@ export function namedNode(node: string, name: string, runtimeDir: string | undef
   } catch (error) {
     // A link made but not renamed would otherwise stay behind, one per failed start.
     try { fs.unlink(temp) } catch { /* never made */ }
-    return fallBack(error instanceof Error ? error.message : String(error))
+    return fallBack(errorKind(error))
   }
 }

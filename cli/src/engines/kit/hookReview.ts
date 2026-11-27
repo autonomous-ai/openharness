@@ -6,8 +6,8 @@
  * The record is the engine's own, written as the engine writes it on "Trust all": a table per hook in its
  * config file, keyed by the settings file in the real path of the engine's home, the event, the block and
  * the hook, holding the hash the engine computes of the hook. The hash is the engine's: the hook normalized
- * (its matcher only where the engine honours one, a timeout always, `async`), every object's keys sorted,
- * compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.162.0
+ * (its matcher only where the engine honours one, a timeout always, clamped as the engine clamps it, `async`),
+ * every object's keys sorted, compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.169.0
  * (hookReview.spec.ts). Should an engine hash differently, it sees a changed hook and asks again, which is
  * where it was before.
  *
@@ -18,6 +18,7 @@ import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
+import { errorKind, outsideHome } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
@@ -37,12 +38,21 @@ function sortedKeys(value: unknown): unknown {
 
 const identityHash = (identity: unknown): string => `sha256:${createHash('sha256').update(JSON.stringify(sortedKeys(identity))).digest('hex')}`
 
+/** Events Codex gives 1 s when none is named and caps at 3 s, hashing the clamped value (codex-rs
+ *  `normalize_command_hook`, `SESSION_END_DEFAULT_TIMEOUT_SEC`/`SESSION_END_MAX_TIMEOUT_SEC`, 0.150.0 to 0.169.0). */
+const SHORT_EVENTS = new Set(['interrupt', 'session_end'])
+
+/** The timeout the engine hashes: a short event's clamped to 1-3 s, any other at least 1. */
+const hashedTimeout = (label: string, timeout: number | undefined, defaultTimeout: number): number =>
+  SHORT_EVENTS.has(label) ? Math.min(3, Math.max(1, timeout ?? 1)) : Math.max(1, timeout ?? defaultTimeout)
+
 /** The engine's hash of one command hook, as `hooks/list` reports it in `currentHash`. */
 export function reviewHash(record: HookReviewRecord, event: string, matcher: string | undefined, hook: { command: string; timeout?: number; async?: boolean }): string {
+  const label = record.events[event]
   return identityHash({
-    event_name: record.events[event],
+    event_name: label,
     ...(record.matcherEvents.includes(event) && matcher !== undefined ? { matcher } : {}),
-    hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout ?? record.defaultTimeout), async: hook.async === true }],
+    hooks: [{ type: 'command', command: hook.command, timeout: hashedTimeout(label, hook.timeout, record.defaultTimeout), async: hook.async === true }],
   })
 }
 
@@ -78,13 +88,12 @@ const KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')`
 const HEADER = new RegExp(String.raw`^[ \t]*\[\[?[ \t]*${KEY}(?:[ \t]*\.[ \t]*${KEY})*[ \t]*\]\]?[ \t]*(?:#.*)?\r?$`)
 
 /**
- * The text as it is read for its structure: multi-line strings and a byte order mark blanked to spaces,
- * newlines kept, so that a line inside a string is never taken for a header or a key, and every offset still
- * points into the real text. Codex refuses a config.toml that does not parse, every setting in it lost: a
- * header appended in the wrong place would cost a person far more than a hook review.
+ * The text as it is read for its structure: multi-line strings blanked to spaces, newlines kept, so that a line
+ * inside a string is never taken for a header or a key, and every offset still points into the real text. Codex
+ * refuses a config.toml that does not parse, every setting in it lost: a header appended in the wrong place would
+ * cost a person far more than a hook review. The text has no BOM: inspectHookFile reads past one.
  */
 const structure = (text: string): string => text
-  .replace(/^﻿/, ' ')
   .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, (string) => string.replace(/[^\n]/g, ' '))
 
 /** How many arrays and inline tables a line opens, less those it closes; its strings and comment left out. */
@@ -179,8 +188,9 @@ export function withReviewRecords(text: string, record: HookReviewRecord, record
 /**
  * `harness uninstall`: the config file's text without each record [owned] calls Harness's (its key and hash), in the
  * one form Harness, and the engine on "Trust all", writes it: its own table holding the hash and nothing else. The
- * table goes with the blank lines after it, up to the next header; every other byte stays. A record with more in its
- * table is the engine's or the person's and is kept.
+ * table goes with the blank lines after it, up to the next header; every other byte of the text stays (a BOM the file
+ * had is not in it, and the file is written without one). A record with more in its table is the engine's or the
+ * person's and is kept.
  */
 export function withoutReviewRecords(text: string, record: HookReviewRecord, owned: (key: string, hash: string) => boolean): { text: string; removed: number } {
   const shape = structure(text)
@@ -206,28 +216,33 @@ export function withoutReviewRecords(text: string, record: HookReviewRecord, own
 }
 
 /** Inspect approvals before publishing hooks. An unreadable or conflicting
- * config cannot authorize even the first write of the installation. */
+ * config cannot authorize even the first write of the installation. [pruned]: the settings as they were before
+ * Harness's blocks were taken out of them, whose records of those blocks go in the same write. */
 export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
-  platform: NodeJS.Platform = process.platform) {
-  const config = join(home, record.file), observed = inspectHookFile(config, 0o600)
+  platform: NodeJS.Platform = process.platform, pruned?: Settings) {
+  const config = join(home, record.fileName), observed = inspectHookFile(config, 0o600)
   // Codex uses the real home plus the literal hooks filename, even when that
   // leaf is an alias. The config's own leaf alias does not change that home.
-  const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
+  const keyed = join(observed.directory, basename(settingsFile))
+  const records = reviewRecords(record, keyed, settings, platform)
   if (records.size === 0) throw new HookPreparationHeld('the hooks have no verifiable approval records')
   const text = observed.content ?? ''
   try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
   const next = withReviewRecords(text, record, records)
   if (next === 'unsafe') throw new HookPreparationHeld('the hook review configuration cannot be safely updated')
-  const output = next === 'unchanged' ? text : next
+  // A record [settings] still needs, the same hook at the same place, stays.
+  const gone = pruned ? reviewRecords(record, keyed, pruned, platform) : new Map<string, string>()
+  const output = withoutReviewRecords(next === 'unchanged' ? text : next, record, (key, hash) => gone.get(key) === hash && records.get(key) !== hash).text
   try { parseToml(output, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the prepared hook reviews are not complete TOML') }
   observed.prepare(output)
   return {
     verify: observed.verify,
     commit: async (attempt: HookPreparationAttempt) => {
-      const published = await observed.replace(next === 'unchanged' ? text : next, attempt)
-      if (next !== 'unchanged') console.log(record.messages.recorded.replace('{config}', config))
+      const published = await observed.replace(output, attempt)
+      // The file by its name, never its path, which names the person's home.
+      if (output !== text) console.log(record.messages.recorded.replace('{config}', () => record.fileName + outsideHome(config)))
       return published
     },
   }
@@ -236,7 +251,7 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
 /** Record the exact settings already on disk. Failure is explicit so launch
  * remains held until both the hook and its approval are confirmed durable. */
 export async function recordReviewed(record: HookReviewRecord, home: string, settingsFile: string): Promise<boolean> {
-  const config = join(home, record.file)
+  const config = join(home, record.fileName)
   try { return await runHookPreparation([settingsFile, config], async attempt => {
     const source = inspectHookFile(settingsFile)
     const settings = JSON.parse(source.content ?? 'null') as Settings
@@ -246,7 +261,7 @@ export async function recordReviewed(record: HookReviewRecord, home: string, set
     source.verify(); published.verify()
     return true
   }) } catch (err) {
-    console.error(record.messages.skipped.replace('{config}', config), err)
+    console.error(record.messages.skipped.replace('{config}', () => record.fileName + outsideHome(config)), err instanceof HookPreparationHeld ? err.hold : errorKind(err))
     return false
   }
 }

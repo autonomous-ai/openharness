@@ -88,8 +88,9 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     return streamId
   }
   /**
-   * harnessd's processes as their master logs them (never by title: the master and its services rename
-   * themselves): the master this test started, its latest core, and each service's latest process, alive.
+   * harnessd's processes as their master logs them (never by what ps shows: an older release's master and services
+   * rename themselves, this build's do not): the master this test started, its latest core, and each service's latest
+   * process, alive.
    */
   const harnessdProcesses = (): Array<{ role: string; pid: number }> => {
     const text = logs()
@@ -194,11 +195,6 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
         ADAPTER_GRID_RUNTIME_METADATA_URL: `${local}/grid/metadata.json`,
       },
     })
-    // Nothing beyond this machine: the runner's environment may name a registry or a proxy.
-    for (const [key, value] of Object.entries(daemon.env)) {
-      const host = typeof value === 'string' && /^(https?|wss?):\/\//i.test(value) ? new URL(value).hostname : null
-      if (host && host !== '127.0.0.1' && host !== 'localhost') delete daemon.env[key]
-    }
     if (backend) {
       // Signed in, as `harness login` leaves a computer: a session for its machine on this account.
       writeFileSync(join(daemon.root, 'auth', 'session.json'), JSON.stringify({

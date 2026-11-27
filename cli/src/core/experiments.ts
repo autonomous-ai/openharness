@@ -10,16 +10,17 @@
  */
 import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { AGENT_SETTING_EXPERIMENTS, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
+import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
 import type { AuthSession } from '../lib/authSession.js'
+import { errorKind } from '../lib/log.js'
 import type { BackendNotice } from './api.js'
 
 type Experiments = Readonly<Record<string, { state: readonly string[] }>>
 
 /** Whether any of `state` is in `dataDir`: a path under it, or `dir/prefix*suffix` for a file of that kind in that folder.
- *  The star was only read after a slash, so `super-tabs/host-*.json` was looked up as that literal file name and never
- *  found: a machine contributed to a Swarm never woke the Swarm service at a start, and after the master re-executed
- *  (every update) it stayed off until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
+ *  The star was only read after a slash, so `folder/name-*.json` was looked up as that literal file name and never found:
+ *  an experiment with saved state was not woken at a start, and after the master re-executed (every update) it stayed off
+ *  until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
 export function stateIsThere(dataDir: string, state: readonly string[]): boolean {
   return state.some((entry) => {
     const slash = entry.lastIndexOf('/')
@@ -58,6 +59,7 @@ type Answer = { status: number; body: Record<string, unknown> }
 
 /** What `harness settings` and an older window's Settings ▸ Agents are told while this computer is signed out. */
 export const AGENT_SETTINGS_SIGNED_OUT = 'Sign in to Harness to change this: what agents may do is an experiment of your account (Settings ▸ Experimental).'
+const GRANTABLE: ReadonlySet<string> = new Set(Object.values(AGENT_SETTING_NAMES))
 const ACCOUNT_UNAVAILABLE = 'Harness could not reach your account to change this. Try again in a moment.'
 
 /**
@@ -82,6 +84,9 @@ export function createAgentSettingsSync(deps: {
   onNotice: (listener: (notice: BackendNotice) => void) => () => void
   /** Agent Messages' switch changed here (core/api.ts `MessagesPort.settingsChanged`). */
   messagesChanged: () => void
+  /** The account turned Hachi on: its package must be in place before the person's first ⇧⌘H creates it, and the Store
+   *  that puts it there may not be running (core/viewersWake.ts). Absent, nobody is told. */
+  hachiOn?: () => void
   everyMs?: number
   log?: (line: string) => void
 }) {
@@ -101,10 +106,11 @@ export function createAgentSettingsSync(deps: {
     if (!ownsAgentSettings(owner, now)) return answer
     const before = readAgentSettings(deps.dataDir, now)
     try { saveAgentSettings(deps.dataDir, owner, said.settings) } catch (error) {
-      log(`[experiments] the agents' settings could not be kept · ${String(error)}`)
+      log(`[experiments] the agents' settings could not be kept · ${errorKind(error)}`)
       return answer
     }
     if (said.settings.agentMessages !== before.agentMessages) deps.messagesChanged()
+    if (said.settings.hachi && !before.hachi) deps.hachiOn?.()
     return answer
   }
 
@@ -112,7 +118,7 @@ export function createAgentSettingsSync(deps: {
     const asked = deps.session()
     if (!asked?.machineId) return
     try { heard(await deps.backend('GET', EXPERIMENTAL_SETTINGS), asked) } catch (error) {
-      log(`[experiments] the account's experiments could not be read · ${error instanceof Error ? error.message : String(error)}`)
+      log(`[experiments] the account's experiments could not be read · ${errorKind(error)}`)
     }
   }
 
@@ -168,8 +174,10 @@ export function createAgentSettingsSync(deps: {
      * Agents, written through to the account's experiments. Signed out there is no account to write to.
      */
     async settingsWrite(body: unknown): Promise<Answer> {
+      // Only the settings `harness settings` names: Hachi's switch is the person's yes, given in Settings ▸ Experimental
+      // alone (docs/design/2026-11-12-hachi.md), so no agent turns it through here.
       const changes = body && typeof body === 'object'
-        ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => key in AGENT_SETTING_EXPERIMENTS && typeof value === 'boolean')
+        ? Object.entries(body as Record<string, unknown>).filter(([key, value]) => GRANTABLE.has(key) && typeof value === 'boolean')
         : []
       if (!changes.length) return { status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Nothing to change: send {"agentsStartAgents": true|false}, {"pullRequestLine": true|false}, {"agentMessages": true|false}, {"agentMessagesHideSummary": true|false}, {"agentsTellAgents": true|false} or {"programsReply": true|false}.' } } }
       const asked = deps.session()
@@ -183,9 +191,10 @@ export function createAgentSettingsSync(deps: {
         if (!agentSettingsFromAnswer(written)) return failed(written)
       }
       // Turned on by an agent on the person's yes (agentClient/settings.ts): Harness has only its word for that yes.
+      // Its name is the person's words, so the log says only that an agent did.
       const byAgent = (body as Record<string, unknown>).byAgent
       if (typeof byAgent === 'string' && byAgent.trim()) {
-        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by ${byAgent.trim().slice(0, 40)}, which says the person said yes`)
+        log(`[settings] ${changes.map(([key, enabled]) => `${key} ${enabled ? 'on' : 'off'}`).join(', ')} by an agent, which says the person said yes`)
       }
       return { status: 200, body: { ...readAgentSettings(deps.dataDir, deps.session()), signedIn: true } }
     },
@@ -206,7 +215,7 @@ export function createAccountNotices(tell: (notice: BackendNotice) => void, log:
     },
     notice(notice: BackendNotice): void {
       for (const listener of listeners) {
-        try { listener(notice) } catch (error) { log(`[experiments] a notice's listener failed · ${error instanceof Error ? error.message : String(error)}`) }
+        try { listener(notice) } catch (error) { log(`[experiments] a notice's listener failed · ${errorKind(error)}`) }
       }
       tell(notice)
     },

@@ -118,12 +118,22 @@ class _BrowserSettingsPageState extends State<BrowserSettingsPage> {
       appLog.warn('browser', 'settings request failed: $code');
       _failure = code == 'NOT_OWNER'
           ? 'Only its owner can open this browser'
+          // A screen is one of this build's or the machine's own, so a refused one is newer than the machine. No version
+          // or capability names it: CLIs 0.6.10-0.6.12, the only ones without portrait, refuse with exactly this detail.
+          : save &&
+                failure is WsRequestFailure &&
+                failure.detail == 'invalid browser setting: screen'
+          ? 'Update Harness on $_machineName for this screen'
           : save && failure is WsRequestFailure
           ? 'Browser settings weren\'t saved. Check them and save again.'
           : 'Reconnect this machine to open its browser';
     }
     if (mounted) setState(() => _busy = false);
   }
+
+  String get _machineName =>
+      widget.app.stateOf(widget.machineId)?.machine.displayName ??
+      widget.machineId;
 
   static int? _number(String text, int max) {
     final n = int.tryParse(text.trim());
@@ -414,7 +424,7 @@ class _BrowserSettingsPageState extends State<BrowserSettingsPage> {
             _row(
               'Screen',
               _select('screen', _screen, {
-                for (final size in BrowserSettings.screens)
+                for (final size in {...BrowserSettings.screens, _screen})
                   size: size.replaceFirst('x', ' × '),
               }, (screen) => _screen = screen),
             ),

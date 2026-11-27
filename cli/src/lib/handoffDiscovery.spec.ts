@@ -27,6 +27,13 @@ describe('sessionDiscovery', () => {
     expect(d.findLiveSession).toHaveBeenCalledWith('codex', '/w', Date.parse(MARKER), { bornOnly: true, pid: 4242, codexHome: undefined })
   })
 
+  it('looks for the session of a process with a Windows start marker', async () => {
+    const d = deps()
+    const processIdentity = { pid: 4242, executable: 'codex.exe', startMarker: 'w:133700000000000000' }
+    expect(await sessionDiscovery(d)(agent({ processIdentity }))).toEqual({ engine: 'codex', sessionId: 's9', transcriptPath: '/t/s9.jsonl' })
+    expect(d.findLiveSession).toHaveBeenCalledWith('codex', '/w', 1_725_526_400_000, { bornOnly: true, pid: 4242, codexHome: undefined })
+  })
+
   it('passes a codex agent its own CODEX_HOME', async () => {
     const d = deps()
     await sessionDiscovery(d)(agent({ codexHome: '/h' }))

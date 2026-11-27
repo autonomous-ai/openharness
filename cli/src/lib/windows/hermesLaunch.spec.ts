@@ -1,13 +1,27 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { hermesArgv, hermesBootFile, hermesBootSource, hermesRoot, launcherPython } from './hermesLaunch.js'
 import { windowsEngineArgv } from './launch.js'
 
 // Hermes' Windows installer, as measured on DESKTOP-0TFH0OJ (2026-11-09): <root>\bin\hermes.exe is a 115 KB uv
 // launcher, unsigned, whose `#!` names the (also unsigned) Python it ships; Smart App Control refuses it, but
 // `hermes_cli.main` runs fine on that Python. The shapes below are that install's, copied into a temp folder.
+// A write that stops part way, as on a full disk.
+const disk = vi.hoisted(() => ({ full: false }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+  }
+})
+afterEach(() => { disk.full = false })
+
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 const folder = (): string => { const dir = mkdtempSync(join(tmpdir(), 'hermes-win-')); dirs.push(dir); return dir }
@@ -58,6 +72,16 @@ describe('Hermes on Windows, past Smart App Control', () => {
     // A boot file that cannot be written: the launcher's own argv, and Windows' own sentence.
     const ok = install()
     expect(hermesArgv(ok.launcher, [], { platform: 'win32', write: () => { throw new Error('denied') } })).toBeNull()
+  })
+
+  it('a write that fails part way leaves the old file', () => {
+    const { root, launcher } = install()
+    // The boot file of an install that has since moved: rewritten, but only ever whole.
+    const old = touch(hermesBootFile(root), hermesBootSource(join(root, 'moved')))
+    disk.full = true
+    expect(hermesArgv(launcher, [], { platform: 'win32' })).toBeNull()
+    disk.full = false
+    expect(readFileSync(old, 'utf8')).toBe(hermesBootSource(join(root, 'moved')))
   })
 
   it('is what an engine argv does for hermes, and only for hermes', () => {

@@ -42,10 +42,12 @@ It keeps the core and the services running, and nothing else.
    there: a failed exec cannot be caught (`reexec.ts`).
 8. **Each process runs under its own name** (`processName.ts`): Activity Monitor and `top` name a process
    after the file exec'd, and the master, core and each service are started through a hard link of the
-   managed node (`harnessd`, `harnessd-core`, `harnessd-<service>`), titled the same. The links live in
-   `<runtime>/node-…/libexec/harnessd/` — never `bin/`, which agent panes get on PATH — are made only for
-   the managed runtime's node, never a bare `harness` (the dial's `pgrep -x harness` means the app), and
-   any failure runs the process as `node`. Children a process starts use `baseNode(process.execPath)`.
+   managed node (`harnessd`, `harnessd-core`, `harnessd-<service>`). No process sets `process.title`: on macOS
+   a title puts the process's environment where `pgrep -f` reads its arguments
+   (`../architecture.processTitle.spec.ts`). The links live in `<runtime>/node-…/libexec/harnessd/` — never
+   `bin/`, which agent panes get on PATH — are made only for the managed runtime's node, never a bare
+   `harness` (the dial's `pgrep -x harness` means the app), and any failure runs the process as `node`.
+   Children a process starts use `baseNode(process.execPath)`.
 9. **Updates are the master's to run, never the core's.** The updater runs in a process the master starts
    (`UPDATER_HOST`, `../services/updaterProcess.ts`): it downloads, verifies, canaries and stages a build,
    then says so (`harnessd:staged`); the master asks the core to hand over (`harnessd:update`) and judges

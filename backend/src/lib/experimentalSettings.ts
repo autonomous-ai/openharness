@@ -9,8 +9,10 @@ import { prisma } from './prisma.js'
  *  another: an agent may give more work to a harness it started (`harness tell`), behind a switch of its own because a
  *  harness another started gets no exception from Agent Messages (owner, 2026-10-11). `programs_reply` is the last: a
  *  program acting for the person, such as a lamp, may give more work to an idle harness of theirs in a pane (`harness
- *  reply`, #1628), a switch apart from `agents_tell_agents`, which is about agents. */
-export const experimentalFeatures = ['focus_bar_creature', 'share_button', 'devices_tab', 'agents_start_agents', 'agent_pull_request_line', 'agent_messages', 'agent_messages_hide_summary', 'agents_tell_agents', 'programs_reply'] as const
+ *  reply`, #1628), a switch apart from `agents_tell_agents`, which is about agents. `hachi` turns on Hachi, the person's
+ *  own harness that starts and follows their other harnesses (docs/design/2026-11-12-hachi.md); turning it on is their
+ *  yes for the start and tell gates to let Hachi through, so only the switch turns it on. */
+export const experimentalFeatures = ['focus_bar_creature', 'share_button', 'devices_tab', 'agents_start_agents', 'agent_pull_request_line', 'agent_messages', 'agent_messages_hide_summary', 'agents_tell_agents', 'programs_reply', 'hachi'] as const
 export type ExperimentalFeature = typeof experimentalFeatures[number]
 export const experimentalSettingsId = (userId: string): string =>
   createHash('sha256').update(JSON.stringify(['experimental-settings', userId])).digest('hex').slice(0, 24)
@@ -19,7 +21,7 @@ export const experimentalSettingsId = (userId: string): string =>
 const FIELDS = {
   focus_bar_creature: 'focusBarCreature', share_button: 'shareButton', devices_tab: 'devicesTab',
   agents_start_agents: 'agentsStartAgents', agent_pull_request_line: 'agentPullRequestLine', agent_messages: 'agentMessages',
-  agent_messages_hide_summary: 'agentMessagesHideSummary', agents_tell_agents: 'agentsTellAgents', programs_reply: 'programsReply',
+  agent_messages_hide_summary: 'agentMessagesHideSummary', agents_tell_agents: 'agentsTellAgents', programs_reply: 'programsReply', hachi: 'hachi',
 } as const satisfies Record<ExperimentalFeature, string>
 type Row = { [K in (typeof FIELDS)[ExperimentalFeature]]?: boolean } & { revision: number }
 

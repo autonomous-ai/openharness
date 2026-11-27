@@ -354,7 +354,6 @@ void main() {
       ('cmd+left', 'pane.focus_left'),
       ('cmd+enter', 'pane.zoom'),
       ('cmd+shift+p', 'navigation.commands'),
-      ('cmd+s', 'super_tab.new'),
       ('cmd+ctrl+s', 'app.store'),
       ('cmd+shift+s', 'agent.share'),
       ('cmd+m', 'machines.list'),
@@ -370,6 +369,8 @@ void main() {
     }
     // Chat with PM is gone in v4: its key is free.
     expect(command('cmd+shift+k'), isNull);
+    // New Swarm went with the Swarm (2026-11-14): its key is free.
+    expect(command('cmd+s'), isNull);
     expect(harnessCommandById['swarm.chat_with_pm'], isNull);
     // Parity with the table that handles real workspace input, including all
     // alternate directions and tab/history keys.
@@ -384,9 +385,11 @@ void main() {
       final id = command(stroke.toString());
       expect(harnessCommandById[id]?.action, shortcut.action);
     }
-    for (final retired in ['cmd+shift+h', 'cmd+u', 'cmd+y']) {
+    for (final retired in ['cmd+u', 'cmd+y']) {
       expect(command(retired), isNull, reason: retired);
     }
+    // A retired chord given again: Hachi's (docs/design/2026-11-12-hachi.md), bound only while it is on.
+    expect(command('cmd+shift+h'), 'hachi.open');
     // ⌥⌘←/→ walk tabs, as in Safari and Chrome; ⇧⌘[ ] no longer do.
     expect(command('cmd+alt+left'), 'swarm.previous');
     expect(command('cmd+alt+right'), 'swarm.next');

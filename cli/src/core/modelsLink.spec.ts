@@ -101,7 +101,7 @@ describe('models in its own process, as the core reaches it', () => {
     })
 
     it('checks the entire assignment batch before returning it', async () => {
-      const processes = [{ key: 'a', engine: 'claude' as const, env: { ANTHROPIC_BASE_URL: RELAY }, args: '' }]
+      const processes = [{ key: 'a', engine: 'codex' as const, args: `-c model_providers.grid.base_url="${RELAY}" -m m` }]
       const assignments = [{ key: 'a', assignment: { baseUrl: RELAY, model: null } }]
       const { port, call } = setup({ gridAssignments: { assignments } })
       expect(await port.gridAssignments(processes)).toEqual(assignments)

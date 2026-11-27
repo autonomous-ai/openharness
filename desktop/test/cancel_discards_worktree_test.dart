@@ -6,6 +6,9 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/project_folder.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -55,12 +58,16 @@ class _Connection extends WsConn {
 }
 
 class _App extends AppNotifier {
-  _App(_Connection connection, {required bool local, this.discardFails = false})
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        connectionForTest: (_) => connection,
-      ) {
+  _App(
+    _Connection connection, {
+    required bool local,
+    this.discardFails = false,
+    this.discardKeeps = false,
+  }) : super(
+         config: AppConfig.dev,
+         authSession: AuthSession(),
+         connectionForTest: (_) => connection,
+       ) {
     const machine = Machine(
       machineId: 'm',
       name: 'Studio',
@@ -69,6 +76,7 @@ class _App extends AppNotifier {
     machineStates['m'] = MachineState(machine)..localOnly = local;
   }
   final bool discardFails;
+  final bool discardKeeps;
   final discarded = <(String, bool)>[];
   @override
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
@@ -82,9 +90,14 @@ class _App extends AppNotifier {
     String folder, {
     bool keepBranch = false,
   }) async {
-    if (discardFails) throw StateError('git went away');
+    if (discardFails) {
+      throw const FileSystemException(
+        'cannot remove',
+        '/harnesses/worktrees/x4/witty-finch',
+      );
+    }
     discarded.add((folder, keepBranch));
-    return true;
+    return !discardKeeps;
   }
 }
 
@@ -195,6 +208,38 @@ void main() {
     },
   );
 
+  // A worktree's folder is named after its branch, which the person chose.
+  test('a worktree kept after cancel is logged without its folder', () async {
+    final stream = _captureLog();
+    final connection = _Connection();
+    final app = _App(connection, local: true, discardKeeps: true);
+    addTearDown(app.dispose);
+    expect(await _holdThenCancel(app, connection), isNull);
+    expect(
+      stream.entries
+          .where((e) => e.category == 'worktree')
+          .map((e) => e.message),
+      ['kept after cancel'],
+    );
+    _expectNoFolder(stream);
+  });
+
+  test(
+    'a worktree that cannot be removed is logged by its error\'s type',
+    () async {
+      final stream = _captureLog();
+      final connection = _Connection();
+      final app = _App(connection, local: true, discardFails: true);
+      addTearDown(app.dispose);
+      expect(await _holdThenCancel(app, connection), isNull);
+      final line = stream.entries.singleWhere((e) => e.category == 'worktree');
+      expect(line.level, AppLogLevel.warn);
+      expect(line.message, 'not removed after cancel');
+      expect(line.error, 'FileSystemException');
+      _expectNoFolder(stream);
+    },
+  );
+
   group('New Harness on this computer', () {
     late Directory root;
     late String repo;
@@ -273,6 +318,22 @@ void main() {
       );
     });
   });
+}
+
+/// Sends [appLog] to a fresh [LogStream] for one test.
+LogStream _captureLog() {
+  final previous = appLog;
+  final stream = LogStream();
+  appLog = StreamAppLog(stream);
+  addTearDown(() => appLog = previous);
+  return stream;
+}
+
+void _expectNoFolder(LogStream stream) {
+  for (final e in stream.entries) {
+    expect(e.message, isNot(contains('witty-finch')));
+    expect(e.error ?? '', isNot(contains('witty-finch')));
+  }
 }
 
 /// The box reads Git with real processes: waits until it has an answer.

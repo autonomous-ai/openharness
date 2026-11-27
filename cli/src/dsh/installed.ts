@@ -6,11 +6,18 @@
  * and a row whose manifest no longer parses is reported broken rather than silently dropped, so a
  * DSH that breaks on update is visible in `harness dsh list` instead of vanishing from the picker.
  */
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { atomicWriteFile, jsonArray, readState, requireState } from '../lib/secureState.js'
 import { DSH_ID_RE, readDshManifest, type DshManifest } from './manifest.js'
+
+/**
+ * What a package's setup built (venvs, launchers, environments) names the folder it ran in, so when Harness's folder
+ * moves the setup must run again: `pending` until the Store has run it (setupAgain.ts), `needs-setup` when that failed,
+ * until an update runs it again.
+ */
+export type SetupMark = 'pending' | 'needs-setup'
 
 export interface InstalledDshRecord {
   id: string
@@ -28,6 +35,8 @@ export interface InstalledDshRecord {
   linked: boolean
   installedAt: number
   updatedAt?: number
+  /** Set to `pending` by the move of Harness's folder. */
+  setup?: SetupMark
 }
 
 export interface InstalledDsh extends InstalledDshRecord {
@@ -67,30 +76,44 @@ function validRecord(value: unknown): value is InstalledDshRecord {
 }
 
 export function readInstalledIndex(): InstalledDshRecord[] {
-  let text: string
-  try {
-    text = readFileSync(indexPath(), 'utf8')
-  } catch {
-    return []
-  }
-  try {
-    const parsed = JSON.parse(text) as unknown
-    return Array.isArray(parsed) ? parsed.filter(validRecord) : []
-  } catch {
-    return []
-  }
+  const read = readState(indexPath(), 'cache', jsonArray)
+  return read.state === 'ok' ? read.value.filter(validRecord) : []
 }
 
 export function writeInstalledIndex(records: readonly InstalledDshRecord[]): void {
   mkdirSync(dshRootDir(), { recursive: true, mode: 0o700 })
-  const temporary = `${indexPath()}.${randomUUID()}.tmp`
-  writeFileSync(temporary, JSON.stringify(records, null, 2) + '\n', { mode: 0o600 })
-  renameSync(temporary, indexPath())
+  atomicWriteFile(indexPath(), JSON.stringify(records, null, 2) + '\n', 'cache')
 }
 
 export function upsertInstalledRecord(record: InstalledDshRecord): void {
-  const others = readInstalledIndex().filter((row) => row.id !== record.id)
+  // An index that cannot be read now throws: read as none, this write would forget every other harness installed.
+  const others = (requireState(indexPath(), jsonArray, 'cache') ?? []).filter(validRecord).filter((row) => row.id !== record.id)
   writeInstalledIndex([...others, record].sort((a, b) => a.id.localeCompare(b.id)))
+  invalidateInstalledDsh()
+}
+
+/**
+ * A package whose setup has yet to run again after the move. A linked one too: the move leaves its checkout where it is,
+ * but what its setup built there runs on Harness's Python, which moved.
+ */
+export function awaitsSetup(record: InstalledDshRecord): boolean {
+  return record.setup === 'pending'
+}
+
+/** Packages whose setup has yet to run again after the move. 'needs-setup' does not count. */
+export function setupsPending(records: readonly InstalledDshRecord[] = readInstalledIndex()): number {
+  return records.filter(awaitsSetup).length
+}
+
+/** Sets or (null) removes one record's mark. */
+export function markSetup(id: string, setup: SetupMark | null): void {
+  // As upsertInstalledRecord: an index that cannot be read throws, rather than be written as none.
+  const records = (requireState(indexPath(), jsonArray, 'cache') ?? []).filter(validRecord)
+  writeInstalledIndex(records.map((row) => {
+    if (row.id !== id) return row
+    const { setup: _previous, ...record } = row
+    return setup ? { ...record, setup } : record
+  }))
   invalidateInstalledDsh()
 }
 

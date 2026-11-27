@@ -7,5 +7,5 @@
 export { readOpenclawHistory, readOpenclawSince } from './reader.js'
 export { OpenclawLive } from './live.js'
 export { lastOpenclawTurnText, openclawMessagesToEvents, windowOpenclawEvents } from './normalizer.js'
-export { createRuntimeProfileReader } from './runtimeProfile.js'
+export { createRuntimeProfileReader, transcriptEvidence } from './runtimeProfile.js'
 export { openclawProvider } from '../../lib/sessionSearch/externals/openclaw.js'

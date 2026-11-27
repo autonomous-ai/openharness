@@ -1,0 +1,132 @@
+# Harness Device (device-app)
+
+A menu-bar and tray app for the round dial, for people who do not use the Harness desktop app, on macOS, Windows and
+Linux. It is named **Harness Device** everywhere a person sees it, since the desktop app is Harness and two apps
+named Harness sat side by side in Accessibility. The bundle id, binary, release files and update path never change,
+so installed apps keep updating. It installs the `harness` CLI, keeps the daemon running, shows the dial's state in
+its menu and offers sign-in once. It also exports the logs (`Export logs`), through the CLI. It has no row for Claude
+Code, Codex or Orca: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's two screens are
+plain TypeScript in `ui/`.
+
+## Toolchain
+
+- Rust stable, 1.95 or newer (`rust-version` in `src-tauri/Cargo.toml`): `rustup update stable`. The repo pins no
+  toolchain; CI uses `dtolnay/rust-toolchain@stable`.
+- The Tauri CLI 2.12.4, to build and run the app: `cargo install tauri-cli --version 2.12.4 --locked`. The release
+  pins that version (`scripts/release-setup.sh`); PR CI's end-to-end builds restore it from a cache keyed on that file.
+- It runs on macOS 13 or later (`SMAppService`), Windows 10 or 11 (x64 and arm64, an NSIS installer per user) and Linux
+  (x64 and arm64, an AppImage). Linux builds need webkit2gtk 4.1, appindicator, rsvg and libxdo.
+- Tauri's dependencies take minutes to compile: one `CARGO_TARGET_DIR` outside the repository compiles them once.
+
+## Commands
+
+- `cd src-tauri && cargo test --lib`: every rule. It needs no `ui/dist`.
+- `cd ui && npm run build` first, before `cargo test` or `cargo build`: the binary embeds `ui/dist`.
+- `cd ui && npm test` and `npm run typecheck`: the window.
+- `cd src-tauri && cargo tauri build --debug`: the app bundle. A local build is version 0.0.0 and never checks for
+  updates: only a build the release stamped with its version updates itself.
+- `cd ui && npm run gallery`: every screen in every state, both themes (`ui/gallery.html`).
+- `python3 scripts/icons.py tray` and `python3 scripts/icons.py app`: the tray PNGs from `harness-mark.svg`, and the
+  Linux PNGs from `app-1024.png`, the design team's 1024 px icon (Harness_AppIcon, dark). `icon.icns` and `icon.ico`
+  are that set's files, copied as is.
+- `cd src-tauri && cargo test --locked --lib -- --ignored scratch_terminal_windows`, on a Mac, run from another
+  terminal app than Terminal, with Terminal running and another app in front: the Terminal scripts against two Terminal
+  windows the test opens and closes. macOS may first ask to let that terminal app control Terminal.
+- On Windows, `cd src-tauri && cargo test --locked --lib`: the rules, as PR CI's Windows leg runs them.
+- Linux-only code (`#[cfg(target_os = "linux")]`) from a Mac: a container of `rust:1-bookworm` plus
+  `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`, the repository mounted and
+  `CARGO_TARGET_DIR` on a volume. Most Linux rules compile under `cfg(all(test, unix))`, so a Mac runs them too.
+- End to end, against the fake CLI (`src-tauri/tests/fake-harness`), each printing `ok:` per check:
+  `scripts/e2e/macos.sh`, `scripts/e2e/windows.ps1 -Installer <debug installer>` and
+  `scripts/e2e/linux.sh <AppImage>` (a fake tray host, X11, sway and a scripted Hyprland). `scripts/e2e/update-pair.sh`
+  builds 0.0.1 and 0.0.2 for each driver's update check (`macos.sh --update`, and the same in the other two).
+  `scripts/e2e/appimage-starts.sh <AppImage> <name>`: does an AppImage start from its FUSE mount with no `libfuse2`.
+  `scripts/e2e/linux-install.sh <AppImage>`: the one-line install on Ubuntu 24.04 with no `libfuse2`, against a fake
+  CDN; GitHub-hosted runners only, as it changes `/etc/hosts` and the trust store. PR CI runs all but `macos.sh` and
+  `appimage-starts.sh`, which stay by hand
+  ([What PR CI does not run](../docs/validation-and-release.md#what-pr-ci-does-not-run)).
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules, and the icons'. How a release is cut:
+  [RELEASE.md](RELEASE.md). `test_windows_sign.py` runs `windows-sign.ps1` under `pwsh` where it is installed (CI's
+  Linux leg); without `pwsh`, and on Windows, those tests skip.
+
+## Rules a change keeps
+
+- **Thin over the CLI.** The app owns no daemon logic: it runs the `harness` CLI and reads its NDJSON. It also
+  fetches its own update manifest (`update.rs`), with nothing from the webview in the request.
+- **Fixed arguments.** The app runs only what is listed here, each with arguments fixed in Rust. Nothing from the
+  webview becomes a command line: it sends one of four action names (`retry`, `sign_in`, `later`, `cancel`).
+  - The CLI it found; `logs export --json` is among its commands.
+  - The two install lines, `install.sh --host` and `--desktop`, through `/bin/sh -c` (`install.rs`). On Linux the
+    `--host` line runs in a terminal the person sees, so `sudo` can ask for a password: the first of
+    `x-terminal-emulator -e`, `gnome-terminal --` and `xterm -e` that is there, given `/bin/sh` and the path of
+    `host-<n>.sh`, a fixed script around that line that writes its exit code to `host-<n>.exit` and that it started to
+    `host-<n>.started` (`terminal.rs`), in `<data>/setup` (0700, emptied at each run). A terminal that never runs it
+    fails within 30 s; with no terminal the line runs behind the screen, as on macOS.
+  - On Windows, `powershell.exe` from `System32`, with `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`
+    and the fixed line that runs `install.ps1 -Desktop` (`install.rs`).
+  - To open a page: `/usr/bin/open` on macOS, `xdg-open` on Linux, and Windows' shell `open` on an `https:` URL with
+    no quote, space or control character (`open.rs`).
+  - To show the logs' zip: `open -R` on macOS, the shell's `SHOpenFolderAndSelectItems` on Windows (on a thread of its
+    own, COM set up first; no program run), `xdg-open` with the zip's folder on Linux.
+  - To open the desktop app: `open -b ai.autonomous.harness` on macOS; elsewhere its own file, run with no argument
+    (`Harness\Harness.exe` in the shell's user programs folder, `FOLDERID_UserProgramFiles`, else in
+    `%LOCALAPPDATA%\Programs`; or the AppImage its `harness.desktop` entry names).
+  - Tauri's restart to relaunch itself (`open -n` on its own bundle on macOS), and the updater plugin's `touch` on the
+    bundle after the swap (the `touch` found on the person's PATH) and its installer on Windows.
+
+  One argument is not fixed text: the zip the CLI's answer names, kept only when it is an absolute path whose file
+  name is `harness-logs-YYYYMMDD-HHMM.zip` (`logs.rs`). Nothing from the webview or the manifest reaches any of them.
+  On Linux the app also writes an `Exec=` line into the login entry `harnessd.desktop`, fixed text around the
+  AppImage's and the launcher's paths, each in single quotes inside its `sh -c` text, so systemd's autostart
+  generator, which escapes `$`, reads it as GLib does; a path holding `'`, `"`, `$`, a backtick, a backslash or a
+  control character gets no entry (`loginitem_linux.rs`). The desktop session runs it, never the app.
+  At every launch from an AppImage it also writes the app-list entry `harness-device.desktop` and its icon, taken
+  from inside the image, when the rule of `tests/fixtures/app-list-entry-vectors.json` says so, and logs
+  `app list: entry written|kept|not written (…)` (`app_list.rs`). Written, never run by the app.
+- **Children start clean.** On Windows every child runs with no console, in a job of its own that the daemon leaves:
+  the job ends what a child left behind when the child ends, and every child with the app. Its stdin sits behind a
+  queue that never blocks the app (`child_windows.rs`, `stdin_queue.rs`). On Linux every child gets the person's
+  environment back, without what the AppImage added (`appimage_env.rs`).
+- **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
+  Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
+  is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
+- **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
+  and a text pass the checks and reach a script only as handler parameters, never in its text.
+- **Spoken text and terminal writes.** A text reaches a terminal only through Ghostty's fixed `write_text` and
+  `send_enter` handlers in `tabs_macos.rs`, as a handler parameter, after the watch's and the app's checks. Never
+  Terminal, whose `do script` runs the text as a command. Never iTerm2: its `write` goes to every pane its Broadcast
+  Input joins, where a shell would run the words, and its dictionary has no broadcast property to check. Never
+  keystrokes, System Events or `do script`. It goes to exactly one terminal of that tty, in every window; to an app
+  whose poll or select answered without an error in this run; and a typing older than 500 ms on the tab thread is
+  dropped. Its answer goes only to the watch it came from. Every watch, still started as `hardware watch --json`, reads
+  `{"writes":true}` first on its stdin (`watch.rs`): only a watch that read it is sent words, so one Harness Device
+  0.1.x runs, which drops them, is sent none. A text is never logged: a typing's `tabs:` line names the app and whether
+  it was a write or an Enter. Words reach Ghostty only in a build whose terminal has `tty` (`«property Gtty»`): 1.3.0
+  and 1.3.1 lack it, and only Ghostty's main branch has it. Any other Ghostty is turned off the first time a poll or
+  select reads a terminal's tty (`tabs: Ghostty has no tty`).
+- **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,
+  iTerm2 or Ghostty, never a tty.
+- **One entitlement.** `src-tauri/Entitlements.plist` holds `com.apple.security.automation.apple-events` and no other
+  key: without it a build signed with the hardened runtime sends no Apple Event.
+- **One plugin.** `tauri-plugin-updater`, called from Rust only; the capability gives the webview none of it.
+- **One log, redacted.** Every line passes `log::redact`; no email, token, URL query or path of the person's. An
+  install logs its step lines (`▸`, `✓`, `✗`, on Windows install.ps1's own; at most 200 a run, each redacted, then
+  cut to 512 characters), each run's result and, after a failure, the lines the screen shows; never the rest of what
+  a run prints (`install.rs`). A Linux terminal run logs only its exit code: its lines are the person's.
+  An export logs `logs: exported` or `logs: export failed:` and a fixed reason, and the menu's line as `Saved`; never
+  the zip's path.
+- **No other component's path in a string.** `scripts/ci-plan.py` reads a quoted path of another component as a
+  read of that folder: join path segments one by one, and name other components only in comments.
+- **`HARNESS_DEVICE_CLI`** (the fake CLI for tests) is read by debug builds only.
+
+PR CI compiles and tests the app on Linux and Windows (`device-app-checks`), and runs it end to end there, each suite
+for the paths `DEVICE_APP_PATHS` in `scripts/ci-plan.py` gives it, and each for the jobs' setup action
+(`.github/actions/device-app-setup/`): `device-app-e2e` (`linux.sh` and `windows.ps1`, for any change but Markdown and
+the release scripts' Python tests), `device-app-update` (`update-pair.sh` and each driver's update path, for the
+updater, the Linux and Windows drivers, the release build scripts, `tauri*.conf.json`, the Cargo files and the
+Windows installer's hooks in `src-tauri/windows/`), `device-app-desktop` (Desktop installs the app, for
+`desktop/lib/devices/`, `tauri_signature.dart` and `update_signature.dart` in `desktop/lib/update/`, its test and
+`desktop/test/support/tauri_test_signer.dart`, the Flutter actions, `install.rs`, `packaging.rs`, `instance.rs`,
+`tauri*.conf.json` and the installer's hooks) and `device-app-install`
+(`linux-install.sh`, for the website's installer, its stand-in CDN, `appimage_env.rs`, `packaging.rs` and
+`tauri*.conf.json`). macOS is built and tested by hand (`macos.sh`). All three are released by `make release-device`.

@@ -3,12 +3,17 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the registration golden') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  return { exec: forbidden, execSync: forbidden,
+    execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
+      if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
+      done(null, 'fixture-start')
+    }, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -17,6 +22,11 @@ vi.mock('./bootId.js', async original => ({ ...await original<object>(), current
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
+// No case here means the write deadline to pass: how fast this machine writes the registry never changes the golden.
+beforeEach(() => { deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS) })
+afterEach(() => { vi.restoreAllMocks() })
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/registry-admission.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_REGISTRY_ADMISSION_GOLDEN === '1'
@@ -44,6 +54,7 @@ it.each(['linux', 'darwin'])('preserves healthy registration and transfers on %s
     if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
   }
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  let owned: typeof import('./registry.js')['registry'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...descriptor, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T00:00:00Z') })
@@ -61,28 +72,30 @@ it.each(['linux', 'darwin'])('preserves healthy registration and transfers on %s
     for (const id of [B, C]) write(claude(id), JSON.stringify({ type: 'user', cwd: root, sessionId: id, isSidechain: false }) + '\n')
     vi.resetModules()
     const { registry } = await import('./registry.js')
+    owned = registry
     for (const [index, engine] of (['claude', 'codex', 'terminal'] as const).entries()) {
-      const { entry } = registry.openProcessAgent({ engine, tmuxPane: `%${index + 1}`, cwd: root,
-        processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } })!
+      const { entry } = (await registry.openProcessAgent({ engine, tmuxPane: `%${index + 1}`, cwd: root,
+        processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } }))!
       labels.set(entry.agentId, engine)
     }
-    const register = (engine: 'claude' | 'codex', pane: string, id: string, transcriptPath: string, cwd = root) => {
-      const result = registry.register({ engine, tmuxPane: pane, sessionId: id, transcriptPath, cwd, source: 'fixture' })
+    const register = async (engine: 'claude' | 'codex', pane: string, id: string, transcriptPath: string, cwd = root) => {
+      const result = (await registry.register({ engine, tmuxPane: pane, sessionId: id, transcriptPath, cwd, source: 'fixture' }))
       return result && { ...result, entry: shape(result.entry) }
     }
-    check('first', register('claude', '%1', B, claude(B)))
-    check('same-preserves-folder', register('claude', '%1', B, claude(B), path('temporary-shell-folder')))
-    check('rotation', register('claude', '%1', C, claude(C)))
-    check('terminal-promotion', register('codex', '%3', A, codex))
-    check('move-active', register('codex', '%2', A, codex))
+    check('first', (await register('claude', '%1', B, claude(B))))
+    check('same-preserves-folder', (await register('claude', '%1', B, claude(B), path('temporary-shell-folder'))))
+    check('rotation', (await register('claude', '%1', C, claude(C))))
+    check('terminal-promotion', (await register('codex', '%3', A, codex)))
+    check('move-active', (await register('codex', '%2', A, codex)))
     check('after-active-move', registry.list().map(shape))
     registry.setActive(registry.byPaneEngine('%2', 'codex')!.agentId, false)
-    check('move-dormant', register('codex', '%3', A, codex))
-    check('delegated-rejected', register('codex', '%3', CHILD, child))
+    check('move-dormant', (await register('codex', '%3', A, codex)))
+    check('delegated-rejected', (await register('codex', '%3', CHILD, child)))
     check('final-live', registry.list().map(shape))
     check('final-saved', JSON.parse(readFileSync(path('ADAPTER_DATA_DIR', 'registry.json'), 'utf8')).map(shape))
     ;(await import('./engineHomes.js')).resetEngineHomes()
   } finally {
+    await owned?.flush({ exiting: true }).catch(() => {})
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', descriptor)
     rmSync(root, { recursive: true, force: true })

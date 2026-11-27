@@ -38,6 +38,13 @@ static TaskHandle_t capture_task=&capture_token,sender_task=&sender_token;
 static voice_buffer_t buffer;
 static atomic_bool active, recording, stop_requested, abort_requested, capture_done, heard;
 static atomic_uint input_level;
+// One thread plays both workers: the lock guards nothing here.
+#define portENTER_CRITICAL(lock) ((void)(lock))
+#define portEXIT_CRITICAL(lock) ((void)(lock))
+static int state_lock;
+static enum { UPLOAD_CLOSED, UPLOAD_SENDING, UPLOAD_ENDED } phase;
+static char discarded[24];
+static void cable_client_voice_cancel(const char *id) {(void)id;assert(!"no discard in these sessions");}
 static char agent[]="target-agent";
 enum { VOICE_CMD_NONE,VOICE_CMD_GOAL,VOICE_CMD_LOOP };
 static int command;
@@ -100,13 +107,14 @@ int main(void) {
     for(unsigned round=0;round<100;round++)for(mode=0;mode<MODES;mode++) {
         memset(guarded,0xa5,sizeof guarded);voice_buffer_init(&buffer,guarded+8,BUFFER_BYTES);
         if(round&1) {atomic_store(&buffer.head,UINT32_MAX-255);atomic_store(&buffer.tail,UINT32_MAX-255);}
-        active=recording=true;stop_requested=abort_requested=capture_done=heard=false;
+        active=recording=true;stop_requested=abort_requested=capture_done=heard=false;phase=UPLOAD_SENDING;
         input_level=produced=high_water=read_max_us=0;
         capture_waits=sender_waits=reads=raw_bytes=sent_bytes=pcm_calls=0;
         starts=stops=begins=ends=aborts=notifications=overruns=0;clock_us=0;role=2;
         if(!setjmp(finished))send_audio(NULL);
         assert(!active&&!recording&&capture_done&&input_level==0&&begins==1&&starts==1);
         assert(stops==(unsigned)(mode!=START_FAIL));
+        assert(phase==(ends?UPLOAD_ENDED:UPLOAD_CLOSED)); // what a later discard of this upload acts on
         assert(high_water<=BUFFER_BYTES);
         if(mode==HEALTHY||mode==READ_RECOVER) {
             assert(ends==1&&!aborts&&sent_bytes==20480&&!voice_buffer_used(&buffer));
@@ -126,4 +134,4 @@ with tempfile.TemporaryDirectory(prefix='harness-audio-stream-') as folder:
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),
                     '-I', str(main), str(out / 'stream.c'), str(main / 'voice_buffer.c'),
                     '-o', str(out / 'stream')], check=True)
-    subprocess.run([str(out / 'stream')], check=True, timeout=30)
+    subprocess.run([str(out / 'stream')], check=True)

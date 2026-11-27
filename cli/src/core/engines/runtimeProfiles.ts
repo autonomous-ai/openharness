@@ -2,7 +2,7 @@
 import type { RuntimeProfileState } from '../../lib/runtimeProfileState.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
-import type { RuntimeProfile, RuntimeRecord } from '../../engines/facets/runtime.js'
+import type { ProfileEvidence, RuntimeProfile, RuntimeRecord } from '../../engines/facets/runtime.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { createRuntimeSessions } from './runtimeSessions.js'
 import type { RuntimeTransport } from './runtimeTransport.js'
@@ -67,6 +67,9 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
     ingest(session: RegisteredSession, line: string, silent = false): boolean {
       return handles(session.engine) ? rawUnavailable() : local.ingest(session, line, silent)
     },
+    /** The other engines' records' evidence, from their worker's frames and folds: theirs stays with the local state. */
+    evidence: (session: RegisteredSession, evidence: readonly ProfileEvidence[]): boolean => local.evidence(session, evidence),
+    hydrateEvidence: (session: RegisteredSession, evidence: readonly ProfileEvidence[]): void => local.hydrateEvidence(session, evidence),
     hydrate(session: RegisteredSession, lines: string[]): void {
       if (handles(session.engine)) rawUnavailable()
       local.hydrate(session, lines)

@@ -1,0 +1,7 @@
+[
+  { "invoice": "INV-2041", "customer_id": "C-1007", "issued": "2026-10-02", "amount": "480.00", "currency": "EUR", "status": "paid" },
+  { "invoice": "INV-2042", "customer_id": "C-1013", "issued": "2026-10-05", "amount": "120.00", "currency": "EUR", "status": "paid" },
+  { "invoice": "INV-2043", "customer_id": "C-1002", "issued": "2026-10-11", "amount": "960.00", "currency": "EUR", "status": "open" },
+  { "invoice": "INV-2044", "customer_id": "C-1021", "issued": "2026-10-19", "amount": "75.50", "currency": "EUR", "status": "open" },
+  { "invoice": "INV-2045", "customer_id": "C-1007", "issued": "2026-11-02", "amount": "480.00", "currency": "EUR", "status": "open" }
+]

@@ -258,11 +258,22 @@ export const CODEX_DISABLE_WEB_SEARCH_ARGS: readonly string[] = ['-c', 'web_sear
  * an agent would see one `mcp__…__web_search` on Codex and another everywhere else, so a prompt or
  * skill naming one would silently miss on the other. (When the name carried a hyphen, codex 0.144.6
  * read it back from `-c` without complaint; a bare word needs no such care.)
+ *
+ * `omit_tools_from=["deferred"]` puts the two web tools in every request instead of behind tool
+ * search. They replace the native web search turned off above, so the model must see them the way
+ * an OpenAI model sees its own `web_search`. Behind search they lost (e2e, codex 0.170.0,
+ * DeepSeek-V4-Flash-0731, 2026-11-18): Codex ranks deferred tools with BM25, and on an account with
+ * ChatGPT apps, `ahrefs` and `search_service` outranked them for "web search the internet for latest
+ * version" at `limit` 5. Codex also indexes the name as `mcp__harnessweb_search`, so a search for
+ * `mcp__harness__web_search` matches nothing. The model then searched with ChatGPT's connector and
+ * never called ours. The same happens on codex 0.169.1; only the model's wording differed. The key
+ * exists since codex 0.150; 0.140 and 0.149 ignore it.
  */
 export function codexMcpArgs(mcpUrl: string): string[] {
   return [
     '-c', `mcp_servers.${HARNESS_MCP_SERVER_NAME}.url=${JSON.stringify(mcpUrl)}`,
     '-c', `mcp_servers.${HARNESS_MCP_SERVER_NAME}.env_http_headers.Authorization=${JSON.stringify(GRID_MCP_AUTH_VAR)}`,
+    '-c', `mcp_servers.${HARNESS_MCP_SERVER_NAME}.omit_tools_from=["deferred"]`,
   ]
 }
 

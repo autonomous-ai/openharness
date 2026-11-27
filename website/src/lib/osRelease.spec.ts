@@ -11,7 +11,10 @@ function release(version: string) {
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe("latest OS release", () => {
   it("orders numeric previews independently of repository release order and other products", () => {
@@ -52,6 +55,20 @@ describe("latest OS release", () => {
     vi.stubGlobal("fetch", request);
     expect(await fetchLatestOSRelease()).toContain("preview.13");
     expect(request.mock.calls[1][0]).toBe("https://api.github.com/repos/autonomous-ai/openharness/releases?per_page=100&page=2");
+  });
+
+  it("authenticates the release lookup only when a token is set", async () => {
+    const request = vi.fn<typeof fetch>(async () => new Response(JSON.stringify([release("0.1.0-preview.13")])));
+    vi.stubGlobal("fetch", request);
+    const authorization = () => new Headers(request.mock.calls.at(-1)?.[1]?.headers).get("authorization");
+
+    vi.stubEnv("GITHUB_TOKEN", "test-token");
+    await fetchLatestOSRelease();
+    expect(authorization()).toBe("Bearer test-token");
+
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    await fetchLatestOSRelease();
+    expect(authorization()).toBeNull();
   });
 
   it("does not choose an older partial result when a later page fails", async () => {

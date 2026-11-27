@@ -1,6 +1,6 @@
 name: Prepare backend caches
 
-# PR CI's backend-integration shards restore the mongod download the Super Tab integration suite needs. A cache saved on a
+# PR CI's backend-integration shards restore the mongod download the backend integration suite needs. A cache saved on a
 # PR is visible to that PR alone; one saved on main is visible to every PR, so main saves it, once per key.
 on:
   push:

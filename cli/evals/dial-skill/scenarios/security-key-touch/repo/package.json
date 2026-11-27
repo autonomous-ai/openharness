@@ -1,0 +1,11 @@
+{
+  "name": "quayside-queue",
+  "version": "2.3.1",
+  "description": "A small in-process job queue.",
+  "type": "module",
+  "main": "src/queue.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

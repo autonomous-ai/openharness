@@ -117,9 +117,7 @@ choice, and Launch tries again.
     it without a mouse.
 28. As a guest on a computer shared with me, I want clones to behave as they do today, so that my request
     never tries the owner's other GitHub accounts.
-29. As a Swarm member, I want Swarm project clones to behave as they do today, so that this change does not
-    alter how shared projects get access.
-30. As a developer diagnosing a "No access" report, I want the attempts recorded in the log (which transport
+29. As a developer diagnosing a "No access" report, I want the attempts recorded in the log (which transport
     or alias, and how each failed), so that I can tell the person what to fix.
 
 ## Implementation Decisions
@@ -163,12 +161,8 @@ A checkout whose origin is `git@gh-<account>:org/repo` is then the same reposito
 
 **Who gets the wider attempts.** The fallback and the alias attempts apply to an owner's own New Harness
 launch, on this computer or one of their own. A guest's launch on a shared computer keeps today's single
-attempt; that path never prepares a project folder at all. Swarm clones keep their current behaviour: the
-token path stays HTTPS only, and the non-token path keeps its own HTTPS ↔ SSH retry. A Swarm agent created
-through the owner path (it has a Swarm role) gets no fallback either. The wider attempts are opt-in on the
-daemon's project-folder preparation (`cloneFallback`), off by default. While building, the Swarm retry was
-left where it is rather than moved onto the shared runner: its specs pin the exact preparation calls. Folding
-the two together is a follow-up.
+attempt; that path never prepares a project folder at all. The wider attempts are opt-in on the daemon's
+project-folder preparation (`cloneFallback`), off by default.
 
 **Launch result contract (daemon → apps).** A successful creation that cloned may carry an optional
 `clonedVia: { alias: string }`, present only when an alias was used. A failure after all attempts were
@@ -236,8 +230,7 @@ asserts on private fields or on the order of internal calls.
    - the final `origin`;
    - that an existing alias checkout is reused;
    - staging cleanup;
-   - guest launches try exactly one address;
-   - Swarm's token path stays HTTPS only.
+   - guest launches try exactly one address.
 
    Prior art: the repository-clone test and the project-folder spec.
 4. **Launch result in the core.** An agent creation that clones reports `clonedVia` and `access: "denied"`
@@ -252,7 +245,6 @@ asserts on private fields or on the order of internal calls.
 - Using the Harness GitHub App's token for New Harness clones.
 - Hosts other than GitHub (GitLab, Bitbucket, GitHub Enterprise).
 - Live per-attempt progress while cloning.
-- Changing how Swarm projects get access.
 - Asking for credentials interactively (password, passphrase, device login).
 
 ## Further Notes

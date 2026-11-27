@@ -5,6 +5,7 @@ import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
 import { resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { TmuxBackend } from './tmuxBackend.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 let server: IsolatedTmux | undefined
 afterEach(async () => {
@@ -26,7 +27,7 @@ describe.skipIf(process.env.RUN_REAL_TMUX_DISCOVERY !== '1')('restart startup di
     const release = join(server.root, 'release')
     const running = join(server.root, 'running')
     await mkdir(join(server.root, '@openai/codex/bin'), { recursive: true })
-    await writeFile(binary, `#!${process.execPath}
+    writeExecutable(binary, `#!${process.execPath}
 const fs = require('node:fs');
 if (process.argv.includes('--help')) {
   fs.writeFileSync(${JSON.stringify(probe)}, String(process.pid));
@@ -39,7 +40,7 @@ if (process.argv.includes('--help')) {
   fs.writeFileSync(${JSON.stringify(running)}, String(process.pid));
   setInterval(() => {}, 1000);
 }
-`, { mode: 0o755 })
+`)
     const argv = buildEngineLaunchArgv('codex', { cwd: server.root }, '/bin/zsh')
     argv[argv.indexOf('harness-engine') + 2] = binary
     const pane = await server.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'restart-probe', ...argv)

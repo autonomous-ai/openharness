@@ -1,7 +1,9 @@
 /** Discoverable tool access, without copying credentials or model settings into projects. */
-import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import type { ApiConnectionMetadata } from './apiConnectionMetadata.js'
+import { projectsRoot } from './projectFolder.js'
+import { atomicWriteFile } from './secureState.js'
 import { instructionFileOf } from '../engines/launches.js'
 import { HARNESS_ADAPTERS } from '../dsh/adapters.js'
 
@@ -18,15 +20,47 @@ Use these APIs when needed for the user's task. Never print, paste, or save API 
 Adding an API does not change this harness's model or subscription.
 `
 
-/** Only Harness-created workspaces with saved APIs. Existing instructions are kept;
- * no global agent settings or credentials are written into the project. */
-export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'list'>, workspace: string, engine: string): void {
+/** Only a project folder Harness made ([root] is where it makes them), and only while APIs are saved. Existing
+ * instructions are kept; no global agent settings or credentials are written into the project. A folder the person
+ * chose is theirs, and the note is never written there: until 15 November any folder a harness started in got it, the
+ * person's own repository included (core audit, security 9). */
+export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'saved'>, workspace: string, engine: string,
+  root: string = projectsRoot()): void {
   // An engine that reads no instruction file in its folder (OpenClaw reads its own workspace's) gets none written there.
   const adapter: { instructionFiles: readonly string[] } | undefined = HARNESS_ADAPTERS[engine as keyof typeof HARNESS_ADAPTERS]
-  if (engine === 'terminal' || adapter?.instructionFiles.length === 0 || !store.list().length) return
+  if (engine === 'terminal' || adapter?.instructionFiles.length === 0) return
+  const folder = harnessWorkspace(workspace, root)
+  if (!folder || !store.saved()) return
   const name = instructionFileOf(engine) ?? (engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md')
-  const file = join(workspace, name)
-  if (existsSync(file) && (!lstatSync(file).isFile() || lstatSync(file).isSymbolicLink())) return
-  const previous = existsSync(file) ? readFileSync(file, 'utf8') : ''
-  if (!previous.includes(marker)) writeFileSync(file, `${previous.trimEnd()}${previous ? '\n\n' : ''}${API_INSTRUCTIONS}`)
+  const file = join(folder, name)
+  const existing = existsSync(file) ? lstatSync(file) : null
+  if (existing && (!existing.isFile() || existing.isSymbolicLink())) return
+  const previous = existing ? readFileSync(file, 'utf8') : ''
+  // Whole or not at all: a torn write would lose the instructions written there before the note. The file keeps its
+  // own mode, and a new one is readable as a file written in place was.
+  if (!previous.includes(marker)) {
+    // A file the person made read-only stays as they left it: the rename would replace it (and on Windows retry for a
+    // second first), so it is refused (EACCES) as a write in place was, for the caller's log line.
+    if (existing) accessSync(file, constants.W_OK)
+    atomicWriteFile(file, `${previous.trimEnd()}${previous ? '\n\n' : ''}${API_INSTRUCTIONS}`, 'cache', { mode: existing ? existing.mode & 0o777 : 0o644 })
+  }
+}
+
+/**
+ * [workspace] as it is on disk when it is a project folder Harness made, otherwise null: directly inside [root], as the
+ * trust checks read it (core/agents/create.ts), and no git checkout. A checkout is a repository's (a clone, or a worktree
+ * of the person's own), and an agent may commit the note in its tracked instructions. Nor the folder that holds the
+ * worktrees (lib/gitProject.ts): Claude Code reads a CLAUDE.md in every folder above it, so a note there would reach
+ * every worktree below. Both paths are resolved first, with the case as it is on disk (`native`), so a link in the root
+ * to a folder of the person's is that folder. A root that is not there holds none; any other failure is thrown, for the
+ * caller's log line.
+ */
+function harnessWorkspace(workspace: string, root: string): string | null {
+  let top: string
+  try { top = realpathSync.native(root) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+  const folder = realpathSync.native(workspace)
+  return dirname(folder) === top && basename(folder) !== 'worktrees' && !existsSync(join(folder, '.git')) ? folder : null
 }

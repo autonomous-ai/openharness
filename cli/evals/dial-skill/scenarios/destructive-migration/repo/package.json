@@ -1,0 +1,10 @@
+{
+  "name": "shop-admin",
+  "version": "1.9.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "migrate": "node db/migrate.js",
+    "migrate:status": "node db/migrate.js --status"
+  }
+}

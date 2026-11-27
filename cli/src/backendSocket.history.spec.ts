@@ -1,8 +1,9 @@
+import { removeRegistryAgent } from './testing/registryFixtures.js'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
-import { dispatchDown, relaySocket } from './testing/relaySocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
 import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './lib/normalize.js'
 import { withoutOutputTail } from './lib/cardUpdate.js'
@@ -38,7 +39,7 @@ describe.each([
   let file: string
   let pane = 7400
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const root = engine === 'claude' ? roots.claude : roots.codex
     mkdirSync(root, { recursive: true })
     dir = mkdtempSync(join(root, 'history-'))
@@ -56,12 +57,12 @@ describe.each([
     bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:history', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
-    agentId = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir })!.agentId
-    expect(registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir })).not.toBeNull()
+    agentId = (await registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir }))!.agentId
+    expect((await registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir }))).not.toBeNull()
   })
 
   afterEach(async () => {
-    registry.removeAgent(agentId)
+    ;(await removeRegistryAgent(registry, agentId))
     await socket.stop()
     rmSync(dir, { recursive: true, force: true })
   })
@@ -69,8 +70,12 @@ describe.each([
   let requests = 0
   async function ask(type: string, payload: Record<string, unknown>): Promise<Record<string, any>> {
     const requestId = `r${++requests}`
-    await dispatchDown(socket, { type, payload: { requestId, ...payload } }, 'local:history', 'local')
-    return frames.find((frame) => frame.type === `${type}_result` && frame.payload.requestId === requestId)!.payload
+    socket.handleLocalFrame('local:history', { type, payload: { requestId, ...payload } })
+    return vi.waitFor(() => {
+      const answer = frames.find((frame) => frame.type === `${type}_result` && frame.payload.requestId === requestId)
+      expect(answer).toBeDefined()
+      return answer!.payload
+    }, { timeout: 5_000 })
   }
 
   it('is bound to the transcript under test', () => {
@@ -81,7 +86,7 @@ describe.each([
     const whole = (await ask('session_get', { sessionId })).events
     // What a stop, or a relaunch that had to leave the conversation for a new one, keeps of it.
     stoppedAgents.save(registry.resolve(sessionId)!)
-    registry.removeAgent(agentId)
+    ;(await removeRegistryAgent(registry, agentId))
     try {
       expect(registry.resolve(sessionId)).toBeUndefined()
       expect((await ask('session_get', { sessionId })).events).toEqual(whole)
@@ -168,11 +173,11 @@ describe.each([
 
   it('counts nothing for an agent whose engine keeps no transcript file', async () => {
     const paneId = `%${++pane}`
-    const store = registry.openPendingAgent({ engine: 'opencode', runtimes: [{ backend: 'tmux', paneId }], cwd: dir })!.agentId
+    const store = (await registry.openPendingAgent({ engine: 'opencode', runtimes: [{ backend: 'tmux', paneId }], cwd: dir }))!.agentId
     try {
-      registry.register({ engine: 'opencode', sessionId: `ses_history${pane}`, tmuxPane: paneId, cwd: dir })
+      ;(await registry.register({ engine: 'opencode', sessionId: `ses_history${pane}`, tmuxPane: paneId, cwd: dir }))
       const reply = await ask('sessions_list', { agentId: store })
       expect(reply.sessions).toEqual([expect.objectContaining({ id: `ses_history${pane}`, messageCount: 0 })])
-    } finally { registry.removeAgent(store) }
+    } finally { (await removeRegistryAgent(registry, store)) }
   })
 })

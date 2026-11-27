@@ -5,8 +5,8 @@ Recorded from OpenClaw 2026.11.2 on Linux (`node:24-bookworm`) and macOS 26.6 ar
 ## Not recorded
 
 - **Windows** (`*-win32.txt`, `ps-win32.txt`): not run here; it is measured separately on the Windows VM.
-- **macOS beyond `plain`**: only `screen-plain-start-darwin.txt`, `screen-plain-darwin.txt` and `ps-darwin.txt`.
-  The database rows of the other scenarios are the Linux ones.
+- **macOS beyond `plain`**: only `screen-plain-start-darwin.txt`, `screen-plain-darwin.txt`, `ps-darwin.txt` and the
+  pairing retries below. The database rows of the other scenarios are the Linux ones.
 - **An exec approval prompt on screen**: the TUI never shows one. OpenClaw's docs say "The TUI does not render
   exec approval cards", and with no approval client connected the Gateway denies the command at once
   (`exec denied: Headless runs cannot wait for interactive exec approval.`). `approval.sql` and
@@ -31,3 +31,69 @@ Recorded from OpenClaw 2026.11.2 on Linux (`node:24-bookworm`) and macOS 26.6 ar
   (macOS, 2026.11.2), run with `OPENCLAW_NODE_UPDATE_RESPAWNED=1` and a PATH without another Node. Without it,
   OpenClaw finds a supported Node by itself (Homebrew's node@26 on this Mac) and runs on that one. `--version` is a
   diagnostic: it never installs a Node, and on Node 22 it answers with a warning rather than refusing.
+
+## Pairing retries
+
+`screen-pairing-retries.txt` (120 columns, `openclaw tui`, session `main`) and `screen-pairing-retries-narrow.txt`
+(80x24, a Harness launch whose title scrolled off) are recorded from OpenClaw 2026.11.2 on macOS 26.6 arm64, on a
+Gateway that had not approved the device. Each retry, its Gateway client prints `gateway connect failed:
+GatewayClientRequestError: device pairing required (requestId: <uuid>)` straight to the terminal (`client-*.mjs`
+`logError`; a probe, a rate limit and a token mismatch, which pauses the retries, print none). It starts where the TUI
+left the cursor, in its empty input box, runs over the box and the start of its bottom rule, then on below the frame,
+which the terminal scrolls up; the TUI does not draw over it, its status line still `gateway disconnected: …` 15 s on.
+The narrow one came through Harness's capture, which drops its first line's leading space and the blank lines after
+the last. The composed `screen-pairing.txt` and `screen-pairing-bare.txt` below are the screens before a retry.
+
+## Composed, not captured whole
+
+`screen-banner.txt`, `screen-connecting.txt`, `screen-starting-up.txt`, `screen-sending.txt`, `screen-waiting.txt`,
+`screen-running-quiet.txt`, `screen-history-failed.txt`, `screen-history-refused.txt`, `screen-disconnected.txt`,
+`screen-startup-failed.txt` and `screen-answer-history-words.txt` are `screen-plain-start.txt`'s title, footer and
+rules (session `plain`, 120 columns) around status, chat, box and banner strings a reproduction of a first task on a
+slow Gateway recorded from OpenClaw 2026.11.2 on macOS 26.6 arm64 (Node 24.22.2): its panes, and the status line it
+read every poll from launch to ready, through a run, and through a `chat.history` the Gateway did not answer in time.
+
+- **banner**: the lines the TUI draws before its title, with one of its random taglines.
+- **connecting, starting-up**: the status lines drawn before the Gateway answers; the footer reads `unknown` until then.
+- **sending, waiting, running-quiet**: a run's busy lines (`⠋ sending • 0s | connected`,
+  `⠼ flibbertigibbeting… • 0s | connected`, `⠦ running • 0s | connected`). The recording saw `0s` only:
+  `running-quiet`'s `45s` is the TUI's own elapsed format (`Ns`) at a quiet tool step.
+- **history-failed, history-refused**: the system lines and `gateway connected | idle` / `connected | idle` drawn when
+  the first history load fails, and the message the TUI put back in its input box after refusing it.
+- **disconnected**: the bare `disconnected | idle` drawn between two reconnect tries.
+- **startup-failed**: `startup failed | idle` is the status the TUI sets when a connection's start fails
+  (`setConnectionStatus("startup failed", …)` in its source); the recording did not see it. The chat line drawn with
+  it (` startup failed: <error>`) is left out: no error was recorded.
+- **answer-history-words**: a model's answer saying `history failed:` at column 0, over a ready status line.
+
+`screen-box-scrolled.txt` is drawn line by line by OpenClaw 2026.11.2's own components (pi-tui's `Text` and `Editor`,
+rendered with no terminal) at tmux's default 80x24: a 560-character message OpenClaw refused before it connected, put
+back in its input box with the cursor at its end. The box shows 7 lines (30% of the rows, at least 5), so its top border
+reads `↑ 1 more`. `connected | disconnected` is the status a connection leaves after such a refusal (the TUI resets only
+a `starting up` activity when it connects).
+
+`screen-narrow-starting-up.txt` and `screen-narrow-history-refused.txt` are `screen-starting-up.txt` and
+`screen-history-refused.txt` drawn the same way at 40 columns, where the title, the status line, the system lines, the
+footer and the box each wrap. The busy status line has the blank line pi-tui's `Loader` draws above it, which the
+120-column compositions leave out.
+
+`screen-gateway-starting.txt` and `screen-starting-up-disconnected.txt` are `screen-starting-up.txt` with the status
+lines a cold Gateway drew on a slow Linux machine (arm64 Debian 12, 0.6 CPU, OpenClaw 2026.11.2) for 85–110 s:
+`<spinner> starting up • Ns | gateway starting` (the Gateway's answer while it starts, `resolveGatewayDisconnectState`
+in OpenClaw's tui) and `<spinner> starting up • Ns | disconnected` between its tries.
+
+`screen-pairing.txt`, `screen-pairing-bare.txt` and `screen-token-mismatch.txt` are composed from OpenClaw 2026.11.2's
+source, not recorded: `screen-disconnected.txt`'s banner, title, footer and rules (session `plain`, 120 columns) around
+the chat and status lines a refused connect draws, wrapped as pi-tui's `Text(…, 1, 0)` wraps them. The TUI sets
+`gateway disconnected: <reason>` for 5 s, then `disconnected`, and keeps the activity
+`resolveGatewayDisconnectState` gives (`tui-*.mjs` `handleBackendDisconnected`, `setConnectionStatus`); it prints the
+failure's remedy once, as a system line (`connect-error-details-*.mjs` `classifyGatewayConnectFailure`).
+
+- **pairing**: a device the Gateway has not approved. The reason is `device pairing required (requestId: <uuid>)`
+  (`formatConnectPairingRequiredMessage`; the id is made up), the activity `device approval needed: preview latest
+  request`, the remedy `PAIRING_APPROVAL_REMEDIATION`.
+- **pairing-bare**: the same screen once the 5 s line has gone: `disconnected | device approval needed: preview latest
+  request`.
+- **token-mismatch**: a Gateway token that does not match. The reason is the Gateway's `unauthorized: gateway token
+  mismatch (<hint>)` with the hint it gives the TUI (an operator UI client, `formatGatewayAuthFailureMessage`), the
+  activity `gateway authentication needs attention`, the remedy `SHARED_TOKEN_REMEDIATION`.

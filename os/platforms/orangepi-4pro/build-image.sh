@@ -38,7 +38,8 @@ PY
 
 # Leave no build-host state behind.
 rm -rf "$MNT/root/.npm" "$MNT/home/$ACCOUNT/.npm" "$MNT/tmp/"*
-for leftover in "home/$ACCOUNT/.ssh/authorized_keys" "home/$ACCOUNT/.harness" "root/.ssh/authorized_keys"; do
+for leftover in "home/$ACCOUNT/.ssh/authorized_keys" "home/$ACCOUNT/.harness" "home/$ACCOUNT/.local/share/harness" \
+    "home/$ACCOUNT/.local/state/harness" "root/.ssh/authorized_keys"; do
     [[ ! -e $MNT/$leftover ]] || { echo "Unexpected build-host state: $leftover" >&2; exit 1; }
 done
 chroot "$MNT" /usr/lib/harness/hn --version

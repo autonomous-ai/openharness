@@ -67,8 +67,6 @@ export interface AttributionPlace {
   environment?: NodeJS.ProcessEnv
   /** A seam, like `readCodexConfig`: a spec's launch reads no settings of the machine it runs on. The real file when absent. */
   read?: (path: string) => string | null
-  /** A Swarm session's instructions (lib/agentAttribution.ts): its folder is a branch, whose own settings are not run. */
-  swarmInstructions?: string
 }
 
 /**
@@ -116,13 +114,12 @@ export function agentInstructionArgs(engine: AgentEngine | string, said: { instr
 
 /**
  * The argv that gives a launch Harness's status line (kit/statusLine.ts): every session of an engine that declares one,
- * the person's own or an agent's. A Swarm session's folder is a branch, which could commit a status line command that
- * Harness would then run itself: only the person's own settings are read for the status line.
+ * the person's own or an agent's.
  */
 function statusLineArgs(contract: StatusLineContract | undefined, place: AttributionPlace): string[] {
   if (!contract) return []
   const files = { home: launchHomeOf(contract.home, place.profile, place.environment), personal: launchPersonalHome(place.environment),
-    cwd: place.cwd, read: place.read ?? readConfig, folder: !place.swarmInstructions }
+    cwd: place.cwd, read: place.read ?? readConfig }
   const setting = statusLineSetting(contract, files, env.ADAPTER_DATA_DIR, process.platform,
     () => claudeCodeGitBash({ env: place.environment ?? process.env }))
   return setting ? contract.args.map((arg) => fill(arg, 'settings', JSON.stringify(setting))) : []

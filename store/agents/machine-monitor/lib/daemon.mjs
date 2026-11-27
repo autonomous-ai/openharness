@@ -14,9 +14,8 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DaemonWebSocket, daemonFetch, daemonSocketPath } from './localDaemon.mjs';
+import { DaemonWebSocket, daemonDataDir, daemonFetch, daemonSocketPath } from './localDaemon.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -37,7 +36,7 @@ export function bridgeUrl(env = process.env) {
 
 /** Where the CLI keeps its own state. Read-only here, and only for facts the app shows too. */
 export function dataDir(env = process.env) {
-  return env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data');
+  return daemonDataDir(env);
 }
 
 /**
@@ -45,7 +44,7 @@ export function dataDir(env = process.env) {
  *
  * Since Harness 0.4.21 the loopback port (REST and `/api/local-ws`) answers 401 to a process that does
  * not show `X-Harness-Local: <credential>`, the 0600 `hook-credential` file in Harness's data folder
- * (`ADAPTER_DATA_DIR`, default `~/.harness/cli/data`) — so only the OS user Harness runs as gets in.
+ * (`ADAPTER_DATA_DIR`, default `cli/data` in Harness's data root) — so only the OS user Harness runs as gets in.
  * Read with the CLI's own checks (cli/src/lib/hookAuth.ts `readHookCredential`): a folder that is ours
  * and nobody else can write, a 0600 regular file of ours, a 43-character base64url value. Anything else
  * is no credential and no header (the CLI also tightens a 0755 folder; a reader leaves it alone).

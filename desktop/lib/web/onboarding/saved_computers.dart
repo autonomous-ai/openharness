@@ -38,9 +38,8 @@ class SavedComputer {
 }
 
 /// The account's computers kept in this browser, so the connect page can list
-/// them before the machine list answers. Kept like a saved Super Tab view
-/// (`super_tabs/saved_view.dart`): for the one account using this browser, and
-/// forgotten when another signs in or this one signs out.
+/// them before the machine list answers: for the one account using this
+/// browser, and forgotten when another signs in or this one signs out.
 class SavedComputers {
   SavedComputers(this.storage);
 
@@ -87,13 +86,6 @@ class SavedComputers {
           await storage.write(_key(account), jsonEncode(computers));
         } catch (_) {}
       });
-
-  /// Clear now: [account]'s computers go; the browser stays [account]'s.
-  Future<void> clear(String account) => _serial(() async {
-    if (await storage.read(_owner) == account) {
-      await storage.delete(_key(account));
-    }
-  });
 
   /// [account] (null when signed out) is the one using this browser now:
   /// any other's computers, kept before a reload too, are forgotten.
@@ -143,14 +135,7 @@ class SavedComputersWatch extends ChangeNotifier {
     // Booting, nobody is known yet and nothing is forgotten; signed out (by
     // hand, or a session that expired, at boot too), the last account's go.
     final account = signedOut ? null : app.currentUser?.id;
-    if (account != _account || (signedOut && !_forgotten)) {
-      _bind(account);
-      // The Super Tab views too, as Clear now: a boot signed out never binds
-      // the account they were kept for.
-      if (signedOut) {
-        unawaited(app.superTabs.clearSavedViews().catchError((Object _) {}));
-      }
-    }
+    if (account != _account || (signedOut && !_forgotten)) _bind(account);
     // The list answering takes the kept computers off the page.
     if (!identical(shown, _wasShown)) {
       _wasShown = shown;
@@ -167,15 +152,6 @@ class SavedComputersWatch extends ChangeNotifier {
     if (listEquals(listed, _written)) return;
     _written = listed;
     unawaited(store.write(account, listed));
-  }
-
-  /// Settings ▸ Account's Clear now: the kept computers go. The list on
-  /// screen is not kept again until it changes.
-  Future<void> clear() async {
-    final account = _account;
-    _kept = null;
-    _changed();
-    if (account != null) await store.clear(account);
   }
 
   void _bind(String? account) {
@@ -201,21 +177,16 @@ class SavedComputersWatch extends ChangeNotifier {
   }
 }
 
-/// The one [SavedComputersWatch] of [app], kept in this browser's storage and
-/// cleared by Clear now ([AppNotifier.browserCopies]). The web workspace asks
-/// for it when it is first drawn, so the list is kept whenever it answers, not
-/// only once the connect page shows.
+/// The one [SavedComputersWatch] of [app], kept in this browser's storage. The
+/// web workspace asks for it when it is first drawn, so the list is kept
+/// whenever it answers, not only once the connect page shows.
 SavedComputersWatch savedComputersOf(AppNotifier app) =>
     _watches[app] ??= _watch(app);
 
-SavedComputersWatch _watch(AppNotifier app) {
-  final watch = SavedComputersWatch(
-    app,
-    SavedComputers(app.localStore ?? HarnessFileStore.shared),
-  );
-  app.browserCopies.add(watch.clear);
-  return watch;
-}
+SavedComputersWatch _watch(AppNotifier app) => SavedComputersWatch(
+  app,
+  SavedComputers(app.localStore ?? HarnessFileStore.shared),
+);
 
 final _watches = Expando<SavedComputersWatch>('savedComputersOf');
 

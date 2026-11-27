@@ -129,6 +129,13 @@ it('marks a launch an agent started, and only that one', () => {
   productUsageLaunch('agent_create', ID, emit, 'claude')
   expect(emit.mock.calls.flat()).toEqual([{ id: ID, phase: 'start', engine: 'claude', agentStarted: true }, { id: ID, phase: 'start', engine: 'claude' }])
 })
+it('marks a launch Hachi started as Hachi\'s, only as an agent\'s launch', () => {
+  const emit = vi.fn()
+  productUsageLaunch('agent_create', ID, emit, 'codex', true, true)
+  productUsageLaunch('agent_create', ID, emit, 'codex', false, true)
+  expect(emit.mock.calls.flat()).toEqual([{ id: ID, phase: 'start', engine: 'codex', agentStarted: true, hachiStarted: true },
+    { id: ID, phase: 'start', engine: 'codex' }])
+})
 
 it('keeps a setup refusal\'s fixed code for the separate setup diagnostic, leaving other kinds alone', () => {
   const emit = vi.fn()
@@ -315,7 +322,9 @@ it('keeps every refusal core/agents can answer named: in a fixed kind, or in the
   // These helpers answer through core/agents too. Scanning only that directory missed Windows' new
   // refusal and every Git worktree refusal (five unlisted launch failures on 2026-10-21).
   for (const [path, pattern] of [
-    ['projectFolder.ts', /new (?:ProjectFolderError|RepositoryAccessError)\('([A-Z][A-Z0-9_]*)'/g],
+    ['projectFolder.ts', /new ProjectFolderError\('([A-Z][A-Z0-9_]*)'/g],
+    // A clone's, a worktree's and a branch's refusals, made in the workspaces service and answered through a create.
+    ['gitProjectFolder.ts', /new (?:ProjectFolderError|RepositoryAccessError|RepositoryHostKeyError)\('([A-Z][A-Z0-9_]*)'/g],
     ['gitProject.ts', /new GitProjectError\('([A-Z][A-Z0-9_]*)'/g],
     ['windows/launch.ts', /error: '([A-Z][A-Z0-9_]*)'/g],
   ] as const) {
@@ -378,10 +387,6 @@ it.each([
   expect(names).toEqual(expect.arrayContaining(['history_page_failed', `history_page_error_${kind}`,
     `request_automatic_history_page_error_${detail}`]))
   expect(names.filter(name => name.endsWith('_error_other'))).toEqual([])
-})
-
-it('counts a model switch held for an unreadable Swarm role as unavailable, which a retry once the Swarm answers clears', () => {
-  expect(failureKind('SWARM_ROLE_UNAVAILABLE')).toBe('unavailable')
 })
 
 it('keeps every refusal a Store install or update can answer in the code list', () => {

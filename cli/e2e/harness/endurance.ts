@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process'
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
+import { namedTree } from '../../src/testing/spawnedRuns.js'
 import type { Frame, LocalClient } from './client.js'
 import type { IsolatedDaemon } from './daemon.js'
 
@@ -196,8 +197,8 @@ export async function tmuxClients(d: IsolatedDaemon): Promise<number> {
   return listed.trim() ? listed.trim().split('\n').length : 0
 }
 
-/** Processes still running whose command line names this daemon's root: its engines, viewer servers, workers. */
-export async function strays(d: IsolatedDaemon): Promise<string[]> {
-  const { stdout } = await exec('ps', ['-A', '-o', 'pid=,command='], { timeout: 5000 })
-  return stdout.split('\n').filter((line) => line.includes(d.root) && !line.includes(' ps -A')).map((line) => line.trim())
+/** Processes of the test's tree still running whose command line names this daemon's root: its engines, viewer
+ *  servers, workers. */
+export async function strays(d: Pick<IsolatedDaemon, 'root' | 'treeRoots'>): Promise<string[]> {
+  return namedTree(await d.treeRoots()).filter((row) => row.command.includes(d.root)).map((row) => `${row.pid} ${row.command}`)
 }

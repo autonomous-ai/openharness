@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../core/models.dart';
 import '../core/harness_defaults.dart';
 import '../core/project_folder.dart';
@@ -12,6 +14,7 @@ class EssentialHarness {
     required this.name,
     required this.folderLabel,
     this.firstTask,
+    this.builtinEngine,
   });
 
   final String id;
@@ -23,6 +26,11 @@ class EssentialHarness {
   /// What the harness is asked when it is created, so it is useful at once. Null to wait for the
   /// person.
   final String? firstTask;
+
+  /// For a built-in the daemon puts in place itself (Hachi), the engine its package names. Such a
+  /// harness is left out of `dsh_list` and is not in the Store's catalog, so it is never probed for or
+  /// installed: it is created directly. Null for a harness the Store installs.
+  final String? builtinEngine;
 }
 
 const harnessMonitorEssential = EssentialHarness(
@@ -59,14 +67,30 @@ class EssentialHarnessController {
   bool get opening => _opening != null;
 
   /// Whether a click would open one rather than create one: one in a tab on any machine, or one on
-  /// the machine a new one would be made on (stopped ones included), exactly as [open] looks.
-  bool get exists =>
-      _inTab() != null ||
-      (app.ownedActionMachine?.agents.any((a) => a.dsh == essential.id) ??
-          false);
+  /// a machine [searched] (stopped ones included), exactly as [open] looks.
+  bool get exists => inTab() != null || _found() != null;
+
+  /// The machines a click looks on, after the tabs, before it creates one: the one a new one would be
+  /// made on.
+  @protected
+  Iterable<MachineState> get searched => [?app.ownedActionMachine];
+
+  /// The first machine [searched] that has one, stopped ones included.
+  MachineState? _found() => searched
+      .where((machine) => machine.agents.any((a) => a.dsh == essential.id))
+      .firstOrNull;
+
+  /// Puts a new tab for it in front, empty: a tab of its own named for it.
+  @protected
+  void openTab() => app.newSwarm(name: essential.name);
+
+  /// One this window just created, on [machine].
+  @protected
+  void created(MachineState machine, Agent agent) {}
 
   /// The first tab showing this harness, with its machine and agent.
-  ({String tab, MachineState machine, Agent agent})? _inTab() {
+  @protected
+  ({String tab, MachineState machine, Agent agent})? inTab() {
     for (final tab in app.swarms) {
       for (final pane in tab.panes) {
         final machine = app.stateOf(pane.machineId);
@@ -95,7 +119,7 @@ class EssentialHarnessController {
     final id = essential.id, name = essential.name;
     // Reuse the tab even after focus moves to a different machine, including an offline harness that
     // is still open.
-    if (_inTab() case (:final tab, machine: final owner, :final agent)) {
+    if (inTab() case (:final tab, machine: final owner, :final agent)) {
       app.selectSwarm(tab);
       final machineId = owner.machine.machineId;
       try {
@@ -115,7 +139,7 @@ class EssentialHarnessController {
       }
       return null;
     }
-    final owner = app.ownedActionMachine;
+    final owner = _found() ?? app.ownedActionMachine;
     if (owner == null) return 'Connect a machine to open $name.';
     if (!identical(_owner, owner)) {
       _owner = owner;
@@ -126,13 +150,16 @@ class EssentialHarnessController {
     Agent? existing() => owner.agents.where((a) => a.dsh == id).firstOrNull;
     try {
       var agent = existing();
+      final builtin = essential.builtinEngine;
       if (agent == null) {
-        await app.probeDsh(machineId);
-        if (!_current(owner)) return null;
-        if (owner.dsh[id]?.installed != true) {
-          final error = await app.installDsh(machineId, id);
+        if (builtin == null) {
+          await app.probeDsh(machineId);
           if (!_current(owner)) return null;
-          if (error != null) return error;
+          if (owner.dsh[id]?.installed != true) {
+            final error = await app.installDsh(machineId, id);
+            if (!_current(owner)) return null;
+            if (error != null) return error;
+          }
         }
         agent = existing();
         if (agent == null) {
@@ -154,6 +181,7 @@ class EssentialHarnessController {
           final listed = owner.dsh[id]?.engine ?? '';
           final engine =
               app.agentPreference.engineFor(id) ??
+              builtin ??
               (listed.isNotEmpty ? listed : defaultHarnessEngine);
           final error = await app.createAgent(
             machineId,
@@ -168,8 +196,16 @@ class EssentialHarnessController {
             attempt: _creation,
           );
           if (!_current(owner)) return null;
+          // The daemon puts a built-in in place when its switch goes on, a moment after the click
+          // that turned it on can reach here.
+          if (error != null &&
+              builtin != null &&
+              _creation!.refusal == 'INVALID_DSH') {
+            return '$name is still being set up. Try again in a moment.';
+          }
           if (error != null) return error;
           agent = existing();
+          if (agent != null) created(owner, agent);
         }
       }
       if (agent == null) {
@@ -190,7 +226,7 @@ class EssentialHarnessController {
       if (tab != null) {
         app.selectSwarm(tab.id);
       } else {
-        app.newSwarm(name: name);
+        openTab();
         if (app.activeSwarm.panes.isNotEmpty) {
           return 'Close a tab to make room for $name.';
         }

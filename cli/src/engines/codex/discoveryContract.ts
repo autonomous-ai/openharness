@@ -17,7 +17,8 @@ export const discovery: DiscoveryContract = {
    * A codex pane the daemon did not create (started by hand, or a row discovery had to mint again) has no
    * profile carried from `agent_create`. Its transcript lives under `<CODEX_HOME>/sessions`, so without this
    * the hook's transcript path fails validation against the default profile and session repair scans the
-   * wrong root.
+   * wrong root. A Codex holds its rollout open from its first prompt to its exit, so the rollout's folder names the
+   * home (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result").
    */
-  profile: { variable: 'CODEX_HOME', setting: 'CODEX_HOME' },
+  profile: { setting: 'CODEX_HOME', held: /^(.+)\/sessions\/(?:[^/]+\/)*rollout-[^/]+\.jsonl$/ },
 }

@@ -1,5 +1,33 @@
-import { describe, expect, it, vi } from 'vitest'
-import { isDesktopApp, removalLine, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
+import { execFileSync } from 'child_process'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
+import { AUTH_SESSION_FILE } from './authSession.js'
+import {
+  ancestors, isDesktopApp, REMOVALS_FILE, removalLine, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, windowsProcessQuery, type Asker,
+} from './signOut.js'
+import { encodedCommandArgs, withPrelude } from './windows/powershell.js'
+
+// Pass-through, so a case can see what Windows is asked with.
+vi.mock('child_process', async original => {
+  const actual = await original<typeof import('child_process')>()
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) }
+})
+
+// Pass-through, recording each path written to by name and each rename's target.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.events.push(`write ${String(args[0])}`)
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+afterEach(() => { disk.events = [] })
 
 // 10-27: a desktop test ran the real `harness logout` and signed the whole Mac out. Only a person asks.
 describe('who asked for the sign-in to go', () => {
@@ -55,6 +83,24 @@ describe('who asked for the sign-in to go', () => {
   })
 })
 
+describe('the processes above, on Windows', () => {
+  // Windows looks for a bare name in the folder `harness logout` runs in before PATH.
+  it('are read by Windows PowerShell from System32, with the prelude every script here starts with', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    vi.mocked(execFileSync).mockReturnValueOnce('{"ParentProcessId":0,"CommandLine":"harness logout"}' as never)
+    try {
+      expect(ancestors(1)).toEqual([{ pid: process.ppid, command: 'harness logout' }])
+      expect(execFileSync).toHaveBeenCalledWith('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        encodedCommandArgs(withPrelude(windowsProcessQuery(process.ppid))), expect.objectContaining({ timeout: 5_000, windowsHide: true }))
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+    }
+  })
+})
+
 describe("harness.log's line for a removal", () => {
   it('says why, how a person asked, and every process from the command up', () => {
     const line = removalLine({
@@ -70,3 +116,89 @@ describe("harness.log's line for a removal", () => {
   })
 })
 
+
+// anh Dee's Mac, 2026-11-12: the session went at 04:58, and a flood of "Not signed in" lines filled harness.log to its cap, whose
+// trim took this line with it: nobody could tell what had signed the person out. Each removal is kept apart too, never trimmed.
+describe('the removals kept apart from harness.log', () => {
+  it('keeps each removal\'s line in a file of its own, the last 20 of them', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    const chain = () => [{ pid: 2, command: '-zsh' }]
+    removeSignIn('logout', 'terminal', chain)
+    const first = readFileSync(kept, 'utf8').trimEnd().split('\n')
+    expect(first).toHaveLength(1)
+    expect(first[0]).toMatch(/\[auth\] sign-in removed · reason=logout · asked=terminal · pid=\d+ \(.*\) · parent=2 \(-zsh\)$/)
+    expect(readFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), 'utf8')).toContain(first[0])
+    for (let n = 0; n < 25; n++) removeSignIn(`reset-${n}`, 'desktop app', chain)
+    const lines = readFileSync(kept, 'utf8').trimEnd().split('\n')
+    expect(lines).toHaveLength(20)
+    expect(lines[0]).toContain('reason=reset-5 ')
+    expect(lines[19]).toContain('reason=reset-24 ')
+  })
+
+  // The review of #4221: a line of any length, a file left world-readable before, and a write cut short each cost the history.
+  it('cuts a line to 2 KB, keeps the file to its person alone, and writes it whole or not at all', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    writeFileSync(kept, 'an earlier removal\n')
+    chmodSync(kept, 0o644)
+    removeSignIn('logout', 'terminal', () => [{ pid: 2, command: 'x'.repeat(10_000) }])
+    const lines = readFileSync(kept, 'utf8').trimEnd().split('\n')
+    expect(lines[0]).toBe('an earlier removal')
+    expect(Buffer.byteLength(lines[1]!)).toBeLessThanOrEqual(2_048)
+    // Cut on a character, never inside one: a command of four-byte characters keeps whole ones, and stays within 2 KB.
+    removeSignIn('logout', 'terminal', () => [{ pid: 2, command: '\u{1F98A}'.repeat(2_000) }])
+    const cut = readFileSync(kept, 'utf8').trimEnd().split('\n').at(-1)!
+    expect(Buffer.byteLength(cut)).toBeLessThanOrEqual(2_048)
+    expect(cut).not.toContain('\uFFFD')
+    expect(cut.endsWith('…')).toBe(true)
+    expect(statSync(kept).mode & 0o777).toBe(0o600)
+    // Written beside it and renamed over it: no half-written file, and nothing left beside it.
+    expect(readdirSync(env.ADAPTER_DATA_DIR).filter(name => name.startsWith(`${REMOVALS_FILE}.`))).toEqual([])
+  })
+
+  // The third review of #4221: the file keeps process command lines with no age limit, so what a command line carried stays.
+  it('keeps no secret a command line carried, in the new line or the ones kept before', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    writeFileSync(kept, `an earlier removal · pid=4 (node cli.js --api-key=sk-live1234567890abcdef) · ${'y'.repeat(5_000)}\n`)
+    removeSignIn('logout', 'terminal', () => [{ pid: 2, command: 'curl -H "Authorization: Bearer abcdefghijklmnop" --token 0123456789abcdef0123456789abcdef' }])
+    const text = readFileSync(kept, 'utf8')
+    for (const secret of ['sk-live1234567890abcdef', 'abcdefghijklmnop', '0123456789abcdef0123456789abcdef']) expect(text).not.toContain(secret)
+    expect(text).toContain('<redacted>')
+    for (const line of text.trimEnd().split('\n')) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(2_048)
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    disk.events = []
+    removeSignIn('logout', 'terminal', () => [])
+    expect(disk.events).toContain(`rename ${kept}`)
+    expect(disk.events).not.toContain(`write ${kept}`)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    const old = `${kept}.${process.pid}.tmp`
+    mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
+    writeFileSync(old, 'not this writer\'s')
+    try {
+      removeSignIn('logout', 'terminal', () => [])
+      expect(readFileSync(old, 'utf8')).toBe('not this writer\'s')
+      expect(readFileSync(kept, 'utf8')).toContain('reason=logout')
+    } finally { rmSync(old, { force: true }) }
+  })
+
+  it('still removes the sign-in when the kept file cannot be written', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { recursive: true, force: true })
+    // A folder where the file goes: it can be neither read nor written, and the sign-in goes all the same.
+    mkdirSync(kept, { recursive: true })
+    mkdirSync(join(AUTH_SESSION_FILE, '..'), { recursive: true })
+    writeFileSync(AUTH_SESSION_FILE, '{}')
+    expect(() => removeSignIn('logout', 'terminal', () => [])).not.toThrow()
+    expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
+    rmSync(kept, { recursive: true, force: true })
+  })
+})

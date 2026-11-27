@@ -3,15 +3,14 @@
 import { execFile, spawn } from 'child_process'
 import { existsSync } from 'node:fs'
 import { basename } from 'path'
-import type { ProcessIdentity } from './registry.js'
 import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
 import { psEnv } from './childLocale.js'
+import { errorKind } from './log.js'
 import { neutralizePasteControls } from './pasteText.js'
 import { submitContent, submitSettleMs } from './submitTiming.js'
 import { patientDeadline, patientExec } from './patientExec.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
-import { processIdentityOf } from './terminalRuntime.js'
 import type { TerminalPaneInfo, TerminalPaneRead, TerminalPaneState } from './terminalTypes.js'
 import { processRows, type ProcessRow } from './processTable.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
@@ -186,29 +185,6 @@ async function panePid(pane: string): Promise<number | null> {
 }
 
 /**
- * The pane's OWN process — whatever is sitting there, engine or not.
- *
- * [resolvePaneEngineProcess] answers "is the engine running here yet", which during an install is
- * deliberately no: the pane is running the user's shell, and the shell is running `npm`. This one
- * answers "what is running here", so an agent can be registered for a pane whose engine has not
- * started — the record the terminal tile attaches to while the install scrolls past.
- *
- * The identity is a placeholder by design, and a SHORT-LIVED one. When the engine finally execs,
- * discovery registers it against the same pane and the registry adopts the record in place — see the
- * `routeAgent` branch in `registry.ts`, which matches on the terminal route precisely while an agent
- * has no engine session bound yet. The agentId therefore survives, and so does the tile.
- */
-export async function resolvePaneRootProcess(pane: string): Promise<ProcessIdentity | null> {
-  const rootPid = await panePid(pane)
-  if (!rootPid) return null
-  const rows = await processRows()
-  if (!rows) return null
-  const row = rows.find((candidate) => candidate.pid === rootPid)
-  if (!row) return null
-  return processIdentityOf(row)
-}
-
-/**
  * Every process under a pane, shallowest first — the answer to "then WHAT was running?".
  *
  * `selectEngineProcess` returning null says only that nothing matched the engine, which is the least
@@ -233,10 +209,14 @@ export async function tmuxPaneProcessTree(
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const found: Array<{ executable: string; args: string }> = []
   const queue = [rootPid]
+  const seen = new Set<number>()
   // Breadth-first for the same reason `selectEngineProcess` is: the shallowest processes are the
   // launch chain, and a deep child is the least likely to explain the failure.
   while (queue.length && found.length < limit) {
     const pid = queue.shift()!
+    // A root whose parent pid names its own descendant (a reused pid) would list it again (#4268).
+    if (seen.has(pid)) continue
+    seen.add(pid)
     const row = byPid.get(pid)
     if (row) found.push({ executable: row.executable, args: row.args })
     for (const child of children.get(pid) ?? []) queue.push(child.pid)
@@ -254,7 +234,7 @@ function sleep(ms: number): Promise<void> {
 function tmuxEnter(pane: string): Promise<boolean> {
   return new Promise((resolve) => {
     run('tmux', ['send-keys', '-t', pane, 'Enter'], { timeout: 2000 }, (err) => {
-      if (err) console.error(`[tmux] Enter to ${pane} failed:`, err.message)
+      if (err) console.error(`[tmux] Enter to ${pane} failed:`, errorKind(err))
       resolve(!err)
     })
   })
@@ -347,7 +327,7 @@ export async function setPaneStyle(pane: string, style: string): Promise<boolean
   })
 }
 
-/** What tmux knows about a pane right now. See `agentCreateDiagnosis.ts` for why this is read. */
+/** What tmux knows about a pane right now. See `core/agents/newPane.ts` for why this is read. */
 export { ENGINE_EXIT_PANE_OPTION }
 
 export type TmuxPaneState = TerminalPaneState
@@ -487,7 +467,7 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
   args.push('-d')
   const pasted = await new Promise<boolean>((resolve) => {
     run('tmux', args, { timeout: 2_000 }, (err) => {
-      if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, err.message)
+      if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, errorKind(err))
       resolve(!err)
     })
   })
@@ -530,8 +510,8 @@ export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promi
  * settings list opens a row as soon as the filter narrows to one, so the Enter `sendToTmux` appends would
  * land on the row that just opened and pick whatever was already highlighted.
  */
-export function sendLiteralToTmux(pane: string, text: string): Promise<boolean> {
-  return tmuxPasteText(pane, text, false).then((result) => result === 'pasted')
+export function sendLiteralToTmux(pane: string, text: string, allowed?: () => boolean): Promise<boolean> {
+  return tmuxPasteText(pane, text, false, allowed).then((result) => result === 'pasted')
 }
 
 /**
@@ -550,7 +530,8 @@ export function pasteRawIntoTmux(pane: string, text: string, allowed?: () => boo
   return tmuxPasteText(pane, text, true, allowed).then((result) => result === 'pasted')
 }
 
-export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
+export function sendKeyToTmux(pane: string, key: string, allowed?: () => boolean): Promise<boolean> {
+  if (allowed?.() === false) return Promise.resolve(false)
   return new Promise((resolve) => {
     run('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
   })

@@ -29,14 +29,15 @@ afterEach(async () => {
   rmSync(short, { recursive: true, force: true })
 })
 
-interface Heard { url?: string; token?: string; body: string }
+interface Heard { url?: string; token?: string; gateway?: string; body: string }
 function recorder(): { server: Server; heard: Heard[] } {
   const heard: Heard[] = []
   const server = createServer((request, response) => {
     let body = ''
     request.on('data', part => { body += part })
     request.on('end', () => {
-      heard.push({ url: request.url, token: request.headers['x-harness-hook-token'] as string | undefined, body })
+      heard.push({ url: request.url, token: request.headers['x-harness-hook-token'] as string | undefined,
+        gateway: request.headers['x-harness-hook-gateway'] as string | undefined, body })
       response.writeHead(200, { 'content-type': 'application/json' }).end('{}')
     })
   })
@@ -122,5 +123,33 @@ describe.each(PLUGINS)('%s\'s plugin', (_name, rule, file, announce) => {
     await announce(await load(rule, file, hold.port, null))
     await vi.waitFor(() => expect(hold.heard).toHaveLength(1))
     expect(hold.heard[0]).toMatchObject({ url: '/api/hook/session-start', token: TOKEN })
+  })
+})
+
+const GATEWAY_URLS = ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']
+const OPENCODE = PLUGINS.filter(([name]) => name.startsWith('OpenCode'))
+
+describe.each(OPENCODE)('%s\'s plugin and its gateway', (_name, rule, file, announce) => {
+  it.each([
+    [{ OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' }, 'ori'],
+    [{ ANTHROPIC_BASE_URL: 'https://openrouter.ai.example.com' }, 'none'],
+    [{}, 'none'],
+  ] as Array<[Record<string, string>, string]>)('%j is said as gateway %s, in a header, and never the address', async (urls, gateway) => {
+    for (const name of GATEWAY_URLS) vi.stubEnv(name, urls[name] ?? '')
+    const hold = await holder()
+    await announce(await load(rule, file, hold.port, null))
+    await vi.waitFor(() => expect(hold.heard).toHaveLength(1))
+    expect(hold.heard[0]!.gateway).toBe(gateway)
+    expect(hold.heard[0]!.body).not.toMatch(/gateway|openrouter/)
+  })
+})
+
+describe.each(PLUGINS.filter(([name]) => !name.startsWith('OpenCode')))('%s\'s plugin and the gateway', (_name, rule, file, announce) => {
+  it('says nothing of the gateway', async () => {
+    vi.stubEnv('OPENAI_BASE_URL', 'https://openrouter.ai/api/v1')
+    const hold = await holder()
+    await announce(await load(rule, file, hold.port, null))
+    await vi.waitFor(() => expect(hold.heard).toHaveLength(1))
+    expect(hold.heard[0]!.gateway).toBeUndefined()
   })
 })

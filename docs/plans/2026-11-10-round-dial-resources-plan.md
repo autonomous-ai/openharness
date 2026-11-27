@@ -38,7 +38,7 @@
 - **A format nano cannot print** (`%ll*`, `%j`, `%z`, `%t`, `%L`, `%a`). Expected: none in `FW/main`, and `_printf_float` is still linked for cJSON (Task 4).
 - **An array merged into another** but drawn with a different palette, size or element type. Expected: merged arrays are identical in type and body, and the existing pet, mark and face render tests still pass (Tasks 5-6).
 - **A word with a cut letter next to a kept one** (e.g. "Łódź Hà Nội"). Expected: base letters for the cut ones, the real glyphs for the kept ones, and no `?` (Task 7 test).
-- **A task near its new stack size** on a path the telemetry has not covered: a long voice message, a long Swarm list. Expected: each keeps ≥ 1 KB free over the Task 13 runs.
+- **A task near its new stack size** on a path the telemetry has not covered: a long voice message. Expected: each keeps ≥ 1 KB free over the Task 13 runs.
 
 ---
 
@@ -276,7 +276,7 @@
   - Otherwise rebuild without Task 11, repeat 20 minutes, and keep whichever of Tasks 10/11 passes. Revert the one that fails.
   - If Task 10 is reverted, also delete `ram_telemetry_init`, the `ram_psram_*` helpers and the `json_fb` field.
 - [ ] **Step 3: Normal use.** Ask Diego for 30 minutes on the final firmware:
-  - the Focus face, a pet alert, a voice message, the Swarm screens;
+  - the Focus face, a pet alert, a voice message;
   - a message with "Hà Nội, Łódź, Kraków" so Vietnamese and other accented letters are on screen.
 
   Expected:

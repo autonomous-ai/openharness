@@ -19,10 +19,10 @@
  * network registry. They are two readers of one state directory, so a grid state-format change is a
  * coordination point: the pin has to move before or with it.
  */
-import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath, gridChildEnv, gridCommand } from './gridBinary.js'
 import { gridCallStarted } from './gridCalls.js'
+import { spawnTied } from './tied.js'
 
 // Which `grid` to run is gridBinary.ts's, which the core keeps for its launches; said again here for
 // every grid call that imports it from this module.
@@ -104,9 +104,10 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
   const ended = await gridCallStarted()
   return await new Promise<GridResult>((resolve) => {
     const command = gridCommand(binary, args)
-    let child: ReturnType<typeof spawn>
+    let child: ReturnType<typeof spawnTied>
     try {
-      child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
+      // Tied to this process: each crash of the service that asked left a grid call running (lib/tied.ts).
+      child = spawnTied(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
     } catch (error) {
       // A synchronous spawn failure (Windows' application control answers UNKNOWN, for one) must not
       // reject this promise: every caller reads the result, and the counter an install waits on would

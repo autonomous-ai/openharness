@@ -1,4 +1,5 @@
 import { locateTranscript, transcriptGroups, type TranscriptLocation } from './sessionLocation.js'
+import { errorKind } from '../../lib/log.js'
 
 /**
  * Poll only while a known session has no transcript. A recursive watcher over the project tree once
@@ -6,7 +7,7 @@ import { locateTranscript, transcriptGroups, type TranscriptLocation } from './s
  * Every lookup carries its own candidate identity: remove, replacement and stop revoke it immediately.
  */
 export class TranscriptDiscovery {
-  private readonly pending = new Map<string, { looking: boolean; detail?: string }>()
+  private readonly pending = new Map<string, { looking: boolean; kind?: string }>()
   private timer: NodeJS.Timeout | null = null
   private started = false
   private sweeping = false
@@ -38,12 +39,12 @@ export class TranscriptDiscovery {
     }
   }
 
-  private hold(id: string, candidate: { looking: boolean; detail?: string }, error: unknown): void {
+  private hold(id: string, candidate: { looking: boolean; kind?: string }, error: unknown): void {
     if (this.pending.get(id) !== candidate) return
-    const detail = error instanceof Error ? error.message : String(error)
-    if (candidate.detail === detail) return
-    candidate.detail = detail
-    console.error(`[discovery] transcript ${id} held · ${detail}`)
+    const kind = errorKind(error)
+    if (candidate.kind === kind) return
+    candidate.kind = kind
+    console.error(`[discovery] transcript ${id} held · ${kind}`)
   }
 
   private publish(id: string, candidate: { looking: boolean }, found: string): void {
@@ -67,7 +68,7 @@ export class TranscriptDiscovery {
   private schedule(): void {
     if (!this.started || this.timer || !this.pending.size) return
     this.timer = setInterval(() => {
-      void this.sweep().catch(error => console.error('[discovery] transcript lookup failed', error))
+      void this.sweep().catch(error => console.error('[discovery] transcript lookup failed', errorKind(error)))
     }, this.pollMs)
     this.timer.unref()
   }

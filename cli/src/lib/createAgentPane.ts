@@ -1,4 +1,3 @@
-import type { SwarmSkill } from './savedSkill.js'
 /**
  * Open a tmux pane for a new agent and claim it in the registry, retrying the claim up to
  * `maxAttempts` times.
@@ -10,7 +9,8 @@ import type { SwarmSkill } from './savedSkill.js'
  * call mints a never-before-used pane id from tmux's own monotonic counter, so a retry almost
  * always lands on an unclaimed route without needing to wait for anything. A tmux spawn failure
  * (`SPAWN_FAILED`/`TMUX_UNAVAILABLE`) is a different, not-obviously-transient problem and is
- * returned immediately — only the registration race is retried.
+ * returned immediately — only the registration race is retried. A storage refusal is neither a taken route nor tmux's:
+ * its one pane is closed and it is answered at once as `PERSISTENCE_UNCONFIRMED`.
  */
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
@@ -20,10 +20,13 @@ import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TerminalRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+import { RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
 import type { LaunchModel } from './launchModel.js'
+import { errorKind } from './log.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
@@ -43,7 +46,6 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     codexHome?: string | null
     claudeHome?: string | null
     dsh?: string | null
-    swarmSkill?: SwarmSkill
     dshRuntime?: string | null
     agent?: string | null
     bypassPermission?: boolean
@@ -56,7 +58,10 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     parentAgentId?: string | null
     guest?: string | null
     browser?: boolean
-  }) => RegisteredSession | null }
+    firstTask?: string
+    openclawLocal?: string
+    creationId?: string
+  }) => Promise<RegisteredSession | null> }
   nativeToken?: string
   /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
   agentId?: string
@@ -71,7 +76,10 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   label?: string | null
   /** Base tmux session name (`-s`). Retries append `-r<attempt>` — see module doc. */
   sessionLabel: string
-  argv: string[]
+  /** The pane's command, built for each attempt (1 first): an engine launch reads its script from a one-time file that
+   *  the pane's shell removes as it reads it (engineLaunch.ts `sourcedOnce`), so a retry needs a file of its own. Handed
+   *  the first attempt's, a retry ran a file already gone and its pane died with status 127 (CI, cli/e2e/scale.e2e.ts). */
+  argv: (attempt: number) => string[]
   /** Explicit-argv terminals start here; engine wrappers still enter cwd after rc files. */
   spawnCwd?: string
   /** Windows: the folder the engine starts in (it has no wrapper to enter one) and the shell the pane becomes when it
@@ -94,7 +102,6 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   claudeHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
-  swarmSkill?: SwarmSkill
   dshRuntime?: string | null
   /** The engine's named agent the pane opens as (`agent_create`'s `agent`); kept on the row so a
    *  relaunch opens as it again. Already in `argv` — this is the record, not the launch. */
@@ -109,17 +116,26 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   externalResume?: ExternalResumeIntent
   /** The guest (an email) whose harness this is: it runs as their own OS user (core/agents/guestCreate.ts). */
   guest?: string | null
-  /** Browser ticked, recorded on the row (registry.ts `browser`). */
+  /** Its Browser is on from the start, recorded on the row (registry.ts `browser`). */
   browser?: boolean
+  /** The first task an engine takes typed, not in argv (engineLaunch.ts `typedFirstPrompt`): kept on the row until the
+   *  bind pass types it (registry.ts `firstTask`). */
+  firstTask?: string
+  /** OpenClaw's `--local` folder this pane runs on, recorded on the row so every relaunch keeps it (registry.ts
+   *  `openclawLocal`). Already in `argv` and `env`: this is the record, not the launch. */
+  openclawLocal?: string
+  /** The creation receipt this agent is made from (a create's intent, a fork's receipt), recorded on the row: a first
+   *  launch the native guard holds is recovered from it (registry.ts `creationId`). */
+  creationId?: string
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
-  onDispatch?: () => void
+  onDispatch?: () => void | Promise<void>
   maxAttempts?: number
 }
 
 export type CreateAgentPaneResult<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> =
   | { ok: true; spawned: TerminalCreateResult<Ref> & { state: 'succeeded' }; pending: RegisteredSession }
-  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED'; detail: string }
+  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED' | 'PERSISTENCE_UNCONFIRMED'; detail: string }
 
 export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = TerminalRuntimeRef>(
   deps: CreateAgentPaneDeps<Ref>,
@@ -135,45 +151,56 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.paneLaunch?.afterExit ? { afterExit: deps.paneLaunch.afterExit } : {}),
       ...(deps.paneLaunch?.clearInherited?.length ? { clearInherited: deps.paneLaunch.clearInherited } : {}),
       label,
-      command: deps.argv,
+      command: deps.argv(attempt),
       ...(deps.current ? { current: deps.current } : {}),
       ...(deps.onDispatch ? { onDispatch: deps.onDispatch } : {}),
       // The caller's own variables win over the pane's PATH rule (lib/windows/engineStart.ts `windowsPaneLaunch`).
       ...(deps.paneLaunch?.env || deps.env ? { env: { ...(deps.paneLaunch?.env ?? {}), ...(deps.env ?? {}) } } : {}),
     })
     if (spawned.state !== 'succeeded') {
-      console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${spawned.reason ?? ''}`)
-      const missing = spawned.reason === 'tmux is unavailable'
-      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
+      const code = spawned.reason === 'tmux is unavailable' ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED'
+      console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${code}`)
+      return { ok: false, error: code, detail: spawned.reason }
     }
-    const pending = deps.registry.openPendingAgent({
-      ...(deps.agentId ? { agentId: deps.agentId } : {}),
-      ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
-      engine: deps.engine,
-      runtimes: [spawned.runtime],
-      primaryRuntimeKey: terminalRouteKey(spawned.runtime),
-      cwd: deps.cwd,
-      grid: deps.grid,
-      gridLaunchRecord: deps.gridLaunchRecord,
-      scmLaunchRecord: deps.scmLaunchRecord,
-      ...(deps.launchModel ? { launchModel: deps.launchModel } : {}),
-      codexHome: deps.codexHome,
-      claudeHome: deps.claudeHome,
-      dsh: deps.dsh,
-      dshRuntime: deps.dshRuntime,
-      ...(deps.swarmSkill ? { swarmSkill: deps.swarmSkill } : {}),
-      agent: deps.agent,
-      bypassPermission: deps.bypassPermission,
-      permissionMode: deps.permissionMode,
-      defaultName: deps.defaultName,
-      label: deps.label,
-      forkedFrom: deps.forkedFrom,
-      ...(deps.externalResume ? { externalResume: deps.externalResume } : {}),
-      ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
-      ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
-      ...(deps.guest ? { guest: deps.guest } : {}),
-      ...(deps.browser ? { browser: true } : {}),
-    })
+    let pending: RegisteredSession | null
+    try {
+      pending = await deps.registry.openPendingAgent({
+        ...(deps.agentId ? { agentId: deps.agentId } : {}),
+        ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
+        engine: deps.engine,
+        runtimes: [spawned.runtime],
+        primaryRuntimeKey: terminalRouteKey(spawned.runtime),
+        cwd: deps.cwd,
+        grid: deps.grid,
+        gridLaunchRecord: deps.gridLaunchRecord,
+        scmLaunchRecord: deps.scmLaunchRecord,
+        ...(deps.launchModel ? { launchModel: deps.launchModel } : {}),
+        codexHome: deps.codexHome,
+        claudeHome: deps.claudeHome,
+        dsh: deps.dsh,
+        dshRuntime: deps.dshRuntime,
+        agent: deps.agent,
+        bypassPermission: deps.bypassPermission,
+        permissionMode: deps.permissionMode,
+        defaultName: deps.defaultName,
+        label: deps.label,
+        forkedFrom: deps.forkedFrom,
+        ...(deps.externalResume ? { externalResume: deps.externalResume } : {}),
+        ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
+        ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
+        ...(deps.guest ? { guest: deps.guest } : {}),
+        ...(deps.browser ? { browser: true } : {}),
+        ...(deps.firstTask ? { firstTask: deps.firstTask } : {}),
+        ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
+        ...(deps.creationId ? { creationId: deps.creationId } : {}),
+      })
+    } catch (error) {
+      const closed = await deps.tmuxBackend.kill(spawned.runtime)
+      if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
+      console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} `
+        + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`) + ` · ${errorKind(error)}`)
+      return { ok: false, error: 'PERSISTENCE_UNCONFIRMED', detail: error.message }
+    }
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `
       + `attempt ${attempt}/${maxAttempts}`)

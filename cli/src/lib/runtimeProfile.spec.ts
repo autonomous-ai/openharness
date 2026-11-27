@@ -1,9 +1,12 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { listClaudeModels } from '../engines/claude/lists.js'
 import type { RegisteredSession } from './registry.js'
 import { loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
+import { transcriptEvidence as cursorEvidence } from '../engines/cursor/profileReader.js'
+import { transcriptEvidence as grokEvidence } from '../engines/grok/profileReader.js'
 import {
   codexEffortAllowed,
   encodeRuntimeProfile,
@@ -139,11 +142,13 @@ describe('RuntimeProfileManager', () => {
     ])
   })
 
-  it('offers no switching outside Claude and Codex', async () => {
+  it('offers no switching outside Claude, Codex and OpenCode', async () => {
     // View-only engines still SHOW what they run (the ingest paths do that); they just have nothing to
     // pick and nothing to drive. Both gates are asserted: an empty catalogue, and a refusal to control.
     const manager = new RuntimeProfileManager()
-    for (const engine of ['cursor', 'commandcode', 'devin', 'pi', 'opencode', 'hermes', 'grok'] as const) {
+    // OpenCode drives its own pickers (engines/opencode/profileReader.ts), and is left to its own specs: its list is
+    // `opencode` itself, which no spec may run.
+    for (const engine of ['cursor', 'commandcode', 'devin', 'pi', 'hermes', 'grok'] as const) {
       const value = { ...session('cursor'), engine }
       expect(supportsNativeRuntimeControl(value)).toBe(false)
       await expect(manager.modelsForSession(value)).resolves.toEqual([])
@@ -238,7 +243,7 @@ describe('RuntimeProfileManager', () => {
     const value = session('cursor')
     manager.hydrate(value, [])
 
-    manager.ingest(value, JSON.stringify({ model: 'gpt-5.6-sol' }))
+    manager.evidence(value, [cursorEvidence({ model: 'gpt-5.6-sol' })!])
 
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({
       engine: 'cursor',
@@ -268,9 +273,9 @@ describe('RuntimeProfileManager', () => {
     const value = session('grok')
     manager.hydrate(value, [])
 
-    manager.ingest(value, JSON.stringify({
+    manager.evidence(value, [grokEvidence({
       params: { update: { _meta: { modelId: 'grok-4.5' } } },
-    }))
+    })!])
     manager.ingestPane(value, 'Grok 4.5 (medium) · always-approve')
 
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({
@@ -411,6 +416,44 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ model: 'opus', effort: 'medium' })
   })
 
+  // A session launched with --effort starts at it, which outranks its settings' effortLevel: read as the settings' until its
+  // first reply, an agent of the 2026-11-11 rehearsal, launched at xhigh, was announced to its project as running at high.
+  it('reads a session launched with an effort at that effort, not its settings\', until it shows its own', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    await writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel: 'high' }))
+    const manager = new RuntimeProfileManager()
+    const value = { ...session('claude'), cwd, launchModel: { model: 'opus', effort: 'xhigh' } }
+    manager.hydrate(value, [JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } })])
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'xhigh' })
+    manager.ingest(value, JSON.stringify({ message: { content: [{ text: 'Set effort level to medium' }] } }))
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'medium' })
+  })
+
+  // A row on a grid keeps its launch flags for the move home, but its relaunch passes none of them (launchOverrides.ts): its
+  // process started at its settings' effort, on both attach paths (review of #4090).
+  it('reads a session on a grid at its settings\' effort, not the flags kept for its move home', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    await writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel: 'high' }))
+    const reply = JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } })
+    const row = () => ({ ...session('claude'), cwd, launchModel: { model: 'opus', effort: 'xhigh' }, gridLaunch: { model: 'qwen' } as never })
+    const read = new RuntimeProfileManager(), whole = row()
+    read.hydrate(whole, [reply])
+    await read.ingestConfig(whole, true)
+    expect(parseRuntimeProfile(read.selectedModel(whole))).toMatchObject({ effort: 'high' })
+    const staged = new RuntimeProfileManager(), fromEnd = row()
+    const stage = staged.beginHydrate(fromEnd)
+    stage.ingest(reply)
+    await stage.config!()
+    stage.commit()
+    expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ effort: 'high' })
+  })
+
   // Settings fill high, a reply (or the screen) shows high, then the settings change to medium: the session still runs
   // high, and the row said medium (#1966 delta review). Showing an effort makes it the session's, even an equal one.
   it.each(['a reply', 'the screen'])('keeps an effort %s showed that equals the settings when they change', async by => {
@@ -491,6 +534,27 @@ describe('RuntimeProfileManager', () => {
     expect(olderProfiles.map((profile) => profile.effort)).not.toContain('ultracode')
   })
 
+  it('publishes the models Claude Code itself lists, with their names, lines and efforts, ultracode where it takes it', async () => {
+    vi.mocked(listClaudeModels).mockResolvedValueOnce([
+      { value: 'opus', displayName: 'Opus 5.5', description: 'For complex work and everyday tasks', efforts: ['low', 'high'] },
+      { value: 'claude-fable-5-1', displayName: 'Fable 5.1', description: 'Most capable for your hardest tasks', efforts: ['low'] },
+      { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fastest for quick answers', efforts: [] },
+    ])
+    const manager = new RuntimeProfileManager()
+    const value = session('claude')
+    value.cliVersion = '2.1.283'
+    manager.hydrate(value, [])
+
+    const options = await manager.modelsForSession(value)
+    const rows = options.map((option) => ({ ...parseRuntimeProfile(option.id), displayName: option.displayName, description: option.description }))
+    expect([...new Set(rows.map((row) => row.model))]).toEqual(['opus', 'claude-fable-5-1', 'haiku'])
+    expect(rows.filter((row) => row.model === 'opus').map((row) => row.effort)).toEqual(['auto', 'low', 'high', 'ultracode'])
+    expect(rows.filter((row) => row.model === 'haiku').map((row) => row.effort)).toEqual(['auto'])
+    expect(rows.find((row) => row.model === 'claude-fable-5-1')).toMatchObject({
+      displayName: 'Fable 5.1 / Auto', description: 'Most capable for your hardest tasks',
+    })
+  })
+
   it('observes Claude ultracode effort from JSONL and the live footer', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')
@@ -508,7 +572,7 @@ describe('RuntimeProfileManager', () => {
   })
 
   // A session launched with --effort, or adopted, never prints "Set effort level", and its banner names no effort:
-  // its Lead read as "opus unknown" in the Swarm sidebar (2026-10-28). Claude Code records the effort on each reply.
+  // it read as "opus unknown" in Desktop's sidebar (2026-10-28). Claude Code records the effort on each reply.
   it('observes the effort Claude Code records on each assistant reply', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')
@@ -555,6 +619,48 @@ describe('RuntimeProfileManager', () => {
 
     manager.ingestPane(value, '› \ngpt-5.6-sol ultra ·', true)
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'ultra' })
+  })
+})
+
+// The engine-claude worker must answer within its 5 s deadline, and a Claude Code that is slow to list its models
+// made it miss that and restart (#4413): models() waits for the list at most 1 s, then answers the aliases.
+describe('Claude Code\'s own model list, waited for at most 1 s', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const aliases = ['default', 'opus', 'fable', 'sonnet', 'haiku']
+  const offeredModels = (options: Awaited<ReturnType<RuntimeProfileManager['modelsForSession']>>) =>
+    [...new Set(options.map((option) => parseRuntimeProfile(option.id)?.model))]
+
+  it('answers the aliases when Claude Code has not listed its models within the second', { timeout: 5_000 }, async () => {
+    vi.useFakeTimers()
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise(() => {}))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(offeredModels(await pending)).toEqual(aliases)
+  })
+
+  it('offers Claude Code\'s own list when it answers within the second, and leaves no timer', { timeout: 5_000 }, async () => {
+    vi.useFakeTimers()
+    const opusRow = { value: 'opus', displayName: 'Opus 5.5', description: 'For complex work', efforts: ['low', 'high'] }
+    const haikuRow = { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fastest', efforts: [] }
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise((resolve) => setTimeout(() => resolve([opusRow, haikuRow]), 999)))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(999)
+    expect(offeredModels(await pending)).toEqual(['opus', 'haiku'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([100, 1_500])('answers the aliases when the list read fails after %i ms, and the failure stays handled', { timeout: 5_000 }, async (ms) => {
+    vi.useFakeTimers()
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise((_, reject) => setTimeout(() => reject(new Error('claude exited')), ms)))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(offeredModels(await pending)).toEqual(aliases)
+    // The late rejection lands inside the test, where Vitest would fail the run on it if it went unhandled.
+    await vi.advanceTimersByTimeAsync(1_000)
   })
 })
 

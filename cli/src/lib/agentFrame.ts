@@ -19,22 +19,24 @@ import type { ActivityFrame } from './turnActivity.js'
  * makes the shape testable without a registry, which is the whole reason the drift went unnoticed.
  */
 
-import { agentProject } from './agentProject.js'
-import { describeScmProject } from '../scm/scmProjects.js'
+import { basename } from 'node:path'
+import { validProjectPath } from './projectPath.js'
 import type { ScmDescription } from '../scm/types.js'
-import { sessionGitContext, SessionGitContextReader, type SessionGitContext } from './sessionGitContext.js'
-import { sessionGitHistory } from './sessionGitHistory.js'
+import type { SessionGitContext } from './sessionGitContext.js'
 import { transcriptActivityAt } from './transcriptActivity.js'
 import type { AgentTokenUsage } from './agentUsageWire.js'
 import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunchWire.js'
 import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
-import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
+import { guardHeld, isNameChosen, projectDisplayName, sessionDisplayTitle, type AgentLaunch, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
-import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
+import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
+import { startMarkerMs } from './processProof.js'
 
 /**
  * The grid block on the wire: where the agent's inference goes, and — when the daemon built the
@@ -57,7 +59,7 @@ export type AgentFrame = {
   name: string
   /**
    * Whether a person chose `name` (they renamed the agent), as against the name it was created with or its session
-   * title (registry.ts, `isNameChosen`). A client sends only a chosen name to the Swarm (task #2920). Absent from a
+   * title (registry.ts, `isNameChosen`). A client sends only a chosen name on (task #2920). Absent from a
    * daemon before it: a client reads that as "unknown" and sends nothing.
    */
   nameChosen: boolean
@@ -74,8 +76,7 @@ export type AgentFrame = {
   closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
   identityHold?: string
-  /** What stops the agent that only the person can fix, in words for them (the spec's named states, OpenClaw's);
-   *  absent when nothing does. The daemon's own waits stay in `identityHold` and are never shown. */
+  /** An engine or reader failure the person needs to see; absent for routine internal waits. */
   namedState?: string
   createdAt: string
   updatedAt: string
@@ -156,6 +157,9 @@ export type AgentFrame = {
   /** What a message sent to it waits for before it is typed: `engine` while its engine's reader starts (lib/sessionInput.ts),
    *  as `message_waiting` said once; null when nothing. A window that connects meanwhile reads it here. */
   waitingFor: 'engine' | null
+  /** Until it has taken its first task ({@link agentStarting}). Always present: a push without the key would leave a
+   *  window showing a start that ended. */
+  starting: boolean
   /** Its sandboxed browser (AgentBrowserFrame); absent for an agent created without Browser. */
   browser?: AgentBrowserFrame
 }
@@ -192,15 +196,41 @@ export interface AgentFrameContext {
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
   terminalAvailable: boolean
   tokenUsage?: AgentTokenUsage | null
-  /** The DSH companions' state for this agent; absent when the caller has none to give. */
-  dsh?: AgentDshContext | null
+  /** Service projections read after asynchronous work, fenced to the run that began this frame. */
+  parts?: () => Readonly<Record<string, unknown>>
   /** What the models service says of the grid the agent is on (core/api.ts `ModelsPort.annotation`): from
    *  memory, never I/O. Absent when the caller has none to give, and then the frame says nothing of it. */
   gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
   /** What a message to the agent waits for now (core/input.ts); absent, nothing. Read as the frame is built. */
   waitingFor?: () => 'engine' | null
-  /** The agent's browser; absent for an agent without one, and then the frame has no `browser`. */
-  browser?: AgentBrowserFrame
+  /** Whether the agent is starting now ({@link agentStarting}); absent, it is not. Read as the frame is built. */
+  starting?: () => boolean
+}
+
+/** How long from its launch an OpenClaw with no session bound reads as starting ({@link agentStarting}). */
+export const OPENCLAW_STARTING_MS = 60_000
+
+/**
+ * When an OpenClaw with no session bound stops reading as starting, in epoch ms; null for any other row. It learns its
+ * session only once its Gateway answers, so it is starting for a minute from its launch: the later of its row and its
+ * process's start, as an engine typed into a pane that was open first starts after its row. The binding pass announces
+ * the agent at this time (core/agents/bind.ts), since no frame is built when it passes.
+ */
+export function openclawStartingUntil(s: RegisteredSession): number | null {
+  if (s.engine !== 'openclaw' || s.sessionId) return null
+  return Math.max(s.registeredAt, startMarkerMs(s.processIdentity?.startMarker ?? '') ?? 0) + OPENCLAW_STARTING_MS
+}
+
+/**
+ * Whether [s] has yet to take its first task: the row still holds it, untyped or typed and not yet confirmed (its
+ * `firstTaskTyped`, which a daemon restarted since reads until the binding pass settles it), or the input awaits its
+ * user row ([firstTaskWaiting], core/input.ts); or it is an OpenClaw within its starting minute
+ * ({@link openclawStartingUntil}).
+ */
+export function agentStarting(s: RegisteredSession, firstTaskWaiting: boolean, now: number): boolean {
+  if (s.firstTask || s.firstTaskTyped || firstTaskWaiting) return true
+  const until = openclawStartingUntil(s)
+  return until !== null && now < until
 }
 
 /**
@@ -226,6 +256,19 @@ export async function lastActivityAt(s: RegisteredSession): Promise<number> {
     ?? (s.lastHookAt || s.boundAt || s.registeredAt)
 }
 
+/** The launch and the activity a client is shown for [row]: a launch the guard held (`guardHeld`) for `native`, which
+ *  starts again by itself, reads as a launch starting. One whose recovery waits for another service (models, the Store,
+ *  search) is that service's hold, as any launch held for it. The registry keeps the true hold, which the restore and
+ *  the held passes run on; `startsAgain` is the core's own word, which no client sees. */
+export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active'>): { launch: AgentLaunch | undefined; active: boolean } {
+  const launch = row.launch
+  if (launch?.state !== 'held' || !launch.startsAgain) return { launch, active: row.active }
+  // A held row is inactive in the registry (setLaunch), which would read as offline; a launch starting is active.
+  if (launch.service === 'native' && guardHeld(row)) return { launch: { state: 'starting' }, active: true }
+  const { startsAgain: _, ...held } = launch
+  return { launch: held, active: row.active }
+}
+
 function frameTitle(s: RegisteredSession): string | null {
   const title = sessionDisplayTitle(s)
   return title && title !== projectDisplayName(s) ? title : null
@@ -237,38 +280,35 @@ function frameTitle(s: RegisteredSession): string | null {
  * half of "last used" — when a person last opened it, from any app — and a client sorts by the later
  * of the two.
  */
-const gitContexts = new SessionGitContextReader()
-const NAMED_STATES = new Set<string>(Object.values(OPENCLAW_STATES))
+const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Object.values(OTHER_ENGINE_STATES), MISSING_HELPER, REPLACED_PROGRAM])
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, workspace, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
+  { selectedModel, workspace, terminalAvailable, parts, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, starting }: AgentFrameContext,
 ): Promise<AgentFrame> {
-  // The git context is git's own display projection and keeps reading git directly; the frame's
-  // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
-  // seam adds no Git process.
-  const home = agentProject(s.cwd)
-  const context = gitContexts.read(JSON.stringify([s.agentId, s.sessionId, s.engine, s.codexHome, s.registeredAt]), async () => {
-    const saved = await sessionGitHistory.get(s)
-    const value = await sessionGitContext(await home, tokenUsage?.work, undefined, saved)
-    value.history = await sessionGitHistory.observe(s, value)
-    return value
-  })
-  const [project, updatedAt, gitContext] = await Promise.all([describeScmProject(s.cwd), lastActivityAt(s), context])
-  return {
+  // Fork/Clone need the launch directory even before a service reports. Stopped rows have no
+  // publication lease: their directory remains usable, but no stale Git observation is implied.
+  const folder = validProjectPath(s.cwd)
+    ? { name: basename(s.cwd) || s.cwd, cwd: s.cwd, root: null, remote: null, branch: null } : null
+  const project: ScmDescription | null = folder ? { kind: 'none', ...folder } : null
+  const gitContext: SessionGitContext = { state: folder ? 'workspace' : 'unavailable', current: folder,
+    observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] }
+  const updatedAt = await lastActivityAt(s)
+  const shown = shownLaunch(s)
+  const frame: AgentFrame = {
     id: s.agentId,
     sessionId: s.sessionId,
     userId: '',
     name: projectDisplayName(s),
     nameChosen: isNameChosen(s),
     title: frameTitle(s),
-    status: s.active ? 'active' : 'offline',
+    status: shown.active ? 'active' : 'offline',
     activity: contextActivity?.() ?? null,
     closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
     closeSupported: true,
-    launch: s.launch ?? { state: 'ready' },
+    launch: shown.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
-    ...(s.identityHold && NAMED_STATES.has(s.identityHold) ? { namedState: s.identityHold } : {}),
+    ...(s.identityHold && (NAMED_STATES.has(s.identityHold) || isOpenclawLocalStopped(s.identityHold)) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase
@@ -289,12 +329,13 @@ export async function agentFrame(
     // label: no other engine has one, and clients show nothing without it.
     ...(workspace ? { workspace } : {}),
     // Where this agent's inference actually goes, so a client can tell which agents a newly picked
-    // grid has left behind. Read off the live process by discovery; carries no credential. Null is
-    // a real answer ("on no grid") and must be sent as one — omitting the key would make every push
-    // indistinguishable from a daemon too old to know about grids. The web-search status rides on
-    // the block — decided by the launch, kept on the row — so it is gone the moment the block is. So do
-    // that grid's `state` and a `note` when the agent's model will not answer (issue 03), read from what
-    // the model list last showed — no I/O, and absent for a grid this daemon is not tracking.
+    // grid has left behind. The launch Harness wrote on the row, or a Codex's or Pi's command line;
+    // carries no credential. Null is a real answer ("on no grid") and must be sent as one — omitting
+    // the key would make every push indistinguishable from a daemon too old to know about grids. The
+    // web-search status rides on the block — decided by the launch, kept on the row — so it is gone the
+    // moment the block is. So do that grid's `state` and a `note` when the agent's model will not answer
+    // (issue 03), read from what the model list last showed — no I/O, and absent for a grid this daemon
+    // is not tracking.
     grid: s.grid ? { ...s.grid, ...(s.gridWebSearch ? { webSearch: s.gridWebSearch } : {}), ...gridAnnotation?.(s.grid) } : null,
     // The Codex profile folder this agent launched against, if one was chosen instead of the
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
@@ -306,11 +347,11 @@ export async function agentFrame(
     gitContext,
     // All five are real answers when null, for the reason the module doc gives: a frame that omits
     // them would erase a viewer URL or a verdict an earlier frame had reported.
-    dsh: dsh?.id ?? s.dsh ?? null,
-    dshName: dsh?.name ?? null,
-    viewerUrl: dsh?.viewerUrl ?? null,
-    viewerName: dsh?.viewerName ?? null,
-    verdict: dsh?.verdict ?? null,
+    dsh: s.dsh ?? null,
+    dshName: null,
+    viewerUrl: null,
+    viewerName: null,
+    verdict: null,
     forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
     parentAgentId: s.parentAgentId ?? null,
     startedBy: s.startedBy === 'agent' ? 'agent' : null,
@@ -320,7 +361,8 @@ export async function agentFrame(
     bypassPermission: s.bypassPermission ?? null,
     namedAgent: s.agent ?? null,
     waitingFor: waitingFor?.() ?? null,
-    // Absent, never null, for an agent without a browser: the only agents a browser is drawn for are those that have one.
-    ...(browser ? { browser } : {}),
+    starting: starting?.() ?? false,
   }
+  // Assigning onto the existing fields preserves their wire order; optional service fields append as before.
+  return Object.assign(frame, parts?.())
 }

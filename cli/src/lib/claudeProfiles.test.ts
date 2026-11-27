@@ -1,22 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
+import { harnessPath } from '../config/harnessHome.js'
+import type * as ClaudeHomesModule from './claudeHomes.js'
 import type * as ClaudeProfilesModule from './claudeProfiles.js'
 
 let dataDir = ''
 let home = ''
 const machineId = 'machine-1'
+// A read of this path fails, as EMFILE (too many open files) does for a moment.
+const failing = vi.hoisted(() => ({ read: '' }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (failing.read && args[0] === failing.read) throw Object.assign(new Error('EMFILE: fixture'), { code: 'EMFILE' })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
+  }
+})
+
 const host = vi.hoisted(() => ({ win32: false }))
 vi.mock('../engines/kit/windowsFiles.js', async original => {
   const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
   return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
 })
 
-async function loadModule(): Promise<typeof ClaudeProfilesModule> {
+/** The listing (claudeHomes.ts) and the rest (claudeProfiles.ts), loaded fresh for this test's data folder. */
+async function loadModule(): Promise<typeof ClaudeHomesModule & typeof ClaudeProfilesModule> {
   vi.resetModules()
   process.env.ADAPTER_DATA_DIR = dataDir
-  return import('./claudeProfiles.js')
+  return { ...await import('./claudeHomes.js'), ...await import('./claudeProfiles.js') }
 }
 
 function account(folder: string, oauthAccount: Record<string, string>): void {
@@ -32,6 +47,8 @@ describe('claudeProfiles', () => {
   })
 
   afterEach(() => {
+    failing.read = ''
+    vi.restoreAllMocks()
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(home, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
@@ -104,6 +121,56 @@ describe('claudeProfiles', () => {
     const again = await loadModule()
     expect(again.listClaudeProfiles([], { home, environment: {}, machineId }).map((p) => p.path)).toEqual([home, folder])
     expect(listClaudeProfiles([folder, join(home, 'gone'), 'relative'], { home, environment: {}, machineId })).toHaveLength(2)
+  })
+
+  it('a torn profile list is set aside, not written over', async () => {
+    const { linkClaudeProfile } = await loadModule()
+    const file = join(dataDir, 'claude-profiles.json')
+    // What a reader saw while another process was writing it.
+    writeFileSync(file, '["/a', { mode: 0o600 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const folder = join(home, 'custom')
+    mkdirSync(folder)
+
+    expect(linkClaudeProfile(folder, machineId)).toEqual({ profile: expect.objectContaining({ path: folder }) })
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('["/a')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([folder])
+    expect(warn).toHaveBeenCalledWith(
+      '[state] claude-profiles.json could not be read (not valid JSON); kept as claude-profiles.json.unreadable, starting empty.')
+  })
+
+  it('a profile list that cannot be read for a moment is not written over', async () => {
+    const { linkClaudeProfile } = await loadModule()
+    const file = join(dataDir, 'claude-profiles.json')
+    const kept = join(home, 'kept')
+    const folder = join(home, 'custom')
+    mkdirSync(kept)
+    mkdirSync(folder)
+    writeFileSync(file, JSON.stringify([kept]), { mode: 0o600 })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    failing.read = file
+    expect(() => linkClaudeProfile(folder, machineId)).toThrow('claude-profiles.json could not be read (EMFILE)')
+    failing.read = ''
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([kept])
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
+  })
+
+  // Windows has no mode bits to refuse.
+  it.skipIf(process.platform === 'win32')('a list another account could write is not set aside', async () => {
+    const { linkClaudeProfile, readLinkedPaths } = await loadModule()
+    const file = join(dataDir, 'claude-profiles.json')
+    const folder = join(home, 'custom')
+    mkdirSync(folder)
+    writeFileSync(file, JSON.stringify([folder]))
+    chmodSync(file, 0o664)
+    expect(readLinkedPaths()).toEqual(new Set())
+
+    writeFileSync(file, '["/a')
+    expect(readLinkedPaths()).toEqual(new Set())
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
+    expect(() => linkClaudeProfile(folder, machineId)).toThrow('state file is group/world writable')
+    expect(readFileSync(file, 'utf8')).toBe('["/a')
   })
 
   it('refuses a relative path with INVALID_PATH, a missing folder or file with NOT_FOUND', async () => {
@@ -208,15 +275,45 @@ describe('profileHome', () => {
     expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
   })
 
-  it('takes a claudeHome that is a listed profile or a folder under ~/.harness/claude-profiles, never the default or any other path', async () => {
+  // Harness's claude-profiles folder is ~/.harness's on macOS and the XDG data root's on a fresh Linux home like this one.
+  it('takes a claudeHome that is a listed profile or a folder under Harness\'s claude-profiles, never the default or any other path', async () => {
     const { claudeHomeListed } = await loadModule()
     const work = join(home, '.claude-work')
     account(work, { displayName: 'Work' })
     const options = { home, environment: {} }
+    const own = harnessPath('claude-profiles', home)
     expect(claudeHomeListed(work, machineId, options)).toBe(true)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(own, 'new-one'), machineId, options)).toBe(true)
+    expect(claudeHomeListed(join(`${own}x`, 'new-one'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(own, '..', '..', 'elsewhere'), machineId, options)).toBe(false)
     expect(claudeHomeListed(home, machineId, options)).toBe(false)
     expect(claudeHomeListed(join(home, 'not-listed'), machineId, options)).toBe(false)
+  })
+})
+
+// The id hashes the folder's real path, so a profile moved with Harness's folder takes its new folder's id; nothing stores
+// one (the move rewrites the folders), and Desktop's swarmProfileId computes the same from the folder the daemon reports.
+describe('profile ids after Harness\'s folder moves', () => {
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
+
+  it('a profile in the moved folder takes the id of its new folder', async () => {
+    const { profileFor, profileId } = await loadModule()
+    const folder = join(harnessPath('claude-profiles', '/h', 'linux', moved), '2')
+    expect(folder).toBe('/h/.local/share/harness/claude-profiles/2')
+    expect(profileFor('m', folder, folder, '/h').id).toBe(profileId('m', 'claude', folder))
+    // swarmProfileId('m', 'claude', '/h/.local/share/harness/claude-profiles/2') in Desktop.
+    expect(profileId('m', 'claude', folder)).toBe('872709902d494c68')
+  })
+
+  it('the default profile\'s id does not change', async () => {
+    const { profileFor } = await loadModule()
+    expect(profileFor('m', '/h', '/h', '/h', true).id).toBe('71dc90339553114c')
+  })
+
+  it('macOS hashes the real path as before', async () => {
+    const { profileFor } = await loadModule()
+    const folder = join(harnessPath('claude-profiles', '/Users/h', 'darwin', moved), '2')
+    expect(folder).toBe('/Users/h/.harness/claude-profiles/2')
+    expect(profileFor('m', folder, folder, '/Users/h').id).toBe('9a02c3def3094fc3')
   })
 })

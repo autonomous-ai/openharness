@@ -1,0 +1,405 @@
+/**
+ * Where the person sees an agent in a pane of their own herdr (docs/plans/2026-11-19-dial-herdr-in-terminal-app-design.md):
+ * in the app that holds the herdr client they used last, at that client's tty. Diego's Terminal tab B ran `herdr`
+ * (2026-11-19), and the pane's own hints could not say so: a pane inherits the bundle id and TERM_PROGRAM the server
+ * started with, and its tty is herdr's own pty, which no tab holds. herdr's API lists no clients (protocol 19), so a
+ * client is found as a herdr process connected to the server's client socket.
+ *
+ * Only what that needs is read: process names and parents (the table), the terminals of the caller and its parents up to
+ * the server and, for a client in no app, of it and its parents up to its terminal's maker, the unix-socket rows lsof
+ * gives for herdr's own processes (macOS) or ss's rows of the sockets bound at a client socket's path (Linux) with the
+ * socket links among herdr's own processes' descriptors, their ttys (ps), and a tty's access time (stat), which moves
+ * when the person types into it. Never another process's environment or argv: those hold secrets. Every value read is
+ * outside text, held to its form, and lsof, ss and ps run with no shell.
+ *
+ * Windows (docs/plans/2026-11-25-dial-herdr-windows-app-design.md) names no tty, and only herdr holds the server's end of
+ * its client pipe, the one end that names a client's pid: there the clients are found by the process tree, from one read
+ * of the PTY host's table cut to four columns (pid, parent, image name, start), never its command lines. Nothing walks up
+ * from the server: its parent is its first client's pid, kept after that client ended, which Windows may hand to a newer
+ * process (Ken's VM, 2026-11-26). The walks go up from the caller to the server and up from each client.
+ */
+import { opendir, readlink, stat } from 'node:fs/promises'
+import { win32 } from 'node:path'
+import { windowsStartTime } from '../../lib/windows/treeKill.js'
+import { FRONT_NONE, frontAppId } from './frontApp.js'
+import { HERDR_PANE } from './herdrClient.js'
+import { UNKNOWN_APP } from './hostDetect.js'
+import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import type { Fresh, MadeAnswer, OuterLookup } from './outer.js'
+import {
+  parentChain, readPtyMaker, scannedApps, windowsName, windowsPtyMaker, type ProcessName, type WindowsProcess,
+} from './scannedApp.js'
+import { clientTtyForm } from './tabs.js'
+import { heldAnswers, PID } from './tmux.js'
+import type { Nest } from './types.js'
+
+/** The herdr processes besides the server a lookup asks of at most: the newest, by pid (by start on Windows). */
+export const HERDR_CLIENTS_A_LOOKUP = 16
+/** The out-of-form pane ids said skipped, each said once: past this many the oldest goes. */
+export const SKIPPED_IDS_KEPT = 64
+/** The socket herdr's clients connect to; `herdr.sock` is its API's, which a `herdr agent …` command uses. */
+const CLIENT_SOCKET = '/herdr-client.sock'
+/** A unix socket's kernel address, as lsof prints a descriptor's own (`d`) and its peer's (`n->`). */
+const SOCKET_ADDRESS = /^0x[0-9a-f]{1,16}$/
+/** One `ps -o pid=,tty=` row. */
+const PID_TTY = /^\s*([1-9][0-9]{0,9})\s+(\S+)\s*$/
+/** The descriptors of one process read at most: a herdr server holds a few for each pane and client. */
+export const FDS_A_PROCESS = 1024
+/** A descriptor's link to a socket, with the socket's inode. */
+const SOCKET_LINK = /^socket:\[([0-9]{1,20})\]$/
+/** One `ss -xn` row of a connected unix stream socket: its local address (a bound path, which may hold spaces, or `*`)
+ *  and inode, its peer's address (ss names no peer's path: `*`) and inode, then an empty Process column. */
+const SS_ROW = /^u_str\s+ESTAB\s+[0-9]+\s+[0-9]+\s+(\S.*?)\s+([0-9]{1,20})\s+\*\s+([0-9]{1,20})\s*$/
+/** ss's rows of the sockets bound at a path ending in the client socket's, by ss's own filter (ss(8): a unix path
+ *  pattern): the machine's whole table can pass Node's 1 MiB of output on a busy desktop (8,000 rows read 800 KB on
+ *  Ubuntu 24.04), and the server's accepted connections are the only rows read. */
+const SS_ARGS = ['-xn', 'src', `*${CLIENT_SOCKET}`]
+
+export interface HerdrOuterDeps {
+  run: OrcaDeps['run']
+  /** The machine's processes, as the open scan reads them; it rejects when the table cannot be read. */
+  processes(): Promise<readonly ProcessName[]>
+  /** The terminal one process runs on (scannedApp.ts readTtyName); it rejects when it could not be read. */
+  tty(pid: number): Promise<string | undefined>
+  log(line: string): void
+  now(): number
+  platform: NodeJS.Platform
+  roots: readonly string[]
+  bundleId(bundle: string): Promise<string | undefined>
+  /** A tty's access time (ttyAtime); nothing when it cannot be read. */
+  atime(tty: string): Promise<number | undefined>
+  /** Where Linux's `ss` and `ps` are: NixOS has no /bin/ps. */
+  onPath: OrcaDeps['onPath']
+  /** The socket inodes among a process's descriptors (procSockets); nothing when they cannot be read. */
+  sockets(pid: number): Promise<readonly string[] | undefined>
+  /** What the Windows lookup reads; with none there, it answers nothing. */
+  windows?: HerdrWindowsDeps
+}
+
+/** What the Windows lookup reads, given on Windows alone (services/devices.ts). */
+export interface HerdrWindowsDeps {
+  /** The PTY host's table, four columns a row (scannedApp.ts readWindowsProcesses); rejects when not read. */
+  processes(): Promise<readonly WindowsProcess[]>
+  /** The server herdr's marker names, checked against [rows] (herdrClient.ts herdrMarkerServer); none when unknown. */
+  server(rows: readonly WindowsProcess[]): Promise<number | undefined>
+}
+
+/** The app that holds the herdr client showing an agent's pane, that client's tty when it names a tab, and its process,
+ *  which kitty's tabs find the client's window by and Linux's raise brings; or, with no app, the process to raise
+ *  alone when it is in a window. */
+interface ClientPlace { app?: string; tty?: string; pid?: number }
+/** The step of a lookup that could not be read, as its line names it: the process table, the sockets, the ttys, the
+ *  clients' app. */
+type NotRead = 'processes' | 'sockets' | 'ttys' | 'app'
+
+/** A file's access time, nothing when it cannot be read. Never rejects. */
+export async function ttyAtime(tty: string): Promise<number | undefined> {
+  return (await stat(tty).catch(() => undefined))?.atimeMs
+}
+
+/** The socket inodes among a process's descriptors (/proc/<pid>/fd links that read socket:[<inode>]), each once, at
+ *  most FDS_A_PROCESS read; none when the folder cannot be read (the process gone, or another account's). [proc] is
+ *  /proc, or a test's folder standing in for it. Never rejects. */
+export async function procSockets(pid: number, proc = '/proc'): Promise<readonly string[] | undefined> {
+  const folder = `${proc}/${pid}/fd`
+  const fds: string[] = []
+  try {
+    for await (const fd of await opendir(folder)) {
+      fds.push(fd.name)
+      if (fds.length === FDS_A_PROCESS) break
+    }
+  } catch {
+    return undefined
+  }
+  // A descriptor closed since the folder was read has no link: passed over.
+  const links = await Promise.all(fds.map((fd) => readlink(`${folder}/${fd}`).catch(() => '')))
+  return [...new Set(links.flatMap((link) => SOCKET_LINK.exec(link)?.[1] ?? []))]
+}
+
+/** The process is herdr itself, by its executable's name exactly: `herdr-dev` or a `herdr.app` is not. */
+const isHerdr = (p: ProcessName): boolean => p.executable.split('/').pop() === 'herdr'
+/** Windows' herdr, by its image name with no case: `herdr.exe`. */
+const isWindowsHerdr = (p: ProcessName): boolean => windowsName(p.executable) === 'herdr'
+
+/** A run's stdout whatever its exit code: lsof and ps exit 1 when a pid in their list has gone, with the rest of their
+ *  output intact. Nothing when it printed nothing, timed out or did not start. */
+async function output(run: HerdrOuterDeps['run'], file: string, args: string[]): Promise<string | undefined> {
+  const said = await run(file, args, RUN_TIMEOUT_MS).catch(() => ({ code: null, stdout: '' }))
+  return said.code === null || !said.stdout.trim() ? undefined : said.stdout
+}
+
+/** Which of [asked] are connected to the server's client socket: one of their descriptors' peers is the address of a
+ *  descriptor of the server's named …/herdr-client.sock. lsof -F pdn prints a `p` line a process, an `f` line a
+ *  descriptor, then its `d` and its `n`; any other line is passed over. A connection the other way round (the server's
+ *  peer one of theirs) or to another server's socket makes no client. */
+function connectedOf(stdout: string, server: number, asked: ReadonlySet<number>): Set<number> {
+  const serving = new Set<string>()
+  const peers: Array<[pid: number, address: string]> = []
+  let pid: number | undefined
+  let address: string | undefined
+  for (const line of stdout.split('\n')) {
+    const value = line.slice(1)
+    if (line[0] === 'p') {
+      pid = PID.test(value) ? Number(value) : undefined
+      address = undefined
+    } else if (line[0] === 'f') {
+      address = undefined
+    } else if (line[0] === 'd') {
+      address = SOCKET_ADDRESS.test(value) ? value : undefined
+    } else if (line[0] === 'n' && pid !== undefined) {
+      if (pid === server) {
+        if (address && value.endsWith(CLIENT_SOCKET)) serving.add(address)
+      } else if (asked.has(pid) && value.startsWith('->') && SOCKET_ADDRESS.test(value.slice(2))) {
+        peers.push([pid, value.slice(2)])
+      }
+    }
+  }
+  return new Set(peers.filter(([, peer]) => serving.has(peer)).map(([client]) => client))
+}
+
+/** The peers' inodes of the connections the server accepted on its client socket: the `ss` rows whose local path
+ *  ends in …/herdr-client.sock and whose local inode is one of the server's ([served]). A client's own socket is
+ *  unnamed, and a named session's server accepts on a socket of its own. A row out of form is passed over. */
+function acceptedPeers(stdout: string, served: ReadonlySet<string>): Set<string> {
+  const peers = new Set<string>()
+  for (const line of stdout.split('\n')) {
+    const row = SS_ROW.exec(line)
+    if (row && row[1].endsWith(CLIENT_SOCKET) && served.has(row[2])) peers.add(row[3])
+  }
+  return peers
+}
+
+/** What the steps from the server on read with: the table comes from the caller, the hooked form's read or the scan's. */
+type ClientDeps = Omit<HerdrOuterDeps, 'processes'>
+
+/** Of the candidates (ascending pids), the one whose tty was typed into last: a tty's access time moves when the person
+ *  types into it, as `w`'s idle time does (macOS, 2026-11-19). One whose time cannot be read (a tty out of form, a stat
+ *  that failed) ranks below every one whose time was read; among equals the higher pid (PM, 2026-11-19). */
+async function usedLast(deps: ClientDeps, form: RegExp, pids: readonly number[], ttyOf: ReadonlyMap<number, string>): Promise<number> {
+  if (pids.length === 1) return pids[0]
+  const times = await Promise.all(pids.map((pid) => {
+    const tty = ttyOf.get(pid) ?? ''
+    return form.test(tty) ? deps.atime(tty).catch(() => undefined) : undefined
+  }))
+  let last = 0
+  // The pids ascend: on a tie the later one, the higher pid, wins.
+  for (let at = 1; at < pids.length; at++) if ((times[at] ?? -Infinity) >= (times[last] ?? -Infinity)) last = at
+  return pids[last]
+}
+
+/** macOS: which of [others] are connected to the server's client socket, from lsof's unix-socket rows of herdr's own
+ *  processes. Nothing when lsof could not be read. */
+async function lsofClients(deps: ClientDeps, server: number, others: readonly number[]): Promise<Set<number> | undefined> {
+  const sockets = await output(deps.run, '/usr/sbin/lsof', ['-a', '-U', '-p', [server, ...others].join(','), '-F', 'pdn'])
+  return sockets === undefined ? undefined : connectedOf(sockets, server, new Set(others))
+}
+
+/** Linux: which of [others] hold the peer of a connection the server accepted on its client socket, from ss's rows at
+ *  that path (SS_ARGS) and the socket inodes of herdr's own processes' descriptors: `ss -p` would read every process of
+ *  the account. A process whose descriptors cannot be read is left out. Nothing when ss or the server's descriptors
+ *  could not be read. */
+async function ssClients(deps: ClientDeps, server: number, others: readonly number[]): Promise<Set<number> | undefined> {
+  const ss = deps.onPath('ss')
+  if (!ss) return undefined
+  const [rows, served, held] = await Promise.all([
+    output(deps.run, ss, SS_ARGS), deps.sockets(server), Promise.all(others.map((pid) => deps.sockets(pid))),
+  ])
+  if (rows === undefined || served === undefined) return undefined
+  const peers = acceptedPeers(rows, new Set(served))
+  return new Set(others.filter((_, at) => held[at]?.some((inode) => peers.has(inode))))
+}
+
+/** From the server on, over [rows] (the table): `{}` when none of its clients (or itself, run with `--no-session`) is on
+ *  a tty, or the one used last of those in no listed app is inside a multiplexer; that client's process alone when it
+ *  is in no app; else its app, tty and process. The step that could not be read, when one could not. */
+async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: readonly ProcessName[]): Promise<ClientPlace | NotRead> {
+  const others = rows.filter((p) => p.pid !== server && isHerdr(p)).map((p) => p.pid)
+    .sort((a, b) => a - b).slice(-HERDR_CLIENTS_A_LOOKUP)
+  // herdr before 0.9.0 ran the panes under the client itself with `--no-session`, on its tab's tty, with no client
+  // socket: with no other herdr, or none connected, the server is the one candidate.
+  let candidates = [server]
+  if (others.length) {
+    const connected = await (deps.platform === 'linux' ? ssClients : lsofClients)(deps, server, others)
+    if (connected === undefined) return 'sockets'
+    if (connected.size) candidates = others.filter((other) => connected.has(other))
+  }
+  const ps = deps.platform === 'linux' ? deps.onPath('ps') : '/bin/ps'
+  const ttys = ps ? await output(deps.run, ps, ['-o', 'pid=,tty=', '-p', candidates.join(',')]) : undefined
+  if (ttys === undefined) return 'ttys'
+  const ttyOf = new Map<number, string>()
+  for (const line of ttys.split('\n')) {
+    const row = PID_TTY.exec(line)
+    if (row && candidates.includes(Number(row[1]))) ttyOf.set(Number(row[1]), `/dev/${row[2]}`)
+  }
+  // A candidate ps does not list has gone. The server counts only on a client's tty: a detached one has none.
+  const left = candidates.filter((p) => ttyOf.has(p) && (p !== server || form.test(ttyOf.get(p) ?? '')))
+  if (!left.length) return {}
+  // A client inside tmux, Zellij or Herdr's terminal has parents that end at a detached server or holder: no app.
+  // Every other step answers its own word: the app scan's throw is the one left, which each caller says as `app`.
+  const apps = await scannedApps(left, { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
+  const shown = left.filter((p) => apps.has(p))
+  if (!shown.length) {
+    const client = await usedLast(deps, form, left, ttyOf)
+    // A client whose own terminal tmux, Zellij or another herdr made is in no window a raise could bring, and herdr
+    // (0.9.5) strips their variables from its panes, so the agent's hints cannot name that multiplexer's pane. In a
+    // terminal with no page: the client's process alone, so Linux's raise brings its window.
+    const maker = await readPtyMaker(client, rows, deps.tty).catch(() => null)
+    if (maker === null) return 'ttys'
+    return maker?.host === 'tmux' || maker?.host === 'zellij' || maker?.host === 'herdr' ? {} : { pid: client }
+  }
+  const client = await usedLast(deps, form, shown, ttyOf)
+  const app = apps.get(client)
+  const tty = ttyOf.get(client)
+  // A tty out of form names no tab.
+  return tty && form.test(tty) ? { app, tty, pid: client } : { app, pid: client }
+}
+
+/** Of a client's walk (parentChain, nearest first, the client included), the nearest step a listed app names, or a
+ *  terminal with no page of its own (Windows Terminal, Alacritty), the process that owns its window; whichever comes
+ *  first. Neither (explorer, a console of Windows' default-terminal handoff, a parent gone or its pid reused): none. */
+function windowedBy(walk: readonly WindowsProcess[]): { app?: string; owner?: number } {
+  for (const step of walk) {
+    const app = frontAppId(win32.basename(step.executable))
+    if (app === UNKNOWN_APP) return { owner: step.pid }
+    if (app !== FRONT_NONE) return { app }
+  }
+  return {}
+}
+
+/** Windows, over [rows] (the table): the newest client in a listed app, its app and process; else the newest in a
+ *  terminal with no page, its window's owner alone, even when a newer client is in no window (Decision 5: the
+ *  default-terminal handoff's console names none); else `{}`, as when herdr's marker names another server. Newest by
+ *  start, on a tie the higher pid: Windows keeps no time of a client's last key. */
+async function windowsClientOf(windows: HerdrWindowsDeps, server: number, rows: readonly WindowsProcess[]): Promise<ClientPlace> {
+  // The hook sends no pane id for a named session's pane: a second guard.
+  const marked = await windows.server(rows)
+  if (marked !== undefined && marked !== server) return {}
+  const table = new Map(rows.map((p) => [p.pid, p]))
+  const herdrs = rows.filter((p) => p.pid !== server && isWindowsHerdr(p)).map((p) => ({ p, walk: parentChain(p.pid, table) }))
+  // A herdr's parent is the one its walk takes: a parent pid reused by a process that started after it names no parent.
+  const parents = new Set(herdrs.flatMap(({ walk }) => (walk[1] ? [walk[1].pid] : [])))
+  // A herdr under another is a pane's `herdr agent …` or a nested client, and one that started a herdr besides the
+  // server is a named session's client. A row with no start is another account's: the PTY host could not open it.
+  const candidates = herdrs.flatMap(({ p, walk }) => {
+    const start = windowsStartTime(p.startMarker ?? '')
+    return start === null || parents.has(p.pid) || walk.slice(1).some(isWindowsHerdr) ? [] : [{ pid: p.pid, start, walk }]
+  }).sort((a, b) => (a.start === b.start ? b.pid - a.pid : a.start > b.start ? -1 : 1)).slice(0, HERDR_CLIENTS_A_LOOKUP)
+  const placed = candidates.map(({ pid, walk }) => ({ pid, ...windowedBy(walk) }))
+  const inApp = placed.find((c) => c.app !== undefined)
+  if (inApp) return { app: inApp.app, pid: inApp.pid }
+  const owned = placed.find((c) => c.owner !== undefined)
+  return owned ? { pid: owned.owner } : {}
+}
+
+/** [place] said by its line: a step not read says its word and answers `{}`. A client in no app whose window can be
+ *  raised by its process (on Windows its window's owner) is found all the same: `none` would read as nothing found. */
+function said(deps: ClientDeps, place: ClientPlace | NotRead): ClientPlace {
+  if (typeof place === 'string') {
+    deps.log(`[device] herdr client · not read · ${place}`)
+    return {}
+  }
+  deps.log(`[device] herdr client · ${place.app ? 'found' : place.pid !== undefined ? 'found · window' : 'none'}`)
+  return place
+}
+
+/** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout costs one timeout, not one
+ *  an ask. A fresh ask, a tap's or a rest's, reads the client again past FRESH_WITHIN_MS (eval I13). */
+function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>, opts?: Fresh) => Promise<ClientPlace> {
+  const held = heldAnswers<ClientPlace>(deps.now)
+  return (key, place, opts) => held(key, async () => said(deps, await place()), opts)
+}
+
+/**
+ * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
+ * that client's tty (on Windows, which names no tty, the client they attached from last). Nothing at once on Windows
+ * with no Windows table to read, when the hints name no herdr pane in form or the caller is no pid; else the client's
+ * place, its process alone (on Windows its window's owner) when no app holds it, `{}` when no client is found or it runs
+ * inside a multiplexer; with `nest: 'herdr'` once a herdr server made the caller's terminal, told as soon as that is
+ * read (OuterLookup's made). Never rejects.
+ */
+export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
+  const windows = deps.platform === 'win32' ? deps.windows : undefined
+  // Windows has no `ps` to read a client's tty with, and no form for one: its clients are found by the process tree.
+  const form = clientTtyForm(deps.platform)
+  const clientsFrom: ((server: number, rows: readonly WindowsProcess[]) => Promise<ClientPlace | NotRead>) | undefined = windows
+    ? (server, rows) => windowsClientOf(windows, server, rows)
+    : form && ((server, rows) => clientsOf(deps, form, server, rows))
+  if (!clientsFrom) return () => undefined
+  // By pane and caller, as tmux's, with the server's read.
+  const held = heldAnswers<ClientPlace & { nest?: Nest }, MadeAnswer>(deps.now)
+  const skipped = new Set<string>()
+
+  /** A herdr pane id the lookup cannot take is said, once an id: a lookup that answers nothing otherwise leaves the
+   *  agent off its app's page with no line to say why. The line names no id: it is outside text. */
+  function skip(id: string): void {
+    if (skipped.has(id)) return
+    if (skipped.size === SKIPPED_IDS_KEPT) skipped.delete(skipped.values().next().value!)
+    skipped.add(id)
+    deps.log('[device] herdr client · skipped · pane-id')
+  }
+
+  /** The server that made the caller's terminal and the table it was read over; else the answer, said: `{}` when no
+   *  herdr server made it. */
+  const serverOf = async (pid: number): Promise<{ server: number; rows: readonly WindowsProcess[] } | ClientPlace> => {
+    // One read of the table serves the server's, the clients' and their apps' walks.
+    const table: Promise<readonly WindowsProcess[]> = windows ? windows.processes() : deps.processes()
+    const rows = await table.catch(() => undefined)
+    if (!rows) return said(deps, 'processes')
+    // The server is the herdr that made the caller's terminal, not the nearest among its parents: a terminal started
+    // from a herdr pane has that server among its parents too, and keeps the pane's variables, yet its agents are in no
+    // herdr client. The table holds no terminal: the caller's and its parents' are read. Windows names none: its maker
+    // is the caller's nearest parent past shells and launchers.
+    const maker = windows ? windowsPtyMaker(pid, rows) : await readPtyMaker(pid, rows, deps.tty).catch(() => null)
+    if (maker === null) return said(deps, 'processes')
+    if (maker?.host !== 'herdr') {
+      // Its own word: `none` is a herdr pane whose client was not found.
+      deps.log('[device] herdr client · outside')
+      return {}
+    }
+    return { server: maker.pid, rows }
+  }
+
+  /** `{}` when no herdr server made the caller's terminal; else the place from the server on, on herdr's page. */
+  const placeOf = (pid: number): MadeAnswer => {
+    const found = serverOf(pid)
+    // The pane is herdr's whatever the client steps read: found, none or not read, the agent is on herdr's page even
+    // with no app known (Diego, 2026-11-23). A step that throws is said as the app scan: a lookup never rejects.
+    const place = found.then(async (read) => ('server' in read
+      ? { ...said(deps, await clientsFrom(read.server, read.rows).catch((): NotRead => 'app')), nest: 'herdr' as const }
+      : read))
+    return Object.assign(place, { made: found.then((read) => 'server' in read) })
+  }
+
+  return (hints, pid, made, opts) => {
+    const id = hints.HERDR_PANE_ID
+    if (!id) return undefined
+    if (!HERDR_PANE.test(id)) {
+      skip(id)
+      return undefined
+    }
+    if (!PID.test(String(pid))) return undefined
+    const answer = held(`${id}:${pid}`, () => placeOf(pid), opts)
+    if (made) void answer.made.then((yes) => { if (yes) made('herdr') })
+    return answer
+  }
+}
+
+/**
+ * Where the person sees an agent the open scan found in a pane of their own herdr, with no hook to name that pane
+ * (Diego's iTerm2 tab running herdr, 2026-11-22): the hooked form's place, from the server on. The scan read the table
+ * ([rows]) and the agent's terminal's maker ([maker], the server) already, so neither is read again. Nothing at once on
+ * Windows or when the pid or maker is no pid. Never rejects.
+ */
+export function createHerdrNested(
+  deps: ClientDeps,
+): (found: { pid: number; maker: number; rows: readonly ProcessName[] }, opts?: Fresh) => Promise<ClientPlace> | undefined {
+  const form = clientTtyForm(deps.platform)
+  if (!form) return () => undefined
+  // The answer depends on the server alone: two panes of one herdr cost one lookup.
+  const held = saidAnswers(deps)
+  return ({ pid, maker, rows }, opts) => {
+    if (!PID.test(String(pid)) || !PID.test(String(maker))) return undefined
+    // A step that throws is said as the app scan: a lookup never rejects.
+    return held(String(maker), () => clientsOf(deps, form, maker, rows).catch((): NotRead => 'app'), opts)
+  }
+}

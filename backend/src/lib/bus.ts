@@ -21,7 +21,6 @@ import { logger } from '../utils/logger.js'
 import { createCircuitBreaker } from './circuitBreaker.js'
 import { guardRedisCommands, isRedisFailure, wasNotSent } from './redisGuard.js'
 import type { Frame, UpBusMsg, DownBusMsg } from './tunnel.js'
-import { redisStamps, type SwarmStamps } from '../superTabs/cache.js'
 import { busKind, markCpuKind } from './selfProfile.js'
 
 // A connection in subscriber mode must never fail its (re)SUBSCRIBE commands, so the sub side keeps
@@ -363,52 +362,12 @@ export function publishAgentMessageShareChanged(id: string): Promise<number> {
   return safePublish(`amsg-share:${id}`, '{}')
 }
 
-/** Who may watch an agent's terminal in a Swarm may have narrowed (a member removed, a project's sharing changed): its
- *  observer sockets, on any instance, check again at once. No content on this channel. */
-export function subscribeSwarmAccessChanged(tabId: string, cb: () => void): Promise<() => void> {
-  return addSub(`swarm-access:${tabId}`, cb)
-}
-export function publishSwarmAccessChanged(tabId: string): Promise<number> {
-  return safePublish(`swarm-access:${tabId}`, '{}')
-}
-
-/** A Swarm terminal request was answered or refused: its sender's wait, on any instance, reads it again. No content. */
-export function subscribeTerminalAnswered(requestId: string, cb: () => void): Promise<() => void> {
-  return addSub(`terminal-answer:${requestId}`, cb)
-}
-export function publishTerminalAnswered(requestId: string): Promise<number> {
-  return safePublish(`terminal-answer:${requestId}`, '{}')
-}
-
 /** Frames between daemons of a shared tab, by tab and machine: sealed, never read here. */
 export function subscribeTabRelay(share: string, machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
   return addSub(`amsg:${share}:${machineId}`, cb as Cb)
 }
 export function publishTabRelay(share: string, machineId: string, msg: unknown): Promise<number> {
   return safePublish(`amsg:${share}:${machineId}`, JSON.stringify(msg))
-}
-
-/** A Swarm's stamp moved (superTabs/cache.ts): every instance frees what it holds of the Swarm at the old stamp. One
- *  channel for every Swarm; a broadcast lost while Redis is down costs nothing, since each read checks the stamp itself. */
-const SWARM_STAMP = 'swarm-stamp'
-type StampScopes = Array<'main' | 'machine'>
-export function publishSwarmStamp(tabId: string, scopes: readonly ('main' | 'machine')[]): Promise<number> {
-  return safePublish(SWARM_STAMP, JSON.stringify({ tabId, scopes }))
-}
-export function subscribeSwarmStamps(cb: (tabId: string, scopes: StampScopes) => void): Promise<() => void> {
-  return addSub(SWARM_STAMP, (msg: unknown) => {
-    const { tabId, scopes } = (msg ?? {}) as { tabId?: unknown; scopes?: unknown }
-    if (typeof tabId !== 'string' || !Array.isArray(scopes) || !scopes.every(s => s === 'main' || s === 'machine')) return
-    cb(tabId, scopes as StampScopes)
-  })
-}
-
-/** The Swarm stamps on this Redis (superTabs/cache.ts), their bumps broadcast on the bus. */
-export function redisSwarmStamps(): SwarmStamps {
-  return redisStamps(pub, { publish: publishSwarmStamp, subscribe: listener => {
-    const subscribed = subscribeSwarmStamps(listener).catch((err: unknown) => { logger.error('[bus] Swarm stamp subscribe failed', err); return () => {} })
-    return () => { void subscribed.then(stop => stop()) }
-  } })
 }
 
 /** A machine's sharing changed (routes/machineShares.ts): a session another account holds to it on any
@@ -862,53 +821,6 @@ export function publishDeviceMachineListChanged(userId: string, msg: DeviceMachi
 
 export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: DeviceMachineListChangedMsg) => void): Promise<() => void> {
   return addSub(deviceMachineListChannel(userId), cb as Cb)
-}
-
-// Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
-// on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
-/** `terminal`: a terminal request waits, not a delivery (lib/swarmDeliveryPushes.ts announceSwarmTerminal). `pushes` is that
- *  socket's own 4-minute repeat that it pushes, sent through Redis so a silent Redis stops it. */
-export type SwarmDeliveriesMsg = { tabId: string; agentId: string; terminal?: true } | { pushes: true }
-
-const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
-
-export function publishSwarmDeliveries(machineId: string, msg: SwarmDeliveriesMsg): Promise<number> {
-  return safePublish(swarmDeliveriesChannel(machineId), JSON.stringify(msg))
-}
-
-export function subscribeSwarmDeliveries(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
-  return addSub(swarmDeliveriesChannel(machineId), cb)
-}
-
-// Per-MACHINE Swarm host changes: a commit changed what this machine's host reads (superTabs/store.ts hostsChanged), on some
-// REST worker; the worker holding that machine's adapter socket tells its host to read its changes (lib/swarmHostPushes.ts).
-// `pushes` is that socket's own 4-minute repeat that it pushes, sent through Redis so a silent Redis stops it.
-export type SwarmHostMsg = { tabId: string; lastChangedAt: number } | { pushes: true }
-
-const swarmHostChannel = (machineId: string): string => `swarm-host:${machineId}`
-
-export function publishSwarmHost(machineId: string, msg: SwarmHostMsg): Promise<number> {
-  return safePublish(swarmHostChannel(machineId), JSON.stringify(msg))
-}
-
-export function subscribeSwarmHost(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
-  return addSub(swarmHostChannel(machineId), cb)
-}
-
-// Per-USER Swarm changes: a commit changed a Swarm this person is in (superTabs/store.ts swarmChanged), on some REST worker;
-// every socket of theirs, daemon or web, tells their apps to read it again (lib/swarmClientPushes.ts).
-export interface SwarmMemberMsg { tabId: string; lastChangedAt: number; parts: Array<'main' | 'machine'> }
-/** One socket's own 4-minute repeat that the server pushes, named by that socket so its other sockets ignore it. */
-export interface SwarmMemberRepeat { pushes: string }
-
-const swarmMemberChannel = (userId: string): string => `swarm-member:${userId}`
-
-export function publishSwarmMember(userId: string, msg: SwarmMemberMsg | SwarmMemberRepeat): Promise<number> {
-  return safePublish(swarmMemberChannel(userId), JSON.stringify(msg))
-}
-
-export function subscribeSwarmMember(userId: string, cb: (msg: unknown) => void): Promise<() => void> {
-  return addSub(swarmMemberChannel(userId), cb)
 }
 
 // Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every

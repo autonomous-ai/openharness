@@ -8,6 +8,7 @@ import { createServer, request as httpRequest, type Server } from 'node:http'
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { harnessPath } from '../../config/harnessHome.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { bridgePipeRecord, bridgeSocketPath, sync } from './agents.js'
 import { serveBridgePipe, serveBridgeSocket } from './bridge.js'
@@ -414,7 +415,7 @@ describe.skipIf(process.platform === 'win32')('the MCP clients\' way to the brid
     sync(vault, { ...env, CLAUDE_CONFIG_DIR: home })
     expect(claudeEntry('linear').url).toBeUndefined()
     const long = new Store(join(home, 'x'.repeat(120)), env)
-    expect(bridgeSocketPath(long)).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/bridge\.sock$/)
+    expect(bridgeSocketPath(long)?.replace(/\/[0-9a-f]{16}\/bridge\.sock$/, '/<hash>/bridge.sock')).toBe(join(harnessPath('s'), '<hash>', 'bridge.sock'))
     expect(bridgeSocketPath(vault, 'win32')).toBeNull()
   })
 })

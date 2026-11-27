@@ -9,7 +9,7 @@ const WAVE_FORMAT_PCM = 1
  * Only uncompressed PCM WAV is accepted, which is all the phone (mobile/lib/phone/voice_wav.dart) and the dial
  * (cli/src/cable/cableHost.ts wav()) ever send: its length is the bytes after the header at the rate the header
  * states. Compressed audio (MP3, Opus, or a compressed codec inside a WAV) is many times longer than its bytes
- * suggest, so charging it by size would let one account transcribe hours a day on a 10-minute plan. The header
+ * suggest, so charging it by size would let one account transcribe hours a day on a 30-minute plan. The header
  * is the caller's to write, so a rate, channel count or sample size outside what a microphone records (which
  * would make a long clip read as no time at all) is refused too.
  */

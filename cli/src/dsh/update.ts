@@ -54,7 +54,9 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
       if ((previous.manifest.kind ?? 'agent') !== (cloned.manifest.kind ?? 'agent')) {
         return { ok: false, error: 'PACKAGE_KIND_MISMATCH', detail: `The update changes ${record.id} from an agent to a viewer or vice versa` }
       }
-      if ((record.revision && record.revision === cloned.revision) || (record.commit && record.commit === cloned.commit)) {
+      // A package whose setup failed after Harness's folder moved is set up again even at the same version.
+      const upToDate = (record.revision && record.revision === cloned.revision) || (record.commit && record.commit === cloned.commit)
+      if (upToDate && record.setup !== 'needs-setup') {
         opts.onLine?.(`${record.id} is already up to date`)
         return { ok: true, installed: previous, doctor: { ok: true, lines: [] }, setupLines: [] }
       }
@@ -68,7 +70,9 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
     mkdirSync(dirname(record.dir), { recursive: true, mode: 0o700 })
     renameSync(staged, record.dir)
     placed = true
-    const installed: InstalledDsh = { ...record, source, ref: ref ?? null, commit: cloned.commit, revision: cloned.revision,
+    // The setup runs below, so the record it commits carries no mark.
+    const { setup: _mark, ...unmarked } = record
+    const installed: InstalledDsh = { ...unmarked, source, ref: ref ?? null, commit: cloned.commit, revision: cloned.revision,
       updatedAt: Date.now(), manifest: cloned.manifest, realDir: realpathSync(record.dir) }
     const result = await finishInstall(installed, {
       ...opts, source,

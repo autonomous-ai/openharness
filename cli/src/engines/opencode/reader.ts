@@ -16,17 +16,17 @@
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
+import { oversizeRow, readStorePages, type StorePage } from '../../lib/sqlitePage.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import {
   MAX_OUTPUT, MAX_THINKING, OC_V2_TURN_TYPES, clip, object, str, ocMessageFromV2,
   opencodeToolName, toolOutputText, toolSummary, userMessageText,
   isTaskPart, taskStartEvent, taskEndEvent,
-  type OcMessage, type OcPart, type ChildStats,
+  type OcMessage, type OcPart, type OcV2Row, type ChildStats,
 } from './normalizer.js'
 
 const ID_RE = /^[A-Za-z0-9_]+$/
 const POLL_MS = 1_000
-const MAX_BUFFER = 32 * 1024 * 1024
 
 function parseJson(text: unknown): Record<string, unknown> {
   if (typeof text !== 'string') return object(text) ?? {}
@@ -45,6 +45,8 @@ function cursorOf(msg: OcMessage): Cursor {
  * session has rows there, else from the legacy `message`/`part` tables. Either way the result is the v1 shape.
  * `after` restricts to messages strictly after that boundary (for incremental polling); a cursor with a `seq`
  * belongs to a v2 session and one without to a v1 session, so it picks the table it continues in.
+ * Read a page at a time, bounded by bytes (lib/sqlitePage.ts): one read of a session past 32 MiB was refused on every
+ * poll, so its reader never seeded and its history never loaded (#4188).
  * Read-only, with a short busy timeout, so it never contends with opencode's writer.
  * Throws `OpencodeSqliteMissing` when this machine has no way to read SQLite at all.
  */
@@ -53,74 +55,117 @@ export async function readOpencodeMessages(
   sessionId: string,
   after?: Cursor | null,
 ): Promise<OcMessage[]> {
+  return await loadOpencodeMessages(dbPath, sessionId, after) ?? []
+}
+
+/** As [readOpencodeMessages], but null when the store did not answer (locked, mid-write, past its deadline). */
+async function loadOpencodeMessages(
+  dbPath: string,
+  sessionId: string,
+  after?: Cursor | null,
+): Promise<OcMessage[] | null> {
   if (!ID_RE.test(sessionId)) return []
   if (!after || after.seq !== undefined) {
     const afterSeq = Number.isFinite(after?.seq) ? Math.trunc(after!.seq!) : -1
     const afterTimeCreated = after?.seq !== undefined ? after.tc : undefined
     const v2 = await readV2Messages(dbPath, sessionId, afterSeq, afterTimeCreated)
-    if (v2.length > 0 || after) return v2
+    if (v2 === null || v2.length > 0 || after) return v2
   }
   return readLegacyMessages(dbPath, sessionId, after ?? null)
 }
 
-/** The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session. */
-async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number, afterTimeCreated?: number): Promise<OcMessage[]> {
-  const types = OC_V2_TURN_TYPES.map((type) => `'${type}'`).join(', ')
-  let sql: string
-  let params: (string | number)[]
-  if (afterTimeCreated !== undefined) {
-    sql =
-      'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
-      `FROM session_message m WHERE m.session_id = ? AND (m.time_created > ? OR (m.time_created = ? AND m.seq > ?)) AND m.type IN (${types}) ORDER BY m.time_created ASC, m.seq ASC;`
-    params = [sessionId, afterTimeCreated, afterTimeCreated, afterSeq]
-  } else {
-    sql =
-      'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
-      `FROM session_message m WHERE m.session_id = ? AND m.type IN (${types}) ORDER BY m.time_created ASC, m.seq ASC;`
-    params = [sessionId]
+const V2_PARTS: NonNullable<StorePage['parts']> = {
+  table: 'session_part', on: 'p.message_id = t.id', order: ['pord'],
+  columns: [{ as: 'pord', sql: 'p.ordinal' }, { as: 'pdata', sql: 'p.data' }],
+}
+/** Each store's answer about `session_part`: true once it has the table, else when it was last found without it. */
+const v2PartStores = new Map<string, true | number>()
+const PARTS_RECHECK_MS = 60_000
+
+/** Whether the store keeps OpenCode 2.4's `session_part`; null when it did not answer. */
+async function hasV2Parts(dbPath: string): Promise<boolean | null> {
+  const known = v2PartStores.get(dbPath)
+  if (known === true) return true
+  if (known !== undefined && Date.now() - known < PARTS_RECHECK_MS) return false
+  const read = await sqliteReadAll(dbPath, "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'session_part';")
+  if (!read.ok) {
+    if (read.reason === 'missing') throw new OpencodeSqliteMissing()
+    return null
   }
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  v2PartStores.set(dbPath, read.rows.length > 0 ? true : Date.now())
+  return read.rows.length > 0
+}
+
+/**
+ * The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session, null
+ * when the store did not answer.
+ */
+async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number, afterTimeCreated?: number): Promise<OcMessage[] | null> {
+  const types = OC_V2_TURN_TYPES.map((type) => `'${type}'`).join(', ')
+  const page: StorePage = {
+    table: 'session_message', where: `t.session_id = ? AND t.type IN (${types})`, params: [sessionId],
+    key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mseq', sql: 't.seq' }],
+    columns: [{ as: 'mid', sql: 't.id' }, { as: 'mtype', sql: 't.type' }, { as: 'mdata', sql: 't.data' }],
+  }
+  const cursor = afterTimeCreated !== undefined ? [afterTimeCreated, afterSeq] : null
+  // OpenCode 2.4 keeps an assistant step's text, reasoning and tools in `session_part`, one row each, and leaves the
+  // step's own `content` empty (measured on 2.4.1, Harness OS, 2026-11-26: Chat UI showed the question and no answer).
+  // 1.x and 2.0 have no such table, which a store is asked once for, and again a while after it said no: an OpenCode
+  // update adds it while we run. Unanswered, the read waits for the next poll: a step read without its parts would be
+  // passed by the cursor with its answer left out.
+  const parts = await hasV2Parts(dbPath)
+  if (parts === null) return null
+  const result = await readStorePages(dbPath, parts ? { ...page, parts: V2_PARTS } : page, cursor)
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
-    return [] // no `session_message` table (OpenCode 1), or locked / transient — the caller falls back or retries
+    // A store with no `session_message` table (OpenCode 1) reads from the legacy tables; anything else is retried.
+    return /no such table/.test(String(result.error?.message)) ? [] : null
+  }
+  const rows: Array<{ row: OcV2Row; parts: unknown[] }> = []
+  for (const row of result.rows) {
+    // A row past the row cap comes back without its data: left out, said once, and the read goes on past it.
+    if (Number(row.page_big)) { oversizeRow('opencode', sessionId, `seq ${row.mseq}`); continue }
+    if (Number(row.page_part)) { rows.at(-1)?.parts.push(parseJson(row.pdata)); continue }
+    rows.push({
+      row: { id: str(row.mid), type: str(row.mtype), seq: Number(row.mseq) || 0, timeCreated: Number(row.mtc) || 0, data: parseJson(row.mdata) },
+      parts: [],
+    })
   }
   const messages: OcMessage[] = []
-  for (const row of result.rows) {
-    const message = ocMessageFromV2({
-      id: str(row.mid), type: str(row.mtype), seq: Number(row.mseq) || 0, timeCreated: Number(row.mtc) || 0, data: parseJson(row.mdata),
-    })
+  for (const { row, parts } of rows) {
+    const content = Array.isArray(row.data.content) && row.data.content.length > 0 ? row.data.content : parts
+    const message = ocMessageFromV2({ ...row, data: { ...row.data, content } })
     if (message && message.id) messages.push(message)
   }
   return messages
 }
 
 /** The legacy `message`/`part` tables: OpenCode 1's conversation. */
-async function readLegacyMessages(dbPath: string, sessionId: string, after: Cursor | null): Promise<OcMessage[]> {
+async function readLegacyMessages(dbPath: string, sessionId: string, after: Cursor | null): Promise<OcMessage[] | null> {
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
-  const cond = bounded
-    ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
-    : ''
-  const sql =
-    'SELECT m.id AS mid, m.time_created AS mtc, m.data AS mdata, p.id AS pid, p.data AS pdata ' +
-    'FROM message m LEFT JOIN part p ON p.message_id = m.id ' +
-    `WHERE m.session_id = ? ${cond}` +
-    'ORDER BY m.time_created, m.id, p.time_created, p.id;'
-  const params = bounded
-    ? [sessionId, Math.trunc(after!.tc), Math.trunc(after!.tc), after!.id]
-    : [sessionId]
-
-  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
+  // A page's unit is a message with all of its parts, so a message is never split across pages. Its own row comes
+  // first and carries its data, once; its part rows follow in their order and carry the part alone.
+  const page: StorePage = {
+    table: 'message', where: 't.session_id = ?', params: [sessionId],
+    key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mid', sql: 't.id' }], columns: [{ as: 'mdata', sql: 't.data' }],
+    parts: {
+      table: 'part', on: 'p.message_id = t.id', order: ['ptc', 'pid'],
+      columns: [{ as: 'ptc', sql: 'p.time_created' }, { as: 'pid', sql: 'p.id' }, { as: 'pdata', sql: 'p.data' }],
+    },
+  }
+  const result = await readStorePages(dbPath, page, bounded ? [Math.trunc(after!.tc), after!.id] : null)
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
-    return [] // db locked / transient — retry next tick
+    return null // db locked / transient — retry next tick
   }
-  const rows = result.rows
 
   const byId = new Map<string, OcMessage>()
   const order: string[] = []
-  for (const row of rows) {
+  for (const row of result.rows) {
     const mid = str(row.mid)
     if (!mid) continue
+    // A message past the row cap comes back as its own row alone, without data: left out, said once, read past.
+    if (Number(row.page_big)) { oversizeRow('opencode', sessionId, `id ${mid}`); continue }
     let msg = byId.get(mid)
     if (!msg) {
       const mdata = parseJson(row.mdata)
@@ -162,6 +207,8 @@ export class OpencodeReader {
   private open = false
   private thinking = 0
   private cursor: Cursor | null = null
+  /** Whether the session's rows were read once and seeded; until then nothing is emitted (#4065). */
+  private hydrated = false
   private readonly emittedText = new Map<string, number>() // partId → chars already emitted
   private readonly thinkingIds = new Map<string, string>() // reasoning partId → stable thinkingId
   private readonly toolStarted = new Set<string>()
@@ -176,17 +223,30 @@ export class OpencodeReader {
   /** Hydrate silently (no replay), then start polling. */
   async start(): Promise<void> {
     try {
-      const all = await readOpencodeMessages(this.deps.dbPath, this.deps.sessionId, null)
-      const opening = this.hydrate(all)
-      if (opening.length) this.deps.onEvents(opening)
+      await this.seed()
     } catch (err) {
       if (err instanceof OpencodeSqliteMissing) { this.deps.onFatal?.(err); return }
     }
     this.timer = setInterval(() => { void this.tick() }, this.deps.pollMs ?? POLL_MS)
   }
 
+  /** A read of the store now, as its poll makes: what a drain of the session asks (engines/others/streams.ts). */
+  poll(): Promise<void> { return this.tick() }
+
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  /**
+   * Read the whole session and seed from it. A store that does not answer leaves the reader unseeded, and the next tick
+   * reads in full again: with no cursor yet, an incremental read would emit the whole history as new (#4065).
+   */
+  private async seed(): Promise<void> {
+    const all = await loadOpencodeMessages(this.deps.dbPath, this.deps.sessionId, null)
+    if (!all) return
+    this.hydrated = true
+    const opening = this.hydrate(all)
+    if (opening.length) this.deps.onEvents(opening)
   }
 
   /**
@@ -255,6 +315,7 @@ export class OpencodeReader {
     if (this.polling) return
     this.polling = true
     try {
+      if (!this.hydrated) { await this.seed(); return }
       const batch = await readOpencodeMessages(this.deps.dbPath, this.deps.sessionId, this.cursor)
       if (batch.length === 0) return
       const events: LiveEvent[] = []

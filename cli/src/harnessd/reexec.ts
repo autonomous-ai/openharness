@@ -28,6 +28,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { errorKind } from '../lib/log.js'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 import { signedExitCode, type ExitReason, type ReexecOutcome, type ResumeState } from './supervisor.js'
 
@@ -43,21 +44,28 @@ export { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from '.
  */
 export const REEXEC_LIMIT = 3
 
-/** How much of a file `sha256File` holds at a time. */
-const HASH_PIECE_BYTES = 64 * 1024
+/** The piece of a file `sha256File` holds at a time: one, for every call (why is on `sha256File`). */
+const HASH_PIECE = Buffer.allocUnsafe(64 * 1024)
 
 /**
  * The sha256 of the file at [path], read a piece at a time. A master hashes cli.js, 6.5 MB, and every
  * file of its lean bundle before each process it starts (./leanServices.ts), eight of them as it boots:
  * read whole, each read was a buffer the size of the file, and at idle a master still held 35 to 45 MiB
  * of them, which a collection would have freed but none came (measured 2026-10-06).
+ *
+ * Every call reads through the same piece. With a piece of its own per call, a check of the lean folder
+ * allocated 64 KiB per file, and the folder grew from 236 files to 393: about 25 MiB at each check. They
+ * were freed, but the allocator kept the pages, so the master stayed as high as the collections' timing
+ * had let it climb: 88 to 99 MiB resident on Linux and 101 to 111 on macOS, against the 100 MiB
+ * e2e/lean.e2e.ts holds it under, which failed at 100.4 on 2026-11-14. Through one piece it is 75.3 MiB
+ * on Linux (the median was 95.6) and 76.6 on macOS (108.6), the same in every run (Node 24.22.2, measured
+ * 2026-11-14). The reads are synchronous, so no two calls ever hold the piece at once.
  */
 export function sha256File(path: string): string {
   const hash = createHash('sha256')
   const fd = openSync(path, 'r')
   try {
-    const piece = Buffer.allocUnsafe(HASH_PIECE_BYTES)
-    for (let read = readSync(fd, piece); read > 0; read = readSync(fd, piece)) hash.update(piece.subarray(0, read))
+    for (let read = readSync(fd, HASH_PIECE); read > 0; read = readSync(fd, HASH_PIECE)) hash.update(HASH_PIECE.subarray(0, read))
   } finally {
     closeSync(fd)
   }
@@ -258,7 +266,9 @@ export function recoverFailedReexec(deps: {
 
 export interface ProbeResult {
   ok: boolean
-  detail: string
+  /** How the probe ended (`exit 1 · stderr 40 B`, `signal SIGKILL`, the spawn error's kind), never what it printed:
+   *  a bundle's output can name the person's paths, and only the log reads this. */
+  ended: string
   /** The bundle's master says it takes a handover (`PROBE_HANDOVER`); left out, it does not. */
   handover?: true
 }
@@ -271,26 +281,26 @@ export function runProbe(
   const child = start(nodePath, args, env)
   // Apart: a bundle from before probes answers with its usage on stdout and the reason on stderr.
   let out = ''
-  let err = ''
+  let errBytes = 0
   child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
-  child.stderr?.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
-  const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
+  child.stderr?.on('data', (chunk: Buffer) => { errBytes += chunk.length })
   const result = new Promise<ProbeResult>((resolve) => {
     let settled = false
-    const done = (ok: boolean, detail: string, handover = false) => {
+    const done = (ok: boolean, ended: string, handover = false) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ ok, detail, ...(handover ? { handover: true } : {}) })
+      resolve({ ok, ended, ...(handover ? { handover: true } : {}) })
     }
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL') } catch { /* gone */ }
       done(false, `no answer within ${timeoutMs} ms`)
     }, timeoutMs)
-    child.on('error', (error) => done(false, error.message))
+    child.on('error', (error) => done(false, errorKind(error)))
     child.on('close', (code, signal) => {
       const ok = code === 0 && out.includes(PROBE_ANSWER)
-      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`), ok && out.includes(PROBE_HANDOVER))
+      const how = signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`
+      done(ok, errBytes > 0 ? `${how} · stderr ${errBytes} B` : how, ok && out.includes(PROBE_HANDOVER))
     })
   })
   return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }
@@ -394,7 +404,6 @@ export function createReexec(deps: ReexecDeps): {
   let replacing = false
   let handing: Promise<void> | null = null
   let handedOver = false
-  const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
   /**
    * Windows. The replacement holds the machine once it took the handover (`takeHandover`) and the pid file names it, so
@@ -403,7 +412,7 @@ export function createReexec(deps: ReexecDeps): {
   const handOver = async (h: HandOverDeps, next: string, state: ResumeState, carryOn: (outcome: ReexecOutcome) => void): Promise<void> => {
     let busy = 'the daemon spawn lock is busy'
     const release = await h.lock().catch((error: unknown) => {
-      busy = `could not take the daemon spawn lock (${message(error)})`
+      busy = `could not take the daemon spawn lock (${errorKind(error)})`
       return null
     })
     if (deps.stopping()) { release?.(); return }
@@ -417,11 +426,11 @@ export function createReexec(deps: ReexecDeps): {
       deps.log(`[harnessd] ${why} — keeping this master`)
       carryOn('kept')
     }
-    if (!deps.exists(deps.scriptPath)) { stay(`${deps.scriptPath} is not there to hand over to`); return }
+    if (!deps.exists(deps.scriptPath)) { stay('the bundle is not there to hand over to'); return }
     const token = h.token()
     // A name for the handover's decision file (`takeBackHandover`): with any other, every handover would only time out.
     if (!HANDOVER_TOKEN.test(token)) { stay(`the handover token ${JSON.stringify(token)} is not one a file can be named by`); return }
-    try { h.claim() } catch (error) { stay(`could not claim the pid file (${message(error)})`); return }
+    try { h.claim() } catch (error) { stay(`could not claim the pid file (${errorKind(error)})`); return }
     // Now, not as the re-execution began: stopping the children and the probe took up to PROBE_TIMEOUT_MS of it.
     const at = deps.now()
     // No replacement takes the handover or claims the pid file after its cutoff (`mayClaimPidFile`): past that and
@@ -430,7 +439,7 @@ export function createReexec(deps: ReexecDeps): {
     try {
       deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at, handover: token })
     } catch (error) {
-      stay(`could not leave the re-execution marker (${message(error)})`)
+      stay(`could not leave the re-execution marker (${errorKind(error)})`)
       return
     }
 
@@ -463,7 +472,7 @@ export function createReexec(deps: ReexecDeps): {
       try {
         return h.takeBack(token)
       } catch (error) {
-        if (!unknownSaid) deps.log(`[harnessd] could not take the handover back yet (${message(error)}) — trying again`)
+        if (!unknownSaid) deps.log(`[harnessd] could not take the handover back yet (${errorKind(error)}) — trying again`)
         unknownSaid = true
         return null
       }
@@ -474,7 +483,7 @@ export function createReexec(deps: ReexecDeps): {
       try {
         if (h.readPid() !== deps.pid) h.claim()
       } catch (error) {
-        deps.log(`[harnessd] could not claim the pid file back (${message(error)})`)
+        deps.log(`[harnessd] could not claim the pid file back (${errorKind(error)})`)
       }
       stay(why)
     }
@@ -515,7 +524,7 @@ export function createReexec(deps: ReexecDeps): {
           try {
             named = h.readPid()
           } catch (error) {
-            leave(`the new master took over, and the pid file cannot be read (${message(error)})`)
+            leave(`the new master took over, and the pid file cannot be read (${errorKind(error)})`)
             return
           }
           if (named !== null && named !== deps.pid && runs(named) !== false) { leave(`the new master took over, and the pid file names pid ${named}`); return }
@@ -566,7 +575,7 @@ export function createReexec(deps: ReexecDeps): {
         if (deps.stopping()) return null
       }
     }
-    const outcome = await wait().catch((error: unknown) => (deps.stopping() ? null : `the handover failed (${message(error)})`))
+    const outcome = await wait().catch((error: unknown) => (deps.stopping() ? null : `the handover failed (${errorKind(error)})`))
     if (outcome === null) { await stop(); return }
     if (typeof outcome === 'string') { await settle(outcome); return }
     leave(`handed over to the new master (pid ${outcome})`)
@@ -603,11 +612,11 @@ export function createReexec(deps: ReexecDeps): {
         const running = deps.probe([...args, PROBE_COMMAND], env)
         probe = running
         void running.result.then((result) => {
-          const { ok, detail } = result
+          const { ok, ended } = result
           probe = null
           if (deps.stopping()) return
           if (!ok) {
-            deps.log(`[harnessd] the new bundle's master did not answer its probe (${detail}) — keeping this master`)
+            deps.log(`[harnessd] the new bundle's master did not answer its probe (${ended}) — keeping this master`)
             carryOn('refused')
             return
           }
@@ -627,7 +636,7 @@ export function createReexec(deps: ReexecDeps): {
             // which ends a master that has no core and no services running at this point. Without the
             // marker a re-execution that never came up would be taken for one in progress, so this master
             // keeps its code and starts the core on the new bundle itself, judging it as every update.
-            deps.log(`[harnessd] could not leave the re-execution marker (${error instanceof Error ? error.message : String(error)}) — keeping this master`)
+            deps.log(`[harnessd] could not leave the re-execution marker (${errorKind(error)}) — keeping this master`)
             carryOn('kept')
             return
           }
@@ -648,7 +657,7 @@ export function createReexec(deps: ReexecDeps): {
           } catch (error) {
             // Only what `process.execve` refuses before it begins: arguments it cannot take.
             deps.removeMarker()
-            deps.log(`[harnessd] could not re-execute this master (${error instanceof Error ? error.message : String(error)}) — keeping it`)
+            deps.log(`[harnessd] could not re-execute this master (${errorKind(error)}) — keeping it`)
             carryOn('kept')
           }
         })

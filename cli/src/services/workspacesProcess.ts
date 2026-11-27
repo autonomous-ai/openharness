@@ -1,22 +1,26 @@
 /**
- * Workspaces in their own process (`harness __service workspaces`, with `HARNESSD_SERVICES=workspaces`).
+ * Workspaces in their own process (`harness __service workspaces`, with `HARNESSD_SERVICES=workspaces`; in the edge host
+ * by default).
  *
- * The same branch naming and worktree sweep as in the core's process (services/workspaces.ts), on a core
- * API built here. It acts only when the core says so (core/workspacesLink.ts):
- * - It names branches when told to, with the live agents the core sends on each terminal-title pass.
- * - It sweeps when the core's timer says, asking the core at that moment for every agent, live and
- *   stopped, and sweeping with exactly that answer.
- *
- * It never sweeps on its own, never with agents it kept from earlier, never when the core cannot answer,
- * and never two sweeps at once (services/workspaces.ts). After a rename it asks the core to send the
- * agent's frame again. The git work (renames, worktree removals, their timeouts) is this process's
- * alone: a hang or a crash in it costs workspaces, and the master starts them again.
+ * The same workspaces as in the core's process (services/workspaces.ts), on a core API built here. It names branches
+ * when the core says so (core/workspacesLink.ts), with the live agents the core sends on each terminal-title pass, and
+ * after a rename asks the core to send the agent's frame again. It makes the folder a create asks git for, and reads and
+ * removes a harness's worktree for a purge, as the core asks (`prepareFolder`, `describeWorkspace`, `reviewWorktree`,
+ * `removeWorktree`), and says it does each time it connects (`folders`): a core from before asks none of it, and a core
+ * of this build asks nothing of a process from before. A `sweep` an older core still sends is ignored: no worktree is
+ * removed on a timer (#4166). The git work is this process's alone: a hang or a crash in it costs workspaces, and the
+ * master starts them again.
  */
-import type { CoreApi } from '../core/api.js'
+import type { AgentView, CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { gitProjectFolderOf } from '../lib/gitProjectFolder.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import type { WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
-import { UNASKED } from './processCoreApi.js'
+import { processCoreApi, UNASKED } from './processCoreApi.js'
+import { followLink } from './followLink.js'
+import { createFramePublisher } from './framePublisher.js'
 import { startWorkspaces } from './workspaces.js'
 
 export interface WorkspacesServiceOptions {
@@ -33,15 +37,33 @@ export interface WorkspacesServiceOptions {
 const isSession = (value: unknown): value is RegisteredSession =>
   !!value && typeof value === 'object' && typeof (value as { agentId?: unknown }).agentId === 'string'
 
+const pathOrNull = (value: unknown): string | null | undefined => typeof value === 'string' || value === null ? value : undefined
+/** The harness a review is of, as the core sent it: its folder and its conversation's files, each a string or none. */
+function targetOf(value: unknown): WorkspaceTarget | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  const cwd = pathOrNull(v.cwd)
+  if (cwd === undefined) return null
+  const target: WorkspaceTarget = { cwd }
+  for (const key of ['transcriptPath', 'codexHome', 'hermesHome'] as const) {
+    const file = pathOrNull(v[key])
+    if (file) target[key] = file
+  }
+  return target
+}
+/** The folders every other harness works in, as the core sent them: every one, or none and the request is refused. A
+ *  list cut short could leave out the harness whose files a removal would take. */
+const othersOf = (value: unknown): string[] | null =>
+  Array.isArray(value) && value.length <= 10_000 && value.every((cwd) => typeof cwd === 'string') ? value as string[] : null
+const refused = { ok: false, reason: 'The request to review this worktree was malformed.' }
+
 /**
- * The core API workspaces run on in their own process. The live agents are the ones the core last sent.
- * Every agent, live and stopped, is known only while a sweep the core asked for starts; asked at any
- * other time it throws, and a sweep that cannot list the folders in use sweeps nothing. A frame sent
- * again (after a rename) is the core's to send: `renamed` asks it to.
+ * The core API workspaces run on in their own process. The live agents are the ones the core last sent; stopped ones are
+ * never asked for. A frame sent again (after a rename) is the core's to send: `renamed` asks it to.
  */
 export function workspacesCoreApi(
   dataDir: string,
-  view: { live(): RegisteredSession[]; inUse(): RegisteredSession[] | null },
+  view: { live(): RegisteredSession[] },
   renamed: (agentId: string) => void,
 ): CoreApi {
   return {
@@ -50,11 +72,7 @@ export function workspacesCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: () => {
-        const agents = view.inUse()
-        if (!agents) throw new Error('the core has not said which folders are in use')
-        return agents
-      },
+      all: () => { throw new Error('workspaces never list stopped agents') },
       live: () => view.live(),
       displayName: () => '',
       byAgent: (agentId) => view.live().find((session) => session.agentId === agentId),
@@ -92,35 +110,31 @@ export function workspacesCoreApi(
 }
 
 export function runWorkspacesService(options: WorkspacesServiceOptions): ServiceProcess {
-  let live: RegisteredSession[] = []
-  /** Every agent the core named for the sweep starting now; null at every other moment. */
-  let inUse: RegisteredSession[] | null = null
+  let live: AgentView[] = []
   let core: CoreConnection | null = null
-  /** A sweep's question to the core is out: a second request meanwhile is the same sweep. */
-  let asking = false
+  let following = false
+  const lifecycle = followLink({ each: true, frames: true })
+  lifecycle.follow(event => {
+    if (event.kind === 'running') {
+      following ||= !!event.session.frameEpoch
+      live = [...live.filter(session => session.agentId !== event.session.agentId), event.session]
+    } else if (event.kind === 'ended' || event.kind === 'purged') live = live.filter(session => session.agentId !== event.agentId)
+  })
+  // Before shared publications the core computed Git facts itself. Its existing refresh query is
+  // sufficient during that handover; no second Git publication protocol. Delete 2026-12-18.
+  const publisher = createFramePublisher(session => ({ query: 'branchNamed', payload: { agentId: session.agentId } }))
   const ports = emptyPorts()
   // Lost only with the connection: the frame then shows the new branch when the core's read of the
   // folder expires (lib/agentProject.ts), seconds later.
   const renamed = (agentId: string): void => { void core?.query('branchNamed', { agentId }).catch(() => {}) }
-  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live, inUse: () => inUse }, renamed), ports)
+  const api = workspacesCoreApi(options.dataDir, { live: () => live }, renamed)
+  api.agents.follow = lifecycle.follow
+  api.usage = processCoreApi(options.dataDir, 'workspaces', {
+    ask: (query, payload) => core?.query(query, payload) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  }).usage
+  ;(options.start ?? startWorkspaces)(publisher.scope(api), ports)
   if (!ports.workspaces) throw new Error('workspaces did not start')
   const workspaces = ports.workspaces
-
-  /** The core's timer says it is time: ask it for every agent now, and sweep with exactly that answer. */
-  const sweep = (): void => {
-    const connection = core
-    if (!connection || asking) return
-    asking = true
-    void connection.query('agents').then((answer) => {
-      // Every entry, as the core sent it: one left out would be a folder in use that looks unused. An
-      // answer that is not a list of agents (QUERY_FAILED, when the core could not read them all) is no
-      // sweep at all.
-      const agents = answer.agents
-      if (!Array.isArray(agents) || !agents.every(isSession)) return
-      inUse = agents
-      try { workspaces.sweepUnused() } catch { /* its own failure: the next timer tries again */ } finally { inUse = null }
-    }, () => {}).finally(() => { asking = false })
-  }
 
   const run = options.run ?? runServiceProcess
   const service = run({
@@ -128,15 +142,54 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    // The apps ask workspaces nothing yet: only the core tells it what to do.
-    requests: {},
-    onEvent: (payload) => {
-      if (payload.kind === 'nameBranches' && Array.isArray(payload.agents)) {
-        live = payload.agents.filter(isSession)
-        workspaces.nameBranches()
-      } else if (payload.kind === 'sweep') sweep()
+    // The apps ask workspaces nothing: only the core does, for the git it runs none of (core/workspacesLink.ts).
+    requests: {
+      prepareFolder: (payload) => {
+        const project = gitProjectFolderOf(payload.project)
+        return project ? workspaces.prepareFolder(project, { cloneFallback: payload.cloneFallback === true })
+          : { ok: false, error: 'INVALID_PROJECT_SOURCE', detail: 'Choose a project.' }
+      },
+      describeWorkspace: async (payload) => {
+        const target = targetOf(payload.target), others = othersOf(payload.others)
+        return { workspace: target && others ? await workspaces.describeWorkspace(target, others) : null }
+      },
+      reviewWorktree: (payload) => {
+        const target = targetOf(payload.target), others = othersOf(payload.others)
+        return target && others ? workspaces.reviewWorktree(target, others) : refused
+      },
+      removeWorktree: (payload) => {
+        const target = targetOf(payload.target), others = othersOf(payload.others)
+        // The review is checked against a fresh one of the same worktree before anything is removed
+        // (lib/worktreeDeletion.ts `removeReviewedWorktree`): one that is not what it says removes nothing.
+        return target && others && payload.review && typeof payload.review === 'object'
+          ? workspaces.removeWorktree(payload.review as WorktreeReview, target, others, payload.discardChanges === true) : refused
+      },
     },
-    onConnected: (connection) => { core = connection },
+    onEvent: (payload) => {
+      if (lifecycle.heard(payload)) return
+      if (payload.kind === 'nameBranches' && Array.isArray(payload.agents)) {
+        if (!following) live = payload.agents.filter(isSession)
+        workspaces.nameBranches()
+      }
+    },
+    onConnected: (connection) => {
+      core = connection
+      publisher.connected(connection)
+      void lifecycle.connected((query, payload) => connection.query(query, payload))
+      // Said on every connection: a core of this build asks a process for folders only once it has said it makes them.
+      // The core reads it as it arrives, so only a connection that ends loses it, and the next one says it again; a
+      // failure is still said, as creates that need git wait until it is heard.
+      void connection.query('folders').catch((error: unknown) => {
+        console.warn(`[workspaces] could not tell the core this process makes folders · ${errorKind(error)}`)
+      })
+    },
+    onDisconnected: () => {
+      core = null; following = false
+      publisher.disconnected()
+      lifecycle.disconnected()
+      for (const session of live) lifecycle.heard({ kind: 'agent', event: { kind: 'ended', agentId: session.agentId } })
+      live = []
+    },
   })
-  return { stop: () => service.stop() }
+  return { stop: () => { workspaces.stop(); publisher.disconnected(); lifecycle.disconnected(); return service.stop() } }
 }

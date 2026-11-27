@@ -3,7 +3,7 @@ import type { RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { prepareTerminalBackends, TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { terminalRouteKey } from './terminalRuntime.js'
-import type { TerminalRuntimeRef, TerminalStreamHandle, TerminalStreamSink } from './terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalRuntimeRef, type TerminalStreamHandle, type TerminalStreamSink } from './terminalTypes.js'
 
 const tmux: TerminalRuntimeRef = { backend: 'tmux', paneId: '%1' }
 const second: TerminalRuntimeRef = { backend: 'tmux', paneId: '%2' }
@@ -56,6 +56,22 @@ function submitBy(onFirst: Awaited<ReturnType<TerminalBackend['submitText']>>) {
 }
 
 describe('TerminalBackendCoordinator', () => {
+  it.each(['leased', 'direct'] as const)('carries a revoked key predicate through the %s route', async route => {
+    const native = backend('tmux:default', vi.fn())
+    const allowed = () => false
+    native.sendKey = vi.fn<TerminalBackend['sendKey']>(async (_runtime, _key, current) => current?.() === false
+      ? { state: 'failed', dispatch: 'not_started', reason: 'revoked' }
+      : { state: 'succeeded', dispatch: 'executed' })
+    const coordinator = new TerminalBackendCoordinator([native], ['tmux'])
+    const row = session(), lease = await coordinator.acquireLease(row)
+    expect(lease.state).toBe('succeeded')
+    if (lease.state !== 'succeeded') throw new Error('fixture lease was refused')
+    const result = route === 'leased' ? await coordinator.sendLegacyKeyLease(lease.value, 'Enter', allowed)
+      : await coordinator.sendLegacyKey(row, 'Enter', allowed)
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(native.sendKey).toHaveBeenCalledWith(expect.anything(), 'enter', allowed)
+  })
+
   it('opens a retained terminal runtime even when engine discovery marked the agent dormant', async () => {
     const tmuxBackend = backend('tmux:default', vi.fn())
     const handle = streamHandle()
@@ -206,6 +222,33 @@ describe('TerminalBackendCoordinator', () => {
     expect(ambiguous).toHaveBeenCalledOnce()
   })
 
+  it('refuses a lease its session outgrew before typing as any lease is refused, so the input path asks again', async () => {
+    const submit = submitBy({ state: 'succeeded', dispatch: 'executed' })
+    const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
+    const acquired = await coordinator.acquireLease(session())
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    // Restore records the resumed engine after the row already reads active.
+    const restored = { ...session(), processIdentity: { pid: 43, executable: 'codex', startMarker: 'Sat Aug 15 10:01:00 2026' } }
+    await expect(coordinator.submitTextForLease(restored, acquired.value, 'hello')).resolves.toEqual({
+      state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED,
+    })
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('returns a submit whose lease changed while it typed as the backend answered it, typed once', async () => {
+    const current = session()
+    const typed = { state: 'unknown' as const, dispatch: 'possibly_executed' as const, reason: 'lost response' }
+    const submit = vi.fn(async () => {
+      current.processIdentity = { pid: 43, executable: 'codex', startMarker: 'Sat Aug 15 10:01:00 2026' }
+      return typed
+    })
+    const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
+    const acquired = await coordinator.acquireLease(current)
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    await expect(coordinator.submitTextForLease(current, acquired.value, 'hello')).resolves.toEqual(typed)
+    expect(submit).toHaveBeenCalledOnce()
+  })
+
   it('never changes placement for a side effect issued through an already pinned multi-step lease', async () => {
     const submit = submitBy({ state: 'failed', dispatch: 'rejected', reason: 'rejected' })
     const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
@@ -306,6 +349,26 @@ describe('TerminalBackendCoordinator', () => {
       await expect(coordinator.validateLease(acquired.value, current)).resolves.toBe(false)
     })
 
+    it('does not type through a lease whose engine a restart replaced while the submit checked its terminal', async () => {
+      const current = session()
+      current.runtimes = [tmux]
+      let live = 42
+      const submit = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
+      const tmuxBackend = { ...backend('tmux:default', submit), validate: vi.fn(async (_runtime: TerminalRuntimeRef, expected: { processIdentity?: { pid: number } }) =>
+        expected.processIdentity?.pid === live ? { state: 'alive' as const } : { state: 'gone' as const, reason: 'process changed under tmux pane', replaced: true as const }) }
+      // The restart records its new engine on the row while the submit's check waits; the check then answers for it.
+      const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'], {
+        unknownRetryMs: [10], sleep: async () => { current.processIdentity = { pid: 44, executable: 'claude', startMarker: 'Sat Aug 15 10:02:00 2026' } },
+      })
+      const acquired = await coordinator.acquireLease(current)
+      if (acquired.state !== 'succeeded') throw new Error('no lease')
+      live = 44
+      await expect(coordinator.submitTextForLease(current, acquired.value, 'hello')).resolves.toEqual({
+        state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED,
+      })
+      expect(submit).not.toHaveBeenCalled()
+    })
+
     it('waits on a terminal with no engine in it while a restart is replacing that engine', async () => {
       const answers = [{ state: 'gone' as const, reason: 'no claude process under pane %1' }, { state: 'alive' as const }]
       const { coordinator } = patient(async () => answers.shift()!)
@@ -393,7 +456,7 @@ describe('prepareTerminalBackends', () => {
       { state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'could not prepare ptyhost: odd' },
       { state: 'ready' },
     ])
-    expect(error).toHaveBeenCalledWith('[terminal] tmux: could not prepare tmux: spawn tmux ENOMEM')
+    expect(error.mock.calls).toEqual([['[terminal] tmux: could not prepare tmux: Error'], ['[terminal] ptyhost: could not prepare ptyhost: string']])
     error.mockRestore()
   })
 })

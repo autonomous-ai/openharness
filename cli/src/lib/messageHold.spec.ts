@@ -7,7 +7,7 @@ import {
 import * as TAKEOVER from './__fixtures__/takeoverScreens.js'
 import { screen as claudeScreen } from '../engines/claude/screen.js'
 import { inspectCloseActivity } from './closeAgentService.js'
-import { CODEX_SWARM_MESSAGE } from './__fixtures__/codexSwarmMessage.js'
+import { CODEX_PARAGRAPH_DRAFT } from './__fixtures__/codexParagraphDraft.js'
 
 const fixture = (name: string) => readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), 'utf8')
 const RULE = '─'.repeat(100)
@@ -36,7 +36,8 @@ const CODEX_MODEL_MENU = 'Select Model and Effort\n› 1. gpt-5.6-sol (current)\
 describe('what a message is not typed into', () => {
   it('is a permission prompt, in Claude Code, Codex and every engine whose prompt the daemon reads', () => {
     for (const [engine, name] of [['claude', 'permission-claude.txt'], ['claude', 'permission-claude-edit.txt'], ['claude', 'permission-claude-plan.txt'],
-      ['codex', 'permission-codex.txt'], ['commandcode', 'permission-commandcode.txt'], ['cursor', 'permission-cursor.txt']] as const) {
+      ['codex', 'permission-codex.txt'], ['commandcode', 'permission-commandcode.txt'], ['cursor', 'permission-cursor.txt'],
+      ['hermes', 'permission-hermes.txt'], ['copilot', 'permission-copilot.txt']] as const) {
       expect(messageHold(engine, fixture(name)), name).toBe('permission_open')
     }
   })
@@ -216,9 +217,9 @@ describe('anything but the engine\'s own composer, for Claude Code and Codex', (
     expect(messageHold('cursor', null)).toBeNull()
   })
 
-  it('is not a Swarm message in paragraphs, typed into a Codex that does not shade its composer: its Enter is pressed', () => {
-    expect(messageHold('codex', CODEX_SWARM_MESSAGE)).toBeNull()
-    expect(messageHold('codex', CODEX_SWARM_MESSAGE.replace('\n\n  \u001b[2mgpt-6', '\n\n  1. Yes\n  2. No\n\n  \u001b[2mgpt-6'))).toBe('prompt_hidden')
+  it('is not a message in paragraphs, typed into a Codex that does not shade its composer: its Enter is pressed', () => {
+    expect(messageHold('codex', CODEX_PARAGRAPH_DRAFT)).toBeNull()
+    expect(messageHold('codex', CODEX_PARAGRAPH_DRAFT.replace('\n\n  \u001b[2mgpt-6', '\n\n  1. Yes\n  2. No\n\n  \u001b[2mgpt-6'))).toBe('prompt_hidden')
   })
 
   it('waits a little for the passing ones, an engine starting or a pane read once in vain, before refusing', () => {

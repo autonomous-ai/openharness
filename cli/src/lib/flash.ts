@@ -23,18 +23,14 @@
  */
 
 import { spawn } from 'child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
-import { homedir } from 'os'
 import { env } from '../config/env.js'
+import { FLASHER_DIR } from './flasherDir.js'
 import { completeFlash } from './flashRecovery.js'
+import { atomicWriteFile } from './secureState.js'
+import { powershellPath } from './windows/powershell.js'
 
-/**
- * The script caches its own downloads (esptool, firmware) under `~/.harness/flasher` via
- * `HARNESS_FLASHER_CACHE`. Keeping our copy of the script in the same directory is deliberate: one
- * place holds everything the flasher owns, so "delete this folder" is a complete reset.
- */
-const CACHE_DIR = process.env.HARNESS_FLASHER_CACHE || join(homedir(), '.harness', 'flasher')
 const FETCH_TIMEOUT_MS = 20_000
 
 export interface FlasherScript {
@@ -59,7 +55,7 @@ export function flasherScript(platform: NodeJS.Platform = process.platform): Fla
       kind: 'the PowerShell flasher',
       // -ExecutionPolicy Bypass for this one process: a user's policy may refuse scripts. The file came from fetch,
       // which marks nothing as downloaded, so no SmartScreen or zone check is involved.
-      command: (scriptPath, args) => ({ file: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args] }),
+      command: (scriptPath, args) => ({ file: powershellPath(), args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args] }),
       byHand: (url) => [`  irm ${url} -OutFile flash-circle.ps1`, '  powershell -NoProfile -ExecutionPolicy Bypass -File flash-circle.ps1'],
       missing: 'Windows PowerShell (powershell.exe) was not found, and the flasher is a PowerShell script.\nRun it yourself from a PowerShell window:',
     }
@@ -117,7 +113,7 @@ function realRun(script: FlasherScript) {
 
 function defaultsFor(platform: NodeJS.Platform): { deps: FlashDeps; cached: string } {
   const script = flasherScript(platform)
-  const cached = join(CACHE_DIR, script.name)
+  const cached = join(FLASHER_DIR, script.name)
   return {
     cached,
     deps: {
@@ -127,7 +123,8 @@ function defaultsFor(platform: NodeJS.Platform): { deps: FlashDeps; cached: stri
       },
       writeCache: (body) => {
         mkdirSync(dirname(cached), { recursive: true })
-        writeFileSync(cached, body, { mode: 0o755 })
+        // Whole or not at all, and flushed: the cache is what runs offline, and a truncated or emptied copy would be run.
+        atomicWriteFile(cached, body, 'cache', { mode: 0o755, durable: true })
       },
       run: realRun(script),
       log: (line) => console.log(line),
@@ -201,11 +198,13 @@ export async function flashCommand(args: string[], overrides: Partial<FlashDeps>
     // product's own device — and the check that actually prevents damage is the script's refusal to write
     // to anything that is not an ESP32-S3. A confirmation in front of a customer converting the device
     // they own is friction wearing the clothes of safety. The user's own flags follow and still win.
+    // The script would read a relative HARNESS_FLASHER_CACHE against its own folder; it gets the one folder the CLI resolved.
+    const cacheEnvironment = { ...environment, HARNESS_FLASHER_CACHE: FLASHER_DIR }
     const childEnvironment = platform === 'win32' ? {
-      ...environment,
+      ...cacheEnvironment,
       HARNESS_FLASH_RECOVERY_NODE: process.execPath,
       HARNESS_FLASH_RECOVERY_ARGS: JSON.stringify([...process.execArgv, process.argv[1]]),
-    } : environment
+    } : cacheEnvironment
     return await deps.run(cached, ['--yes', ...args], childEnvironment)
   } catch (err) {
     // The only way `spawn` itself fails here in practice: the script's interpreter is missing. Say what to do

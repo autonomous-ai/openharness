@@ -270,7 +270,7 @@ function findTranscripts(daemon: IsolatedDaemon): string[] {
       else if (entry.name.endsWith('.jsonl')) found.push(path)
     }
   }
-  walk(join(daemon.root, 'claude'))
-  walk(join(daemon.root, 'codex'))
+  walk(daemon.engineConfig.claudeProjectsDir)
+  walk(daemon.engineConfig.codexHome)
   return found
 }

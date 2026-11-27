@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+const err = (text) => process.stderr.write(`${text}\n`)
+
+err('You have not agreed to the Xcode license agreements. You must agree to both license agreements below in order to use Xcode.')
+err("Please run 'sudo xcodebuild -license' from within a Terminal window to review and agree to the Xcode and Apple SDKs license.")
+process.exit(69)

@@ -1,0 +1,9 @@
+{
+  "name": "storefront-web",
+  "version": "2.7.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js"
+  }
+}

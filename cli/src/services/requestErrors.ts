@@ -5,13 +5,14 @@
  * with it (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { ServiceRequest } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 
 export function internalOnThrow(type: string, handler: ServiceRequest): ServiceRequest {
   return async (payload, asker) => {
     try {
       return await handler(payload, asker)
     } catch (error) {
-      console.error(`[backend] dispatch ${type} failed:`, error)
+      console.error(`[backend] dispatch ${type} failed:`, errorKind(error))
       return { error: 'INTERNAL' }
     }
   }

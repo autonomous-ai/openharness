@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { constants, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { harnessPathText } from '../config/harnessHome.js'
 import {
   AGENT_NAME_RE,
   BYPASS_PERMISSION_FLAGS,
@@ -18,6 +19,7 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  launchAttempts,
   shellAgentArgv,
   buildTerminalLaunchArgv,
   interactiveEngineShell,
@@ -58,17 +60,24 @@ import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { browserPrelude } from './browserShim.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
+
+// A write that stops part way, as on a full disk.
+const disk = vi.hoisted(() => ({ full: false }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!disk.full) return actual.writeFileSync(...args)
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+  }
+})
+afterEach(() => { disk.full = false })
+import { writeExecutable } from '../testing/executableFixture.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { resumeSessionId } from './processTable.js'
-
-// What these cases test is what real shells make of the scripts this module writes: sh, dash, bash and
-// zsh run each one, and nothing here could be faked without faking the subject. Each run carries its own
-// bound (a probe's 5 s in engineLaunch.ts, the 10 s of the runs below), and vitest's 5 s default sat under
-// them: a slow shell timed the case out instead of answering as its bound says. Under a full run at load
-// 36 (six workers), 11 cases here hit it, one of them on a single probe; under 8 busy and 8 spawning loops
-// the four-probe case took 4.9 s. Room for four probes at their limit, and a margin.
-vi.setConfig({ testTimeout: 30_000 })
 
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
@@ -192,6 +201,52 @@ describe('buildEngineLaunchArgv', () => {
     expect(existsSync(fresh)).toBe(true)
   })
 
+  it.each(['/bin/zsh', '/usr/local/bin/fish'])('a retry under %s removes the launch file its closed pane\'s shell never read, and no other', (shell) => {
+    const build = () => buildEngineLaunchArgv('claude', { cwd: '/work' }, shell, undefined, undefined, NO_TMUX)
+    const fileOf = (argv: string[]) => argv.map(arg => /^(?:\.|exec \S+) '(.+\.sh)'$/.exec(arg)?.[1]).find(Boolean)!
+    const another = fileOf(build())
+    const first = build()
+    const attempts = launchAttempts(first, build)
+    expect(attempts(1)).toBe(first)
+    const second = attempts(2)
+    // Its pane was closed at once (its registration refused), before its shell read the file: it waited an hour for
+    // the sweep, one more for each retry.
+    expect(existsSync(fileOf(first))).toBe(false)
+    expect(existsSync(fileOf(second))).toBe(true)
+    const third = attempts(3)
+    expect(existsSync(fileOf(second))).toBe(false)
+    // Another launch's file, its pane still to read it, stays.
+    expect(existsSync(another)).toBe(true)
+    rmSync(another)
+    rmSync(fileOf(third))
+  })
+
+  it('a retry removes no file a launch names outside its launch folder, nor one reached through it', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'launch-elsewhere-'))
+    const name = '0123abcd-0123-4abc-8def-0123456789ab.sh'
+    const outside = join(elsewhere, name)
+    writeFileSync(outside, '')
+    const through = `${join(env.ADAPTER_DATA_DIR, 'launch')}/../${elsewhere.split('/').slice(1).map(() => '..').join('/')}${outside}`
+    for (const arg of [`. '${outside}'`, `. '${through}'`, `source '${join(env.ADAPTER_DATA_DIR, 'launch', name)}'`]) {
+      const first = ['/bin/zsh', '-lc', arg]
+      const build = vi.fn(() => ['/bin/zsh'])
+      expect(launchAttempts(first, build)(2)).toBe(first)
+      expect(build).not.toHaveBeenCalled()
+    }
+    expect(existsSync(outside)).toBe(true)
+    rmSync(elsewhere, { recursive: true })
+  })
+
+  it('a retry of a launch with no one-time file runs it again as it is', () => {
+    // Windows has none, and its pane's other launch facts were read from the first argv (windowsPaneLaunch `held`).
+    const first = ['claude.exe', '--permission-mode', 'auto']
+    const build = vi.fn(() => ['claude.exe'])
+    const attempts = launchAttempts(first, build)
+    expect([attempts(1), attempts(2), attempts(3)]).toEqual([first, first, first])
+    expect(attempts(2)).toBe(first)
+    expect(build).not.toHaveBeenCalled()
+  })
+
   it('puts the script on the command line when there is no data folder to write it in', () => {
     const saved = env.ADAPTER_DATA_DIR
     env.ADAPTER_DATA_DIR = '/dev/null/no-data-folder'
@@ -211,7 +266,7 @@ describe('buildEngineLaunchArgv', () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-launch-size-'))
     const savedPath = process.env.PATH
     try {
-      writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nfor arg in "$@"; do printf '%s\\000' "$arg"; done > "$(mktemp ${dir}/call.XXXXXX)"\nprintf '%%42\\n'\n`, { mode: 0o755 })
+      writeExecutable(join(dir, 'tmux'), `#!/bin/sh\nfor arg in "$@"; do printf '%s\\000' "$arg"; done > "$(mktemp ${dir}/call.XXXXXX)"\nprintf '%%42\\n'\n`)
       process.env.PATH = `${dir}:${savedPath}`
       const grid = { networkId: 'grid-3378218621364f16', networkName: 'autonomous.ai', baseUrl: 'https://grid.autonomous.ai/grid-3378218621364f16/relay/v1', apiKey: 'gridkey-abc123', model: 'GLM-4.7-Flash', mcpUrl: 'https://api-grid.autonomous.ai/v1/grid/web-mcp/' }
       for (const engine of ['claude', 'codex'] as const) {
@@ -270,7 +325,7 @@ describe('buildEngineLaunchArgv', () => {
       const binary = join(folder, 'codex')
       // /bin/sh --help succeeds on macOS but fails with Ubuntu's dash. A
       // simulated CLI needs its own help contract for the real startup probe.
-      writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n', { mode: 0o755 })
+      writeExecutable(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n')
       // Not a child of this process, as the terminal's is not: an unreaped child never looks gone.
       const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 1 >/dev/null 2>&1 & echo $!']).toString().trim())
       try {
@@ -421,9 +476,9 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       const folder = mkdtempSync(join(tmpdir(), 'harness-codex-launch-'))
       try {
         const binary = join(folder, 'codex fixture')
-        writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
+        writeExecutable(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
           + (mode === 'failed' ? 'exit 2\n' : `printf '%s\\n' '${mode === 'supported' ? '  --no-daemon  Run locally' : '  --model  Choose a model'}'\nexit 0\n`)
-          + 'fi\nprintf "<%s>\\n" "$@"\n', { mode: 0o755 })
+          + 'fi\nprintf "<%s>\\n" "$@"\n')
         const script = buildEngineLaunchArgv('codex', {}, '/bin/sh', undefined, undefined, NO_TMUX)[2]
         const args = ['-c', script, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
         if (mode === 'failed') {
@@ -783,7 +838,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       ]) {
         const held = onWindows(() => buildEngineLaunchArgv('codex', { native: changed }, ''))
         expect(held.slice(1, 2)).toEqual(['-e'])
-        expect(held.slice(3)).toEqual(['harness-held', 'Waiting for native launch preparation to be confirmed.', token])
+        expect(held.slice(3)).toEqual(['harness-held', 'Starting again.', token])
         expect(isHeldStartCommand(held.join(' '), token)).toBe(true)
         expect(held.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
       }
@@ -828,7 +883,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
     // The Team-written mode went with Team accounts (backend #3872): no engine has it.
     expect(permissionModeFlags('claude', 'teamWritten')).toBeNull()
     expect(permissionModeFlags('codex', 'teamWritten')).toBeNull()
-    // An older Buddy's saved mode is no mode: the registry clears it on load (task #4215).
+    // An older release's saved `buddy` mode is no mode: the registry clears it on load (task #4215).
     expect(permissionModeFlags('claude', 'buddy')).toBeNull()
     expect(permissionModeFlags('codex', 'readOnlyAsk')).toBeNull()
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
@@ -1115,8 +1170,7 @@ afterEach(() => {
 
 function executable(dir: string, name: string): string {
   const path = join(dir, name)
-  writeFileSync(path, '#!/bin/sh\nexit 0\n')
-  chmodSync(path, 0o700)
+  writeExecutable(path, '#!/bin/sh\nexit 0\n')
   return path
 }
 
@@ -1124,7 +1178,7 @@ function bashProbeShell(): string {
   const dir = mkdtempSync(join(tmpdir(), 'harness-engine-shell-'))
   dirs.push(dir)
   const shell = join(dir, 'bash')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 [ "$1" = '-ic' ] || exit 97
 shift
 script="$1"
@@ -1133,7 +1187,6 @@ PATH="$HARNESS_ENGINE_TEST_PATH"
 export PATH
 exec /bin/sh -c "$script" "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -1151,7 +1204,7 @@ function zshProbeShell(): string {
   dirs.push(dir)
   // Named `zsh` so interactiveEngineShell hands it zsh's own `-lic`, exactly as it would $SHELL.
   const shell = join(dir, 'zsh')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 [ "$1" = '-lic' ] || exit 97
 shift
 script="$1"
@@ -1160,7 +1213,6 @@ PATH="$HARNESS_ENGINE_TEST_PATH"
 export PATH
 exec ${ZSH} -c "$script" "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -1169,8 +1221,7 @@ describe('commandAvailableInInteractiveShell', () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-failed-probe-'))
     dirs.push(dir)
     const shell = join(dir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexit 9\n')
-    chmodSync(shell, 0o700)
+    writeExecutable(shell, '#!/bin/sh\nexit 9\n')
     const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
     expect(result).toMatchObject({ status: 'unverified', detail: expect.stringContaining('9') })
   })
@@ -1219,23 +1270,22 @@ describe('commandOutputInInteractiveShell', () => {
   it('returns both streams and the exit status from the shell a launch uses, and nothing for a hung command', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-output-'))
     dirs.push(binDir)
-    writeFileSync(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
-    chmodSync(join(binDir, 'openclaw'), 0o700)
+    writeExecutable(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
     writeFileSync(join(binDir, 'stuck'), '#!/bin/sh\nexec /bin/sleep 30\n')
     chmodSync(join(binDir, 'stuck'), 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = `${binDir}:/usr/bin:/bin`
-    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], bashProbeShell())
+    const shell = bashProbeShell()
+    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], shell)
     expect(ran?.code).toBe(3)
     expect(ran?.output).toContain('OpenClaw --version')
     expect(ran?.output).toContain('a warning')
-    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], bashProbeShell())).resolves.toBeNull()
+    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], shell)).resolves.toBeNull()
   }, 8_000)
 })
 
 /** A fake engine whose `--help` prints exactly `help`, and nothing else. */
 function fakeEngine(dir: string, name: string, help: string): void {
-  writeFileSync(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
-  chmodSync(join(dir, name), 0o700)
+  writeExecutable(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
 }
 
 describe('the permission gates', () => {
@@ -1370,11 +1420,10 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
     dirs.push(binDir)
     const codex = join(binDir, 'codex')
-    writeFileSync(
+    writeExecutable(
       codex,
       '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--sandbox"; exit 0; fi\nexit 2\n',
     )
-    chmodSync(codex, 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
     await expect(
@@ -1450,8 +1499,7 @@ describe('commandSupportsFlagInInteractiveShell', () => {
       const shell = bashProbeShell()
       const runs = join(binDir, 'runs')
       const build = (path: string, help: string) => {
-        writeFileSync(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
-        chmodSync(path, 0o700)
+        writeExecutable(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
       }
       const asked = () => existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).length : 0
       const opencode = join(binDir, 'opencode')
@@ -1490,8 +1538,7 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const shellDir = mkdtempSync(join(tmpdir(), 'harness-engine-shell-'))
     dirs.push(shellDir)
     const shell = join(shellDir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexit 1\n')
-    chmodSync(shell, 0o700)
+    writeExecutable(shell, '#!/bin/sh\nexit 1\n')
 
     await expect(
       commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', shell),
@@ -1502,8 +1549,7 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
     dirs.push(binDir)
     const codex = join(binDir, 'codex')
-    writeFileSync(codex, '#!/bin/sh\nexit 2\n')
-    chmodSync(codex, 0o700)
+    writeExecutable(codex, '#!/bin/sh\nexit 2\n')
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
     await expect(
@@ -1519,11 +1565,10 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-zsh-'))
     dirs.push(binDir)
     const codex = join(binDir, 'codex')
-    writeFileSync(
+    writeExecutable(
       codex,
       '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--approve-for-me"; exit 0; fi\nexit 2\n',
     )
-    chmodSync(codex, 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
     await expect(
@@ -1672,7 +1717,9 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     const friendly = (install: EngineInstallRecipe, firstPrompt?: string): string =>
       buildEngineLaunchArgv('opencode', { installIfMissing: install, ...(firstPrompt ? { firstPrompt } : {}) }, '/bin/zsh', process.execPath)[4]
     const run = (paneScript: string) => runPaneScript(paneScript, 'harness-no-such-engine', { ...process.env, HOME: home })
-    const log = () => readFileSync(join(home, '.harness', 'logs', 'install-opencode.log'), 'utf8')
+    // Where the script's `$HOME/…` lands with HOME set to [home]: the logs folder the suite's own home resolves to.
+    const logFile = () => `${harnessPathText('logs', home)}/install-opencode.log`
+    const log = () => readFileSync(logFile(), 'utf8')
 
     it('shows what is happening without the installer, and keeps the installer\'s output in the log', async () => {
       const result = await run(friendly(recipe("printf 'npm notice New major version of npm available!\\n'")))
@@ -1694,8 +1741,32 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
       expect(result).toMatchObject({ code: 1, ranEngine: false })
       expect(result.stdout).toContain('OpenCode could not be installed.')
       expect(result.stdout).toContain('E404 not found: fixture')
-      expect(result.stdout).toContain(`Full details: ${join(home, '.harness', 'logs', 'install-opencode.log')}`)
+      expect(result.stdout).toContain(`Full details: ${logFile()}`)
       expect(result.stdout).not.toContain('The command is above')
+    })
+
+    // Moved: the data root is in place with its marker, and ~/.harness is the bridge left for what started before the move.
+    it('the prelude names the state root on a moved Linux home', () => {
+      for (const folder of [['.local', 'share', 'harness'], ['.harness']]) mkdirSync(join(home, ...folder), { recursive: true })
+      writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n')
+      const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      process.env.HOME = process.env.USERPROFILE = home
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+      try {
+        // Linux's zsh sources the script from a one-time file.
+        const paneScript = launchScriptOf(buildEngineLaunchArgv('opencode', { installIfMissing: recipe('true') }, '/bin/zsh', process.execPath))
+        expect(paneScript).toContain('harness_install_log="$HOME/.local/state/harness/logs/install-opencode.log"')
+        expect(paneScript).toContain('mkdir -p "$HOME/.local/state/harness/logs"')
+        expect(paneScript).toContain('harness_dl_pid=$(cat "$HOME/.local/state/harness/run/downloading-$1" 2>/dev/null)')
+        expect(paneScript).not.toContain('$HOME/.harness')
+      } finally {
+        Object.defineProperty(process, 'platform', platform)
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[name]
+          else process.env[name] = value
+        }
+      }
     })
 
     it('runs the engine after an install that put it in place', async () => {
@@ -1753,12 +1824,11 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     chmodSync(engineSource, 0o700)
     const installed = join(runtimeBin, 'installed-engine')
     const npm = join(runtimeBin, 'npm')
-    writeFileSync(npm, `#!/bin/sh
+    writeExecutable(npm, `#!/bin/sh
 if [ "$1" = prefix ]; then exit 0; fi
 /bin/cp ${JSON.stringify(engineSource)} ${JSON.stringify(installed)}
 /bin/chmod 700 ${JSON.stringify(installed)}
 `)
-    chmodSync(npm, 0o700)
 
     const result = await runPaneScript(
       script(recipe('npm install -g fixture', {
@@ -1847,6 +1917,18 @@ describe('zsh\'s new-user menu, kept out of an agent\'s pane', () => {
     writeFileSync(join(root, 'data'), 'a file where the data folder should be')
     expect(zshNewUserGuard({ HOME: root })).toEqual([])
     expect(zshNewUserGuard({})).toEqual([])
+  })
+
+  it('a write that fails part way leaves the old file', () => {
+    const home = join(root, 'home')
+    mkdirSync(home)
+    // A .zshenv an older Harness wrote: rewritten, but only ever whole.
+    mkdirSync(folder(), { recursive: true })
+    writeFileSync(join(folder(), '.zshenv'), '# an older guard\n')
+    disk.full = true
+    expect(zshNewUserGuard({ HOME: home })).toEqual([])
+    disk.full = false
+    expect(readFileSync(join(folder(), '.zshenv'), 'utf8')).toBe('# an older guard\n')
   })
 
   // What the .zshenv does, in a real zsh: a person's ZDOTDIR, set or unset, is theirs again before any

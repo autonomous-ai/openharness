@@ -1,9 +1,11 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
-import { registry as realRegistry, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
+import { registry as realRegistry, RegistryOwnershipChanged, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
-import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
+import { STARTING_AGAIN } from './engineLaunch.js'
+import { DID_NOT_START, GRID_CREDENTIAL_REQUIRED, guardHold, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
@@ -68,14 +70,15 @@ interface Harness {
   released: string[]
 }
 
-it.each(['held alive', 'held gone', 'starting alive', 'starting gone'] as const)('preserves the original native first launch through recovery: %s', async phase => {
+// A starting one whose held shell is alive at boot carries the guard's proof: "the guard's hold", below.
+it.each(['held alive', 'held gone', 'starting gone'] as const)('preserves the original native first launch through recovery: %s', async phase => {
   const entry = row({ sessionId: '', launch: phase.startsWith('held')
     ? { state: 'held', service: 'native', nativeToken: 'original', detail: 'Original launch held' }
     : { state: 'starting', nativeToken: 'original' } })
   const h = harness([entry], { alivePanes: phase.endsWith('alive') ? ['%3'] : [] })
   h.deps.waitingPane = async () => true
   h.deps.keepAbandoned = vi.fn()
-  const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), log: () => {} })
+  const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), announce: () => {}, log: () => {} })
   await held.boot(() => restoreAgents(h.deps))
   expect(entry.launch).toMatchObject({ state: 'held', nativeToken: 'original' })
   expect(await held.restartHeld(entry.agentId)).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' })
@@ -97,7 +100,7 @@ it('revokes an active held restore when shutdown begins during launch preparatio
     return new Promise<RestoreLaunch>(done => { finish = done })
   })
   h.deps.keepAbandoned = vi.fn()
-  const held = createHeldLaunches({ registry: h.deps.registry, log: () => {},
+  const held = createHeldLaunches({ registry: h.deps.registry, announce: () => {}, log: () => {},
     restore: (only, current) => restoreAgents({ ...h.deps, only, cancelled: () => !current() }) })
   await held.boot(async () => {})
   const pending = held.restoreHeld()
@@ -161,14 +164,15 @@ it('publishes the fresh fallback token before dispatch and recognizes its own gu
   const respawn = h.deps.respawn
   h.deps.respawn = async (runtime, launch, control) => {
     if (!launch.nativeToken) return respawn(runtime, launch, control)
-    control!.onDispatch!()
+    await control!.onDispatch!()
     expect(h.rows.get('agent-a')!.launch).toEqual({ state: 'starting', nativeToken: 'fresh-fallback' })
     expect(control!.current!()).toBe(true)
     return respawn(runtime, launch, { ...control!, onDispatch: undefined })
   }
   h.deps.waitingPane = vi.fn(async (_runtime, token) => token === 'fresh-fallback')
   await restoreAgents(h.deps)
-  await vi.waitFor(() => expect(h.rows.get('agent-a')!.launch).toMatchObject({ state: 'held', nativeToken: 'fresh-fallback' }))
+  // The fallback is a launch with no conversation and no receipt to rebuild it from: the guard's hold fails it.
+  await vi.waitFor(() => expect(h.rows.get('agent-a')!.launch).toEqual({ state: 'failed', ...DID_NOT_START }))
   expect(h.deps.waitingPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' }, 'fresh-fallback')
   expect(h.respawns).toBe(2) // Resume, then the one proven fresh fallback.
 })
@@ -192,6 +196,26 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
   const note = (name: string) => { h.calls.push(`${name}${h.transactionDepth ? '@tx' : ''}`) }
   h.deps = {
     registry: {
+      confirmLaunch: async (id, input) => {
+        const row = h.rows.get(id)
+        if (!row) return { state: 'not-published' }
+        if (input.processIdentity) note(`updateIdentity:${id}:${input.processIdentity.pid}`)
+        Object.assign(row, input, { launch: { state: 'ready' }, active: true })
+        return { state: 'confirmed', entry: structuredClone(row) }
+      },
+      beginNativeDispatch: async (id, nativeToken) => {
+        const row = h.rows.get(id)
+        if (!row) return null
+        row.launch = { state: 'starting', nativeToken }; row.active = true
+        return structuredClone(row)
+      },
+      confirmEngineExit: async (id) => {
+        note(`releaseEngine:${id}`)
+        const row = h.rows.get(id)
+        if (!row) return { state: 'not-published' }
+        row.engine = 'terminal'; row.sessionId = ''; row.processIdentity = null; row.launch = { state: 'ready' }; row.active = true
+        return { state: 'confirmed', entry: structuredClone(row) }
+      },
       list: () => [...h.rows.values()],
       byAgent: (id) => h.rows.get(id),
       transaction: async (apply) => {
@@ -210,15 +234,14 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
         const r = h.rows.get(id); if (!r) return null
         r.launch = launch; return r
       },
-      updateProcessIdentity: (id, pi) => { note(`updateIdentity:${id}:${pi.pid}`); const r = h.rows.get(id); if (r) r.processIdentity = pi; return !!r },
-      unbindSession: (sid) => { note(`unbind:${sid}`); return true },
-      inheritName: (from, to) => { note(`inheritName:${from}->${to}`) },
-      releaseEngine: (id) => {
-        note(`releaseEngine:${id}`)
-        const r = h.rows.get(id); if (!r || !r.terminalHost) return null
-        r.engine = 'terminal'; r.sessionId = ''; r.processIdentity = null; r.launch = { state: 'ready' }; r.active = true
-        return r
+      updateProcessIdentity: (id, pi, _gateway, grid) => {
+        note(`updateIdentity:${id}:${pi.pid}`)
+        const r = h.rows.get(id)
+        if (r) { r.processIdentity = pi; if (grid !== undefined) r.grid = grid }
+        return !!r
       },
+      confirmSessionUnbound: async (id, sid) => { note(`unbind:${sid}`); const row = h.rows.get(id); if (!row) return { state: 'not-published' }; row.sessionId = ''; return { state: 'confirmed', entry: structuredClone(row) } },
+      inheritName: (from, to) => { note(`inheritName:${from}->${to}`) },
     },
     livePane: async (runtime) => (opts.alivePanes ?? []).includes(runtime.paneId),
     liveProcess: async (_entry, runtime) => live.has(runtime.paneId) ? identity(1000 + Number(runtime.paneId.slice(1))) : null,
@@ -239,14 +262,14 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
       h.launched.push({ agentId: entry.agentId, launch })
       h.paneCreates++
       if (opts.failCreate) return { ok: false, reason: 'tmux said no' }
-      control?.onDispatch?.()
+      await control?.onDispatch?.()
       return { ok: true, runtime: { backend: 'tmux', paneId: h.nextPane.shift() ?? '%99' } }
     },
     respawn: async (runtime, launch, control) => {
       note(`respawn:${runtime.paneId}:${launch.argv.join(' ')}`)
       h.launched.push({ agentId: 'respawn', launch })
       h.respawns++
-      control?.onDispatch?.()
+      await control?.onDispatch?.()
       return { ok: true }
     },
     probeProcess: async (runtime) => {
@@ -316,7 +339,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
     const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent,
-      prepareSessionResume: () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
+      prepareSessionResume: async () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
@@ -351,7 +374,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.revision = id => jobs.revision(id)
     h.deps.cancelled = () => false
     h.probes.set('%3', [identity(7)])
-    const retry = createHeldLaunches({ registry: h.deps.registry, log: vi.fn(),
+    const retry = createHeldLaunches({ registry: h.deps.registry, announce: () => {}, log: vi.fn(),
       restore: only => restoreAgents({ ...h.deps, only }) })
     await retry.boot(async () => {})
     expect(await jobs.run('agent-a', async () => {
@@ -385,7 +408,7 @@ describe('restore ownership across asynchronous work', () => {
     else h.deps.respawn = async (_runtime, _launch, control) => {
       expect(operations.busy('agent-a')).toBe(true)
       expect(control?.current?.()).toBe(true)
-      control?.onDispatch?.()
+      await control?.onDispatch?.()
       expect(mark).toHaveBeenCalledWith('session-a')
       expect(h.calls).toContain('hold:tmux\u0000%3')
       dispatched()
@@ -535,6 +558,13 @@ describe('restoreAgents — a survey that could not tell', () => {
     expect(h.calls.filter((call) => /releaseEngine|createPane/.test(call))).toEqual([])
   })
 
+  it('a survey that failed outright fails its row with a code of its own beside the reason', async () => {
+    const h = harness([row()])
+    h.deps.liveProcess = async () => { throw new Error('ps said /Users/sentinel/x') }
+    const summary = await restoreAgents(h.deps)
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'SURVEY_FAILED', reason: 'ps said /Users/sentinel/x' }])
+  })
+
   it('each held restore reads a fresh tmux inventory, preserving its pane until it actually disappears', async () => {
     const h = harness([row({ launch: heldLaunch('store') })])
     let panes: TerminalRuntimeRef[] = []
@@ -598,7 +628,7 @@ describe('restoreAgents — which agents get a pane back', () => {
       'triggerHint:%0',
       'release:tmux\u0000%0', // the finally, idempotent by contract
     ])
-    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
+    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'ready' })
   })
 
   it('launches fresh when the row has no session to resume', async () => {
@@ -636,6 +666,15 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.calls).toEqual(['updateIdentity:agent-a:1003'])
   })
 
+  it('re-identifies a live row whose engine\'s hook dropped its ready launch during the survey', async () => {
+    const h = harness([row()], { livePanes: ['%3'], alivePanes: ['%3'] })
+    const live = h.deps.liveProcess
+    // What a hook's registration does to the row (registry.ts `register`): no `launch`.
+    h.deps.liveProcess = async (entry, runtime) => { delete h.rows.get('agent-a')!.launch; return live(entry, runtime) }
+    await restoreAgents(h.deps)
+    expect(h.calls).toContain('updateIdentity:agent-a:1003')
+  })
+
   it('does not touch a live row that still knows its process', async () => {
     const h = harness([row({ processIdentity: identity(1003) })], { livePanes: ['%3'] })
     await restoreAgents(h.deps)
@@ -648,7 +687,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     h.deps.restorable = (runtime) => runtime.backend === 'ptyhost'
     const created: TerminalRuntimeRef[] = []
     h.deps.createPane = async (entry, launch, control) => {
-      h.paneCreates++; h.launched.push({ agentId: entry.agentId, launch }); control?.onDispatch?.()
+      h.paneCreates++; h.launched.push({ agentId: entry.agentId, launch }); await control?.onDispatch?.()
       const runtime = pty(`%${10 + h.paneCreates}`); created.push(runtime)
       return { ok: true, runtime }
     }
@@ -723,6 +762,18 @@ describe('restoreAgents — which agents get a pane back', () => {
     await settled(h, 1, 1)
   })
 
+  it('says it restored onto a grid, never which: a person chose its name, and a short one is guessed from a hash', async () => {
+    const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: { ...GRID, networkName: 'sentinel grid' } })])
+    h.probes.set('%0', [identity(7)])
+    const log = vi.fn()
+    h.deps.log = log
+    expect((await restoreAgents(h.deps)).restored).toEqual(['gridded'])
+    await settled(h, 1, 1)
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toMatch(/· pane %0 → %\d+ · resuming session- · on a grid$/m)
+  })
+
   it('the fresh fallback of a grid agent is a grid launch too', async () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
     h.states.set('%0', [{ dead: true }])
@@ -731,6 +782,41 @@ describe('restoreAgents — which agents get a pane back', () => {
     await settled(h, 1, 1)
     expect(h.launched.slice(1).map((l) => l.launch.env)).toEqual([{ GRID_API_KEY: 'gridkey-abc123' }, { GRID_API_KEY: 'gridkey-abc123' }])
     expect(h.launched[2].launch.argv).toEqual(['claude', '--grid', 'grid-abc'])
+  })
+
+  it('writes on the row the grid each launch puts the engine on, with its process, the fresh fallback\'s included', async () => {
+    const now = { baseUrl: 'https://saved.example/now/v1', model: 'm' }
+    const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
+    h.probes.set('%0', [identity(7)])
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = async (entry, options) => ({ ...await build(entry, options) as RestoreLaunch, grid: now })
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(h.rows.get('gridded')!.grid).toEqual(now)
+
+    // Its resume dies, and the fresh launch that follows is on the engine's own login.
+    const fresh = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
+    fresh.states.set('%0', [{ dead: true }])
+    fresh.probes.set('%0', [null, identity(8)])
+    const resumed = fresh.deps.buildLaunch
+    fresh.deps.buildLaunch = async (entry, options) => ({ ...await resumed(entry, options) as RestoreLaunch, grid: options.resumeSessionId ? now : null })
+    await restoreAgents(fresh.deps)
+    await settled(fresh, 1, 1)
+    expect(fresh.calls).toContain('updateIdentity:gridded:8')
+    expect(fresh.rows.get('gridded')!.grid).toBeNull()
+  })
+
+  it('writes the grid an earlier daemon\'s launch left on the row once it finds that launch\'s engine', async () => {
+    // That launch wrote its record on the row before it dispatched (`refreshGridWebSearch`); its engine was never seen.
+    const entry = row({ agentId: 'gridded', grid: { baseUrl: 'https://grid.example/old/relay', model: null }, gridLaunch: { ...GRID, model: 'm' },
+      launch: { state: 'starting', nativeToken: 'original' } })
+    const h = harness([entry], { alivePanes: ['%3'] })
+    h.deps.waitingPane = vi.fn(async () => false)
+    h.probes.set('%3', [identity(9)])
+    await restoreAgents(h.deps)
+    await vi.waitFor(() => expect(h.calls).toContain('updateIdentity:gridded:9'))
+    expect(entry.grid).toEqual({ baseUrl: GRID.baseUrl, model: 'm' })
+    expect(h.launches).toEqual([])
   })
 
   it('does not relaunch a grid agent whose credential was never persisted, and marks it so', async () => {
@@ -747,7 +833,7 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('a launch the machine cannot build fails the row instead of opening a pane on the wrong login', async () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })], { refuseLaunch: true })
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed).toEqual([{ agentId: 'gridded', reason: 'no way to point it at a grid' }])
+    expect(summary.failed).toEqual([{ agentId: 'gridded', code: 'GRID_ENGINE_UNSUPPORTED', reason: 'no way to point it at a grid' }])
     expect(h.paneCreates).toBe(1)
     expect(h.respawns).toBe(0)
     expect(h.launched[0].launch.argv).toEqual([])
@@ -764,7 +850,8 @@ describe('restoreAgents — which agents get a pane back', () => {
       workspaceMissing: () => null,
       relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
       downgradedPermission: async () => ({ bypassPermission: false }),
-      prepareSessionResume: () => {}, refreshGridWebSearch: () => {},
+      prepareSessionResume: async () => {}, refreshGridWebSearch: () => {},
+      receipts: { firstLaunchTask: () => null },
       launch: (entry) => {
         if (entry.agentId === 'agent-a') throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd')
         return { argv: [entry.engine, '--resume', entry.sessionId] }
@@ -772,7 +859,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     })
     const summary = await restoreAgents(h.deps)
     expect(summary.restored).toEqual(['agent-b'])
-    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason: expect.stringContaining('claude.cmd is a batch file') }])
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'ENGINE_LAUNCH_REFUSED', reason: expect.stringContaining('claude.cmd is a batch file') }])
     expect(h.calls).toContain('setLaunch:agent-a:failed:ENGINE_LAUNCH_REFUSED')
     await settled(h, 1, 1)
   })
@@ -788,10 +875,26 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('records a pane that could not be opened and leaves the row untouched', async () => {
     const h = harness([row()], { failCreate: true })
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed).toEqual([{ agentId: 'agent-a', reason: 'tmux said no' }])
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'WAITING_PANE_FAILED', reason: 'tmux said no' }])
     expect(h.calls).not.toContainEqual(expect.stringMatching(/^updateRuntimes/))
     expect(h.calls).not.toContainEqual(expect.stringMatching(/^hold/))
     expect(h.rows.get('agent-a')?.tmuxPane).toBe('%3')
+  })
+
+  it.each([
+    ['says why', async () => ({ ok: false as const, reason: 'tmux said no in /Users/sentinel/x' }), 'tmux said no in /Users/sentinel/x', 'text(33)'],
+    ['throws', async () => { throw new Error('tmux said no in /Users/sentinel/x') }, 'Error: tmux said no in /Users/sentinel/x', 'text(40)'],
+  ])('logs a pane that %s by the length of its reason, never its words', async (_label, respawn, reason, logged) => {
+    const h = harness([row()])
+    const log = vi.fn()
+    h.deps.log = log
+    // A terminal host's refusal can quote the folder it was asked to open the pane in.
+    h.deps.respawn = respawn
+    const summary = await restoreAgents(h.deps)
+    expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'PANE_FAILED', reason }])
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[restore] claude · agent agent-a · could not open a pane · ${logged}`)
   })
 
   it('restores several agents inside one transaction so reused pane ids cannot evict each other', async () => {
@@ -858,7 +961,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(h.paneCreates).toBe(0)
     expect(h.calls.filter((call) => call.endsWith('@tx'))).toEqual([])
     expect(h.calls).toContain('respawn:%47:claude --resume session-gridded --grid grid-abc')
-    expect(h.rows.get('gridded')?.launch).toEqual({ state: 'starting' })
+    expect(h.calls).toContain('setLaunch:gridded:starting')
     await settled(h, 1, 1)
   })
 
@@ -932,7 +1035,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     const h = harness([gridRow('gridded', { launch: HELD, resumeOnly: true })])
     withModels(h)
     h.deps.defer = true
-    h.deps.retainStopped = vi.fn()
+    h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
     const summary = await restoreAgents(h.deps)
     expect(summary.held).toEqual(['gridded'])
     expect(summary.skipped).toEqual([])
@@ -945,7 +1048,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     const h = harness([gridRow('refused', { launch: HELD }), gridRow('lost', { launch: HELD, resumeOnly: true, sessionId: '' })], { alivePanes: ['%47', '%44'] })
     withModels(h, ['refused'])
     const summary = await restoreAgents(h.deps)
-    expect(summary.failed.map((f) => f.agentId)).toEqual(['refused', 'lost'])
+    expect(summary.failed.map(({ agentId, code }) => [agentId, code])).toEqual([['refused', 'GRID_ENGINE_UNSUPPORTED'], ['lost', 'RESUME_UNAVAILABLE']])
     expect(h.calls).toContain('kill:%47')
     expect(h.calls).toContain('kill:%44')
     expect(h.rows.get('refused')?.launch).toMatchObject({ state: 'failed', error: 'GRID_ENGINE_UNSUPPORTED' })
@@ -955,7 +1058,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     const h = harness([gridRow('gridded')], { failCreate: true })
     withModels(h)
     h.deps.defer = true
-    expect((await restoreAgents(h.deps)).failed).toEqual([{ agentId: 'gridded', reason: 'tmux said no' }])
+    expect((await restoreAgents(h.deps)).failed).toEqual([{ agentId: 'gridded', code: 'WAITING_PANE_FAILED', reason: 'tmux said no' }])
     const bare = harness([gridRow('gridded')])
     bare.deps.needs = () => 'models'
     bare.deps.defer = true
@@ -1000,6 +1103,29 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect((await restoreAgents(stuck.deps)).restored).toEqual(['gridded'])
     await settled(stuck, 2, 1)
     expect(stuck.rows.get('gridded')?.sessionId).toBe('session-gridded')
+  })
+
+  it('a waiting pane that could not be shown is logged by the service it waits for, never the pane\'s refusal', async () => {
+    const h = harness([row({ terminalHost: true, engine: 'claude', gridLaunch: GRID })])
+    h.deps.needs = () => null
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['wait', held.detail] })
+    const build = h.deps.buildLaunch
+    let asks = 0
+    h.deps.buildLaunch = async (entry, o) => (++asks === 2 ? { held: 'models' } : build(entry, o))
+    const respawn = h.deps.respawn
+    // A terminal host's refusal can quote the folder of the pane it was asked to show.
+    h.deps.respawn = async (runtime, launch, control) => launch.argv[0] === 'wait'
+      ? { ok: false, reason: 'the pane at /Users/sentinel/x is gone' } : respawn(runtime, launch, control)
+    const log = vi.fn()
+    h.deps.log = log
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    // The person still reads why, on the row.
+    await vi.waitFor(() => expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'held', detail: expect.stringContaining('/Users/sentinel/x') }))
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('[restore] claude · agent agent-a · held · waiting for models · its waiting pane could not be shown')
   })
 
   it('holds a terminal whose adopted engine needs a service to come back, too', async () => {
@@ -1053,7 +1179,7 @@ describe('restoreAgents — waiting for the engine', () => {
     const tail = h.calls.slice(7)
     expect(tail.slice(0, 4)).toEqual(['inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:9')
-    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
+    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'ready' })
   })
 
   it('keeps the conversation the fresh launch leaves, before it is unbound', async () => {
@@ -1082,12 +1208,13 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(h.respawns).toBe(2)
     expect(h.launches.map((l) => l.resumeSessionId ?? 'fresh')).toEqual(['session-a', 'fresh'])
     const tail = h.calls.slice(7)
-    expect(tail.slice(0, 5)).toEqual(['updateIdentity:agent-a:7', 'inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
+    expect(tail.slice(0, 7)).toEqual(['updateIdentity:agent-a:7', 'clearIdentity:agent-a', 'setLaunch:agent-a:starting',
+      'inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:8')
     expect(tail).toContain('clearRemainOnExit:%0')
     // remain-on-exit was NOT cleared before the first engine died — that is what kept the pane.
     expect(tail.indexOf('clearRemainOnExit:%0')).toBeGreaterThan(tail.indexOf('respawn:%0:claude'))
-    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
+    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'ready' })
   })
 
   it('fails a fresh engine that exits inside the settling window', async () => {
@@ -1168,6 +1295,92 @@ describe('restoreAgents — waiting for the engine', () => {
     await settled(h, 1)
     expect(h.calls.filter((c) => c.startsWith('setLaunch:agent-a:failed'))).toEqual([])
   })
+
+  const started = { ...identity(7), executable: 'node' }
+  /** Records each write, and runs its refresh before it publishes, as `confirmLaunch` does. */
+  const refreshing = (h: Harness) => {
+    const publish = h.deps.registry.confirmLaunch
+    const writes: Array<[string | undefined, number | undefined]> = []
+    h.deps.registry.confirmLaunch = async (id, input, authority) => {
+      writes.push([input.processIdentity?.executable, authority?.expires])
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    }
+    return writes
+  }
+
+  it('publishes an engine that named itself between the look and the refresh, then settles and hands the pane over', async () => {
+    const h = harness([row()])
+    h.probes.set('%0', [started, identity(7), identity(7)])   // the look, the refused refresh, the re-write's refresh
+    const writes = refreshing(h), log = vi.fn()
+    h.deps.log = log
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes.map(([executable]) => executable)).toEqual(['node', 'claude'])
+    expect(writes[0]![1]).toEqual(expect.any(Number))
+    expect(writes[1]![1]).toBe(writes[0]![1])   // restore's own expires, for both
+    expect(h.rows.get('agent-a')).toMatchObject({ processIdentity: identity(7), launch: { state: 'ready' } })
+    expect(h.calls).toContain('clearRemainOnExit:%0')
+    const lines = log.mock.calls.map(call => call.join(' '))
+    expect(lines).toContain('[restore] publication · engine renamed · agent-a')
+    expect(lines.some(line => line.includes('engine up'))).toBe(true)
+    expect(lines.some(line => line.includes('watch failed'))).toBe(false)
+  })
+
+  it('re-writes once when its own retry after a first hook is the look that sees the new name', async () => {
+    const h = harness([row({ sessionId: '' })])
+    h.probes.set('%0', [started, identity(7), identity(7)])   // the look, the retry's own refresh, the re-write's refresh
+    const publish = h.deps.registry.confirmLaunch
+    const writes: Array<string | undefined> = []
+    h.deps.registry.confirmLaunch = async (id, input, authority) => {
+      writes.push(input.processIdentity?.executable)
+      if (writes.length === 1) {
+        // The engine's first hook bound this process while the write was prepared.
+        Object.assign(h.rows.get(id)!, { sessionId: 'hooked', processIdentity: started })
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    }
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes).toEqual(['node', 'claude'])
+    expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'hooked', processIdentity: identity(7), launch: { state: 'ready' } })
+    expect(h.calls).toContain('clearRemainOnExit:%0')
+  })
+
+  it.each([
+    ['pid', identity(8)],
+    ['start', { ...identity(7), startMarker: 'start again' }],
+  ])('ends the watch, as before, when a Node runtime\'s %s changed before the refresh', async (_part, changed) => {
+    const h = harness([row()])
+    h.probes.set('%0', [started, changed])
+    const writes = refreshing(h), log = vi.fn()
+    h.deps.log = log
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(writes).toHaveLength(1)
+    expect(h.rows.get('agent-a')?.launch).not.toEqual({ state: 'ready' })
+    expect(h.calls).not.toContain('clearRemainOnExit:%0')
+    const lines = log.mock.calls.map(call => call.join(' '))
+    expect(lines.some(line => line.includes('watch failed'))).toBe(true)
+    expect(lines.some(line => line.includes('engine renamed'))).toBe(false)
+  })
+
+  // Restore's deadline is what is left of its watch, not `publishEngine`'s default 5 s: a publication, and its
+  // re-write, never outlive the watch that made them.
+  it('publishes an engine that named itself within what is left of the watch\'s budget, the re-write too', async () => {
+    const h = harness([row()], { budgetMs: 1_000 })
+    h.probes.set('%0', [started, identity(7), identity(7)])
+    const writes = refreshing(h)
+    const before = performance.now()
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes.map(([executable]) => executable)).toEqual(['node', 'claude'])
+    expect(writes[1]![1]).toBe(writes[0]![1])
+    expect(writes[0]![1]).toBeGreaterThanOrEqual(before)
+    expect(writes[0]![1]).toBeLessThanOrEqual(performance.now() + 1_000)
+  })
 })
 
 describe('restoreAgents — terminals', () => {
@@ -1189,7 +1402,7 @@ describe('restoreAgents — terminals', () => {
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.calls).toEqual([
       'createPane:term-1', 'updateRuntimes:term-1:%0@tx', 'setLaunch:term-1:held@tx',
-      'clearIdentity:term-1', 'respawn:%0:terminal', 'setLaunch:term-1:ready', 'clearRemainOnExit:%0',
+      'clearIdentity:term-1', 'respawn:%0:terminal', 'clearRemainOnExit:%0',
     ])
     expect(h.rows.get('term-1')?.launch).toEqual({ state: 'ready' })
   })
@@ -1275,9 +1488,9 @@ describe('restoreAgents — terminals', () => {
 it('retains a missing strict-resume pane whose resume was never confirmed for explicit Open', async () => {
   const entry = row({ resumeOnly: true, launch: { state: 'starting' } })
   const h = harness([entry])
-  h.deps.retainStopped = vi.fn((saved, _paneAlive) => { h.rows.delete(saved.agentId) })
+  h.deps.retainStopped = vi.fn(async (saved, _paneAlive) => { h.rows.delete(saved.agentId); return { state: 'confirmed' as const, entry: null } })
   const summary = await restoreAgents(h.deps)
-  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false, expect.objectContaining({ current: expect.any(Function) }))
   expect(summary.restored).toEqual([])
   expect(h.paneCreates).toBe(0)
   expect(h.respawns).toBe(0)
@@ -1286,7 +1499,7 @@ it('retains a missing strict-resume pane whose resume was never confirmed for ex
 it('restores a confirmed strict-resume pane by exact resume, and never falls back to fresh', async () => {
   const entry = row({ resumeOnly: true, launch: { state: 'ready' } })
   const h = harness([entry])
-  h.deps.retainStopped = vi.fn()
+  h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
   h.probes.set('%0', [null, null])
   h.states.set('%0', [{ dead: true }])
   const summary = await restoreAgents(h.deps)
@@ -1303,18 +1516,31 @@ it('restores a confirmed strict-resume pane by exact resume, and never falls bac
 it('archives an engine that exited while the daemon was down without overwriting its shell', async () => {
   const entry = row()
   const h = harness([entry], { alivePanes: ['%3'] })
-  h.deps.retainStopped = vi.fn()
+  h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
   await restoreAgents(h.deps)
-  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true, expect.objectContaining({ current: expect.any(Function) }))
   expect(h.paneCreates).toBe(0)
   expect(h.respawns).toBe(0)
+})
+
+it('awaits an exited engine publication before completing restore', async () => {
+  const h = harness([row()], { alivePanes: ['%3'] })
+  let release!: () => void, entered!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const called = new Promise<void>(resolve => { entered = resolve })
+  h.deps.retainStopped = vi.fn(async () => { entered(); await held; return { state: 'confirmed' as const, entry: null } })
+  let settled = false
+  const pending = restoreAgents(h.deps).finally(() => { settled = true })
+  await called
+  try { await Promise.resolve(); await Promise.resolve(); expect(settled).toBe(false) }
+  finally { release(); await pending }
 })
 
 
 describe('missing held panes against the durable registry', () => {
   it.each([['cycle', false], ['chain failure', false], ['cycle', true], ['chain failure', true], ['outside selection', true]] as const)('preserves every row through a recycled route %s (held pass %s)', async (mode, only) => {
     const old = mode === 'cycle' ? ['%1', '%0'] : mode === 'chain failure' ? ['%2', '%0', '%1'] : ['%3', '%0']
-    const entries = old.map(paneId => realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp' })!)
+    const entries = await Promise.all(old.map(async paneId => (await realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp' }))!))
     try {
       for (const entry of entries) realRegistry.setLaunch(entry.agentId, heldLaunch('store'))
       const h = harness(entries)
@@ -1334,16 +1560,16 @@ describe('missing held panes against the durable registry', () => {
       expect(entries.every(entry => realRegistry.byAgent(entry.agentId)?.active === false)).toBe(true)
       expect(h.respawns).toBe(0)
       if (mode !== 'cycle') expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining('left intact for review'))
-      if (mode === 'chain failure') expect(result.failed).toHaveLength(1)
+      if (mode === 'chain failure') expect(result.failed).toEqual([expect.objectContaining({ code: 'WAITING_PANE_FAILED' })])
       // The synchronous batch has released durable writes before its returned Promise settles.
       const committing = realRegistry.transaction(() => realRegistry.setLaunch(entries[0].agentId, heldLaunch('store')))
-      expect(() => realRegistry.setClosePlan(entries[0].agentId, null)).not.toThrow()
+      await expect((async () => (await realRegistry.setClosePlan(entries[0].agentId, null)))()).resolves.not.toBeInstanceOf(Error)
       await committing
-    } finally { for (const entry of entries) realRegistry.removeAgent(entry.agentId) }
+    } finally { for (const entry of entries) (await removeRegistryAgent(realRegistry, entry.agentId)) }
   })
 
   it('an allocated waiting row stays inactive while a service answer is outstanding', async () => {
-    const entry = realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%44' }] })!
+    const entry = (await realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%44' }] }))!
     let finish!: (value: RestoreLaunchResult) => void
     try {
       realRegistry.setLaunch(entry.agentId, heldLaunch('store'))
@@ -1357,7 +1583,7 @@ describe('missing held panes against the durable registry', () => {
       finish({ held: 'store' })
       await restoring
       expect(realRegistry.byAgent(entry.agentId)?.active).toBe(false)
-    } finally { realRegistry.removeAgent(entry.agentId) }
+    } finally { (await removeRegistryAgent(realRegistry, entry.agentId)) }
   })
 
   it('an unrelated live pane pin cannot block missing held recovery', async () => {
@@ -1377,7 +1603,7 @@ describe('missing held panes against the durable registry', () => {
     let finish!: () => void
     const previous = operations.run('agent-a', () => new Promise<void>(done => { finish = done }))
     h.probes.set('%0', [identity(8)])
-    const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), log: () => {} })
+    const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), announce: () => {}, log: () => {} })
     await held.boot(async () => {})
     expect(await held.restoreHeld('store')).toMatchObject({ retry: true })
     expect(h.paneCreates).toBe(0)
@@ -1424,7 +1650,7 @@ describe('external adoption crash boundaries', () => {
     launch: starting ? { state: 'starting' } : heldLaunch('search'),
   })
   function dispatch(h: Harness) {
-    h.deps.registry.beginExternalDispatch = id => {
+    h.deps.registry.beginExternalDispatch = async id => {
       const row = h.rows.get(id)!
       expect(row.launch?.state).toBe('held')
       h.calls.push('journal:dispatch')
@@ -1446,7 +1672,7 @@ describe('external adoption crash boundaries', () => {
       h.deps.waitingPane = vi.fn(async () => true)
       h.deps.respawn = vi.fn(async (_pane, launch, control) => {
         expect(control?.expectedHeldToken).toBe(h.rows.get('agent-a')?.externalResume?.token)
-        control?.onDispatch?.()
+        await control?.onDispatch?.()
         expect(h.rows.get('agent-a')).toMatchObject({ launch: { state: 'starting' }, externalResume: { dispatched: true } })
         expect(control?.current?.()).toBe(true)
         expect(launch.argv).toContain('imported-session')
@@ -1456,6 +1682,24 @@ describe('external adoption crash boundaries', () => {
       expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
       await settled(h, 1, 1)
       expect(h.deps.respawn).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('an external resume that continues commits its first task with the dispatch', async () => {
+    for (const firstTask of ['continue', undefined]) {
+      const h = harness([imported('admitted')], { alivePanes: ['%3'] })
+      dispatch(h)
+      const begin = vi.spyOn(h.deps.registry, 'beginExternalDispatch')
+      const build = h.deps.buildLaunch
+      h.deps.buildLaunch = async (entry, options) => {
+        const launch = await build(entry, options) as RestoreLaunch
+        return firstTask ? { ...launch, firstTask } : launch
+      }
+      h.deps.waitingPane = async () => true
+      h.probes.set('%3', [identity(12)])
+      expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+      await settled(h, 1, 1)
+      expect(begin).toHaveBeenCalledWith('agent-a', firstTask, { current: expect.any(Function) })
     }
   })
 
@@ -1480,7 +1724,7 @@ describe('external adoption crash boundaries', () => {
       h.deps.waitingPane = async () => failure === 'before-tmux'
       const executed = vi.fn()
       h.deps.respawn = async (_pane, _launch, control) => {
-        control?.onDispatch?.(); executed(); return { ok: false, reason: 'lost tmux reply' }
+        await control?.onDispatch?.(); executed(); return { ok: false, reason: 'lost tmux reply' }
       }
       h.probes.set('%3', [identity(11)])
       const summary = await restoreAgents(h.deps)
@@ -1499,7 +1743,7 @@ describe('external adoption crash boundaries', () => {
   it('resumes a committed external conversation after tmux loss, retaining strict identity without search or a fresh fallback', async () => {
     const h = harness([imported('admitted', true)])
     dispatch(h)
-    h.deps.retainStopped = vi.fn()
+    h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
     h.deps.waitingLaunch = () => ({ argv: ['waiting-shell'] })
     h.states.set('%0', [{ dead: true }])
     expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
@@ -1507,5 +1751,542 @@ describe('external adoption crash boundaries', () => {
     expect(h.deps.retainStopped).not.toHaveBeenCalled()
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'imported-session' }])
     expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'imported-session', launch: { state: 'failed', error: 'RESUME_FAILED' } })
+  })
+})
+
+describe('restoreAgents — a pane that holds only the recorded process (#4259)', () => {
+  it('keeps the agent whose recorded process still runs in its pane under another name, and archives the one whose process is gone', async () => {
+    const bound = identity(11)
+    const kept = row({ agentId: 'kept', processIdentity: bound })
+    const gone = row({ agentId: 'gone', sessionId: 'session-b', tmuxPane: '%4', runtimes: [{ backend: 'tmux', paneId: '%4' }],
+      primaryRuntimeKey: 'tmux\u0000%4', processIdentity: identity(21) })
+    const h = harness([kept, gone])
+    const retainStopped = h.deps.retainStopped = vi.fn<NonNullable<RestoreAgentsDeps['retainStopped']>>(async () => ({ state: 'confirmed' as const, entry: null }))
+    const panes: TerminalRuntimeRef[] = [{ backend: 'tmux', paneId: '%3' }, { backend: 'tmux', paneId: '%4' }]
+    h.deps.survey = () => terminalSurvey(async () => ({ ok: true, panes }), async (runtime) => ({
+      ok: false, unknown: false,
+      paneProcesses: runtime.paneId === '%3'
+        ? [identity(10), { ...bound, executable: 'unshare' }]
+        // The same pid started later is another process.
+        : [identity(20), { ...identity(21), startMarker: 'start later' }],
+    }))
+    const summary = await restoreAgents(h.deps)
+    expect(retainStopped.mock.calls.map(([entry, paneAlive]) => [entry.agentId, paneAlive])).toEqual([['gone', true]])
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
+    expect(h.paneCreates).toBe(0)
+    expect(h.rows.get('kept')!.processIdentity).toEqual(bound)
+  })
+})
+
+describe('the guard\'s hold: a launch it held starts again, first launch or conversation (2026-11-25)', () => {
+  const CREATION = 'create-0123456789abcdef'
+  const startsAgain = (nativeToken: string): AgentLaunch => ({ state: 'held', service: 'native', nativeToken, startsAgain: true, detail: STARTING_AGAIN })
+  const didNotStart: AgentLaunch = { state: 'failed', ...DID_NOT_START }
+  const fork = (sessionId?: string) => ({ agentId: 'source', name: 'Source', ...(sessionId ? { sessionId } : {}) })
+  /** A create's first launch: no conversation yet, the receipt that made it named. */
+  const first = (overrides: Partial<RegisteredSession> = {}) => row({ engine: 'codex', sessionId: '', creationId: CREATION, ...overrides })
+
+  it.each<[string, RegisteredSession, AgentLaunch]>([
+    ['a create with a creation id', first(), startsAgain('token')],
+    ['a Codex fork of the session it forked', first({ forkedFrom: fork('source-session') }), startsAgain('token')],
+    ['a Claude Code fork of the session it forked', first({ engine: 'claude', forkedFrom: fork('source-session') }), startsAgain('token')],
+    ['a conversation with no creation id', row(), startsAgain('token')],
+    ['a conversation of a handoff fork', row({ engine: 'opencode', forkedFrom: fork() }), startsAgain('token')],
+    ['a first launch with no creation id', first({ creationId: undefined }), didNotStart],
+    ['an OpenCode (handoff) fork', first({ engine: 'opencode', forkedFrom: fork('source-session') }), didNotStart],
+    ['a native fork that names no session', first({ forkedFrom: fork() }), didNotStart],
+  ])('guardHold: %s', (_name, entry, launch) => {
+    expect(guardHold(entry, 'token')).toEqual(launch)
+  })
+
+  /** A first launch the core was watching when it stopped: its pane alive with no engine yet, its held shell seen by
+   *  the restore's watch, not at boot. */
+  function watched(entry: RegisteredSession) {
+    const h = harness([entry], { alivePanes: ['%3'] })
+    const startAgain = h.deps.startAgain = vi.fn()
+    let reads = 0
+    h.deps.waitingPane = vi.fn(async () => reads++ > 0)
+    return { h, startAgain }
+  }
+
+  it('a restored first launch the guard holds starts again, and asks the held passes for it', async () => {
+    const entry = first({ launch: { state: 'starting', nativeToken: 'original' } })
+    const { h, startAgain } = watched(entry)
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(entry.launch).toEqual(startsAgain('original'))
+    expect(startAgain.mock.calls).toEqual([['agent-a']])
+    expect(h.launches).toEqual([])
+    expect(h.paneCreates + h.respawns).toBe(0)
+  })
+
+  it('a restored first launch the guard holds with nothing to rebuild from fails, asking nothing', async () => {
+    const entry = first({ creationId: undefined, launch: { state: 'starting', nativeToken: 'original' } })
+    const { h, startAgain } = watched(entry)
+    const log = h.deps.log = vi.fn()
+    const killPane = h.deps.killPane = vi.fn()
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(entry.launch).toEqual(didNotStart)
+    expect(startAgain).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[restore] codex · agent agent-a · failed · ENGINE_DID_NOT_START')
+    expect(killPane).not.toHaveBeenCalled()
+    expect(h.paneCreates + h.respawns).toBe(0)
+  })
+
+  it('a restored conversation the guard holds starts again too: startsAgain, "Starting again.", and the held passes are asked for it', async () => {
+    const entry = row()
+    const h = harness([entry])
+    const startAgain = h.deps.startAgain = vi.fn()
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = async (e, o) => ({ ...await build(e, o) as RestoreLaunch, nativeToken: 'relaunch' })
+    h.deps.waitingPane = vi.fn(async (_runtime, token) => token === 'relaunch')
+    expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+    await settled(h, 1)
+    // "The original launch is held for recovery." is gone: the row says what the pane says.
+    expect(entry.launch).toEqual(startsAgain('relaunch'))
+    expect(startAgain.mock.calls).toEqual([['agent-a']])
+  })
+
+  it('boot: a first launch left starting in its held shell becomes a held first launch', async () => {
+    for (const creationId of [CREATION, undefined]) {
+      const entry = first({ creationId, launch: { state: 'starting', nativeToken: 'original' } })
+      const h = harness([entry], { alivePanes: ['%3'] })
+      const startAgain = h.deps.startAgain = vi.fn()
+      const killPane = h.deps.killPane = vi.fn()
+      const log = h.deps.log = vi.fn()
+      h.deps.waitingPane = vi.fn(async () => true)
+      // A real boot holds every native launch for a later pass (main.ts `needs`).
+      const summary = await restoreAgents({ ...h.deps, defer: true, needs: () => 'native' })
+      if (creationId) {
+        expect(entry.launch).toEqual(startsAgain('original'))
+        expect(startAgain.mock.calls).toEqual([['agent-a']])
+        expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: ['agent-a'], unsurveyed: [] })
+      } else {
+        expect(entry.launch).toEqual(didNotStart)
+        expect(startAgain).not.toHaveBeenCalled()
+        expect(summary).toEqual({ restored: [], skipped: [], failed: [{ agentId: 'agent-a', code: 'ENGINE_DID_NOT_START', reason: DID_NOT_START.detail }], held: [], unsurveyed: [] })
+        expect(log).toHaveBeenCalledWith('[restore] codex · agent agent-a · failed · ENGINE_DID_NOT_START')
+      }
+      // Never a fresh launch over the original's held shell, which stays where it is.
+      expect(h.launches).toEqual([])
+      expect(h.paneCreates + h.respawns).toBe(0)
+      expect(killPane).not.toHaveBeenCalled()
+    }
+  })
+
+  it('boot: a conversation left starting in its held shell starts again, and is relaunched in this pass as today', async () => {
+    const entry = row({ launch: { state: 'starting', nativeToken: 'original' } })
+    const h = harness([entry], { alivePanes: ['%3'] })
+    const startAgain = h.deps.startAgain = vi.fn()
+    h.deps.waitingPane = vi.fn(async () => true)
+    const built: Array<AgentLaunch | undefined> = []
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = async (e, o) => { built.push(structuredClone(e.launch)); return build(e, o) }
+    const tokens: Array<string | undefined> = []
+    const respawn = h.deps.respawn
+    h.deps.respawn = async (runtime, launch, control) => { tokens.push(control?.expectedHeldToken); return respawn(runtime, launch, control) }
+    h.probes.set('%3', [identity(3)])
+    expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+    // "Waiting to confirm the engine executable and native hooks." is gone.
+    expect(built).toEqual([startsAgain('original')])
+    expect(startAgain.mock.calls).toEqual([['agent-a']])
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+    expect(tokens).toEqual(['original'])
+    expect(h.paneCreates).toBe(0)
+    await settled(h, 1, 1)
+  })
+
+  it('a first launch whose pane went with a reboot, or whose watch ran out, is held as today, without startsAgain', async () => {
+    const startAgain = vi.fn()
+    const gone = first({ launch: { state: 'starting', nativeToken: 'original' } })
+    const reboot = harness([gone])
+    reboot.deps.startAgain = startAgain
+    reboot.deps.waitingPane = vi.fn(async () => true)
+    expect((await restoreAgents(reboot.deps)).skipped).toEqual([{ agentId: 'agent-a', reason: 'original native launch awaits recovery' }])
+    expect(gone.launch).toEqual({ state: 'held', service: 'native', nativeToken: 'original',
+      detail: 'The first launch was interrupted before its conversation was confirmed. The original request is held for recovery.' })
+
+    const expired = first({ launch: { state: 'starting', nativeToken: 'original' } })
+    const watch = harness([expired], { alivePanes: ['%3'], budgetMs: 0 })
+    watch.deps.startAgain = startAgain
+    watch.deps.waitingPane = vi.fn(async () => false)
+    await restoreAgents(watch.deps)
+    await settled(watch, 1)
+    expect(expired.launch).toEqual({ state: 'held', service: 'native', nativeToken: 'original',
+      detail: 'Waiting to confirm the native engine process. The original launch and terminal are preserved.' })
+    expect(startAgain).not.toHaveBeenCalled()
+  })
+
+  /** A launch the guard held in its own pane, the held shell under its token ('original'), relaunched with a new one
+   *  ('relaunch'). Each dispatch is recorded with what the row said once it was journaled. */
+  function inItsPane(entry: RegisteredSession) {
+    const h = harness([entry], { alivePanes: ['%3'] })
+    const startAgain = h.deps.startAgain = vi.fn()
+    h.deps.waitingPane = vi.fn(async (_runtime, token) => token === 'original')
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = async (e, o) => ({ ...await build(e, o) as RestoreLaunch, nativeToken: 'relaunch' })
+    const dispatched: Array<{ paneId: string; argv: string[]; expectedHeldToken?: string; journaled?: AgentLaunch }> = []
+    h.deps.respawn = async (runtime, launch, control) => {
+      await control?.onDispatch?.()
+      dispatched.push({ paneId: runtime.paneId, argv: launch.argv, expectedHeldToken: control?.expectedHeldToken, journaled: structuredClone(h.rows.get(entry.agentId)!.launch) })
+      return { ok: true }
+    }
+    // The relaunched engine shows, so the watch publishes it and ends.
+    h.probes.set('%3', [identity(3)])
+    return { h, startAgain, dispatched }
+  }
+  const intoItsPane = { paneId: '%3', argv: ['codex'], expectedHeldToken: 'original', journaled: { state: 'starting', nativeToken: 'relaunch' } }
+
+  it('relaunches a held first launch into its held pane only: respawn with the row\'s token, the new token journaled first', async () => {
+    const entry = first({ launch: startsAgain('original') })
+    const { h, dispatched } = inItsPane(entry)
+    expect(await restoreAgents(h.deps)).toEqual({ restored: ['agent-a'], skipped: [], failed: [], held: [], unsurveyed: [] })
+    expect(h.launches).toEqual([{ agentId: 'agent-a' }])
+    expect(dispatched).toEqual([intoItsPane])
+    expect(h.paneCreates).toBe(0)
+    // Watched on that pane until its engine is up.
+    await settled(h, 1, 1)
+    expect(h.calls).toContain('updateIdentity:agent-a:3')
+    expect(entry.launch).toEqual({ state: 'ready' })
+  })
+
+  it('at boot, too: held for native by the defer, then relaunched by the held pass', async () => {
+    const entry = first({ launch: { state: 'starting', nativeToken: 'original' } })
+    const { h, startAgain, dispatched } = inItsPane(entry)
+    h.deps.needs = () => 'native'
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['held', held.detail] })
+    const log = h.deps.log = vi.fn()
+    expect(await restoreAgents({ ...h.deps, defer: true })).toEqual({ restored: [], skipped: [], failed: [], held: ['agent-a'], unsurveyed: [] })
+    expect(entry.launch).toEqual(startsAgain('original'))
+    expect(startAgain.mock.calls).toEqual([['agent-a']])
+    expect(log).not.toHaveBeenCalled()
+    expect(h.launches.length + dispatched.length + h.paneCreates).toBe(0)
+
+    expect((await restoreAgents({ ...h.deps, only: new Set(['agent-a']) })).restored).toEqual(['agent-a'])
+    expect(dispatched).toEqual([intoItsPane])
+    await settled(h, 1, 1)
+    expect(entry.launch).toEqual({ state: 'ready' })
+  })
+
+  it('fails a held first launch at once when its pane is gone or surely not its held shell, and never gives it a pane', async () => {
+    for (const alivePanes of [[], ['%3']]) {
+      const entry = first({ launch: startsAgain('original') })
+      const h = harness([entry], { alivePanes })
+      h.deps.waitingPane = vi.fn(async () => false)
+      h.deps.waitingLaunch = (_entry, held) => ({ argv: ['held', held.detail] })
+      const killPane = h.deps.killPane = vi.fn()
+      const log = h.deps.log = vi.fn()
+      expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], held: [], unsurveyed: [],
+        failed: [{ agentId: 'agent-a', code: 'ENGINE_DID_NOT_START', reason: DID_NOT_START.detail }] })
+      expect(entry.launch).toEqual(didNotStart)
+      expect(log).toHaveBeenCalledWith('[restore] codex · agent agent-a · failed · ENGINE_DID_NOT_START')
+      expect(h.launches).toEqual([])
+      expect(h.paneCreates + h.respawns).toBe(0)
+      expect(killPane).not.toHaveBeenCalled()
+    }
+  })
+
+  it('waits for the next attempt when its pane could not be read', async () => {
+    for (const unread of ['livePane', 'waitingPane'] as const) {
+      const entry = first({ launch: startsAgain('original') }), before = structuredClone(entry)
+      const h = harness([entry], { alivePanes: ['%3'] })
+      h.deps.waitingPane = vi.fn(async () => unread === 'waitingPane' ? 'unknown' as const : true)
+      if (unread === 'livePane') h.deps.livePane = async () => 'unknown'
+      expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: ['agent-a'] })
+      expect(entry).toEqual(before)
+      expect(h.launches.length + h.paneCreates + h.respawns).toBe(0)
+    }
+  })
+
+  it('resumes a guard-held conversation whose pane went into a new waiting pane, as today', async () => {
+    const entry = row({ launch: startsAgain('original') })
+    const h = harness([entry])
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['held', held.detail, held.nativeToken!] })
+    const built: Array<AgentLaunch | undefined> = []
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = async (e, o) => { built.push(structuredClone(h.rows.get(e.agentId)!.launch)); return build(e, o) }
+    const tokens: Array<string | undefined> = []
+    const respawn = h.deps.respawn
+    h.deps.respawn = async (runtime, launch, control) => { tokens.push(control?.expectedHeldToken); return respawn(runtime, launch, control) }
+    h.probes.set('%0', [identity(10)])
+    expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+    // Its new pane is the held shell under its token, and the resume goes into that pane only.
+    expect(h.launched[0]).toEqual({ agentId: 'agent-a', launch: { argv: ['held', STARTING_AGAIN, 'original'] } })
+    expect(built).toEqual([startsAgain('original')])
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+    expect(tokens).toEqual(['original'])
+    expect(h.calls.filter(call => call.startsWith('respawn:'))).toEqual(['respawn:%0:claude --resume session-a'])
+    await settled(h, 1, 1)
+
+    // One whose pane is alive and not its held shell waits for the next attempt.
+    const other = row({ launch: startsAgain('original') }), before = structuredClone(other)
+    const alive = harness([other], { alivePanes: ['%3'] })
+    alive.deps.waitingPane = vi.fn(async () => false)
+    expect(await restoreAgents(alive.deps)).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: ['agent-a'] })
+    expect(other).toEqual(before)
+  })
+
+  it.each(['native', 'models', 'store'])('a guard-held %s launch, first or conversation, held again keeps startsAgain, worded as any hold for that service but native\'s "Starting again.", with no pane respawn and no hold line', async service => {
+    for (const saved of [first({ launch: startsAgain('original') }), row({ launch: startsAgain('original') })]) {
+      // Held by its launch's build, or by the boot's defer.
+      for (const defer of [false, true]) {
+        const entry = structuredClone(saved)
+        const h = harness([entry], { alivePanes: ['%3'] })
+        h.deps.waitingPane = vi.fn(async () => true)
+        h.deps.waitingLaunch = (_entry, held) => ({ argv: ['held', held.detail] })
+        const log = h.deps.log = vi.fn()
+        if (defer) Object.assign(h.deps, { defer, needs: () => service })
+        else h.deps.buildLaunch = async () => ({ held: service, detail: `Waiting for ${service}.` })
+        expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], failed: [], held: ['agent-a'], unsurveyed: [] })
+        // Its wait is that service's, not the guard's: the frame shows it held for that service.
+        const detail = service === 'native' ? STARTING_AGAIN : defer ? (heldLaunch(service) as { detail: string }).detail : `Waiting for ${service}.`
+        expect(entry.launch).toEqual({ ...startsAgain('original'), service, detail })
+        expect(h.paneCreates + h.respawns).toBe(0)
+        expect(log).not.toHaveBeenCalled()
+      }
+    }
+  })
+
+  it('a guard-held conversation no waiting pane could be opened for keeps "Starting again."', async () => {
+    const entry = row({ launch: startsAgain('original') })
+    const h = harness([entry], { failCreate: true })
+    const summary = await restoreAgents(h.deps)
+    expect(summary.held).toEqual(['agent-a'])
+    expect(entry.launch).toEqual(startsAgain('original'))
+  })
+
+  it('fails a held first launch whose request cannot be read, and keeps its pane', async () => {
+    for (const entry of [first({ launch: startsAgain('original') }), row({ launch: startsAgain('original') })]) {
+      const h = harness([entry], { alivePanes: ['%3'] })
+      h.deps.waitingPane = vi.fn(async () => true)
+      h.deps.buildLaunch = async () => ({ error: DID_NOT_START.error, detail: DID_NOT_START.detail })
+      const killPane = h.deps.killPane = vi.fn(async () => {})
+      expect((await restoreAgents(h.deps)).failed).toEqual([{ agentId: 'agent-a', code: 'ENGINE_DID_NOT_START', reason: DID_NOT_START.detail }])
+      expect(entry.launch).toEqual(didNotStart)
+      // A held conversation's failure still closes its pane, as today.
+      expect(killPane.mock.calls).toEqual(entry.sessionId ? [[{ backend: 'tmux', paneId: '%3' }]] : [])
+    }
+  })
+
+  it.each([
+    ['tmux turned away', 'The waiting pane changed', false],
+    ['found its evidence changed after the journal', 'The harness changed before pane dispatch', true],
+  ] as const)('watches a journaled recovery whose respawn %s with its pane no longer the held shell, as boot watches one', async (_name, reason, evidenceChanged) => {
+    for (const entry of [row({ launch: startsAgain('original') }), first({ launch: startsAgain('original') })]) {
+      const { h } = inItsPane(entry)
+      let evidence = true, heldShell = true
+      h.deps.waitingPane = vi.fn(async (_runtime, token) => heldShell && token === 'original')
+      const build = h.deps.buildLaunch
+      h.deps.buildLaunch = async (e, o) => ({ ...await build(e, o) as RestoreLaunch, current: () => evidence })
+      h.deps.respawn = async (_runtime, _launch, control) => {
+        await control!.onDispatch!()
+        if (evidenceChanged) evidence = false
+        // tmux ran the launch before its reply failed.
+        heldShell = false
+        return { ok: false, reason }
+      }
+      const summary = await restoreAgents(h.deps)
+      expect(summary.restored).toEqual([])
+      expect(summary.failed).toEqual([{ agentId: 'agent-a', code: 'PANE_FAILED', reason }])
+      // Starting under its new token, it is watched on its pane: an engine tmux started there after all is published.
+      await settled(h, 1, 1)
+      expect(h.calls).toContain('updateIdentity:agent-a:3')
+      expect(entry.launch).toEqual({ state: 'ready' })
+    }
+  })
+
+  it('a journaled recovery the terminal turned away with its pane still the held shell goes back to that hold, never a watch of its new token', async () => {
+    const waiting = { state: 'held', service: 'native', nativeToken: 'original', detail: 'Waiting to confirm the native engine process.' } as const
+    for (const entry of [row({ launch: startsAgain('original') }), first({ launch: startsAgain('original') }), row({ launch: { ...waiting } })]) {
+      const before = structuredClone(entry.launch)
+      const { h } = inItsPane(entry)
+      let evidence = true
+      const build = h.deps.buildLaunch
+      h.deps.buildLaunch = async (e, o) => ({ ...await build(e, o) as RestoreLaunch, current: () => evidence })
+      h.deps.respawn = async (_runtime, _launch, control) => {
+        await control!.onDispatch!()
+        // Its evidence changed between the journal and the respawn: the pane was never respawned.
+        evidence = false
+        return { ok: false, reason: 'The harness changed before pane dispatch' }
+      }
+      expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], failed: [], held: ['agent-a'], unsurveyed: [] })
+      expect(entry.launch).toEqual(before)
+      // Nothing watches the pane, and its route is let go.
+      expect(h.probes.get('%3')).toEqual([identity(3)])
+      await settled(h, 1)
+    }
+  })
+
+  it('a guard-held terminal whose resume is refused goes back to its shell, as any terminal does', async () => {
+    const entry = row({ terminalHost: true, launch: startsAgain('original') })
+    const h = harness([entry], { alivePanes: ['%3'] })
+    h.deps.waitingPane = vi.fn(async (_runtime, token) => token === 'original')
+    // The core's restore launch, whose first-launch rule reads the row it is handed (core/agents/restoreLaunch.ts).
+    h.deps.buildLaunch = createRestoreLaunch({
+      workspaceMissing: () => null,
+      relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
+      downgradedPermission: async () => ({ bypassPermission: false }),
+      prepareSessionResume: async () => {}, refreshGridWebSearch: () => {},
+      receipts: { firstLaunchTask: () => null },
+      launch: (e, o) => ({ argv: [e.engine, ...(o.resumeSessionId ? ['--resume', o.resumeSessionId] : [])] }),
+    })
+    // The engine exits at once: its resume refused.
+    h.states.set('%3', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.rows.get('agent-a')).toMatchObject({ engine: 'terminal', sessionId: '', launch: { state: 'ready' } })
+    expect(h.calls).toContain('respawn:%3:terminal')
+  })
+
+  it('the held rows without startsAgain stay as today', async () => {
+    const waiting = { state: 'held', service: 'native', nativeToken: 'original', detail: 'Waiting for native.' } as const
+    const firstLaunch = first({ launch: { ...waiting } }), before = structuredClone(firstLaunch)
+    const conversation = row({ agentId: 'agent-b', tmuxPane: '%4', runtimes: [{ backend: 'tmux', paneId: '%4' }], primaryRuntimeKey: 'tmux\u0000%4', launch: { ...waiting } })
+    const h = harness([firstLaunch, conversation], { alivePanes: ['%3', '%4'] })
+    h.deps.waitingPane = vi.fn(async () => true)
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['held', held.detail] })
+    h.deps.buildLaunch = async () => ({ held: 'models', detail: 'Waiting for models.' })
+    const log = h.deps.log = vi.fn()
+    const summary = await restoreAgents(h.deps)
+    expect(summary.skipped).toEqual([{ agentId: 'agent-a', reason: 'original native launch awaits recovery' }])
+    expect(firstLaunch).toEqual(before)
+    expect(summary.held).toEqual(['agent-b'])
+    expect(conversation.launch).toEqual({ state: 'held', service: 'models', nativeToken: 'original', detail: 'Waiting for models.' })
+    expect(h.calls).toContain('respawn:%4:held Waiting for models.')
+    expect(log).toHaveBeenCalledWith('[restore] claude · agent agent-b · held in pane %4 · waiting for models')
+  })
+
+  describe('a held row 0.6.86 or older saved: a first launch the guard held, before startsAgain marked one', () => {
+    // Spelled out, not read from the code under test: these rows are on people's disks, and match only word for word.
+    const OLD_DETAILS = [
+      'Waiting to confirm the engine executable and native hooks.',
+      'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.',
+    ]
+    const saved = (detail: string, overrides: Partial<RegisteredSession> = {}) =>
+      first({ launch: { state: 'held', service: 'native', nativeToken: 'original', detail }, ...overrides })
+
+    it.each(OLD_DETAILS)('a held row 0.6.86 saved, its waiting pane alive and its own, starts again: %s', async detail => {
+      const entry = saved(detail)
+      const { h, startAgain, dispatched } = inItsPane(entry)
+      const built: Array<AgentLaunch | undefined> = []
+      const build = h.deps.buildLaunch
+      h.deps.buildLaunch = async (e, o) => { built.push(structuredClone(h.rows.get(e.agentId)!.launch)); return build(e, o) }
+      expect(await restoreAgents(h.deps)).toEqual({ restored: ['agent-a'], skipped: [], failed: [], held: [], unsurveyed: [] })
+      // The guard's hold as #4604 marks one, so its attempts are bounded from here (core/agents/heldLaunches.ts).
+      expect(built).toEqual([startsAgain('original')])
+      expect(startAgain.mock.calls).toEqual([['agent-a']])
+      expect(dispatched).toEqual([intoItsPane])
+      expect(h.paneCreates).toBe(0)
+      await settled(h, 1, 1)
+      expect(entry.launch).toEqual({ state: 'ready' })
+    })
+
+    it.each(OLD_DETAILS)('at boot, held for native by the defer with the guard\'s mark, then relaunched by the held pass: %s', async detail => {
+      const entry = saved(detail)
+      const { h, startAgain, dispatched } = inItsPane(entry)
+      h.deps.waitingLaunch = (_entry, held) => ({ argv: ['held', held.detail] })
+      expect(await restoreAgents({ ...h.deps, defer: true, needs: () => 'native' })).toEqual({ restored: [], skipped: [], failed: [], held: ['agent-a'], unsurveyed: [] })
+      expect(entry.launch).toEqual(startsAgain('original'))
+      expect(startAgain.mock.calls).toEqual([['agent-a']])
+      expect(h.launches.length + dispatched.length + h.paneCreates).toBe(0)
+
+      expect((await restoreAgents({ ...h.deps, only: new Set(['agent-a']) })).restored).toEqual(['agent-a'])
+      expect(dispatched).toEqual([intoItsPane])
+      await settled(h, 1, 1)
+      expect(entry.launch).toEqual({ state: 'ready' })
+    })
+
+    /** Its pane alive and read as [waiting], gone, or not read ([unread] answers 'unknown'): the row fails with
+     *  DID_NOT_START, nothing launched or closed. */
+    async function failsAsDidNotStart(entry: RegisteredSession, alivePanes: string[], waiting: boolean, unread?: 'livePane' | 'waitingPane') {
+      const h = harness([entry], { alivePanes })
+      const startAgain = h.deps.startAgain = vi.fn()
+      h.deps.waitingPane = vi.fn(async (_runtime, token) => unread === 'waitingPane' ? 'unknown' as const : waiting && token === 'original')
+      if (unread === 'livePane') h.deps.livePane = async () => 'unknown'
+      const killPane = h.deps.killPane = vi.fn()
+      const log = h.deps.log = vi.fn()
+      expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], held: [], unsurveyed: [],
+        failed: [{ agentId: 'agent-a', code: 'ENGINE_DID_NOT_START', reason: DID_NOT_START.detail }] })
+      expect(entry.launch).toEqual(didNotStart)
+      expect(log).toHaveBeenCalledWith('[restore] codex · agent agent-a · failed · ENGINE_DID_NOT_START')
+      expect(startAgain).not.toHaveBeenCalled()
+      expect(h.launches).toEqual([])
+      expect(h.paneCreates + h.respawns).toBe(0)
+      expect(killPane).not.toHaveBeenCalled()
+    }
+
+    it('one with no creationId fails: DID_NOT_START, its pane read or not', async () => {
+      for (const detail of OLD_DETAILS) for (const unread of [undefined, 'livePane', 'waitingPane'] as const) {
+        await failsAsDidNotStart(saved(detail, { creationId: undefined }), ['%3'], true, unread)
+      }
+    })
+
+    it('one whose pane is gone, or not its held shell, fails: DID_NOT_START', async () => {
+      for (const detail of OLD_DETAILS) {
+        await failsAsDidNotStart(saved(detail), [], true)
+        await failsAsDidNotStart(saved(detail), ['%3'], false)
+      }
+    })
+
+    it('one whose pane cannot be read gets the guard\'s hold and waits for its next attempt', async () => {
+      for (const detail of OLD_DETAILS) for (const unread of ['livePane', 'waitingPane'] as const) {
+        const entry = saved(detail), before = structuredClone(entry)
+        const h = harness([entry], { alivePanes: ['%3'] })
+        const startAgain = h.deps.startAgain = vi.fn()
+        h.deps.waitingPane = vi.fn(async () => unread === 'waitingPane' ? 'unknown' as const : true)
+        if (unread === 'livePane') h.deps.livePane = async () => 'unknown'
+        expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: ['agent-a'] })
+        expect(entry).toEqual({ ...before, launch: startsAgain('original') })
+        expect(startAgain.mock.calls).toEqual([['agent-a']])
+        expect(h.launches.length + h.paneCreates + h.respawns).toBe(0)
+      }
+    })
+
+    it('one whose pane stays unreadable fails DID_NOT_START 15 minutes after its mark', async () => {
+      vi.useFakeTimers()
+      const entry = saved(OLD_DETAILS[0])
+      const h = harness([entry], { alivePanes: ['%3'] })
+      h.deps.waitingPane = vi.fn(async () => 'unknown' as const)
+      const announce = vi.fn(), log = vi.fn(), start = performance.now(), passes: number[] = []
+      const held = createHeldLaunches({ registry: h.deps.registry, announce, log,
+        restore: only => { passes.push(performance.now() - start); return restoreAgents({ ...h.deps, only }) } })
+      try {
+        h.deps.startAgain = held.startAgain
+        await held.boot(() => restoreAgents(h.deps))
+        await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
+        expect(entry.launch).toEqual(startsAgain('original'))
+        expect(announce).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(entry.launch).toEqual(didNotStart)
+        expect(announce.mock.calls).toEqual([[entry]])
+        expect(log).toHaveBeenCalledWith('[restore] codex · agent agent-a · first launch held 15 minutes · NATIVE_EVIDENCE_UNSETTLED')
+        // The guard's schedule from the mark (heldRetryMs): 2 s, backing off to 30 s, the last at 15 minutes.
+        expect(passes).toEqual([2_000, 6_000, 14_000, 30_000, ...Array.from({ length: 29 }, (_, i) => 60_000 + i * 30_000)])
+        // Never relaunched into a pane it could not read, and nothing left to try it again.
+        expect(h.launches.length + h.paneCreates + h.respawns).toBe(0)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        held.close()
+        vi.useRealTimers()
+      }
+    })
+
+    // Not the shape alone: current code still holds a first launch with a native token on purpose (newPane.ts, and this
+    // file when a reboot took its pane), and restart.ts refuses to start it fresh.
+    it.each([
+      'Waiting to confirm the native engine process. The original launch and terminal are preserved.',
+      'The first launch was interrupted before its conversation was confirmed. The original request is held for recovery.',
+    ])('a held row current code saves is skipped as today: %s', async detail => {
+      const entry = saved(detail), before = structuredClone(entry)
+      const h = harness([entry], { alivePanes: ['%3'] })
+      const startAgain = h.deps.startAgain = vi.fn()
+      h.deps.waitingPane = vi.fn(async () => true)
+      expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [{ agentId: 'agent-a', reason: 'original native launch awaits recovery' }],
+        failed: [], held: [], unsurveyed: [] })
+      expect(entry).toEqual(before)
+      expect(startAgain).not.toHaveBeenCalled()
+      expect(h.launches.length + h.paneCreates + h.respawns).toBe(0)
+    })
   })
 })

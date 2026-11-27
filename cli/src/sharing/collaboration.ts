@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
+import { atomicWriteFile } from '../lib/secureState.js'
 
 const linkSchema = z.object({
   id: z.string().uuid(), machineId: z.string(), agentId: z.string(),
@@ -32,9 +33,7 @@ export class HarnessCollaborationStore {
   }
   private save(next: z.infer<typeof schema>): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    const temp = `${this.path}.${randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify(next), { flag: 'wx', mode: 0o600 })
-    renameSync(temp, this.path)
+    atomicWriteFile(this.path, JSON.stringify(next), 'cache')
     this.data = next
   }
   links(): HarnessLink[] { return this.data.links.map(l => ({ ...l })) }

@@ -23,6 +23,7 @@
 import { gridJson } from './gridExec.js'
 import type { GridHandoffResult } from './gridHandoff.js'
 import type { EnsureResult, EnsureStatus } from './gridEnsure.js'
+import { errorKind } from './log.js'
 
 export type GridAttachStatus =
   /** No `grid` on this machine — there is nothing to attach a sign-in to. */
@@ -105,7 +106,7 @@ export async function reconcileGridAttach(
   try {
     name = await deps.mintName()
   } catch (err) {
-    deps.log(`could not read this account's grid name (${msg(err)}) — will try again on the next start`)
+    deps.log(`could not read this account's grid name (${errorKind(err)}) — will try again on the next start`)
     return { status: 'no-name', name: null, detail: msg(err) }
   }
   if (!name) {
@@ -128,12 +129,14 @@ export async function reconcileGridAttach(
     } catch (err) {
       // Could not read the local registry. That cannot PROVE the machine is set up, so it falls
       // through to the hand-off below — which rewrites that registry, so the next start reads it.
-      deps.log(`could not read this machine's grid list (${msg(err)}) — signing in again to rebuild it`)
+      deps.log(`could not read this machine's grid list (${errorKind(err)}) — signing in again to rebuild it`)
     }
   }
   if (email && names.includes(name)) {
     deps.onName(name)
-    deps.log(`already signed in with grid '${name}' — nothing to do`)
+    // The log says "the account's grid", never its name: the name starts as the email does, and is short enough
+    // that a hash of it is guessed.
+    deps.log("already signed in with the account's grid — nothing to do")
     return { status: 'converged', name, detail: '', ...(ownGrid ? { ownGrid: 'existed' as const } : {}) }
   }
   // Signed in as this account earlier in this daemon's life, and nothing here needs the account's own
@@ -157,23 +160,23 @@ export async function reconcileGridAttach(
     try {
       token = await deps.accessToken()
     } catch (err) {
-      deps.log(`no harness token to hand to grid (${msg(err)})`)
+      deps.log(`no harness token to hand to grid (${errorKind(err)})`)
       return { status: 'handoff-failed', name, detail: msg(err) }
     }
     const handoff = await deps.handoff(token)
     if (handoff.code !== 'OK') {
-      deps.log(`grid sign-in did not happen: ${handoff.message}`)
+      deps.log(`grid sign-in did not happen: ${handoff.code}`)
       return { status: 'handoff-failed', name, detail: handoff.message }
     }
   }
   if (!ownGrid) {
     deps.onName(name)
-    deps.log(`signed grid in as this account ('${name}' not needed yet)`)
+    deps.log("signed grid in as this account (the account's grid not needed yet)")
     return { status: 'signed-in', name, detail: '' }
   }
   const ensured = await deps.ensure(name)
   deps.onName(name)
-  deps.log(`signed grid in and ensured '${name}': ${ensured.status}${ensured.message ? ` — ${ensured.message}` : ''}`)
+  deps.log(`signed grid in and ensured the account's grid: ${ensured.status}`)
   return { status: 'signed-in', name, detail: ensured.message, ownGrid: ensured.status }
 }
 
@@ -210,9 +213,8 @@ export interface GridAccess {
  * - **Remembered.** A sign-in as this account, and the account's grid once it is there, hold for the
  *   daemon's life — until `grid` no longer holds a sign-in at all, which a hand-run `grid logout`
  *   leaves behind.
- * - **A failure is held.** Not every ask is a person acting: a held Swarm start asks every 2 seconds
- *   (core/agents/pendingLaunches.ts) and each owner's Swarm every minute (superTabs/swarmGrids.ts), and each ask that
- *   failed ran grid's installer again. A failure answers as it is for a minute, twice as long after each failure in a
+ * - **A failure is held.** Not every ask is a person acting: a held start asks every 2 seconds
+ *   (core/agents/pendingLaunches.ts), and each ask that failed ran grid's installer again. A failure answers as it is for a minute, twice as long after each failure in a
  *   row up to ten; a success clears it.
  */
 export function createGridAccess(opts: GridAccessOptions): GridAccess {
@@ -238,7 +240,7 @@ export function createGridAccess(opts: GridAccessOptions): GridAccess {
       result = await opts.attempt({ ownGrid, signedInThisRun: signedIn })
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
-      opts.log(`attempt failed: ${detail}`)
+      opts.log(`attempt failed: ${errorKind(err)}`)
       return failed({ status: 'handoff-failed', name: null, detail })
     }
     if (result.status !== 'converged' && result.status !== 'signed-in') return failed(result)

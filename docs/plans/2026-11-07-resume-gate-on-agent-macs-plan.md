@@ -1,6 +1,6 @@
 # The resume gate passes on agent Macs (task #4405) Plan
 
-> Written by the Engineer by the project's way of working: superpowers writing-plans, one pull request.
+> Written with superpowers writing-plans; one pull request.
 
 **Goal:** `npm run test:resume` passes at clean main on the Mac Studio, as its specs do in Linux CI, so pull requests in
 that area can record their exact-head receipt.

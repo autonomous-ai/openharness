@@ -8,11 +8,11 @@
  * It asks this computer's daemon (`/api/agent-settings`), which reads them as this computer keeps them and writes a
  * change through to the account (core/experiments.ts `createAgentSettingsSync`): the copy is the daemon's alone.
  */
-import { AGENT_SETTING_NAMES, askThePersonFirst, PERSON_SAID_YES, type AgentSettings } from '../lib/agentSettings.js'
+import { AGENT_SETTING_NAMES, askThePersonFirst, PERSON_SAID_YES, type AgentSettings, type GrantableSetting } from '../lib/agentSettings.js'
 import { localCredentialHeaders } from '../lib/localCredential.js'
 import { daemonFetch } from '../lib/localTransport.js'
 import { env } from '../config/env.js'
-import { daemonUnreachableText } from '../lib/daemonState.js'
+import { daemonUnreachableText } from '../lib/unreachable.js'
 import { outsideCaller } from './model.js'
 
 /** A refusal, as the agent verbs exit (commands.ts `EXIT.refused`): not a failure to retry. */
@@ -46,7 +46,7 @@ An agent turns one on only for the person: it asks them first, with its tool for
 AskUserQuestion; Codex: request_user_input) or in its reply, and adds ${PERSON_SAID_YES} once they said yes.
 Turning one off needs no one's yes.`
 
-const ABOUT: Record<keyof AgentSettings, string> = {
+const ABOUT: Record<GrantableSetting, string> = {
   agentsStartAgents: 'agents may start, wait for and close harnesses of their own',
   agentsTellAgents: 'an agent may give more work to a harness it started',
   pullRequestLine: 'a harness another agent starts says so in the pull requests it opens',

@@ -11,8 +11,8 @@ export async function stopExternalOwner(owner: NonNullable<ExternalResumeIntent[
   generation?: typeof externalProcessGeneration
   exists?: typeof processExists
   job?: typeof verifiedForegroundJob
-  beforeSignal?(signal: NodeJS.Signals): void
-  afterSignal?(signal: NodeJS.Signals): void
+  beforeSignal?(signal: NodeJS.Signals): void | Promise<void>
+  afterSignal?(signal: NodeJS.Signals): void | Promise<void>
   kill?: (pid: number, signal: NodeJS.Signals) => void
   sleep?: (ms: number) => Promise<void>
 }): Promise<boolean> {
@@ -37,10 +37,10 @@ export async function stopExternalOwner(owner: NonNullable<ExternalResumeIntent[
     if (job === 'unknown') return false
     if (!await deps.same() || !deps.current() || !sameProcess()) return false
     try {
-      deps.beforeSignal?.(signal)
+      await deps.beforeSignal?.(signal)
       if (!deps.current() || !sameProcess()) return false
       ;(deps.kill ?? ((pid, name) => globalThis.process.kill(pid, name)))(job ? -job : process.pid, signal)
-      deps.afterSignal?.(signal)
+      await deps.afterSignal?.(signal)
     }
     catch { return deps.current() && !exists(process.pid) }
     if (await wait(budget)) return true

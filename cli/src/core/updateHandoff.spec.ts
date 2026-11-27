@@ -53,7 +53,7 @@ describe('the update handoff', () => {
     // Without a master too, after the probe; one that throws is said, and the teardown goes on.
     const other = make({ supervised: false, beforeTeardown: async () => { throw new Error('boom') } })
     await other.handoff.handOver([step(other.calls, 'the backend')])
-    expect(other.calls).toContain('[update] the moves did not settle (boom) — handing over all the same')
+    expect(other.calls).toContain('[update] the moves did not settle (Error) — handing over all the same')
     expect(other.calls.indexOf('release the backend')).toBeGreaterThan(other.calls.indexOf('probe the master'))
   })
 
@@ -66,8 +66,8 @@ describe('the update handoff', () => {
     ])
     expect(calls).toEqual([
       '[update] applying 1.0.0 → 2.0.0 — restarting daemon',
-      'release the timers', '[update] the timers did not let go (a teardown step that throws) — handing over all the same',
-      'release the hook server', '[update] the hook server did not let go (odd) — handing over all the same',
+      'release the timers', '[update] the timers did not let go (Error) — handing over all the same',
+      'release the hook server', '[update] the hook server did not let go (string) — handing over all the same',
       'release the backend', '[update] handing 2.0.0 to harnessd', 'exit 75',
     ])
   })
@@ -90,6 +90,23 @@ describe('the update handoff', () => {
     expect(plain.calls.at(-1)).toBe('exit 75')
   })
 
+  it('keeps claim and socket ownership when an abandoned registry drain settles after the exit deadline', async () => {
+    vi.useFakeTimers()
+    let settle!: () => void
+    const { handoff, calls } = make({ teardownDeadlineMs: 100 })
+    const done = handoff.restartForUpdate('2.0.0', [
+      step(calls, 'the registry', () => new Promise<void>(resolve => { settle = resolve })),
+      step(calls, 'the data folder claim'), step(calls, 'the local socket'),
+    ])
+    await vi.advanceTimersByTimeAsync(100)
+    await done
+    expect(calls).toContain('exit 75')
+    settle()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).not.toContain('release the data folder claim')
+    expect(calls).not.toContain('release the local socket')
+  })
+
   it('without a master, hands this build to one once its master answers, after the same teardown, once', async () => {
     const { handoff, calls } = make({ supervised: false })
     const done = handoff.handOver([step(calls, 'the registry'), step(calls, 'the backend', () => { throw new Error('no') })])
@@ -101,7 +118,7 @@ describe('the update handoff', () => {
     expect(calls).toEqual([
       'probe the master',
       '[update] handing 1.0.0 to a harnessd master, which runs the updater — this core is leaving',
-      'release the registry', 'release the backend', '[update] the backend did not let go (no) — handing over all the same',
+      'release the registry', 'release the backend', '[update] the backend did not let go (Error) — handing over all the same',
       'start a master, exit',
     ])
     // Leaving, it hands nothing else over.

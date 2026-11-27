@@ -13,18 +13,22 @@ import { modelsAssignments } from './modelsAssignments.js'
  */
 import { join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
-import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
+import type { AgentView, CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
-import { linkClaudeProfile, listClaudeProfiles, profileId } from '../lib/claudeProfiles.js'
+import { listClaudeCommands } from '../engines/claude/lists.js'
+import { CODEX_COMMANDS } from '../engines/codex/commandList.js'
+import { listOpencodeCommands } from '../engines/opencode/commandList.js'
+import { linkClaudeProfile } from '../lib/claudeProfiles.js'
+import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { defaultCodexHome, linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
 import { deriveHarnessGridName, resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
 import { ensureHarnessGrid } from '../lib/gridEnsure.js'
-import { gridAvailable, gridExec, managedGridPath } from '../lib/gridExec.js'
+import { gridAvailable, managedGridPath } from '../lib/gridExec.js'
 import { GridFleetRpc, parseGridFleetRequest } from '../lib/gridFleetRpc.js'
 import { handOffToGrid } from '../lib/gridHandoff.js'
 import { ensureGridInstalled } from '../lib/gridInstall.js'
@@ -37,12 +41,12 @@ import {
 import { gridModelsPayload } from '../lib/gridModelsPayload.js'
 import { resolveGridTarget } from '../lib/gridTarget.js'
 import { LocalModels } from '../lib/localModels.js'
+import { errorKind } from '../lib/log.js'
 import { nvidiaComputeApps } from '../lib/gpuProcesses.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
-import type * as SwarmServicesEntry from '../superTabs/inServices.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The requests models answers for the apps, declared in core/api.ts for the core to route. */
@@ -56,12 +60,7 @@ interface GridSetUp {
   setUp(): boolean
 }
 
-/** What models runs of the Swarm while it is on (superTabs/inServices.ts, docs/plans/2026-10-23-swarm-local-models.md):
- *  a Swarm's grid, the APIs and models shared with it, and the check that keeps them there. Absent while the Swarm is
- *  off (`HARNESS_SWARM`): none of it is loaded, no API is served to a Swarm, and its requests are answered unavailable. */
-export type SwarmModels = Pick<typeof SwarmServicesEntry, 'syncSwarmGrid' | 'SwarmApiShares' | 'SwarmHeal' | 'liveModels' | 'SwarmOffers'>
-
-export function startModels(core: CoreApi, ports: CorePorts, swarm?: SwarmModels): ServiceRequests {
+export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
   // A managed grid already here follows its pin on EVERY start of this service — the daemon's, and the
   // restart a self-update ends in — not only on `--repair`: the pin is expected to move, and a machine
   // installed last month has to notice. A machine with none gets none from a start: grid is an add-on,
@@ -91,7 +90,7 @@ export function startModels(core: CoreApi, ports: CorePorts, swarm?: SwarmModels
         await ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
         if (gridAvailable()) return
         const installed = await ensureGridInstalled()
-        if (installed.status !== 'present') gridLog(installed.message)
+        if (installed.status !== 'present') gridLog(`grid install: ${installed.status} · its message ${Buffer.byteLength(installed.message)} B`)
       },
       gridAvailable: () => gridAvailable(),
       // The backend mints and remembers the name, through the core, which holds the sign-in.
@@ -157,7 +156,7 @@ export function startModels(core: CoreApi, ports: CorePorts, swarm?: SwarmModels
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types.
     prewarm: (target) => { void keystrokePrewarm(target).catch(() => {}) },
-    launchTarget: (selection) => SWARM_GRID.test(selection.grid) ? swarmLaunchTarget(grid, selection) : launchTarget(selection),
+    launchTarget: (selection) => launchTarget(selection),
     moveTarget: (request) => moveTarget(grid, privateGridName, core, request),
     // The agent is on a grid model now and its pane is restarting: start that grid meanwhile if it sleeps,
     // so the first message rarely waits on a boot (issue 03). It decides for itself whether a wake is
@@ -183,7 +182,7 @@ export function startModels(core: CoreApi, ports: CorePorts, swarm?: SwarmModels
     // The web-tools cache lives exactly as long as the sign-in.
     signedOut: () => clearGridMcpUrlCache(),
   }
-  return modelsRequests(core, grid, privateGridName, swarm)
+  return modelsRequests(core, grid, privateGridName)
 }
 
 /**
@@ -196,17 +195,6 @@ export async function launchTarget(selection: NewAgentModel): Promise<GridLaunch
   const models = await listGridModels(selection.grid)
   if (!models.some((model) => model.id === selection.model)) return null
   return resolveGridTarget(selection.grid, selection.model)
-}
-
-/**
- * A Builder on a model served on a Swarm's grid (docs/plans/2026-10-23-swarm-local-models.md) may start on a machine that
- * never used grid: it signs in first (the Harness sign-in handed to `grid login --harness`), then pulls the account's grids,
- * since the Swarm's grid is new to this machine until a sync lists it.
- */
-export async function swarmLaunchTarget(grid: GridSetUp, selection: NewAgentModel, sync: () => Promise<unknown> = () => gridExec(['--remote', 'sync'])): Promise<GridLaunchOverride | null> {
-  if (await notReady(grid, false)) return null
-  await sync()
-  return launchTarget(selection)
 }
 
 /**
@@ -245,17 +233,6 @@ async function moveTarget(
 /** Sections one `grid_models_list` may ask to wake — a person presses one "Show models" at a time. */
 const MAX_WAKES_PER_ASK = 8
 
-/** The APIs this computer shares with Swarms: one set for the process, since each holds a live endpoint. */
-function swarmApiShares(dataDir: string, swarm: SwarmModels): InstanceType<SwarmModels['SwarmApiShares']> {
-  const saved = new ApiConnections(dataDir)
-  const shares = new swarm.SwarmApiShares({ access: (id) => saved.modelAccess(id), exec: (args) => gridExec(args), stateFile: join(dataDir, 'swarm-api-shares.json') })
-  void shares.restore().catch(() => {})
-  return shares
-}
-
-/** A Swarm's grid name as the backend mints it (backend/src/superTabs/commands.ts `swarmGridName`). */
-const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
-
 type LocalModelRequest = 'grid_fleet_models_list' | 'grid_fleet_model_download' | 'grid_fleet_model_start' | 'grid_fleet_model_stop'
 
 /**
@@ -265,7 +242,7 @@ type LocalModelRequest = 'grid_fleet_models_list' | 'grid_fleet_model_download' 
  * answered them itself. A failure is answered as the socket answered it, sentences included: the apps
  * show them.
  */
-function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => Promise<string | null>, swarm?: SwarmModels): ServiceRequests {
+function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => Promise<string | null>): ServiceRequests {
   // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
   // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
   // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
@@ -281,8 +258,6 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     appEngines: appEngineOps(process.env),
     gpuProcesses: nvidiaComputeApps,
   })
-  // A Swarm's grid, the APIs and models shared with it and the check that keeps them there, while the Swarm is on.
-  const swarmSide = swarm ? swarmGridRequests(grid, core.dataDir, swarm, localModels) : null
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid that lands
    *  meanwhile. */
   let listing: { gridName: string | null; grids: Promise<GridSection[]> } | null = null
@@ -298,28 +273,18 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     try {
       const list = type === 'grid_fleet_models_list'
       const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
-      // A start or stop for a Swarm runs on the Swarm's grid, which its owner's computer made: it needs grid signed in,
-      // not the account's own grid. Asked to make that too, a Run for Swarm failed on an account at its plan's network
-      // limit ("Free plan allows 5 networks") while the Swarm's grid stood ready (2026-10-26).
-      const forSwarm = !list && type !== 'grid_fleet_model_download' && typeof payload.grid === 'string' && SWARM_GRID.test(payload.grid)
-      const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download' && !forSwarm) : null
+      const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download') : null
       const gridName = await privateGridName()
       if (list) {
-        // `scan: false` is a Swarm machine reading (superTabs/machines.ts), every 15 s while a Swarm has Local models
-        // on: it never starts the Model Manager's scan of other apps' models, which it ran every 30-45 s at rest, 0.6 s
-        // of CPU each (2026-11-11). A person's ask still does.
-        const snapshot = await localModels.list(gridName, payload.refresh === true || setup, payload.scan !== false)
+        const snapshot = await localModels.list(gridName, payload.refresh === true || setup)
         const needed = !grid.setUp()
         if (setup && !unready) core.clients.gridModelsChanged()
         return { ...snapshot, ...(needed ? { gridSetupNeeded: true } : {}), ...(unready ? { gridSetupError: unready } : {}) }
       }
       if (unready) return { error: unready }
-      // A start or stop for the community grid of this computer's OS (`osGrid`): run there, for its members. Or for a
-      // Swarm's own grid (docs/plans/2026-10-23-swarm-local-models.md), named by the Swarm and checked by grid itself:
-      // only its members may serve there.
+      // A start or stop for the community grid of this computer's OS (`osGrid`): run there, for its members.
       const community = payload.community === true && type !== 'grid_fleet_model_download'
-      const swarm = type !== 'grid_fleet_model_download' && typeof payload.grid === 'string' && SWARM_GRID.test(payload.grid) ? payload.grid : null
-      const target = swarm ?? (community ? await localModels.communityGrid() : gridName)
+      const target = community ? await localModels.communityGrid() : gridName
       if (community && !target) return { error: 'This computer is in no community grid.' }
       return { ...await localModels.act(target, payload.modelId, type === 'grid_fleet_model_download' ? 'download' : type === 'grid_fleet_model_start' ? 'start' : 'stop') }
     } catch {
@@ -377,7 +342,12 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     models_list: async (payload) => {
       const sessionId = typeof payload.agentId === 'string' && payload.agentId ? payload.agentId : undefined
       try {
+        // The phone's `/` list: the commands the agent's engine itself offers, asked of the engine here, in this process.
+        if (payload.commands === true) return { commands: await agentCommands(core, sessionId) }
         const models = await core.agents.runtimeModels(sessionId)
+        // The phone's model sheet: one row per model with its name, the engine's line under it and its efforts,
+        // instead of every model-and-effort pair — the same 16 KiB cap, and the rows a person reads.
+        if (payload.catalog === true) return { catalog: runtimeModelCatalog(models, sessionId) }
         return {
           // The device derives labels from the opaque runtime-v1 id. Omitting the duplicate
           // displayName keeps the encrypted picker response below its 16 KiB decrypt cap.
@@ -387,7 +357,7 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
         }
       } catch (error) {
         // Logged and answered as the socket did while this was a case of its own.
-        console.error('[backend] dispatch models_list failed:', error)
+        console.error('[backend] dispatch models_list failed:', errorKind(error))
         return { error: 'INTERNAL' }
       }
     },
@@ -397,85 +367,8 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     grid_fleet_model_start: localModel('grid_fleet_model_start'),
     grid_fleet_model_stop: localModel('grid_fleet_model_stop'),
     ...gridCommands(),
-    ...(swarmSide?.requests ?? SWARM_OFF_REQUESTS),
-    ...launchTargetRequests(core, async (id) => { await swarmSide?.shares.stopConnection(id) }),
+    ...launchTargetRequests(core),
   }
-}
-
-/** The Swarm's requests to models (core/api.ts `MODELS_REQUESTS`), answered while it is off as its own service's are. */
-const SWARM_MODELS_REQUESTS = ['grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal'] as const
-const SWARM_OFF_REQUESTS: ServiceRequests = Object.fromEntries(SWARM_MODELS_REQUESTS.map((type) =>
-  [type, () => ({ error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: false })]))
-
-/**
- * What models answers a Swarm while it is on: its own grid, kept in step with its people (lib/swarmGrid.ts), a saved API
- * or a model shared with it (lib/swarmApiShares.ts, lib/swarmOffers.ts), and what this computer serves there, checked
- * against what the grid lists (lib/swarmHeal.ts). One set of shared APIs for the process, since each holds a live
- * endpoint; its `stopConnection` takes a deleted API off every Swarm first.
- */
-function swarmGridRequests(grid: GridSetUp, dataDir: string, swarm: SwarmModels, localModels: Pick<LocalModels, 'servedApps' | 'rejoinApp'>) {
-  const shares = swarmApiShares(dataDir, swarm)
-  const offers = new swarm.SwarmOffers(join(dataDir, 'swarm-offers.json'))
-  const heal = new swarm.SwarmHeal({
-    live: async (name) => {
-      const answer = await gridExec(['--remote', 'models', name, '--json'])
-      return answer.code === 'OK' ? swarm.liveModels(answer.stdout) : null
-    },
-    shares: { list: (name) => shares.list(name), rejoin: (name, connectionId, model) => shares.rejoin(name, connectionId, model) },
-    apps: { served: (name) => localModels.servedApps(name), rejoin: (name) => localModels.rejoinApp(name) },
-  })
-  const requests: ServiceRequests = {
-    // What this computer serves on a Swarm's grid that the grid really lists, joined again when it lost them: read by
-    // every machine reading (superTabs/machines.ts).
-    grid_swarm_heal: async (payload) => {
-      if (typeof payload.grid !== 'string' || !SWARM_GRID.test(payload.grid)) return { error: 'INVALID_REQUEST' }
-      return { ...await heal.check(payload.grid) }
-    },
-    // A Swarm's own grid, created and kept in step with its people by the owner's computer (lib/swarmGrid.ts).
-    grid_swarm_sync: async (payload, asker) => {
-      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
-      const members = Array.isArray(payload.members) ? payload.members.filter((m): m is string => typeof m === 'string' && /^[^\s@]+@[^\s@]+$/.test(m)) : null
-      if (typeof payload.grid !== 'string' || !SWARM_GRID.test(payload.grid) || !members || members.length > 200) return { error: 'INVALID_REQUEST' }
-      // Signed in first: the owner may never have used grid on this computer before turning the add-on on.
-      const unready = await notReady(grid, false)
-      if (unready) return { ready: false, error: unready, added: [], removed: [] }
-      return { ...await swarm.syncSwarmGrid(payload.grid, members) }
-    },
-    // A saved API shared with a Swarm's grid, on this computer's key (lib/swarmApiShares.ts). This computer's own person
-    // alone: the key is theirs, and so are the credits every Builder in the Swarm then spends.
-    grid_swarm_api_share: async (payload, asker) => {
-      if (!asker.local || !asker.owner) return { error: 'OWNER_REQUIRED' }
-      const { grid: name, connectionId, model, action } = payload
-      if (typeof name !== 'string' || !SWARM_GRID.test(name) || typeof connectionId !== 'string' || typeof model !== 'string'
-        || !model || model.length > 200 || (action !== 'start' && action !== 'stop')) return { error: 'INVALID_REQUEST' }
-      if (action === 'stop') return { ...await shares.stop(name, connectionId, model) }
-      const unready = await notReady(grid, false)
-      if (unready) return { error: unready }
-      return { ...await shares.share(name, connectionId, model) }
-    },
-    grid_swarm_api_shares: (payload) => ({
-      shares: shares.list(typeof payload.grid === 'string' ? payload.grid : undefined),
-    }),
-    // A model shared with this computer's person, offered to a Swarm or no longer (lib/swarmOffers.ts). Their choice
-    // alone: Builders the Swarm starts here then run on someone else's model through their access.
-    grid_swarm_offer: (payload, asker) => {
-      if (!asker.local || !asker.owner) return { error: 'OWNER_REQUIRED' }
-      const { grid: name, sharedGrid, model, action } = payload
-      const text = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 200
-      if (typeof name !== 'string' || !SWARM_GRID.test(name) || !text(sharedGrid) || !text(model) || (action !== 'start' && action !== 'stop')) {
-        return { error: 'INVALID_REQUEST' }
-      }
-      try {
-        return { offers: offers.set({ grid: name, sharedGrid: sharedGrid as string, model: model as string }, action === 'start') }
-      } catch {
-        return { error: 'The offer could not be saved on this computer.' }
-      }
-    },
-    grid_swarm_offers: (payload) => ({
-      offers: offers.list(typeof payload.grid === 'string' ? payload.grid : undefined),
-    }),
-  }
-  return { requests, shares }
 }
 
 /**
@@ -512,7 +405,7 @@ function gridCommands(): ServiceRequests {
  * socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4). Its own function so the socket's
  * specs can serve it alone behind the gates.
  */
-export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: string) => Promise<void>): ServiceRequests {
+export function launchTargetRequests(core: CoreApi): ServiceRequests {
   // The saved APIs, a file in the data folder (lib/apiConnections.ts): read afresh on every request.
   const apiConnections = new ApiConnections(core.dataDir)
   return {
@@ -521,8 +414,6 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
     api_connections: internalOnThrow('api_connections', async (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       if (payload.action === 'models') return apiModelsRequest(apiConnections, payload)
-      // A deleted API comes off every Swarm it is shared with first: its share holds the key and would go on serving.
-      if (payload.action === 'remove' && typeof payload.id === 'string') await onRemove(payload.id)
       const reply = apiConnectionsRequest(apiConnections, payload)
       if (payload.action === 'save') rememberSavedApis(apiConnections)
       return reply
@@ -554,7 +445,7 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
       return { profile: result }
     }),
 
-    // The Claude counterpart: CLAUDE_CONFIG_DIR folders, with the ids and labels the Swarm switch picks from.
+    // The Claude counterpart: CLAUDE_CONFIG_DIR folders, with their ids and labels.
     // Paths and account names are the owner's alone, so a guest gets nothing.
     claude_profiles_list: internalOnThrow('claude_profiles_list', (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
@@ -573,12 +464,6 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
       return linkClaudeProfile(typeof payload.path === 'string' ? payload.path : '', core.daemon.machineId())
     }),
 
-    // Offering an account to the Swarm went with Desktop's accounts page (F9): no account is offered, and an offer is not kept.
-    // A Desktop of the last 30 days may still send one, and is told so. Goes on or after 2026-12-10.
-    swarm_account_offer: internalOnThrow('swarm_account_offer', (_payload, asker) => {
-      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
-      return { offered: false, ignored: true }
-    }),
   }
 }
 
@@ -588,6 +473,76 @@ export function launchTargetRequests(core: CoreApi, onRemove: (connectionId: str
  * unbounded and still gets everything.
  */
 const DEVICE_PICKER_MAX_MODELS = 24
+
+/** One model an agent's engine offers, for a sheet that lists models and sets effort apart. */
+export interface RuntimeCatalogRow {
+  /** What the runtime-v1 id carries: an alias (`opus`) or a model id (`claude-fable-5-1`). */
+  model: string
+  name: string
+  description?: string
+  /** The efforts it takes, `auto` first when it has one; empty for a model that takes none. */
+  efforts: string[]
+}
+
+/** One `/` command an agent's engine offers: what follows the `/`, its line, and the argument it takes. */
+export interface AgentCommandRow { name: string; description: string; argumentHint: string }
+
+/** The most bytes the commands take in one answer, kept under the 16 KiB a sealed answer may carry. */
+const COMMANDS_MAX_BYTES = 12_000
+
+/** Each engine that lists its own `/` commands, and how. */
+const COMMAND_LISTS: Record<string, (agent: AgentView) => Promise<AgentCommandRow[] | null>> = {
+  claude: listClaudeCommands,
+  codex: async () => [...CODEX_COMMANDS],
+  opencode: listOpencodeCommands,
+}
+
+/**
+ * [agentId]'s `/` commands, in the engine's own order: Claude Code's (engines/claude/lists.ts) and OpenCode's
+ * (engines/opencode/commandList.ts). Any other engine, an agent that is gone or an engine that could not be asked has
+ * none, and the phone shows no list. Rows past [COMMANDS_MAX_BYTES] are left out: a skill-heavy setup lists more than a
+ * phone reads anyway.
+ */
+export async function agentCommands(core: CoreApi, agentId: string | undefined): Promise<AgentCommandRow[]> {
+  const agent = agentId ? core.agents.resolve(agentId) : undefined
+  const list = agent && Object.hasOwn(COMMAND_LISTS, agent.engine) ? COMMAND_LISTS[agent.engine] : undefined
+  if (!agent || !list) return []
+  const rows: AgentCommandRow[] = []
+  let bytes = 0
+  for (const command of await list(agent) ?? []) {
+    bytes += Buffer.byteLength(JSON.stringify(command))
+    if (bytes > COMMANDS_MAX_BYTES) break
+    rows.push(command)
+  }
+  return rows
+}
+
+/** The most models one answer carries: a picker is read by a person, and the answer is sealed under a 16 KiB cap. */
+const CATALOG_MAX_MODELS = 40
+
+/**
+ * [agentId]'s choices folded by model, in the engine's own order. Its name is the option's label before ` / `, the
+ * effort after it being the option's own; a model listed only with `auto` takes no effort the person can set.
+ */
+export function runtimeModelCatalog(models: RuntimeModelOption[], agentId: string | undefined): RuntimeCatalogRow[] {
+  const rows = new Map<string, RuntimeCatalogRow>()
+  for (const option of models) {
+    const profile = parseRuntimeProfile(option.id)
+    if (!profile || (agentId && profile.sessionId !== agentId)) continue
+    let row = rows.get(profile.model)
+    if (!row) {
+      if (rows.size >= CATALOG_MAX_MODELS) continue
+      const name = option.displayName.split(' / ', 1)[0]!.trim() || profile.model
+      row = { model: profile.model, name, ...(option.description ? { description: option.description } : {}), efforts: [] }
+      rows.set(profile.model, row)
+    }
+    if (!row.efforts.includes(profile.effort)) row.efforts.push(profile.effort)
+  }
+  for (const row of rows.values()) {
+    if (row.efforts.length === 1 && row.efforts[0] === 'auto') row.efforts = []
+  }
+  return [...rows.values()]
+}
 
 export function compactRuntimePickerModels(
   models: RuntimeModelOption[],

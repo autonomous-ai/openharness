@@ -6,6 +6,9 @@ import 'package:xterm/xterm.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/attached_task_delivery.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -17,6 +20,10 @@ HarnessAttachment _file(String name, [int size = 4]) =>
 const _codexComposer =
     '\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\r\n'
     '\r\n  GPT-6-Astra · /tmp/work\r\n  ? for shortcuts';
+
+const _codexUpdateFinished =
+    '🎉 Update ran successfully! Please restart Codex.';
+const _codexAutoRelaunch = 'harness: Codex updated. Continuing startup…';
 
 /// A ready Codex 0.154 as captured in its pane (2026-10-18): the update box
 /// is only news, and the footer is a status line with no shortcut hint.
@@ -42,7 +49,7 @@ const _codexHooksReview =
 
 /// Records what a harness's terminal was handed, in order.
 class _RecordingSession extends TerminalSession {
-  _RecordingSession()
+  _RecordingSession({this.refuse = const {}})
     : super(
         machineId: 'box',
         agentId: 'a1',
@@ -57,10 +64,13 @@ class _RecordingSession extends TerminalSession {
 
   final calls = <String>[];
 
+  /// Files this terminal fails to take.
+  final Set<String> refuse;
+
   @override
   Future<bool> pasteFile(String filename, Uint8List content) async {
     calls.add('file:$filename');
-    return true;
+    return !refuse.contains(filename);
   }
 
   @override
@@ -191,6 +201,78 @@ void main() {
       session.dispose();
     });
 
+    testWidgets('delivers after the launcher restarts an updated Codex', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write('Updating Codex via installer…');
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskOpenTimeout + const Duration(seconds: 1));
+      expect(problem, 'pending');
+
+      // The Codex process exits after writing the notice. Its launcher sees
+      // that output and starts the replacement process in the same pane.
+      session.terminal.write('\r\n$_codexUpdateFinished');
+      await tester.pump(kAttachedTaskSettle);
+      expect(problem, 'pending');
+      expect(session.calls, isEmpty);
+
+      session.terminal.write('\r\n$_codexAutoRelaunch\r\n$_codexComposer');
+      await tester.pump(kAttachedTaskSettle);
+      await tester.pump();
+      expect(problem, isNull);
+      expect(session.calls, ['file:shot.png', 'paste: ', 'send:Look']);
+    });
+
+    testWidgets('times out once when an updated Codex never starts', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.resize(40, 24);
+      session.terminal.write('Updating Codex via installer…');
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskOpenTimeout + const Duration(seconds: 1));
+      expect(problem, 'pending');
+
+      // The notice wraps at this width. Seeing it again or seeing the retry
+      // announcement later must not reset the new startup deadline.
+      session.terminal.write('\r\n$_codexUpdateFinished');
+      await tester.pump(kAttachedTaskOpenTimeout - const Duration(seconds: 1));
+      expect(problem, 'pending');
+      session.notifyListeners();
+      session.terminal.write(
+        '\r\n$_codexAutoRelaunch\r\n'
+        'harness: codex exited (1). This pane is a shell now — run codex again, or stop the pane.',
+      );
+      await tester.pump(const Duration(seconds: 2));
+      expect(problem, contains('Restart Codex'));
+      expect(session.calls, isEmpty);
+    });
+
     testWidgets(
       'keeps the task and image queued through a Codex startup update',
       (tester) async {
@@ -294,6 +376,39 @@ void main() {
       expect(problem, contains('did not open in time'));
     });
 
+    testWidgets('waits for the Codex composer when the pane uses »', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write(
+        'Hooks need review\r\n» 1. Review hooks\r\n'
+        'Press enter to confirm',
+      );
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskSettle);
+      expect(problem, 'pending');
+      expect(session.calls, isEmpty);
+
+      final composer = _codex154Ready.replaceFirst('›', '»');
+      session.terminal.write('\u001b[2J\u001b[H$composer');
+      await tester.pump(kAttachedTaskSettle);
+      await tester.pump(kAttachedTaskOpenTimeout);
+      expect(problem, isNull);
+      expect(session.calls, ['file:shot.png', 'paste: ', 'send:Look']);
+    });
+
     test('files first, each followed by a space, then the task', () async {
       final app = _app();
       addTearDown(app.dispose);
@@ -315,6 +430,41 @@ void main() {
         'send:Summarise these',
       ]);
     });
+
+    test(
+      'a file that did not arrive is logged by its place, not its name',
+      () async {
+        final previousLog = appLog;
+        final stream = LogStream();
+        appLog = StreamAppLog(stream);
+        addTearDown(() => appLog = previousLog);
+        final app = _app();
+        addTearDown(app.dispose);
+        final session = _RecordingSession(refuse: {'zebra-orchard.pdf'});
+        app.adoptSessionForTest(session);
+        final problem = await deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png'), _file('zebra-orchard.pdf')],
+          task: 'Summarise these',
+        );
+        expect(
+          problem,
+          'Could not attach zebra-orchard.pdf. Attach it in the pane.',
+        );
+        expect(
+          stream.entries.where(
+            (e) => e.message == 'file 2 of 2 did not reach a1',
+          ),
+          hasLength(1),
+        );
+        expect(
+          stream.entries.where((e) => e.message.contains('zebra-orchard')),
+          isEmpty,
+        );
+      },
+    );
 
     testWidgets('waits for the engine to be ready before handing anything', (
       tester,

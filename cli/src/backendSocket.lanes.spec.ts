@@ -104,7 +104,7 @@ describe('a remote client\'s keystrokes', () => {
     void binary(input(STREAM_A, 1))
     await binary(input(STREAM_A, 2))
     expect(seen).toEqual([`input:${STREAM_A}:2`])
-    expect(error).toHaveBeenCalledWith('[backend] binary terminal dispatch failed:', 'tmux went away')
+    expect(error).toHaveBeenCalledWith('[backend] binary terminal dispatch failed:', 'Error')
     await socket.stop()
   })
 })

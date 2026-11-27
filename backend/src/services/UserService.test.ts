@@ -25,7 +25,6 @@ import {
   provisionalEmailForExternalId,
   userService,
 } from './UserService.js'
-import { FOLLOW_WAIT_MS, onAccountRenamed } from '../superTabs/accountRenames.js'
 
 const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: 'u1',
@@ -363,45 +362,5 @@ describe('a change to what a sign-in answers ends every pod\'s remembered sign-i
     await userService.remove('u1')
     expect(signInsChanged).toHaveBeenCalledWith('u1')
     after(remove)
-  })
-})
-
-// anh Dee, 2026-11-10: a person's name in each of their Swarms follows their account's (superTabs/accountRenames.ts).
-describe('the account name the Swarms follow', () => {
-  const told: unknown[] = []
-  beforeEach(() => {
-    told.length = 0
-    onAccountRenamed(async rename => { told.push(rename) })
-  })
-  afterEach(() => onAccountRenamed(null))
-
-  it('tells the Swarms of a new name, the person\'s or an admin\'s, and of no other change', async () => {
-    findUnique.mockResolvedValue(row({ name: 'A' }))
-    await userService.update('u1', { name: 'A' })
-    await userService.update('u1', { role: 'admin' })
-    expect(told).toEqual([])
-    await userService.update('u1', { name: 'Ada King' })
-    expect(told).toEqual([{ userId: 'u1', autonomousEnv: 'prod' }])
-  })
-
-  it('tells them of a name a sign-in fills into an account that had none', async () => {
-    findUnique.mockResolvedValue(row({ name: null }))
-    await userService.upsertFromSso({ externalId: 'prod-sub-1', email: 'a@example.com', autonomousEnv: 'prod', name: 'Nguyen Phan Thuy' })
-    expect(told).toEqual([{ userId: 'u1', autonomousEnv: 'prod' }])
-  })
-
-  it('answers the rename however the Swarms fare: a failure is logged, a slow one is not waited for past its bound', async () => {
-    findUnique.mockResolvedValue(row({ name: 'A' }))
-    onAccountRenamed(async () => { throw new Error('down') })
-    await expect(userService.update('u1', { name: 'Ada' })).resolves.toMatchObject({ name: 'Ada' })
-    vi.useFakeTimers()
-    try {
-      onAccountRenamed(() => new Promise(() => {}))
-      const renaming = userService.update('u1', { name: 'Ada Lovelace' })
-      await vi.advanceTimersByTimeAsync(FOLLOW_WAIT_MS)
-      await expect(renaming).resolves.toMatchObject({ name: 'Ada Lovelace' })
-    } finally {
-      vi.useRealTimers()
-    }
   })
 })

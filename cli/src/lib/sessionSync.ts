@@ -1,5 +1,6 @@
 import { isTerminalEngine } from '../engines/types.js'
 import type { AgentFrame } from './agentFrame.js'
+import { errorKind } from './log.js'
 import type { RegisteredSession } from './registry.js'
 
 export interface SessionSyncDeps {
@@ -9,7 +10,7 @@ export interface SessionSyncDeps {
   sendCommander(frame: { type: string; payload: Record<string, unknown> }): void
   onUnavailable?(agentId: string): void
   onFailed?(agentId: string, detail: string): void
-  warn(error: unknown): void
+  warn(kind: string): void
 }
 
 /** Publish registry updates to the app and the dial without treating a liveness hint as an ending. */
@@ -34,7 +35,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
       deps.send(frame)
       if (device) deps.sendCommander(frame)
     } catch (error) {
-      deps.warn(error)
+      deps.warn(errorKind(error))
     }
   }
 }

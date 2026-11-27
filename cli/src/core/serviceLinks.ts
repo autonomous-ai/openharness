@@ -42,6 +42,8 @@ export interface ServiceLink {
 }
 
 export interface ServiceQueryAuthority {
+  /** Still the authenticated connection that issued this query, after asynchronous dispatch. */
+  current?(): boolean
   /** Checked inside a commit, after all asynchronous query dispatch: the exact routed owner request is still live. */
   ownsRequest(id: string, type: string, expected: Record<string, unknown>): boolean
 }
@@ -72,7 +74,8 @@ export interface ServiceLinksOptions {
   onDemand?: ReadonlySet<string>
   /** Of those, the ones whose requests also wait for them to come back after they connected and went (a crash, a
    *  kill, the master's restart for an update), as a first start is waited for: asked for again, within the same
-   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's (core/main.ts). */
+   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's and the engine
+   *  probe's (core/main.ts). */
   waitsThroughRestart?: ReadonlySet<string>
   /** How long a service on demand may take to connect from when it is first asked for (`ON_DEMAND_START_MS`), and, by service,
    *  the ones that may take longer (`startWaits`: Claude Code's and Codex's readers, `READER_START_MS`). */
@@ -270,7 +273,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         clearTimer(entry.timer)
         entry.timer = setTimer(() => settle(id, entry, unavailable(service)), entry.wait)
       }
-      const authority: ServiceQueryAuthority = { ownsRequest(id, type, expected) {
+      const authority: ServiceQueryAuthority = { current: () => links.get(service) === connected, ownsRequest(id, type, expected) {
         const entry = waiting.get(id)
         return !!entry && entry.service === service && entry.type === type && entry.connection === connected
           && links.get(service) === connected && now() <= entry.expiresAt
@@ -310,11 +313,12 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     },
 
     /** Route a request a service owns: false when no service owns `type`, and the core answers it itself.
-     *  The asker goes beside the payload, never in it, so nothing a client writes can stand for it. */
-    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
+     *  The asker goes beside the payload, never in it, so nothing a client writes can stand for it. `waitMs`: how long
+     *  its answer is waited for, a door's route's own (core/serviceRoutes.ts); its type's wait otherwise. */
+    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): boolean {
       const service = ownerOf.get(type)
       if (!service) return false
-      ask(service, type, payload, asker, reply)
+      ask(service, type, payload, asker, reply, waitMs)
       return true
     },
 

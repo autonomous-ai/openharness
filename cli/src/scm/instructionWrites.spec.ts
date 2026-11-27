@@ -6,7 +6,7 @@ import { PROCESS_ENGINES } from '../engines/types.js'
 import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
 import type { InstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
-import type { ApiConnections } from '../lib/apiConnections.js'
+import type { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 
 // `prepareScmWrite` is handed PROJECT_INSTRUCTION_FILES before Harness writes into a project's
@@ -55,12 +55,12 @@ describe('the files an SCM is asked to prepare before Harness writes instruction
   }
 
   it('names every file the saved-API notes go in', () => {
-    const store = { list: () => [{ id: 'api' }] } as unknown as ApiConnections
+    const store: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => true }
     for (const engine of [...PROCESS_ENGINES, 'gemini']) {
       rmSync(ws, { recursive: true, force: true })
       mkdirSync(ws)
       const before = snapshot()
-      prepareApiInstructions(store, ws, engine)
+      prepareApiInstructions(store, ws, engine, root)
       const written = touched(before)
       // OpenClaw reads its own workspace's instructions, never the pane folder's: it gets no notes there.
       if (engine === 'openclaw') { expect(written).toEqual([]); continue }

@@ -9,7 +9,7 @@ import { externalEvidenceActive, externalReadFailed } from '../../lib/sessionSea
 
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readHead, readJson, readTail, readText, record, text } from '../../lib/sessionSearch/externals/support.js'
-import { argvTokens, engineProcessMatch, resumeSessionId } from '../../lib/processTable.js'
+import { argvTokens, commandOf, engineProcessMatch, resumeSessionId } from '../../lib/processTable.js'
 import {
   type ExternalEngine, type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type Ownership, type ProcessView,
   type RunningProcess, type ScanContext, UNSETTLED,
@@ -42,7 +42,9 @@ function originOf(fields: Record<string, unknown>, origin: Head['origin']): Exte
   const value = fields[origin.field]
   if (typeof value !== 'string' || !Object.hasOwn(origin.values, value)) return null
   const rule = origin.values[value]
-  return typeof rule === 'string' ? rule : fields[rule.field] === rule.is ? rule.then : rule.otherwise
+  if (typeof rule === 'string') return rule
+  const second = fields[rule.field]
+  return typeof second === 'string' && Object.hasOwn(rule.values, second) ? rule.values[second] : rule.otherwise
 }
 
 /** What a head record says: its conversation, folder and author, or null when it is not a person's. */
@@ -123,9 +125,14 @@ export async function walkFiles(dir: string, files: Extract<AdoptionContract['fi
 /** Whether a process serves other clients rather than a person's terminal. */
 export function servesOthers(row: RunningProcess | undefined, servers: Extract<Owners, { open: unknown }>['open']['servers']): boolean {
   if (!row) return false
-  if (servers.executable.test(row.executable) || servers.args.test(row.args)) return true
+  const command = commandOf(row)
+  if (servers.executable.test(command) || servers.args.test(row.args)) return true
+  // `args` is split at a space, so under `…/Application Support/…` its second word is a piece of the path: the
+  // arguments are what follows the whole command path when `args` starts with it.
+  const rest = row.args.startsWith(command) ? row.args.slice(command.length) : null
+  const args = rest !== null && (rest === '' || /^\s/.test(rest)) ? argvTokens(rest) : argvTokens(row.args).slice(1)
   // The subcommand: the first argument that is not an option.
-  const subcommand = argvTokens(row.args).slice(1).find((token) => !token.startsWith('-'))
+  const subcommand = args.find((token) => !token.startsWith('-'))
   return !!subcommand && servers.subcommands.includes(subcommand)
 }
 

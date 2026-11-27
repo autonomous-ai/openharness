@@ -3,7 +3,7 @@
  * process): the same handler as in the core's process (services/machineAddons.ts). It asks the core only where this
  * daemon runs (`daemon`), for this machine's account id; what it holds is RAM, bounded as v1's add-ons are.
  */
-import type { DaemonAddress } from '../core/api.js'
+import type { DaemonAddress, ServiceRequest } from '../core/api.js'
 import { startMachineAddons } from './machineAddons.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { daemonIn, processCoreApi } from './processCoreApi.js'
@@ -32,19 +32,17 @@ export function runMachineAddonsService(options: MachineAddonsServiceOptions): S
     }).finally(() => { reading = null })
   }
   const requests = startMachineAddons(processCoreApi(options.dataDir, 'machineAddons', { daemon: () => daemon }))
+  /** The machine's id asked for first: the add-ons refuse to serve without it (lib/autonomous-device/machineAddons.ts). */
+  const afterKnown = (answer: ServiceRequest): ServiceRequest => async (payload, asker, closed) => {
+    await known().catch(() => {})
+    return answer(payload, asker, closed)
+  }
   return (options.run ?? runServiceProcess)({
     name: 'machineAddons',
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    requests: {
-      machine_addon: async (payload, asker, closed) => {
-        await known().catch(() => {})
-        // Never as `''`: a device named nothing would take no proposal and be listed as no machine.
-        if (!daemon?.machineId()) return { error: { code: 'UNAVAILABLE', message: 'This machine\'s id is not known yet. Try again in a moment.' } }
-        return requests.machine_addon!(payload, asker, closed)
-      },
-    },
+    requests: { machine_addon: afterKnown(requests.machine_addon!), machine_addons_http: afterKnown(requests.machine_addons_http!) },
     onConnected: (connection) => { core = connection; void known().catch(() => {}) },
     onDisconnected: () => { core = null },
   })

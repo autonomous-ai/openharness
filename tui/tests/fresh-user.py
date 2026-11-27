@@ -19,6 +19,8 @@ import subprocess
 import tempfile
 import time
 
+import harness_home
+
 
 class User:
     def __init__(self, state):
@@ -57,8 +59,12 @@ class User:
             time.sleep(.025)
         raise AssertionError('Popup did not settle\n' + self.screen())
 
+    def folder(self, entry):
+        # Looked up at each use: the daemon's first start moves a ~/.harness home to the XDG folders.
+        return harness_home.path(self.home, self.env, entry)
+
     def native(self, *args):
-        return subprocess.check_output([str(self.home / '.harness/bin/harness-tui'), *args],
+        return subprocess.check_output([str(self.folder('bin') / 'harness-tui'), *args],
                                        env=self.env, cwd=self.home, text=True, timeout=15).strip()
 
     def zoom(self):
@@ -192,7 +198,7 @@ class User:
         conn.sock = socket.socket(socket.AF_UNIX)
         conn.sock.settimeout(3)
         try:
-            conn.sock.connect(str(self.home / '.harness/cli/data' / f'daemon-{self.env["PORT"]}.sock'))
+            conn.sock.connect(str(self.folder('cli') / 'data' / f'daemon-{self.env["PORT"]}.sock'))
             conn.request('GET', '/api/status')
             response = conn.getresponse()
             assert response.status == 200
@@ -201,7 +207,7 @@ class User:
             conn.close()
 
     def stop(self):
-        native = self.home / '.harness/bin/harness-tui'
+        native = self.folder('bin') / 'harness-tui'
         if native.exists():
             subprocess.run([str(native), 'kill-server'], env=self.env, cwd=self.home,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
@@ -210,7 +216,7 @@ class User:
             subprocess.run([str(launcher), 'stop'], env=self.env, cwd=self.home,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25)
         self.outer('kill-server', check=False)
-        marker = self.home / '.harness/runtime/current-tmux'
+        marker = self.folder('runtime') / 'current-tmux'
         if marker.exists():
             subprocess.run([marker.read_text().strip(), 'kill-server'], env=self.env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
@@ -243,8 +249,8 @@ def start():
                                 env=env, cwd=home, stdout=log, stderr=subprocess.STDOUT, timeout=600)
     assert result.returncode == 0, (root / 'install.log').read_text()
     # Optional local candidates are applied only after the real public installer completes.
-    for variable, destination in [('HN_FRESH_USER_CLI', home / '.harness/cli/cli.js'),
-                                  ('HN_FRESH_USER_BINARY', home / '.harness/bin/harness-tui')]:
+    for variable, destination in [('HN_FRESH_USER_CLI', harness_home.path(home, env, 'cli') / 'cli.js'),
+                                  ('HN_FRESH_USER_BINARY', harness_home.path(home, env, 'bin') / 'harness-tui')]:
         if os.environ.get(variable):
             shutil.copy2(os.environ[variable], destination)
     env['PATH'] = f'{home}/.local/bin:' + env['PATH']

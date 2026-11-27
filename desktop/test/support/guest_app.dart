@@ -8,6 +8,7 @@ class GuestTestApp extends AppNotifier {
     super.configStore,
     super.cliLogin,
     super.environmentProvisioner,
+    super.localCliDiscovery,
     super.agentPrefetch,
     super.localManualFixture,
     super.paneLayoutStore,

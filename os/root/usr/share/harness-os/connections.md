@@ -3,7 +3,8 @@
 The user connects services once, in `harness connections`. Every agent running
 as this user gets the same accounts. A connection on another computer does not
 grant access here. Never copy tokens between machines, into chat or into
-project files, and never read the files under `~/.harness/connections`.
+project files, and never read the files under `~/.local/share/harness/connections`
+(`~/.harness/connections` on a computer whose Harness has not moved there yet).
 
 `harness connections list --json` lists this computer's connections. On the PC
 OS, choose **Connections** from the browser's New Tab page, or open

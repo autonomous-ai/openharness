@@ -1,0 +1,335 @@
+/**
+ * The dial skill in one agent home's `skills/dial/SKILL.md`, the same for Claude Code and Codex (both read
+ * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
+ * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
+ * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts,
+ * lib/settingsText.ts and ./dialSkillFiles.ts load only those, and the last nothing of this file's, so no cycle).
+ */
+import { randomUUID } from 'node:crypto'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { insideWindowsRoots } from '../lib/secureState.js'
+import { settingsText } from '../lib/settingsText.js'
+import { readSetup, readWritten, type DialEngine } from './dialSkillFiles.js'
+
+export const DIAL_SKILL_DESCRIPTION = 'Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "[the ask, one line]" --suggest "[your pick]" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress.'
+
+/** How every release's marker line opens, the one 0.6.58 wrote too: one rule knows them all, with no list of lines to
+ *  keep. The period tells it from Harness's other files (`# Written by Harness,`, `:` or ` (`), none of which sits at a
+ *  skill's path. */
+const MARKER_START = '# Written by Harness.'
+/** A YAML comment: both engines' front-matter parsers skip it, and Harness knows its own file by how it opens, whatever
+ *  the text around it, so a later release's text still reads as Harness's and is written over. */
+const DIAL_SKILL_MARKER = `${MARKER_START} Remove it with harness device claude disable or harness device codex disable.`
+
+/** The description is quoted: its `: ` ends a plain YAML scalar, and the engine would skip the skill without a word. */
+export const DIAL_SKILL = `---
+name: dial
+description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
+${DIAL_SKILL_MARKER}
+---
+
+The person has a Harness dial on their desk. It tells them an agent needs them, so they never have to ask.
+
+Before you end a turn that leaves the person something to decide, answer or do, run once:
+
+    harness device notify "<the ask, in one line>" --suggest "<your recommendation, a few words>" --waiting
+
+When a decision comes up mid-turn and you can go on with your recommendation, run it with --proceeding and keep
+working.
+
+- Every such turn, a short one too, and also when the person has just written to you: Harness decides whether the
+  dial sounds.
+- Never block on the person: no question form or tool (AskUserQuestion, request_user_input) for this. Ask in text.
+- \`--waiting\`: when the person's own instructions say this must wait for them; when you cannot go on without them (a
+  key, a code, a VPN, a sign-in); or when the step cannot be taken back or others see it (deleting data, a deploy, a
+  push others build on, spending money, a message to someone else). Work on the other parts meanwhile.
+- Never for finished work, for progress, or to offer more work: only when the person must decide, answer or act for
+  the task to go on.
+- One notice per ask, never twice. Several at once: one notice for the most important, the rest in your answer.
+- Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
+- In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
+  what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
+  prints, your answer carries the ask.
+`
+
+export const DIAL_PLUGIN_ID = 'harness-device@openharness'
+
+const SKILL_BYTES = Buffer.from(DIAL_SKILL)
+/** Harness's skill is well under this; a longer file is the person's and is never read whole. */
+const MAX_SKILL_BYTES = 4096
+/** A settings.json is a few keys; one past this is not read whole. */
+const MAX_SETTINGS_BYTES = 1024 * 1024
+
+type Owned = 'ok' | 'missing' | 'owner' | 'unreadable'
+
+/** Windows gives no uid (-1): there the profile decides (ownWindowsPath). */
+function ownUid(): number {
+  return process.getuid?.() ?? -1
+}
+
+/** The profile alone, resolved: not the data folder windowsStateRoots() also allows, since a skill home is the person's
+ *  engine home, never Harness's data. None when it cannot be resolved, so nothing is this account's. */
+function profileRoots(): string[] {
+  try {
+    return [realpathSync.native(homedir())]
+  } catch {
+    return []
+  }
+}
+
+/** Windows' roots by default, none elsewhere: there the uid decides. */
+function platformRoots(): readonly string[] | undefined {
+  return process.platform === 'win32' ? profileRoots() : undefined
+}
+
+function missingOr(error: unknown): 'missing' | 'unreadable' {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unreadable'
+}
+
+/**
+ * This account's own on Windows: its real path is inside a root (lib/secureState.ts `insideWindowsRoots`). The
+ * profile's ACL is what protects it; a uid means nothing there. A folder is judged through its links and junctions, as a
+ * Mac's stat follows them: its real folder decides. A file must be real, as a state file is: a link to one (lstat
+ * reports junctions as links too) is the person's wherever it points. 'owner' for such a link or a path outside.
+ */
+export function ownWindowsPath(path: string, kind: 'file' | 'directory', roots: readonly string[] = profileRoots()): Owned {
+  let real
+  let info
+  try {
+    if (kind === 'file' && lstatSync(path).isSymbolicLink()) return 'owner'
+    real = realpathSync.native(path)
+    info = statSync(real)
+  } catch (error) {
+    return missingOr(error)
+  }
+  if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) return 'missing'
+  return insideWindowsRoots(real, roots) ? 'ok' : 'owner'
+}
+
+/** 'ok', or why a path is no folder of this user's: 'unreadable' when it cannot be looked at now (a folder above it
+ *  shut), which says nothing of it being gone, so a listed folder stays listed. With roots (Windows'), no uid is read. */
+export function ownDirectory(path: string, uid = ownUid(), windowsRoots: readonly string[] | undefined = platformRoots()): Owned {
+  if (windowsRoots) return ownWindowsPath(path, 'directory', windowsRoots)
+  let info
+  try {
+    info = statSync(path)
+  } catch (error) {
+    return missingOr(error)
+  }
+  if (!info.isDirectory()) return 'missing'
+  return info.uid === uid ? 'ok' : 'owner'
+}
+
+/**
+ * `<home>/skills` through its link: an Orca profile's `skills/` points at `~/.claude/skills`, and homes that share one
+ * folder are one write. null: not a directory this user owns, or missing and not made.
+ */
+export function skillsFolderOf(home: string, make: boolean, uid = ownUid(), windowsRoots: readonly string[] | undefined = platformRoots()): string | null {
+  const skills = join(home, 'skills')
+  let real: string
+  try {
+    real = realpathSync(skills)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !make) return null
+    try {
+      // A dangling link is the person's: mkdir fails on it, and nothing is made at its target.
+      mkdirSync(skills, { recursive: true, mode: 0o700 })
+      real = realpathSync(skills)
+    } catch {
+      return null
+    }
+  }
+  return ownDirectory(real, uid, windowsRoots) === 'ok' ? real : null
+}
+
+export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'failed' {
+  const now = held(skills)
+  if (now === 'same' || now === 'theirs') return now
+  const folder = join(skills, 'dial')
+  let made = false
+  try {
+    // Not recursive: `skills` is the resolved folder, and a `dial` already there was checked to be a real folder.
+    mkdirSync(folder, { mode: 0o700 })
+    made = true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return 'failed'
+  }
+  if (put(folder)) return 'written'
+  // Left empty, the folder this call made would be nobody's.
+  if (made) removeEmpty(folder)
+  return 'failed'
+}
+
+/** A recorded home: Harness's own file with other bytes is written again; one that is gone was removed by the person. */
+export function refreshSkill(skills: string): 'updated' | 'same' | 'gone' | 'theirs' | 'failed' {
+  const now = held(skills)
+  if (now === 'none') return 'gone'
+  if (now === 'same' || now === 'theirs') return now
+  return put(join(skills, 'dial')) ? 'updated' : 'failed'
+}
+
+/** DIAL_SKILL into [folder] through a temp file, on disk before it is renamed into place: an engine, or a crash, never
+ *  sees half a skill, which would read as the person's. */
+function put(folder: string): boolean {
+  const temporary = join(folder, `.SKILL.md.${process.pid}.${randomUUID()}.tmp`)
+  try {
+    const fd = openSync(temporary, 'wx', 0o600)
+    try {
+      writeFileSync(fd, DIAL_SKILL)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(temporary, join(folder, 'SKILL.md'))
+    return true
+  } catch {
+    rmSync(temporary, { force: true })
+    return false
+  }
+}
+
+export function removeSkill(skills: string): 'removed' | 'none' | 'theirs' | 'failed' {
+  const now = held(skills)
+  if (now === 'none' || now === 'theirs') return now
+  const folder = join(skills, 'dial')
+  try {
+    unlinkSync(join(folder, 'SKILL.md'))
+  } catch (error) {
+    // Another remover took it first: the command and the devices service both remove once `disable` marks the removal.
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'failed'
+  }
+  // `skills` is the person's agent folder and stays.
+  removeEmpty(folder)
+  return 'removed'
+}
+
+/** Only an empty folder goes: a file of the person's beside the skill makes the folder theirs. */
+function removeEmpty(folder: string): void {
+  try {
+    rmdirSync(folder)
+  } catch {
+    // Not empty, or already gone.
+  }
+}
+
+/**
+ * Claude Code's own record of the plugin, in its user settings, from one read: 'on' while its entry is true,
+ * 'turned-off' once the person turned it off (the entry false, as `claude plugin disable` and /plugin leave it), 'off'
+ * while it has no entry (never set there, or uninstalled) or another value, 'unknown' when the file says nothing. One
+ * read, so a file written again between two reads never mixes their answers.
+ */
+export function readClaudePlugin(settingsPath: string): 'on' | 'off' | 'turned-off' | 'unknown' {
+  const entry = pluginEntry(settingsPath)
+  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : entry === false ? 'turned-off' : 'off'
+}
+
+/** As readClaudePlugin, turned off or gone alike 'off': disabled or uninstalled. */
+export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+  const state = readClaudePlugin(settingsPath)
+  return state === 'turned-off' ? 'off' : state
+}
+
+/** Whether the person turned the plugin off in these settings. An entry gone says no such thing: never set there, or
+ *  uninstalled. */
+export function claudePluginTurnedOff(settingsPath: string): boolean {
+  return readClaudePlugin(settingsPath) === 'turned-off'
+}
+
+const UNKNOWN = Symbol('unknown')
+
+/**
+ * The plugin's entry as Claude Code's user settings hold it, undefined when they have none; UNKNOWN when the file says
+ * nothing: missing, not a regular file, past 1 MiB, not UTF-8, not JSON or not an object. One read, sized by the file:
+ * the plugin's hook and mod read it on every call. The devices read it at a hook-given path too (cable/hosts/observed.ts),
+ * so only a regular file is opened.
+ */
+function pluginEntry(settingsPath: string): unknown {
+  let settings: unknown
+  try {
+    // Before it is opened: opening a device has effects of its own, such as a serial port's DTR.
+    if (!statSync(settingsPath).isFile()) return UNKNOWN
+    // No wait on a FIFO swapped in after the stat, and no tty becomes this process's controlling terminal.
+    const fd = openSync(settingsPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY)
+    try {
+      const info = fstatSync(fd)
+      if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return UNKNOWN
+      const buffer = Buffer.allocUnsafe(info.size)
+      const length = readSync(fd, buffer, 0, info.size, 0)
+      settings = JSON.parse(settingsText(buffer.subarray(0, length)))
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return UNKNOWN
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return UNKNOWN
+  const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
+  return !!plugins && typeof plugins === 'object' ? (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] : undefined
+}
+
+/** The engines whose skill Harness's own file is in now: per engine, dial-setup.json's folders, dial-skill.json's,
+ *  then the default home's skills/ (only when none of those held it); stops at the first. Reads only: the folders
+ *  Harness may have written it in are recorded, so no home is scanned. A record that cannot be read holds none. */
+export function installedSkills(dataDir: string, homes: Record<DialEngine, string>, uid = ownUid(),
+  windowsRoots: readonly string[] | undefined = platformRoots()): DialEngine[] {
+  const setup = readSetup(dataDir).homes
+  const written = readWritten(dataDir)
+  return (['claude', 'codex'] as const).filter((engine) => {
+    // A folder in both records is looked at once.
+    for (const skills of new Set([...setup[engine], ...written[engine]])) if (ownSkill(skills)) return true
+    const fallback = skillsFolderOf(homes[engine], false, uid, windowsRoots)
+    return fallback !== null && ownSkill(fallback)
+  })
+}
+
+/** Whether [skills] holds Harness's own skill, of any release's text. */
+export function ownSkill(skills: string): boolean {
+  const now = held(skills)
+  return now === 'same' || now === 'ours'
+}
+
+/**
+ * Harness's own skill is a regular file, never a link to one, of at most 4 KiB whose front matter holds a marker line;
+ * 'same' is that file holding exactly DIAL_SKILL. A `dial` that is a link or not a folder is the person's: nothing is
+ * read or written through it.
+ */
+function held(skills: string): 'same' | 'ours' | 'none' | 'theirs' {
+  const folder = join(skills, 'dial')
+  try {
+    if (!lstatSync(folder).isDirectory()) return 'theirs'
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'none' : 'theirs'
+  }
+  let fd: number
+  try {
+    // No link followed, and no wait on a FIFO left at the path.
+    fd = openSync(join(folder, 'SKILL.md'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'theirs'
+  }
+  try {
+    const info = fstatSync(fd)
+    if (!info.isFile() || info.size > MAX_SKILL_BYTES) return 'theirs'
+    const bytes = Buffer.alloc(info.size)
+    const length = readSync(fd, bytes, 0, bytes.length, 0)
+    const text = bytes.subarray(0, length)
+    if (!marked(text.toString('utf8'))) return 'theirs'
+    return text.equals(SKILL_BYTES) ? 'same' : 'ours'
+  } catch {
+    return 'theirs'
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** The first line is `---`, and a line before the next `---` starts with MARKER_START, so the line any release wrote is
+ *  Harness's. Lines end with `\n`: a CRLF copy is the person's. */
+function marked(text: string): boolean {
+  const lines = text.split('\n')
+  const end = lines.indexOf('---', 1)
+  return lines[0] === '---' && end > 0 && lines.slice(1, end).some((line) => line.startsWith(MARKER_START))
+}

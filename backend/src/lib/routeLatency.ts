@@ -10,17 +10,14 @@ import { logger } from '../utils/logger.js'
  * percentiles; its count and max cover every request.
  */
 
-type Window = { n: number; max: number; samples: number[]; clients: Record<string, number>; empty: number; bytes: number }
+type Window = { n: number; max: number; samples: number[]; clients: Record<string, number>; bytes: number }
 
-/** A reply that carried nothing new for its reader (an empty poll), and each reply's size: what polling costs for nothing
- *  (spec 2026-11-02 poll cost, Part 0). */
-export type ReplyFacts = { empty?: boolean; bytes?: number }
+/** Each reply's size (spec 2026-11-02 poll cost, Part 0). */
+export type ReplyFacts = { bytes?: number }
 
-const nothingNew = new WeakSet<object>(), replyBytes = new WeakMap<object, number>()
-/** Says this request's reply carries nothing new for its reader: a poll that found no change. */
-export function markNothingNew(request: FastifyRequest): void { nothingNew.add(request) }
+const replyBytes = new WeakMap<object, number>()
 
-/** Who sent a request, from what every client sends anyway (2026-10-31: who reads Swarm messages so often was unknown):
+/** Who sent a request, from what every client sends anyway (2026-10-31: who called so often was unknown):
  *  the web build's browser, the Desktop and phone apps' Dart client, the CLI daemon's Node client, and a read as an agent
  *  (`asAgentId`), which only the CLI sends. Never the user agent itself, nor the agent. */
 export type ClientKind = 'web' | 'app' | 'cli' | 'agent' | 'other'
@@ -62,11 +59,10 @@ export function createRouteLatency({ pod = `${hostname()}:${process.pid}`, maxSa
     if (!window) {
       const key = routes.size >= maxRoutes - 1 ? OTHER : route
       window = routes.get(key)
-      if (!window) routes.set(key, window = { n: 0, max: 0, samples: [], clients: {}, empty: 0, bytes: 0 })
+      if (!window) routes.set(key, window = { n: 0, max: 0, samples: [], clients: {}, bytes: 0 })
     }
     window.n++
     if (client) window.clients[client] = (window.clients[client] ?? 0) + 1
-    if (facts.empty) window.empty++
     if (facts.bytes) window.bytes += facts.bytes
     if (ms > window.max) window.max = ms
     if (window.samples.length < maxSamples) window.samples.push(ms)
@@ -81,7 +77,7 @@ export function createRouteLatency({ pod = `${hostname()}:${process.pid}`, maxSa
       const sorted = w.samples.sort((a, b) => a - b)
       const mean = sorted.reduce((total, ms) => total + ms, 0) / (sorted.length || 1)
       return { route, totalMs: mean * w.n, stats: { n: w.n, p50: round(percentile(sorted, 50)), p95: round(percentile(sorted, 95)), max: round(w.max),
-        ...(Object.keys(w.clients).length ? { clients: w.clients } : {}), ...(w.empty ? { empty: w.empty } : {}), ...(w.bytes ? { bytes: w.bytes } : {}) } }
+        ...(Object.keys(w.clients).length ? { clients: w.clients } : {}), ...(w.bytes ? { bytes: w.bytes } : {}) } }
     }).sort((a, b) => b.totalMs - a.totalMs).slice(0, top)
     log('route latency', { pod, windowMs: Math.round(performance.now() - started), requests: [...routes.values()].reduce((total, w) => total + w.n, 0),
       routes: Object.fromEntries(rows.map(r => [r.route, r.stats])) })
@@ -108,7 +104,7 @@ export function registerRouteLatency(app: FastifyInstance, { observe, ...options
     const asAgent = typeof (request.query as Record<string, unknown> | undefined)?.asAgentId === 'string'
     const route = request.routeOptions.url ?? 'unrouted'
     latency.record(`${request.method} ${route}`, reply.elapsedTime, clientKind(request.headers['user-agent'], asAgent),
-      { empty: nothingNew.has(request), bytes: replyBytes.get(request) })
+      { bytes: replyBytes.get(request) })
     observe?.(request.method, route, reply.statusCode, reply.elapsedTime / 1000)
     done()
   })

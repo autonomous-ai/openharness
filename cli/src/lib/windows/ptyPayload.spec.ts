@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process'
-import { chmodSync, existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,7 @@ import {
   PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, CANARY_HOME_STALE_MS, SERVE_CANARY_BOUND_MS, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey,
   probeVersionLine, processesInFolder, ptyUpdateWanted, serveCanary, sweepCanaryHomes, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 let tmp: string
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'pty-payload-')) })
@@ -177,6 +178,33 @@ describe('preparePtyPayload failure kinds', () => {
     await expect(run({ probe: async () => { throw new Error('exit 1') } })).rejects.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
   })
+  it('each refusal carries a fixed code, which the log reads instead of its words', async () => {
+    const cases: Array<[string, () => ReturnType<typeof run>]> = [
+      ['DIGEST_MISMATCH', () => run({ download: async () => { throw new DigestMismatchError('bad') } })],
+      ['WRONG_FILES', () => run({}, PTY_PAYLOAD_FILES.slice(1))],
+      ['NOT_SIGNED', () => run({ signatures: async () => ['harness-launch.exe is NotSigned'] })],
+      ['PROBE_FAILED', () => run({ probe: async () => { throw new Error('exit 1') } })],
+      ['PROBE_NOT_JSON', () => run({ probe: async () => null })],
+      ['PTY_VERSION_MISMATCH', () => run({ probe: goodProbe({ version: '0.9.0' }) })],
+      ['PROTOCOL_UNSUPPORTED', () => run({ probe: goodProbe({ protocol: 0 }) })],
+      ['NO_FEATURES', () => run({ probe: goodProbe({ features: 'seed' }) })],
+      ['SERIAL_VERSION_MISMATCH', () => run({ probe: goodProbe({}, { version: '0.9.0' }) })],
+      ['SERVE_FAILED', () => run({ serve: async () => { throw new Error('its create failed') } })],
+    ]
+    // One at a time: a staging folder is named by the millisecond it was made in.
+    for (const [code, prepare] of cases) {
+      const err = await prepare().catch((e) => e)
+      expect(err, code).toBeInstanceOf(PtyPayloadRefused)
+      expect(err.code, code).toBe(code)
+    }
+    expect(leftovers()).toEqual([])
+  })
+  it('a failed unpack keeps the tool\'s error as its cause, whose code the log reads', async () => {
+    const full = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+    const err = await run({ unzip: async () => { throw full } }).catch((e) => e)
+    expect(err).toBeInstanceOf(PtyPayloadUnpackFailed)
+    expect(err.cause).toBe(full)
+  })
 })
 
 describe('the serve canary', () => {
@@ -204,7 +232,7 @@ describe('the serve canary', () => {
     await vi.advanceTimersByTimeAsync(SERVE_CANARY_BOUND_MS)
     await assertion
     expect(leftovers()).toEqual([])
-    // Cleanup included, under the updater's 30 s heartbeat timeout (harnessd/services.ts).
+    // Cleanup included, under the updater's 30 s heartbeat timeout (harnessd/serviceSupervisor.ts).
     expect(SERVE_CANARY_BOUND_MS).toBeLessThanOrEqual(20_000)
   })
 })
@@ -212,8 +240,7 @@ describe('the serve canary', () => {
 describe.skipIf(process.platform === 'win32')('serveCanary, against stand-in binaries', () => {
   function script(name: string, body: string): string {
     const file = join(tmp, name)
-    writeFileSync(file, `#!/bin/sh\n${body}\n`)
-    chmodSync(file, 0o755)
+    writeExecutable(file, `#!/bin/sh\n${body}\n`)
     return file
   }
   const canaryHomes = (dir: string) => readdirSync(dir).filter((n) => n.startsWith('harness-pty-canary-'))
@@ -297,10 +324,10 @@ describe('probeVersionLine', () => {
   // The same `<bin> version` run as ptyHost/launch.ts binaryVersion's (one implementation, 5 s, hidden).
   it.skipIf(process.platform === 'win32')('parses the last line a binary prints, and rejects one that fails', async () => {
     const good = join(tmp, 'good')
-    writeFileSync(good, '#!/bin/sh\necho "starting"\necho \'{"version":"0.11.0"}\'\n', { mode: 0o755 })
+    writeExecutable(good, '#!/bin/sh\necho "starting"\necho \'{"version":"0.11.0"}\'\n')
     await expect(probeVersionLine(good)).resolves.toEqual({ version: '0.11.0' })
     const bad = join(tmp, 'bad')
-    writeFileSync(bad, '#!/bin/sh\nexit 3\n', { mode: 0o755 })
+    writeExecutable(bad, '#!/bin/sh\nexit 3\n')
     await expect(probeVersionLine(bad)).rejects.toThrow()
   })
 

@@ -85,6 +85,8 @@ class Scripts(unittest.TestCase):
             (self.bin / tool).symlink_to(found)
         self.log = self.tmp / "log"
         self.home = self.tmp / "home"
+        # A home still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too (runtimes.sh's rule).
+        (self.home / ".harness").mkdir(parents=True)
         self.fake_venv_python = write_exe(self.tmp / "fake-venv-python", VENV_PYTHON)
 
     def uv(self):

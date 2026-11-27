@@ -91,7 +91,7 @@ export type TerminalActionResult =
 /** Optional core authority, checked after backend waits immediately before a command is sent. */
 export interface TerminalDispatchControl {
   current?: () => boolean
-  onDispatch?: () => void
+  onDispatch?: () => void | Promise<void>
   /** A held adoption may replace only its exact inert shell, checked inside tmux. */
   expectedHeldToken?: string
 }

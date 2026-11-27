@@ -7,6 +7,8 @@ import 'package:harness/companions/coding_memory_connection.dart';
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
+import 'support/loopback_websocket.dart';
+
 class _Log implements AppLog {
   final messages = <String>[];
   @override
@@ -42,7 +44,8 @@ void main() {
     appLog = log;
     server.listen((request) async {
       expect(request.headers.value('sec-websocket-protocol'), isNull);
-      final socket = await WebSocketTransformer.upgrade(request);
+      final socket = await acceptWebSocket(request);
+      if (socket == null) return;
       sockets.add(socket);
       socket.listen((data) async {
         final frame = jsonDecode(data as String) as Map<String, dynamic>;
