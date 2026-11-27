@@ -87,9 +87,12 @@ export async function runNotice(words: string[], deps: NoticeDeps): Promise<numb
   const said = typeof answer === 'object' ? answer?.result : undefined
   // The listener's own rate (429) refuses a loop of notices before the devices hear them: over a limit all the same.
   const result = answer === 429 ? 'limited' : isNoticeResult(said) ? said : 'no dial'
-  // A card shown has its id, so its agent can close it without a list.
+  // A card shown has its id, so its agent can close it without a list. A caller with no session gets none: `--done`
+  // sends nothing without one.
   const given = typeof answer === 'object' ? answer?.id : undefined
-  const id = result === 'shown' && typeof given === 'string' && NOTICE_CARD_ID.test(given) ? given : undefined
+  const id = result === 'shown' && caller.sessionId && typeof given === 'string' && NOTICE_CARD_ID.test(given)
+    ? given
+    : undefined
   if (json) deps.out(JSON.stringify(id ? { result, id } : { result }))
   else deps.out(id ? `${result} ${id}` : result)
   if (typeof answer === 'number' && answer !== 429) reason = `status ${answer}`
