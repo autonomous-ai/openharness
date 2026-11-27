@@ -4572,15 +4572,51 @@ describe('ObservedSource and a Codex on Windows after a restart', () => {
     expect(t.src.paneOf(agent.id, 'vscode')).toBe('term:421')
   })
 
-  it('two TUIs in its folder: on no app\'s page, never a guess', async () => {
-    const second = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
-    const t = windows([...vscodeTui(), daemon(421, 5), ...second], { 420: DIAL, 421: DIAL, 440: DIAL, 441: DIAL }, 430)
+  // Ken's VM, 2026-11-27 (#4663 step 10): two Codex TUIs in VS Code's terminals in one folder, the daemon restarted. Both
+  // sat on Other's page, and each turn's lookup put them there again.
+  const secondVscodeTui: Row[] = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`),
+    win(441, 440, 8, NATIVE)]
+  const twoInVscodeFolders = { 420: DIAL, 421: DIAL, 440: DIAL, 441: DIAL }
+
+  it('two TUIs in its folder, both in VS Code: on VS Code\'s page with no tab, and a daemon\'s turn keeps it there', async () => {
+    const t = windows([...vscodeTui(), daemon(421, 5), ...secondVscodeTui], twoInVscodeFolders, 430)
+    await t.src.scanOpen()
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: THREAD, app: 'vscode' })
+    expect(agent.appPending).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode')).toBeUndefined()
+    expect(t.src.windowOf(agent.id)).toBeUndefined()
+    t.src.ingest(t.hook('turn-start'))
+    await t.settled()
+    expect(t.lookups).toHaveLength(2)
+    expect(t.src.list()[0].app).toBe('vscode')
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
+  })
+
+  it('two TUIs in its folder, once one quit: a daemon\'s turn puts it at the one left\'s terminal', async () => {
+    const rows = [...vscodeTui(), daemon(421, 5), ...secondVscodeTui]
+    const t = windows(rows, twoInVscodeFolders, 430)
+    await t.src.scanOpen()
+    const { id } = t.src.list()[0]
+    rows.splice(rows.findIndex((row) => row.pid === 410), secondVscodeTui.length)
+    t.src.ingest(t.hook('turn-start'))
+    await t.settled()
+    expect(t.src.list()[0].app).toBe('vscode')
+    expect(t.src.paneOf(id, 'vscode-tab')).toBe('client:420')
+    expect(t.src.windowOf(id)).toEqual({ pid: 420, app: 'vscode', outer: true })
+  })
+
+  it('two TUIs in its folder, one in VS Code and one in Windows Terminal: on no app\'s page, never a guess', async () => {
+    const t = windows([...vscodeTui(4), daemon(421, 9), ...terminalTui], { 420: DIAL, 421: DIAL, 520: DIAL, 521: DIAL }, 430)
     await t.src.scanOpen()
     const agent = t.src.list()[0]
     expect(agent).toMatchObject({ sessionId: THREAD, app: 'terminal' })
     expect(agent.appPending).toBeUndefined()
+    t.src.ingest(t.hook('turn-start'))
+    await t.settled()
+    expect(t.src.list()[0].app).toBe('terminal')
     expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
-    expect(t.src.paneOf(agent.id, 'vscode')).toBeUndefined()
   })
 
   it('the daemon\'s parent is a TUI in Windows Terminal: VS Code\'s page, never the daemon\'s parents\'', async () => {
@@ -8035,6 +8071,28 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.lookup).toHaveBeenCalledTimes(3)
     await t.asks[2].answer([{ client: CLIENT }])
     expect(t.agent().app).toBe('terminal-app')
+  })
+
+  it('at its client\'s app with no tab, a tap brings that app forward, and each turn\'s start asks again until a tab is known', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    // Two TUIs in its folder, both in Terminal: the app is certain, the tab is not.
+    await t.asks[0].answer([{ client: { app: 'terminal-app' } }])
+    const { id } = t.agent()
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.src.tabTty(id)).toBeUndefined()
+    expect(t.src.windowOf(id)).toBeUndefined()
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+    expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+    expect(t.agent().app).toBe('terminal-app')
+    // One of them quit: the one left is the client.
+    await t.asks[1].answer([{ client: CLIENT }])
+    expect(t.src.tabTty(id)).toBe('/dev/ttys005')
+    expect(t.src.windowOf(id)).toEqual({ pid: 500, app: 'terminal-app', outer: true })
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
   })
 
   it('a session whose client exited leaves that tab at the next tick, which holds a shell now: on no page until asked again', async () => {
