@@ -131,7 +131,9 @@ export async function askDevices(
     if (signal.aborted) return nothing(`timeout ${headers ? 'in the body' : 'before headers'} (${Math.round(abortedAt - sent)} ms)`)
     if (error instanceof PipeUnproven) return nothing('unproven')
     if (error instanceof SyntaxError) return nothing('not json')
-    const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code
+    // fetch puts a connection's code on the cause; a failed body read puts it on the error itself.
+    const failed = error as { code?: unknown; cause?: { code?: unknown } } | null
+    const code = failed?.cause?.code ?? failed?.code
     if (code === 'ECONNREFUSED' || code === 'ENOENT') return nothing('no listener')
     return nothing(typeof code === 'string' && /^E[A-Z0-9_]+$/.test(code) ? `error ${code}` : 'error')
   } finally { bound.clear() }
