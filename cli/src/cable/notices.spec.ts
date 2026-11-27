@@ -171,13 +171,14 @@ describe('Notices', () => {
     expect(calls.map((c) => [c[0], c[1]])).toEqual([['ask', 'a1'], ['close', 'a1']])
   })
 
-  it('a dial that attaches is asked each pending card again, under its id', () => {
+  // It rang as it was asked: sent again, it would ring for a card the person may have answered already.
+  it('a dial that attaches is held each pending card again, under its id', () => {
     const { notices, calls, asks } = desk()
     notices.notify(notice(VPN, 'a1'))
     notices.notify(notice('Second agent line', 'a2'))
     notices.notify(notice('Third agent line', 'a3'))
     notices.ended('a2')
-    const before = asks().filter((c) => c[1] !== 'a2')
+    const before = asks().filter((c) => c[1] !== 'a2').map(([, agentId, id, questions]) => ['hold', agentId, id, questions])
     calls.length = 0
     notices.attached()
     expect(calls).toEqual(before)
@@ -197,18 +198,23 @@ describe('Notices', () => {
     expect(calls).toEqual([['ask', 'a1', qid(1), [{ key: 'notice', q: VPN, options: ['In Orca'] }]]])
   })
 
-  it('a notice another question of its agent covered is asked again under its id, as that one closes', () => {
-    const { notices, state, asks } = desk()
+  // The design's anti-goal: a ring for a card the person already answered. A card that rang is held from then on, its
+  // row back in the drawer with no ring.
+  it('a card that rang is held, not asked, when another question of its agent closes', () => {
+    const { notices, state, calls } = desk()
     notices.notify(notice(VPN))
+    calls.length = 0
     state.held.add('a1')
     notices.reask('a1')
-    expect(asks()).toHaveLength(1)
+    expect(calls).toEqual([])
     state.held.delete('a1')
     notices.reask('a1')
-    expect(asks()).toEqual([asks()[0], asks()[0]])
+    expect(calls).toEqual([['hold', 'a1', qid(1), [{ key: 'notice', q: VPN, options: ['In Orca'] }]]])
+    expect(state.redraws).toEqual([['a1']])
     notices.ended('a1')
+    calls.length = 0
     notices.reask('a1')
-    expect(asks()).toHaveLength(2)
+    expect(calls).toEqual([])
   })
 
   // A Harness agent's next turn reaches the devices only while a dial listens (services/recaps.ts): its card cannot
@@ -222,7 +228,7 @@ describe('Notices', () => {
     expect(calls.map((c) => [c[0], c[1]])).toEqual([['close', 'h1']])
     calls.length = 0
     notices.attached()
-    expect(calls.map((c) => [c[0], c[1]])).toEqual([['ask', 'o1']])
+    expect(calls.map((c) => [c[0], c[1]])).toEqual([['hold', 'o1']])
   })
 
   it('each pending card is a drawer row, newest first, for a drawer replaced whole', () => {
@@ -558,13 +564,13 @@ describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
     expect(state.redraws).toEqual([])
   })
 
-  // Decided by the PM (2026-11-26): it loses quiet, so from then it is a rung card.
+  // Decided by the PM (2026-11-26): it loses quiet, so from then it is a rung card, held when sent again.
   it('from then it is any rung card', () => {
     const { notices, calls } = quietly()
     notices.rouse('a1')
     calls.length = 0
     notices.attached()
-    expect(calls).toEqual([['ask', 'a1', qid(1, 2), asked]])
+    expect(calls).toEqual([['hold', 'a1', qid(1, 2), asked]])
     calls.length = 0
     notices.ended('a1')
     expect(calls).toEqual([['close', 'a1', qid(1, 2)]])
@@ -660,7 +666,7 @@ describe('Notices after a restart', () => {
     expect(calls.map((c) => [c[0], c[2]])).toEqual([['close', 'shown:k1'], ['ask', qid(1)]])
     calls.length = 0
     notices.attached()
-    expect(calls).toEqual([['ask', 'a1', qid(1), asked('Orca')]])
+    expect(calls).toEqual([['hold', 'a1', qid(1), asked('Orca')]])
   })
 
   it('restored cards count toward the twenty, waiting or not', () => {

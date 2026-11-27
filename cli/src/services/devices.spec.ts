@@ -9545,25 +9545,28 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('questionClose')).toEqual([['h1', own], [ID, outside]])
   })
 
-  it('a card for a session the observed source is switched off for is asked again, and stays through its next turn', () => {
+  // It rang as it was asked: a dial that attaches holds it, with no second ring.
+  it('a card for a session the observed source is switched off for is held again, and stays through its next turn', () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
     switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
     const { port, listener } = devices()
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
     seen.host.watching!(true)
-    expect(calls('question')).toEqual([[ID, ids()[0], card('Terminal')], [ID, ids()[0], card('Terminal')]])
+    expect(calls('question')).toEqual([[ID, ids()[0], card('Terminal')]])
+    expect(calls('hold')).toEqual([[ID, ids()[0], card('Terminal')]])
     port.observed(hook('turn-start'))
     expect(calls('questionClose')).toEqual([])
   })
 
-  it('a dial that attaches is asked the pending notices again', () => {
+  it('a dial that attaches is held the pending notices again', () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
     listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
     const [first] = calls('question')
     seen.host.watching!(true)
-    expect(calls('question')).toEqual([first, first])
+    expect(calls('question')).toEqual([first])
+    expect(calls('hold')).toEqual([first])
   })
 
   // A notice from an agent the person is with is a drawer row, held on the dial: no beep, no wake. Anything unknown is not
@@ -9753,7 +9756,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const asked = (sessionId: string): ObservedAsked => ({ engine: 'claude', sessionId, event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
     const asks = () => (calls('question') as Array<[string, string]>).map(([agentId, id]) => [agentId, id])
 
-    it('asked after the notice covers it, and the notice is asked again as that one closes', async () => {
+    // It rang as it was asked: given back, it is held, a drawer row with no second ring.
+    it('asked after the notice covers it, and the notice is held again as that one closes', async () => {
       vi.useFakeTimers()
       const { port, listener } = devices({ core: bound() })
       port.observed(hook('turn-start'))
@@ -9763,10 +9767,11 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
       port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
       port.observed(asked('sess-1'))
-      const wait = ids()[4]
+      const wait = ids()[3]
       port.observed(hook('turn-stop'))
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
-      expect(asks()).toEqual([['h1', own], [ID, outside], ['h1', 'r1'], ['h1', own], [ID, wait], [ID, outside]])
+      expect(asks()).toEqual([['h1', own], [ID, outside], ['h1', 'r1'], [ID, wait]])
+      expect((calls('hold') as Array<[string, string]>).map(([agentId, id]) => [agentId, id])).toEqual([['h1', own], [ID, outside]])
       expect(calls('questionClose')).toEqual([['h1', 'r1'], [ID, wait]])
     })
 
@@ -10516,7 +10521,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     seen.host.watching!(false)
     expect(calls('questionClose')).toEqual([['h1', own]])
     seen.host.watching!(true)
-    expect(ids()).toEqual([own, outside, outside])
+    expect(ids()).toEqual([own, outside])
+    expect((calls('hold') as Array<[string, string]>).map(([, id]) => id)).toEqual([outside])
   })
 
   // The window's unread list replaces the dial's whole drawer, and a question the dial pins is a row of that drawer.
