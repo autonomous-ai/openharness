@@ -749,7 +749,8 @@ describe('run-eval.mjs follow-ups', () => {
       if (kind === 'answer' || kind === 'answer-one') expect(grade.close_right, scenario).toBe(1)
       else expect(grade, scenario).not.toHaveProperty('close_right')
     }
-    for (const scenario of ['api-key-missing', 'board-unplugged', 'invoice-due-days']) {
+    // unrung's run starts with the seeded card too, so a --done all after its answer closes a card wrongly.
+    for (const scenario of ['api-key-missing', 'board-unplugged', 'invoice-due-days', 'deploy-2fa-code']) {
       expect(rows[`${scenario}.always.clean`].grade.close_wrong, scenario).toBeGreaterThanOrEqual(1)
     }
   })
