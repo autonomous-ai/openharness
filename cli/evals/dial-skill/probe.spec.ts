@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL_DESCRIPTION } from '../../src/devices/dialSkill.js'
 import { AGENT_CONFIG, claudeArgs, type AgentConfig } from './lib/agents.js'
-import { matchesProbe, PROBE_PROMPT, probeArgs, probeFailure, probeListing, readListing, type Listing, type Probe } from './lib/probe.js'
+import { matchesProbe, PROBE_PROMPT, probeArgs, probeFailure, probeListing, readListing, readStartContexts, startContext, type Listing, type Probe } from './lib/probe.js'
 import { loadScenarios, type Condition } from './lib/scenarios.js'
 import { RUN_RESERVE_USD } from './lib/spend.js'
 import type { StagedSkill } from './lib/stage.js'
@@ -19,6 +19,10 @@ const BUNDLED = '- update-config: Use this skill to configure the Claude Code ha
 const RULES = '# Team engineering rules'
 // What a crash or a model would print: a machine path and model text, neither of which may reach a probe row.
 const LEAK = 'I read /Users/someone/secret-project and decided'
+// The session-start line, as the spec words it.
+const START_LINE = 'The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for finished work or progress. The dial skill has the rest.'
+const START_JSON = JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: START_LINE } })
+const START_ANSWER = { argv: ['device', 'claude', 'start'], stdout: `${START_JSON}\n` }
 
 let root: string
 let profile: string
@@ -98,10 +102,48 @@ describe('readListing', () => {
   })
 })
 
+describe('startContext', () => {
+  it("takes the line from a SessionStart hook's answer", () => {
+    expect(startContext([START_ANSWER])).toBe(START_LINE)
+  })
+
+  it.each([
+    ['no answers', undefined],
+    ['another event', [{ argv: ['device', 'claude', 'asked'], stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }) }]],
+    ['text that is not JSON', [{ argv: ['device', 'claude', 'start'], stdout: 'Harness is on\n' }]],
+    ['an additionalContext that is not a string', [{ argv: ['device', 'claude', 'start'], stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 7 } }) }]],
+  ] as const)('is null for %s', (_, answers) => {
+    expect(startContext(answers)).toBeNull()
+  })
+})
+
+describe('readStartContexts', () => {
+  const context = (hookEvent: string, content: string[]) => ({
+    type: 'attachment', attachment: { type: 'hook_additional_context', content, hookName: hookEvent, toolUseID: hookEvent, hookEvent },
+  })
+
+  it("takes a SessionStart attachment's content, and leaves out another event's, a user message and a torn line", () => {
+    const text = [
+      { type: 'user', message: { role: 'user', content: START_LINE } },
+      context('SessionStart', [START_LINE]),
+      context('UserPromptSubmit', ['Prompt context']),
+    ].map((e) => `${JSON.stringify(e)}\n`).join('') + JSON.stringify(context('SessionStart', ['Torn'])).slice(0, 40)
+
+    expect(readStartContexts(text)).toEqual([START_LINE])
+  })
+})
+
 describe('probeFailure', () => {
   const listing = (over: Partial<Listing> = {}): Listing => ({ dial: 'full', skills: 40, cut: 0, chars: 19_000, ...over })
-  const probe = (l: Listing | null, instructions: boolean | null): Omit<Probe, 'failure'> => ({
-    condition: 'crowd', at: '2026-11-26T00:00:00.000Z', listing: l, instructions, skills: [], claude_version: '2.1.332', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 },
+  const probe = (l: Listing | null, instructions: boolean | null, startLine: boolean | null = null): Omit<Probe, 'failure'> => ({
+    condition: 'crowd', at: '2026-11-26T00:00:00.000Z', listing: l, instructions, start_line: startLine, skills: [], claude_version: '2.1.332', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 },
+  })
+
+  it('fails a probe whose session-start line did not reach the model, after the listing', () => {
+    expect(probeFailure(probe(listing(), true, false), 'crowd', true)).toBe('start line not given')
+    expect(probeFailure(probe(listing({ cut: 1 }), true, false), 'crowd', true)).toBe('1 crowd skill cut')
+    expect(probeFailure(probe(listing(), true, true), 'crowd', true)).toBeNull()
+    expect(probeFailure(probe(listing(), false, true), 'crowd', true)).toBe('CLAUDE.md not given')
   })
 
   it.each([
@@ -164,7 +206,17 @@ const id = '0b5c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3'
 const folder = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'))
 fs.mkdirSync(folder, { recursive: true })
 const listing = { type: 'attachment', attachment: { type: 'skill_listing', content: lines.join('\\n'), names, skillCount: names.length, isInitial: true } }
-fs.writeFileSync(path.join(folder, id + '.jsonl'), JSON.stringify({ type: 'user', message: { role: 'user', content: argv[1] } }) + '\\n' + JSON.stringify(listing) + '\\n')
+// As Claude Code does when a session starts: it runs the staged SessionStart hooks and saves what they add to the context.
+const hookFile = path.join('.claude', 'settings.json')
+const contexts = []
+for (const group of fs.existsSync(hookFile) ? JSON.parse(fs.readFileSync(hookFile, 'utf8')).hooks.SessionStart ?? [] : []) {
+  for (const hook of group.hooks) {
+    const out = require('node:child_process').execFileSync('/bin/sh', ['-c', hook.command], { encoding: 'utf8' }).trim()
+    if (out) contexts.push(JSON.parse(out).hookSpecificOutput.additionalContext)
+  }
+}
+const started = contexts.length === 0 ? [] : [{ type: 'attachment', attachment: { type: 'hook_additional_context', content: contexts, hookName: 'SessionStart', toolUseID: 'SessionStart', hookEvent: 'SessionStart' } }]
+fs.writeFileSync(path.join(folder, id + '.jsonl'), [{ type: 'user', message: { role: 'user', content: argv[1] } }, ...started, listing].map((e) => JSON.stringify(e) + '\\n').join(''))
 fs.writeFileSync(${JSON.stringify(marker())}, '')
 const emit = (e) => process.stdout.write(JSON.stringify(e) + '\\n')
 emit({ type: 'system', subtype: 'init', session_id: id, skills: names, claude_code_version: '2.1.332' })
@@ -200,6 +252,33 @@ emit({ type: 'result', subtype: 'success', is_error: false, result: rules, usage
     expect(Number.isNaN(Date.parse(probe.at))).toBe(false)
     expect(existsSync(marker())).toBe(true)
     expect(sessionFolders()).toEqual([])
+  })
+
+  const startHooks = (command: string) => ({ SessionStart: [{ matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command, timeout: 5 }] }] })
+
+  it.each(['clean', 'crowd', 'name-only'] as const)("%s: with a variant's SessionStart hook, the probe reads the line the model was given", async (condition) => {
+    const opts = { skill: true, crowd, base: join(root, 'runs'), hooks: startHooks('harness device claude start'), answers: [START_ANSWER] }
+
+    const probe = await probeListing(scenario(), condition, opts, config(fakeClaude(ANSWER)))
+
+    expect(probe).toMatchObject({ start_line: true, failure: null })
+    // The row holds whether the line came, never its text.
+    expect(JSON.stringify(probe)).not.toContain('Harness dial')
+  })
+
+  it('fails with start line not given when the transcript holds no such context', async () => {
+    // The hook's answer never reaches Claude Code, as when a launcher drops it.
+    const opts = { skill: true, crowd, base: join(root, 'runs'), hooks: startHooks('harness device claude start > /dev/null'), answers: [START_ANSWER] }
+
+    const probe = await probeListing(scenario(), 'crowd', opts, config(fakeClaude(ANSWER)))
+
+    expect(probe).toMatchObject({ start_line: false, failure: 'start line not given' })
+  })
+
+  it('without a SessionStart answer, start_line is null', async () => {
+    const probe = await probeListing(scenario(), 'crowd', { skill: true, crowd, base: join(root, 'runs') }, config(fakeClaude(ANSWER)))
+
+    expect(probe).toMatchObject({ start_line: null, failure: null })
   })
 
   it('fails a probe whose model does not quote the staged CLAUDE.md', async () => {
