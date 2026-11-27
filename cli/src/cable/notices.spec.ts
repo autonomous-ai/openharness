@@ -800,6 +800,20 @@ describe('Notices after a restart', () => {
       expect(plain.notices.stored()).toHaveLength(1)
     })
 
+    // Shortly after a restart, before a look finds its agent, its restored cards are its own by their keys, as its notify
+    // finds them.
+    it('a list or a done of its agent finds it by its keys before a look does', () => {
+      const rig = back([kept({ agentId: 'old', line: W(1) })])
+      const caller = { agentId: 'new', keys: ['claude:s1'] }
+      const other = { agentId: 'new', keys: ['claude:s2'] }
+      expect(rig.notices.list(caller).map(({ id, line }) => [id, line])).toEqual([['k1', W(1)]])
+      expect(rig.notices.list(other)).toEqual([])
+      expect(rig.notices.done(other, 'k1')).toBe(0)
+      expect(rig.notices.done(caller, 'k1')).toBe(1)
+      expect(rig.notices.pending('old')).toBe(false)
+      expect(rig.calls).toEqual([['close', 'old', 'shown:k1']])
+    })
+
     it('listedAgent and noticeKeys name a session the same way', () => {
       const named = { engine: 'claude', sessionId: 's1', paneKeys: ['herdr:p'] }
       const listed = listedAgent('x', named)
