@@ -397,9 +397,8 @@ rings. Harness's own headless runs (the `codex exec` one-shots of `lib/oneshot.t
 
 **The line** (at most 300 characters, the same rule as the description, so the two never disagree):
 
-> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run
-> `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for
-> finished work or progress. The dial skill has the rest.
+> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the
+> dial skill and follow it. Not for finished work or progress.
 
 **Claude Code.** The plugin (`plugins/harness-device/`) gains a `SessionStart` command hook for every source (startup,
 resume, clear, compact), beside its `PermissionRequest` hook and in the same two-shell form.
@@ -430,9 +429,15 @@ record only while the installed folder is the copy this CLI carries. Part 4 adds
 - Codex's side cannot be measured by the eval (no Codex quota). It is judged by the same field counts, the days before
   and 7 days after, and it ships only together with Claude Code's side, on Claude Code's gain.
 
-### Round 1: the line above (v3), not shipped
+### Round 1: v3's line, not shipped
 
-Held out, val and test pooled, v1 then v1 with the line (2026-11-27):
+v3's line:
+
+> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run
+> `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for
+> finished work or progress. The dial skill has the rest.
+
+Held out, val and test pooled, v1 then v1 with v3's line (2026-11-27):
 
 | condition | recall | needless rings |
 | --- | --- | --- |

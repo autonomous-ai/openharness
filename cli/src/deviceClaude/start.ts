@@ -1,7 +1,8 @@
 /**
  * `harness device claude start`: the plugin's SessionStart hook. It hands a session one line, so the agent knows from its
- * first turn to ring the dial before it ends a turn that leaves the person something to decide, answer or do; the dial
- * skill holds the rest (docs/plans/2026-11-26-needs-you-right-design.md, Part 4).
+ * first turn to load the dial skill before it ends a turn that leaves the person something to decide, answer or do. The
+ * line carries no command: the skill's body tells which asks need the person and how to ring
+ * (docs/plans/2026-11-26-needs-you-right-design.md, Part 4, Round 2).
  *
  * It reads the hook's input (only its `cwd`) and the files that say the dial is set up for the session's engine: the
  * engine's settings or config, dial-skill.json's removal and the skill in the session's own home. It asks no daemon and
@@ -13,7 +14,7 @@ import { ownSkill, skillsFolderOf } from '../devices/dialSkill.js'
 import { within } from '../lib/sessionSearch/externals/support.js'
 import { hookInput } from './asked.js'
 
-export const DIAL_START_LINE = 'The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for finished work or progress. The dial skill has the rest.'
+export const DIAL_START_LINE = 'The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the dial skill and follow it. Not for finished work or progress.'
 
 /** The SessionStart answer both engines read, on one line. */
 export function startOutput(): string {

@@ -80,9 +80,8 @@ Missed on purpose:
 
 When a session starts, resumes, is cleared or compacts, the plugin adds this one line to its context:
 
-> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run
-> `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for
-> finished work or progress. The dial skill has the rest.
+> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the
+> dial skill and follow it. Not for finished work or progress.
 
 In Claude Code it comes from the `SessionStart` hook in `hooks/hooks.json` (`hooks/start`), in Codex from the one in
 `hooks/codex.json` (`hooks/codex-start`), which Harness trusts as the plugin's other hooks. Each runs
