@@ -171,6 +171,9 @@ const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
 const DESIGN_CAP_USD = 320;
+// A resumed turn reloads the session and the model answers at least once: started with less, turn 2 would be billed
+// and then cut at its timeout, a failed case either way.
+const TURN2_MIN_MS = 30_000;
 // A stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
 const ACCOUNT_LIMIT = 'account limit reached: pass stopped; report it, do not switch accounts';
 const spendCapLine = ctx => `spend cap · $${ctx.guard.spentUsd.toFixed(2)} of $${ctx.spendCapUsd.toFixed(2)}: `
@@ -411,7 +414,7 @@ async function runCase(input, ctx, timeoutMs) {
       // After the checks, which measure what turn 1 left: the calls after the mark are turn 2's.
       markTurn(st);
       const left = until - Date.now();
-      if (left <= 0)
+      if (left < TURN2_MIN_MS)
         throw Object.assign(new Error('no time left for turn 2'), { failure_class: 'timeout', model: run.model, usage: run.usage, cut: run.cut });
       const first = run;
       // Turn 1 was billed too, so a failed turn 2's error carries both turns' spend.
