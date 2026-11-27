@@ -45,7 +45,9 @@ can name them. It names local paths: it stays on the machine.
   root with Windows' own folders alone on its PATH, on a stand-in dial that greets as the firmware does. stdin takes
   one command a line: `list` (the rows of the last list), `tap <row>`, `rest <row>` (the dial turns to the row),
   `say <row> <text>` (the dial sends the text, `turn.send`), `pick <app>` (`app.pick`, a host id), `quit`. Each message
-  the daemon sends the dial is printed as one JSON line, its keepalive pings aside.
+  the daemon sends the dial is printed as one JSON line, its keepalive pings aside. The stand-in keeps a `settings.set`
+  as the firmware does: it answers `settings.state` with the values it holds and greets with them from then on, so
+  Voice language and the other settings can be checked.
 - **The stand-in, the account's own**: the same with `--own-account`. It uses the engines, editors and apps of the
   account it runs as, and sets their hooks up (in the `CLAUDE_CONFIG_DIR` and `CODEX_HOME` it is run with, when set),
   with Harness's folders in `%USERPROFILE%\.harness-dial-check`, kept

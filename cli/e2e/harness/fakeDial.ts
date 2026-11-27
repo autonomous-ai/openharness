@@ -40,11 +40,27 @@ function roundFirmwareVersion(): string {
   return version
 }
 
+/** The rows a `settings.set` changes on the round firmware, and their type. It takes `character` and `straightTitle`
+ *  and drops them (ui_settings_apply: Focus is its only face, drawn straight across), and never takes `face` or `round`,
+ *  its glass. Voice language is held in 8 bytes, its end included (CFG_VLANG_MAX). */
+const KEPT_SETTINGS: Record<string, 'boolean' | 'number' | 'string'> = {
+  brightness: 'number', muted: 'boolean', quiet: 'boolean', focusFace: 'boolean', scrollReversed: 'boolean', voiceLang: 'string',
+}
+
+/** Voice language as the firmware reads it back: cut to 7 bytes, not characters (snprintf into CFG_VLANG_MAX), and an
+ *  empty one read as English (config_load_voicelang). A cut through a character decodes as the daemon would decode it. */
+function voiceLangHeld(value: string): string {
+  return Buffer.from(value, 'utf8').subarray(0, 7).toString('utf8') || 'en'
+}
+
 export interface FakeDialOptions {
   /** What it calls itself in its greeting; two dials on one desk differ by it. */
   mac?: string
   /** The settings it says it holds when it greets, as the firmware reads them from its flash. */
   settings?: Record<string, unknown>
+  /** Keep a `settings.set` as the round firmware does (cable_client.c handle_settings_set), so a desk can check a
+   *  setting end to end. Off by default: hardwareWatch.e2e.ts answers for the dial by hand and expects it silent. */
+  keepsSettings?: boolean
   /** The capabilities its greeting names (`stats: 'turn-v1'`, …), as a firmware that speaks them does. */
   capabilities?: Record<string, string>
 }
@@ -60,7 +76,9 @@ export class FakeDial {
   /** When each message arrived, ms since the epoch: the gaps are what a dial reads as its daemon's health. */
   readonly arrivedAt: number[] = []
   private readonly mac: string
+  /** A copy: a kept `settings.set` changes it, never the caller's object. */
   private readonly settings?: Record<string, unknown>
+  private readonly keepsSettings: boolean
   private readonly capabilities: Record<string, string>
   /** When the daemon last said anything, and whether it has welcomed this dial since it last went quiet. */
   private heardAt = 0
@@ -71,7 +89,8 @@ export class FakeDial {
 
   private constructor(private readonly cable: Cable, readonly path: string, options: FakeDialOptions) {
     this.mac = options.mac ?? 'e2:e0:00:00:00:01'
-    this.settings = options.settings
+    this.settings = options.settings && { ...options.settings }
+    this.keepsSettings = options.keepsSettings ?? false
     this.capabilities = options.capabilities ?? {}
     this.refreshing = setInterval(() => this.model.refresh(), CAROUSEL_REFRESH_MS)
   }
@@ -90,7 +109,21 @@ export class FakeDial {
       this.model.heard(message)
       // A dial that stops answering for 20 seconds is taken as unplugged (cableSession SILENCE_MS).
       if (message.t === 'ping') this.send({ t: 'pong' })
+      if (message.t === 'settings.set' && this.keepsSettings && this.settings) this.keep(message)
     })
+  }
+
+  /** As the firmware: only the rows it changes and holds, only with a value of their type, brightness clamped to a
+   *  whole number, Voice language as it reads it back, then the values it now holds read back. */
+  private keep(message: DialMessage): void {
+    const settings = this.settings!
+    for (const [key, type] of Object.entries(KEPT_SETTINGS)) {
+      const value = message[key]
+      if (!(key in settings) || typeof value !== type) continue
+      settings[key] = key === 'brightness' ? Math.trunc(Math.min(100, Math.max(0, value as number)))
+        : key === 'voiceLang' ? voiceLangHeld(value as string) : value
+    }
+    this.send({ t: 'settings.state', ok: true, settings: { ...settings } })
   }
 
   static async open(options: FakeDialOptions = {}): Promise<FakeDial> {

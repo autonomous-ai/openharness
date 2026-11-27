@@ -260,7 +260,7 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
     discard()
     throw error
   }
-  const dial = real ? null : await FakeDial.listen(endpoint, { settings: SETTINGS, capabilities: 'capabilities' in options ? options.capabilities : undefined })
+  const dial = real ? null : await FakeDial.listen(endpoint, { settings: SETTINGS, keepsSettings: true, capabilities: 'capabilities' in options ? options.capabilities : undefined })
   let output = ''
   const logName = `daemon-${port}.log`
   const logFile = join(dirs.data, 'harness.log')
