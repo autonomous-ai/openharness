@@ -2007,14 +2007,15 @@ mod tests {
         let scripts = Arc::new(Scripts::default());
         let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
         let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
-        // It ends by itself after the words.
-        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two]);
+        // It ends by itself after the words, once told: ended at once, the end could drop both before the first's call.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two, "@wait end"]);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The first write's call is held, and the second waits behind it as the watch ends.
         scripts.gate(true);
         w.fake.touch("go");
         assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 one"]);
+        w.fake.touch("end");
         assert_eq!(w.next(), Event::WatchExit(Some(0)));
         scripts.gate(false);
         // The devices took the stream's end for the second write's answer: run now, it could meet another send's words.
