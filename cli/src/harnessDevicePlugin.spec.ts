@@ -59,6 +59,22 @@ const START_INPUT = JSON.stringify({
 // A stand-in for what `harness device claude start` prints: the hook passes on only a line with this prefix.
 const SESSION_LINE = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The person has a Harness dial."}}'
 const SESSION_PREFIX = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":'
+const STOP = join(pluginRoot, 'hooks', 'stop')
+const stopHook = (root = pluginRoot): Hook =>
+  (json(root, 'hooks', 'hooks.json') as { hooks: Record<string, HookBlock[]> }).hooks.Stop[0].hooks[0]
+// Claude Code's Stop input.
+const STOP_INPUT = JSON.stringify({
+  session_id: 's-1',
+  transcript_path: '/home/person/.claude/projects/-home-person-work/s-1.jsonl',
+  cwd: '/home/person/work',
+  hook_event_name: 'Stop',
+  stop_hook_active: false,
+  last_assistant_message: 'Should I push the branch?',
+})
+// A stand-in for what `harness device claude stop` prints: Claude Code reads a Stop hook's stdout as its decision, so
+// the hook passes on only a block.
+const BLOCK = '{"decision":"block","reason":"r"}'
+const BLOCK_PREFIX = '{"decision":"block","reason":'
 const CODEX_START = join(pluginRoot, 'hooks', 'codex-start')
 const codexStartHook = (root = pluginRoot): Hook => codexHooks(root).SessionStart[0].hooks[0]
 // Codex's SessionStart input, as Codex 0.172.0 writes it (the spike of 2026-11-27).
@@ -114,6 +130,10 @@ function runStartHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync(START, [], { input: START_INPUT, env: { HOME: home, PATH: path, ...env }, encoding: 'utf8' })
 }
 
+function runStopHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(STOP, [], { input: STOP_INPUT, env: { HOME: home, PATH: path, ...env }, encoding: 'utf8' })
+}
+
 describe('the harness-device plugin', () => {
   it('the marketplace lists harness first and harness-device second, with source ./plugins/harness-device', () => {
     const marketplace = json(repo, '.claude-plugin', 'marketplace.json') as { plugins: { name: string; source: string }[] }
@@ -138,9 +158,11 @@ describe('the harness-device plugin', () => {
 
   // Claude Code on Windows with no Git Bash runs the command in PowerShell, and there counts a hook that fails or times
   // out as a deny unless its onFailure is "continue", which is the default everywhere else.
-  it('hooks.json holds the PermissionRequest hook and one SessionStart command hook for startup, resume, clear and compact, 5 s, onFailure continue', () => {
+  it('hooks.json holds the PermissionRequest hook, one SessionStart command hook for startup, resume, clear and compact, and one Stop command hook with no matcher, 5 s, onFailure continue', () => {
     const { hooks } = json(pluginRoot, 'hooks', 'hooks.json') as { hooks: Record<string, HookBlock[]> }
-    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'SessionStart'])
+    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'SessionStart', 'Stop'])
+    expect(hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: expect.any(String), onFailure: 'continue', timeout: 5 }] }])
+    expect(hooks.Stop[0].hooks[0].command.split('\n')[0]).toBe('echo `# <#` >/dev/null; exec "${CLAUDE_PLUGIN_ROOT}/hooks/stop"')
     expect(hooks.PermissionRequest.map((block) => block.matcher)).toEqual(['*'])
     expect(hooks.PermissionRequest[0].hooks).toEqual([{ type: 'command', command: expect.any(String), onFailure: 'continue', timeout: 5 }])
     expect(hooks.SessionStart.map((block) => block.matcher)).toEqual(['startup|resume|clear|compact'])
@@ -346,6 +368,86 @@ describe('the harness-device plugin', () => {
     expect(calls).toHaveLength(1)
     expect(calls![0].trim()).toBe('device claude start 2> $null')
     expect(windows).toContain(`if ("$o".StartsWith('${SESSION_PREFIX}')) { [Console]::Out.Write("$o") }`)
+    expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
+  })
+
+  // Claude Code reads what a Stop hook prints as its decision: a block keeps the agent's turn going.
+  posix.each(SHELLS)("the Stop hook runs hooks/stop under %s from a folder with a space, and prints the launcher's block", (shell) => {
+    const root = join(tempDir(), 'Harness Device')
+    cpSync(pluginRoot, root, { recursive: true })
+    const home = tempDir()
+    const record = join(home, 'rec')
+    fakeLauncher(join(home, '.local', 'bin', 'harness'), record, BLOCK)
+    const command = stopHook(root).command.replaceAll('${CLAUDE_PLUGIN_ROOT}', root)
+    const result = spawnSync(shell, ['-c', command], { input: STOP_INPUT, env: { HOME: home, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
+    expect(readFileSync(`${record}.argv`, 'utf8')).toBe('device\nclaude\nstop\n')
+    expect(readFileSync(`${record}.stdin`, 'utf8')).toBe(STOP_INPUT)
+    expect(result).toMatchObject({ status: 0, stdout: `${BLOCK}\n`, stderr: '' })
+  })
+
+  // An older or foreign launcher prints its usage, another hook's JSON or nothing, and may fail or write to stderr: none
+  // of it may reach Claude Code as a decision.
+  posix('the Stop hook prints nothing but the block', () => {
+    const home = tempDir()
+    const launcher = join(home, '.local', 'bin', 'harness')
+    mkdirSync(join(launcher, '..'), { recursive: true })
+    for (const out of ['harness v0.6 — connect this computer to your machine', ALLOW, '']) {
+      for (const code of [0, 1, 2]) {
+        writeFileSync(launcher, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${out}'\necho 'usage: harness device' >&2\nexit ${code}\n`)
+        chmodSync(launcher, 0o755)
+        expect(runStopHook(home, '/usr/bin:/bin'), `${out} exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
+      }
+    }
+  })
+
+  posix('with no launcher the Stop hook prints nothing and exits 0', () => {
+    expect(runStopHook(tempDir(), '/usr/bin:/bin')).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix("the Stop hook runs ~/.local/bin/harness first, then the profile's harness.exe, then PATH", () => {
+    const home = tempDir()
+    const profile = tempDir()
+    const bin = tempDir()
+    const placements = [
+      join(home, '.local', 'bin', 'harness'),
+      join(profile, '.harness', 'bin', 'harness.exe'),
+      join(bin, 'harness'),
+    ]
+    const record = (i: number) => join(home, `rec-${i}`)
+    placements.forEach((launcher, i) => fakeLauncher(launcher, record(i), BLOCK))
+    // Each run finds the first placement still there; the next run has it removed.
+    for (const [i, launcher] of placements.entries()) {
+      const result = runStopHook(home, `${bin}:/usr/bin:/bin`, { USERPROFILE: profile })
+      expect(readFileSync(`${record(i)}.argv`, 'utf8'), launcher).toBe('device\nclaude\nstop\n')
+      expect(readFileSync(`${record(i)}.stdin`, 'utf8'), launcher).toBe(STOP_INPUT)
+      for (let later = i + 1; later < placements.length; later++) expect(existsSync(`${record(later)}.argv`), launcher).toBe(false)
+      expect(result, launcher).toMatchObject({ status: 0, stdout: `${BLOCK}\n`, stderr: '' })
+      rmSync(launcher)
+    }
+  })
+
+  posix('hooks/stop is executable and starts with #!/bin/sh', () => {
+    expect(statSync(STOP).mode & 0o111).toBe(0o111)
+    expect(readFileSync(STOP, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
+  })
+
+  // The native command inherits the hook's stdin as Claude Code wrote it; PowerShell reading or re-piping it would
+  // re-encode the person's text.
+  it('the Stop Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device claude stop once with its stdin untouched, writes only the block, and exits 0', () => {
+    const windows = windowsForm(stopHook().command)
+    expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
+    expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
+    expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
+    expect(windows).not.toContain('[Console]::In')
+    expect(windows).not.toMatch(/\|\s*&\s*\$h/)
+    const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
+    const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
+    expect(profile).toBeGreaterThan(-1)
+    expect(onPath).toBeGreaterThan(profile)
+    const calls = windows.match(/device claude stop[^;}]*/g)
+    expect(calls).toHaveLength(1)
+    expect(calls![0].trim()).toBe('device claude stop 2> $null')
+    expect(windows).toContain(`if ("$o".StartsWith('${BLOCK_PREFIX}')) { [Console]::Out.Write("$o") }`)
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
   })
 
@@ -618,6 +720,57 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
       const result = runner.run(startHook().command, { cwd, input: START_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
       expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
     }, 30_000)
+
+    // The person's answer holds what a console code page would change: it must reach the launcher byte for byte.
+    it(`${runner.name}: Stop passes the launcher's block, with the hook's stdin byte for byte, and exits 0`, () => {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, 0, BLOCK)
+      const stopInput = JSON.stringify({ ...JSON.parse(STOP_INPUT), last_assistant_message: 'Đã xong, không cần gì thêm.' })
+      const result = runner.run(stopHook().command, { cwd, input: stopInput, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+      expect(JSON.parse(readFileSync(join(cwd, 'argv.json'), 'utf8'))).toEqual(['claude', 'stop'])
+      expect(readFileSync(join(cwd, 'stdin'), 'utf8')).toBe(stopInput)
+      expect(result.status).toBe(0)
+      expect(result.stdout.trim()).toBe(BLOCK)
+    }, 30_000)
+
+    it(`${runner.name}: Stop prints nothing for a launcher that prints anything else`, () => {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, 0)
+      const result = runner.run(stopHook().command, { cwd, input: STOP_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+      expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }, 30_000)
+
+    it(`${runner.name}: Stop with no launcher, prints nothing and exits 0`, () => {
+      const { cwd, env } = place()
+      const result = runner.run(stopHook().command, { cwd, input: STOP_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+      expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }, 30_000)
+
+    // The devices hold a turn's end for its report up to 6 s, and the report goes out once the launcher starts: this is
+    // the shell's share of that wait, as the stand-in starts at once. It measures and asserts only that each run ended.
+    it(`${runner.name}: the Stop form's time to the report`, () => {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, 0, BLOCK)
+      const started = join(cwd, 'started')
+      // hrtime is the system's monotonic clock on Windows, so the stand-in's reading compares with this process's.
+      writeFileSync(join(cwd, 'device.js'), [
+        "const fs = require('fs')",
+        `fs.writeFileSync(${JSON.stringify(started)}, String(process.hrtime.bigint()))`,
+        'fs.readFileSync(0)',
+        `process.stdout.write(${JSON.stringify(BLOCK)})`,
+      ].join('\n'))
+      const times: number[] = []
+      for (let run = 0; run < 10; run++) {
+        rmSync(started, { force: true })
+        const spawned = process.hrtime.bigint()
+        const result = runner.run(stopHook().command, { cwd, input: STOP_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+        expect(result.status, `run ${run}`).toBe(0)
+        times.push(Number(BigInt(readFileSync(started, 'utf8')) - spawned) / 1e6)
+      }
+      const sorted = [...times].sort((a, b) => a - b)
+      const median = (sorted[4] + sorted[5]) / 2
+      console.log(`[measure] stop report · ${runner.name} · median ${Math.round(median)} · max ${Math.round(sorted[9])} · past 6 s ${times.filter((ms) => ms > 6_000).length}`)
+    }, 180_000)
   }
 
   // Codex runs the command as `<PowerShell> -NoProfile -Command <command>`, with PLUGIN_ROOT in its environment: pwsh when
