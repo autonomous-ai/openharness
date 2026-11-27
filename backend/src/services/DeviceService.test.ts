@@ -110,6 +110,11 @@ describe('recordHello', () => {
     })
   })
 
+  it('stores the CLI\'s version as cliVersion', async () => {
+    await deviceService.recordHello({ deviceId: 'dev-1', cliVersion: '0.6.97', chip: 'harness-cli' })
+    expect(updateMany).toHaveBeenCalledWith({ where: { deviceId: 'dev-1' }, data: { cliVersion: '0.6.97', chip: 'harness-cli' } })
+  })
+
   it('drops rssi 0 — the firmware sentinel for unknown/disconnected', async () => {
     await deviceService.recordHello({ deviceId: 'dev-1', ssid: 'Home', rssi: 0 })
 
@@ -122,7 +127,7 @@ describe('recordHello', () => {
   })
 
   it('does not touch the DB when the device reported nothing usable', async () => {
-    await deviceService.recordHello({ deviceId: 'dev-1', firmwareVersion: null, chip: null })
+    await deviceService.recordHello({ deviceId: 'dev-1', cliVersion: null, firmwareVersion: null, chip: null })
     expect(updateMany).not.toHaveBeenCalled()
   })
 
