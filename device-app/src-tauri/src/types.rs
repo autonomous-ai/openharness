@@ -361,11 +361,12 @@ impl MemoryLog {
         self.lines.lock().unwrap().clone()
     }
 
-    /// Waits until the lines pass `done`, 5 s at most, and gives them.
+    /// Waits until the lines pass `done`, testing::WAIT at most, and gives them. The lines a test waits on come behind
+    /// the fake CLI, so the wait is as long as every other wait on it, and unix only, as testing.rs is.
+    #[cfg(unix)]
     pub fn until(&self, done: impl Fn(&[String]) -> bool) -> Vec<String> {
         let lines = self.lines.lock().unwrap();
-        let wait = std::time::Duration::from_secs(5);
-        let (lines, _) = self.wrote.wait_timeout_while(lines, wait, |lines| !done(lines)).unwrap();
+        let (lines, _) = self.wrote.wait_timeout_while(lines, crate::testing::WAIT, |lines| !done(lines)).unwrap();
         assert!(done(&lines), "{lines:?}");
         lines.clone()
     }
