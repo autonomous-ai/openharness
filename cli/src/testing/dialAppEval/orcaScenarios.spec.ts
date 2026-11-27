@@ -8,16 +8,17 @@ const byId = (id: string): Scenario => ORCA.find((s) => s.id === id)!
 const agents = (s: Scenario): SessionDef[] => s.sessions.filter((d) => d.app === 'orca' && !d.ghost)
 
 describe("Orca's scenarios", () => {
-  it("Orca's main ids are O1-O23, none held out, 23", () => {
-    expect(ORCA.map((s) => s.id)).toEqual(Array.from({ length: 23 }, (_, i) => `O${i + 1}`))
+  it("Orca's main ids are O1-O26, none held out, 26", () => {
+    expect(ORCA.map((s) => s.id)).toEqual(Array.from({ length: 26 }, (_, i) => `O${i + 1}`))
     expect(ORCA.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.filter((s) => s.id.startsWith('O') && !s.id.startsWith('OH'))).toEqual([])
   })
 
-  it("every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B, the chats' O18-O23, which tier B's fake Orca does not list, and O11 in tier A on macOS and Linux alone, for its tmux", () => {
-    const onlyA = ['O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23']
+  it("every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B, the chats' O18-O23, which tier B's fake Orca does not list, and O11, O24, O25 and O26 in tier A on macOS and Linux alone, for their tmux", () => {
+    const tmux = ['O11', 'O24', 'O25', 'O26']
+    const onlyA = [...tmux, 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23']
     for (const s of ORCA) {
-      expect(s.platforms, s.id).toEqual(s.id === 'O11' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux'])
+      expect(s.platforms, s.id).toEqual(tmux.includes(s.id) ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux'])
       expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
     }
   })
@@ -27,7 +28,7 @@ describe("Orca's scenarios", () => {
       O1: ['D1'], O2: ['D1', 'D7'], O3: ['D1', 'D7'], O4: ['D2'], O5: ['D2'], O6: ['D2', 'D1'], O7: ['D3'], O8: ['D4', 'D6'],
       O9: ['D5'], O10: ['D5'], O11: ['D1', 'D3', 'D5'], O12: ['D7', 'D1', 'D2'], O13: ['D7', 'D1', 'D3'], O14: ['D7', 'D1'],
       O15: ['D7', 'D1'], O16: ['D1', 'D7'], O17: ['D7', 'D3'], O18: ['D1', 'D7'], O19: ['D1', 'D7'], O20: ['D3'], O21: ['D2'],
-      O22: ['D5'], O23: ['D5'],
+      O22: ['D5'], O23: ['D5'], O24: ['D2'], O25: ['D1', 'D2'], O26: ['D2'],
     }
     for (const s of ORCA) {
       const want = [...dims[s.id]!, ...s.tiers.includes('b') ? ['D8'] : []]
@@ -135,6 +136,44 @@ describe("Orca's scenarios", () => {
     expect(o11.checks.flatMap((x) => (x.kind === 'ring' ? [[x.expect, x.apart]] : []))).toEqual([[['a', 'b', 'c'], []]])
     expect(o11.checks.flatMap((x) => (x.kind === 'open' ? [[x.session, x.after, x.at]] : []))).toEqual([['c', 'tap', 'face']])
     expect(o11.checks.flatMap((x) => (x.kind === 'voice' ? [[x.session, x.path, x.text]] : []))).toEqual([['c', 'mod', 'Eval words for charlie.']])
+  })
+
+  /** Each agent's [key, tmux, tab, split]. */
+  const placed = (s: Scenario) => agents(s).map((d) => [d.key, d.tmux ?? false, d.tab, d.split])
+
+  it('O24: c alone under tmux in tab 1, focused, then a, then c again within one read', () => {
+    const o24 = byId('O24')
+    expect(placed(o24)).toEqual([['a', false, 0, 0], ['c', true, 1, 0]])
+    expect(o24.steps.flatMap((step) => (step.kind === 'orca.focus' ? [[step.label, step.session]] : []))).toEqual([
+      [undefined, 'a'], ['focus', 'c'], ['away', 'a'], ['again', 'c'],
+    ])
+    // Below the tmux pane poll's period (FOCUS_POLL_MS, 500 ms): its last answer may still be c's pane.
+    const again = o24.steps.findIndex((step) => step.label === 'again')
+    expect(o24.steps[again - 1]).toEqual({ kind: 'wait', ms: 200 })
+    expect(o24.checks).toEqual([
+      { id: 'focus', kind: 'focus', dim: 'D2', session: 'c', after: 'focus', at: 'away' },
+      { id: 'again', kind: 'focus', dim: 'D2', session: 'c', after: 'again' },
+    ])
+  })
+
+  it("O25: c and d under one tmux in tab 1, c first: the ring [a, c, d] on tmux's page too, then a pane switch to d", () => {
+    const o25 = byId('O25')
+    expect(placed(o25)).toEqual([['a', false, 0, 0], ['c', true, 1, 0], ['d', true, 1, 1]])
+    // c's start comes first, so tmux selects its pane until the switch.
+    expect(o25.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))).toEqual(['c', 'd', 'a'])
+    expect(o25.steps.flatMap((step) => (step.kind === 'tmux.selectPane' ? [[step.label, step.session]] : []))).toEqual([['pane', 'd']])
+    expect(o25.checks).toEqual([
+      { id: 'ring', kind: 'ring', dim: 'D1', page: 'orca', expect: ['a', 'c', 'd'], apart: [] },
+      { id: 'focus', kind: 'focus', dim: 'D2', session: 'd', after: 'pane' },
+    ])
+  })
+
+  it("O26: c and d each under its own tmux in tabs 1 and 2, one engine and folder: a focus on d's tab is graded still", () => {
+    const o26 = byId('O26')
+    expect(placed(o26)).toEqual([['a', false, 0, 0], ['c', true, 1, 0], ['d', true, 2, 0]])
+    const [c, d] = [o26.sessions.find((x) => x.key === 'c')!, o26.sessions.find((x) => x.key === 'd')!]
+    expect([c.engine, c.cwd, c.worktree]).toEqual([d.engine, d.cwd, d.worktree])
+    expect(o26.checks).toEqual([{ id: 'still', kind: 'still', dim: 'D2', ms: 3_000, after: 'other' }])
   })
 
   it("O2's c is in w2 with w1's folder", () => {
