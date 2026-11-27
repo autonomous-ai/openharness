@@ -1846,7 +1846,7 @@ mod tests {
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
         let log = w.fake.log();
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
@@ -1878,7 +1878,7 @@ mod tests {
         w.hands.advance(LATE_WRITE + Duration::from_millis(1));
         scripts.gate(false);
         let late = |lines: &[String]| lines.iter().filter(|line| *line == "tabs: Ghostty write dropped late").count();
-        log.until(|lines| late(lines) == TYPING_QUEUED);
+        log.until(WAIT, |lines| late(lines) == TYPING_QUEUED);
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         // The one past the queue was answered first.
@@ -1908,7 +1908,7 @@ mod tests {
         w.hands.advance(LATE_WRITE + Duration::from_millis(1));
         scripts.gate(false);
         let log = w.fake.log();
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
@@ -1964,7 +1964,7 @@ mod tests {
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         let log = w.fake.log();
         // Answered, so Ghostty may be scripted, and the select's call has passed the gate.
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The first write's call is held, and the second waits behind it.
         scripts.gate(true);
         w.fake.touch("go");
@@ -1995,7 +1995,7 @@ mod tests {
         );
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         // Answered, so Ghostty may be scripted.
-        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        w.fake.log().until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         assert_eq!(w.runner.run(Effect::StopWatch), None);
         assert_eq!(w.next(), a_dial());
         scripts.still(2);
@@ -2013,7 +2013,7 @@ mod tests {
         // It ends by itself after the words, once told: ended at once, the end could drop both before the first's call.
         w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two, "@wait end"]);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        w.fake.log().until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The first write's call is held, and the second waits behind it as the watch ends.
         scripts.gate(true);
         w.fake.touch("go");
@@ -2038,10 +2038,10 @@ mod tests {
         );
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         let log = w.fake.log();
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The person said no to Automation for Ghostty as the first words came.
         w.fake.touch("one");
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty not allowed"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty not allowed"));
         w.fake.touch("two");
         assert_eq!(w.next(), a_dial());
         scripts.still(4);
