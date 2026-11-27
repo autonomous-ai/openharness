@@ -141,6 +141,19 @@ const gonePid = (): number => spawnSync(process.execPath, ['-e', '']).pid!
 
 const watched = fs as unknown as Record<string, (...args: unknown[]) => unknown>
 
+/** The folder a swap of [folder] moves aside cannot be removed, as Windows answers while an app still holds a file in
+ *  it (EBUSY); every other path is removed as before. */
+function holdAside(folder: string): void {
+  const aside = `${folder}.old.`
+  for (const name of ['rmSync', 'unlinkSync']) {
+    const real = watched[name]
+    vi.spyOn(watched, name).mockImplementation((path, ...rest) => {
+      if (String(path).startsWith(aside)) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+      return real(path, ...rest)
+    })
+  }
+}
+
 describe('the plugin\'s folder', () => {
   it('a missing folder is written, 0700 and 0600, with nothing left beside it', () => {
     const folder = aFolder()
@@ -369,6 +382,23 @@ describe('the plugin\'s folder', () => {
     vi.restoreAllMocks()
     expect(contents(folder)).toEqual(EARLIER)
     expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', `orca-plugin.new.${process.pid}`])
+    // The devices' process lives on: its next write clears what it left, and is not refused for it.
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
+    holdsOnly(folder, FILES)
+  })
+
+  it('a swap whose moved-aside folder cannot be removed is written, and the next write clears it', () => {
+    const folder = aFolder()
+    ensurePluginFolder(folder, EARLIER, [])
+    holdAside(folder)
+
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
+
+    vi.restoreAllMocks()
+    expect(contents(folder)).toEqual(FILES)
+    expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', `orca-plugin.old.${process.pid}`])
+    expect(ensurePluginFolder(folder, EARLIER, [])).toBe('written')
+    holdsOnly(folder, EARLIER)
   })
 
   it('a parent that cannot be written answers EACCES and leaves the folder as it was', () => {
@@ -478,5 +508,28 @@ describe('the plugin\'s folder', () => {
 
     expect(other).toBe('written')
     holdsOnly(folder, FILES)
+  })
+
+  it('a command whose folder another command swapped meanwhile answers as if its moved-aside folder were removed', () => {
+    for (const [files, answer] of [
+      [FILES, 'written'],
+      [{ ...FILES, 'src/plugin.ts': 'export const answer = 2\n' }, { failed: expect.not.stringMatching(/^EBUSY$/) }],
+    ] as const) {
+      const folder = aFolder()
+      ensurePluginFolder(folder, EARLIER, [])
+      holdAside(folder)
+      const real = watched.renameSync
+      let other: string | undefined
+      vi.spyOn(watched, 'renameSync').mockImplementation((from, to) => {
+        if (other === undefined && String(from).startsWith(`${folder}.new`)) other = anotherCommand(folder, FILES)
+        return real(from, to)
+      })
+
+      expect(ensurePluginFolder(folder, files, [])).toEqual(answer)
+
+      vi.restoreAllMocks()
+      expect(other).toBe('written')
+      expect(contents(folder)).toEqual(FILES)
+    }
   })
 })
