@@ -3481,9 +3481,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const agentId = ran.agentId
       rousing.delete(agentId)
       count((usage) => usage.turnStarted(agentId))
-      // A question its last turn left open is stale: it must not hold a notice of this turn back.
+      // A question its last turn left open is stale: it must not hold a notice of this turn back, and a card it held back
+      // is sent now, as at its close.
       questionsEnded(agentId, 'answered')
-      questionsOpen.delete(ran.agentId)
+      if (questionsOpen.delete(agentId)) reaskNotice(agentId)
       endReplies(ran.agentId, false)
       stats.take(ran.agentId)
       if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
