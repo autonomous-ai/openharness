@@ -14,12 +14,13 @@
  * A failure is said by its kind alone.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { hooks } from '../engines/codex/hookContract.js'
 import { reviewHash, withReviewRecords } from '../engines/kit/hookReview.js'
 import { hookFileVersion } from '../engines/kit/nativeHookFiles.js'
+import { removeQuietly } from '../lib/removePath.js'
 import { pauseSync, RENAME_TRIES, RENAME_WAIT_MS, syncStateDirectory } from '../lib/secureState.js'
 import { settingsText } from '../lib/settingsText.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
@@ -243,7 +244,7 @@ export function replaceConfigText(file: string, text: string, read: string): voi
       }
     }
   } catch (error) {
-    rmSync(temporary, { force: true })
+    removeQuietly(temporary)
     throw error
   }
   syncStateDirectory(dirname(target))

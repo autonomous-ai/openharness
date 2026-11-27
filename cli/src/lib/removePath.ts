@@ -32,3 +32,12 @@ export function removePath(path: string): void {
   if (stats?.isDirectory()) rmSync(path, { recursive: true, force: true })
   else if (stats) removeLink(path)
 }
+
+/**
+ * removePath for a path the caller may leave behind (its own temporary, a pid file, a marker, a staging name), its own
+ * failure dropped: a file Windows still holds throws EBUSY or EPERM, and thrown from a `catch` or `finally` it replaced
+ * the error that failed the work (codexPluginTrust.ts's replaceConfigText).
+ */
+export function removeQuietly(path: string): void {
+  try { removePath(path) } catch { /* left behind: see above */ }
+}
