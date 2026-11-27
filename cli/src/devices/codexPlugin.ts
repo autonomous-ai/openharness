@@ -14,10 +14,9 @@ import { basename, delimiter, dirname, join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { parseVersion, versionAtLeast } from '../engines/kit/runtime.js'
 import { agentCommandOwnershipSnapshotAsync, engineNearby, installedEngineBin } from '../lib/engineBin.js'
-import { type ClaudeAnswer, type ClaudePluginFiles, type ClaudeRun, claudeRunner, failureReason, MARKETPLACE } from './claudePlugin.js'
+import { type ClaudeAnswer, type ClaudePluginFiles, type ClaudeRun, claudeRunner, failureReason, MARKETPLACE, pluginFilesOn, writeFolder } from './claudePlugin.js'
 import { filesContentHash, readConfigText, writePluginTrust } from './codexPluginTrust.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
-import { ensurePluginFolder } from './pluginFolder.js'
 
 /** The first Codex whose plugin hooks and trust records the spike measured (codex-cli 0.172.0, 2026-11-26). */
 export const MIN_CODEX = '0.172.0'
@@ -58,9 +57,10 @@ export function installedRoot(home: string): string {
   return join(home, 'plugins', 'cache', MARKETPLACE, PLUGIN_NAME, 'local')
 }
 
-/** The fingerprint Codex computes of the plugin once installed from [files], on [platform]. */
+/** The fingerprint Codex computes of the plugin once installed from [files], on [platform]: of the files the folder
+ *  holds there (pluginFilesOn). */
 export function carriedCodexHash(files: ClaudePluginFiles, platform: NodeJS.Platform): string {
-  const plugin = Object.entries(files.files).filter(([path]) => path.startsWith(PLUGIN_PREFIX))
+  const plugin = Object.entries(pluginFilesOn(files, platform).files).filter(([path]) => path.startsWith(PLUGIN_PREFIX))
   return filesContentHash(Object.fromEntries(plugin.map(([path, text]) => [path.slice(PLUGIN_PREFIX.length), text])), platform)
 }
 
@@ -245,8 +245,8 @@ async function bringCurrent(deps: CodexInstallDeps, update: boolean): Promise<Co
   if (marketplace === 'own') return { ok: true, outcome: 'own', trusted: false }
   const state = stateIn(config)
   if (state === 'off' || (update && state === 'absent')) return { ok: true, outcome: 'absent', trusted: false }
-  const written = ensurePluginFolder(deps.folder, deps.files.files, deps.files.executable)
-  if (typeof written === 'object') return { ok: false, step: 'folder', error: FOLDER_ERROR, reason: written.failed }
+  const unwritten = writeFolder(deps)
+  if (unwritten) return { ok: false, step: 'folder', error: FOLDER_ERROR, reason: unwritten }
   if (marketplace === 'none') {
     // The absolute path: Codex records it canonical, which marketplaceIn compares by real path.
     const failed = await change(run, ['plugin', 'marketplace', 'add', deps.folder], COPY_MS, 'marketplace')

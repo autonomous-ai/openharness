@@ -774,6 +774,9 @@ describe('the harness-device plugin', () => {
 // (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 2): PowerShell gets ${env:CLAUDE_PLUGIN_ROOT} (backslashes) in
 // place of ${CLAUDE_PLUGIN_ROOT} and a second line of Claude Code's own; Git Bash gets the command as written, with the
 // root in forward slashes.
+// The Stop forms here are the repository's: the CLI writes the plugin on Windows without them in this release
+// (devices/claudePlugin.ts pluginFilesOn), as their start added 0.7-1.5 s to every turn end. They are run and measured
+// still, so they work when a faster start brings them back.
 describe.runIf(process.platform === 'win32')('the harness-device hook on Windows', () => {
   const system = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
   const powershell = join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
