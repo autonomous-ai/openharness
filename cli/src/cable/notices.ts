@@ -83,11 +83,11 @@ export function noticeKeys(agent: KeyedAgent): string[] {
   return [...session ? [session] : [], ...agent.paneKeys ?? []].filter((key) => key.length <= NOTICE_KEY_MAX_CHARS).slice(0, NOTICE_KEYS_MAX)
 }
 
-/** An agent on a list the devices hold: `session` its `<engine>:<sessionId>`, `busy` in a turn as listed. */
-export interface ListedAgent { agentId: string; session?: string; panes: readonly string[]; busy: boolean }
+/** An agent on a list the devices hold: `session` its `<engine>:<sessionId>`. */
+export interface ListedAgent { agentId: string; session?: string; panes: readonly string[] }
 
-export function listedAgent(agentId: string, agent: KeyedAgent, busy: boolean): ListedAgent {
-  return { agentId, session: sessionKey(agent), panes: agent.paneKeys ?? [], busy }
+export function listedAgent(agentId: string, agent: KeyedAgent): ListedAgent {
+  return { agentId, session: sessionKey(agent), panes: agent.paneKeys ?? [] }
 }
 
 /** Why a card went. */
@@ -121,8 +121,8 @@ interface Pending {
   /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart. */
   restored?: true
   /** Its agent was present: a drawer row whose question is held, not asked, as the person is already there; its turn's end
-   *  with the person gone asks it once and drops this (rouse). Apart from `restored`, since working() must not end it: it
-   *  was shown in this turn. */
+   *  with the person gone asks it once and drops this (rouse). Apart from `restored`, which never rouses: it rang before
+   *  the restart. */
   quiet?: true
   /** Queued behind another card of its agent, or come up as the one before it went: a drawer row whose question is held,
    *  never asked, as the person was rung for that agent already. Apart from `quiet`, so no rouse asks it. */
@@ -227,7 +227,7 @@ export class Notices {
     if (card?.who) this.drop([card], 'tapped')
   }
 
-  /** Its agent's next turn started, or it left: its cards go. Nothing for an agent with none. */
+  /** Its agent left: its cards go. Nothing for an agent with none. */
   ended(agentId: string): void {
     this.drop(this.of(agentId), 'gone')
   }
@@ -248,10 +248,10 @@ export class Notices {
 
   /** One kind of list as it is now: the core's Harness agents (`harness`), or the outside sources'. Each restored card of
    *  that kind still waiting looks for its agent there: by its id; else by its session, for an agent that names one; else
-   *  by a pane, for one that names none, so a card never moves to another session in the same pane. Found in a turn,
-   *  most likely one after its notice, it ends. Found otherwise, it is that agent's, under the agent's id, among its
-   *  other cards and under the same caps; its rows are shown by one drawer replace however many were found. A card
-   *  found is not looked for again; with none waiting, the list is not read. */
+   *  by a pane, for one that names none, so a card never moves to another session in the same pane. Found, in a turn
+   *  or not, it is that agent's, under the agent's id, among its other cards and under the same caps: a turn is no
+   *  answer (2026-11-27). Its rows are shown by one drawer replace however many were found. A card found is not looked
+   *  for again; with none waiting, the list is not read. */
   look(harness: boolean, listed: () => readonly ListedAgent[]): void {
     const unfound = [...this.cards.values()].filter((card) => card.unfound && (card.host === 'harness') === harness)
     if (unfound.length === 0) return
@@ -261,10 +261,6 @@ export class Notices {
         const agent = agents.find((other) => other.agentId === card.agentId)
           ?? agents.find(({ session, panes }) => session ? card.keys.includes(session) : panes.some((pane) => card.keys.includes(pane)))
         if (!agent) continue
-        if (agent.busy) {
-          this.remove(card, 'gone')
-          continue
-        }
         delete card.unfound
         if (agent.agentId !== card.agentId) {
           card.agentId = agent.agentId
@@ -273,12 +269,6 @@ export class Notices {
         this.fit(agent.agentId)
       }
     })
-  }
-
-  /** That agent is in a turn: its restored cards end, as the turn most likely came after their notices. A live card
-   *  stays: it was shown in this turn. */
-  working(agentId: string): void {
-    this.drop(this.of(agentId).filter(({ restored }) => restored), 'gone')
   }
 
   /** That agent's turn ended and the person is no longer with it (services/devices.ts): its card shown, when quiet, is
@@ -363,8 +353,8 @@ export class Notices {
     for (const card of mine.filter(({ kind }) => kind !== 'waiting').slice(0, -1)) this.remove(card, 'replaced')
   }
 
-  /** Those cards go, and what their agents show is settled; nothing at all for none, as a turn's start or its work asks
-   *  for an agent's cards each time. */
+  /** Those cards go, and what their agents show is settled; nothing at all for none, as an agent's leaving or a close by
+   *  an id no card has names none. */
   private drop(cards: readonly Pending[], end: NoticeEnd): void {
     if (cards.length > 0) this.change(() => { for (const card of cards) this.remove(card, end) })
   }
