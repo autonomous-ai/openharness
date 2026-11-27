@@ -1,7 +1,8 @@
-import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'child_process'
+import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'child_process'
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { finished } from 'stream/promises'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { claudeCodeGitBash } from './lib/windows/claudeCodeGitBash.js'
@@ -153,6 +154,24 @@ function runStartHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
 
 function runStopHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync(STOP, [], { input: STOP_INPUT, env: { HOME: home, PATH: path, ...env }, encoding: 'utf8' })
+}
+
+/**
+ * Runs [hook] as an engine does: [input] written to its stdin without waiting for the hook to read it, so a hook that
+ * leaves it unread fails the write. spawnSync's write of a long input to a reader that starts late can stall on macOS
+ * (Node 24), so this one is the engine's own, asynchronous kind.
+ */
+async function runAsEngine(hook: string, input: string, env: NodeJS.ProcessEnv) {
+  const child = spawn(hook, [], { env })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
+  const exited = new Promise<number | null>((resolve) => { child.on('close', resolve) })
+  const written = finished(child.stdin).then(() => null, (error: NodeJS.ErrnoException) => error.code ?? error.message)
+  child.stdin.end(input)
+  const [writeError, status] = await Promise.all([written, exited])
+  return { writeError, status, stdout, stderr }
 }
 
 describe('the harness-device plugin', () => {
@@ -706,6 +725,24 @@ describe('the harness-device plugin', () => {
     expect(calls![0].trim()).toBe('device codex stop 2> $null')
     expect(windows).toContain(`if ("$o".StartsWith('${BLOCK_PREFIX}')) { [Console]::Out.Write("$o") }`)
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
+  })
+
+  // A launcher that stops reading early (an older CLI printing its usage, or one past its bound) leaves the rest of the
+  // input in the pipe, as no launcher does: unread, the engine's write of one longer than the pipe holds fails, and the
+  // hook with it, its output dropped.
+  // 1 MiB: past a pipe's buffer on any platform (a Linux socket pair's holds about 208 KB).
+  posix.each(['asked', 'start', 'stop', 'codex-asked', 'codex-start', 'codex-stop'])('hooks/%s reads a long input to its end, after a launcher that reads none of it and with none', async (name) => {
+    const input = JSON.stringify({ ...JSON.parse(STOP_INPUT), last_assistant_message: `${'x'.repeat(1 << 20)}?` })
+    for (const launcher of ['#!/bin/sh\necho "usage: harness device" >&2\nexit 1\n', null]) {
+      const home = tempDir()
+      if (launcher) {
+        mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+        writeFileSync(join(home, '.local', 'bin', 'harness'), launcher)
+        chmodSync(join(home, '.local', 'bin', 'harness'), 0o755)
+      }
+      const result = await runAsEngine(join(pluginRoot, 'hooks', name), input, { HOME: home, PATH: '/usr/bin:/bin' })
+      expect(result, launcher ?? 'no launcher').toStrictEqual({ writeError: null, status: 0, stdout: '', stderr: '' })
+    }
   })
 
   it('the README names harness device claude disable, and says the dial never answers a prompt or approves anything', () => {
