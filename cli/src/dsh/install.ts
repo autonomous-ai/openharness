@@ -9,7 +9,7 @@
  * leaves nothing behind.
  */
 import { execFile } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, symlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -23,7 +23,7 @@ import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
 import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
-import { removePath } from '../lib/removePath.js'
+import { removePath, removeQuietly } from '../lib/removePath.js'
 import { spawnTied } from '../lib/tied.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 import { gitPath } from '../lib/gitOnPath.js'
@@ -182,7 +182,7 @@ async function cloneOnce(
   mkdirSync(root, { recursive: true, mode: 0o700 })
   const tmpDir = join(root, `.tmp-${randomUUID()}`)
   const fail = (error: string, detail: string, ...dirs: string[]): { ok: false; error: string; detail: string } => {
-    for (const dir of [tmpDir, ...dirs]) rmSync(dir, { recursive: true, force: true })
+    for (const dir of [tmpDir, ...dirs]) removeQuietly(dir)
     return { ok: false, error, detail: detail.slice(0, 2000) }
   }
   if (path !== undefined && !PACKAGE_PATH_RE.test(path)) return fail('INVALID_SOURCE', `${path} is not a folder inside the repo`)
@@ -213,7 +213,7 @@ async function cloneOnce(
     commit = await gitHead(repoDir)
     revision = await gitHead(repoDir, `HEAD:${path}`)
     renameSync(folder, tmpDir)
-    rmSync(repoDir, { recursive: true, force: true })
+    removeQuietly(repoDir)
   }
   const manifest = readDshManifest(tmpDir)
   if (!manifest.ok) return fail('INVALID_MANIFEST', manifest.error)
@@ -404,11 +404,8 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
       if (!cloned.ok) { progress({ id: null, phase: 'failed', detail: cloned.detail, error: cloned.error }); return cloned }
       staged = cloned.tmpDir
       manifest = cloned.manifest
-      if (opts.expectedId && manifest.id !== opts.expectedId) {
-        rmSync(cloned.tmpDir, { recursive: true, force: true })
-        return wrongId(manifest.id)
-      }
       // The fetched copy goes with `staged`, in the finally below.
+      if (opts.expectedId && manifest.id !== opts.expectedId) return wrongId(manifest.id)
       const refused = refuseWithoutShell(manifest, progress)
       if (refused) return refused
       unlock = lockDsh(manifest.id)
@@ -432,7 +429,7 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
     }
     return await finishInstall({ ...record, manifest, realDir }, opts, true)
   } finally {
-    if (staged) rmSync(staged, { recursive: true, force: true })
+    if (staged) removeQuietly(staged)
     unlock?.()
   }
 }

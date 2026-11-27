@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { removeQuietly } from '../lib/removePath.js'
 import { dshRootDir, invalidateInstalledDsh, readInstalledIndex, resolveInstalled, isBrokenDsh, type InstalledDsh } from './installed.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { cloneInstall, finishInstall, type DshInstallOptions, type DshInstallResult } from './install.js'
@@ -91,7 +92,7 @@ async function updatePackage(opts: DshUpdateOptions): Promise<DshInstallResult> 
         // Cleanup cannot turn a successfully committed update into a reported failure.
         try { rmSync(backup, { recursive: true, force: true }) } catch { opts.onLine?.(`Previous package retained at ${backup}`) }
       }
-      if (staged) rmSync(staged, { recursive: true, force: true })
+      if (staged) removeQuietly(staged)
     } finally {
       invalidateInstalledDsh()
       unlock()
