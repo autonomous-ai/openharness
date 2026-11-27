@@ -347,7 +347,8 @@ const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommenda
  *  equals one of `answers` exactly gets that answer; any other is refused.
  *
  *  A `stop` answer is a Stop hook's: it blocks as `harness device claude stop` would in the eval's world, where a dial is
- *  always attached, the person is always away and the skill is on. Plain node cannot load the CLI's stop rules either,
+ *  always attached, the person is always away, the skill is on and the run counts as a person's session, not a headless
+ *  one (the product never looks under `claude -p`). Plain node cannot load the CLI's stop rules either,
  *  so the fake applies them itself, and test-data/stop-inputs.json, which the CLI's own spec reads too, holds the two
  *  to the same cases. "Rang in this turn" is a ring the run already recorded. */
 function fakeHarness(recFile: string, answers: HarnessAnswer[]): string {

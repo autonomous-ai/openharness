@@ -284,8 +284,8 @@ export function summarize(flow: string): Summary {
     if (base !== null) bases[v] = base
   }
   // Against the best round, not the baseline: a round ships by beating the text it would replace. A round may name its
-  // own base instead: Part 5's two pairs compare with v4 and with v1, while the best round is v4 and may change at the
-  // verdict, so the pairs must not follow it.
+  // own base instead: Part 5's two pairs compare with v4 and with v1, while the best round moved to v5 at the verdict,
+  // so the pairs must not follow it.
   const heldOutRecall: Record<string, Record<string, Paired>> = {}
   const heldOutRecallP: Record<string, Record<string, number>> = {}
   const heldOutCase = (id: string) => split(id) === 'val' || split(id) === 'test'

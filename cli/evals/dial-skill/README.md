@@ -86,9 +86,10 @@ outside Claude's sandbox, so the runner refuses either file until `_state.json` 
 approves the harness: one changed or planted after approval stops the pass.
 
 An answer with `"stop": true` answers a Stop hook, as `harness device claude stop` would in the eval's world: a dial is
-always attached, the person is always away, the skill is on, and "rang in this turn" means a ring already recorded in
-the run. The fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has
-no `stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the run has not
+always attached, the person is always away, the skill is on, the run counts as a person's session, not a headless one
+(the product never looks under `claude -p`), and "rang in this turn" means a ring already recorded in the run. The
+fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has no
+`stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the run has not
 rung; otherwise it prints nothing. It always exits 0 and records whether it blocked. A block costs one more model round:
 `nudged` is 1 on a run where it happened, outside `score`.
 
