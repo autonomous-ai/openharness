@@ -4,7 +4,8 @@
  * The devices are a spy: the listener's side is in services/devices.spec.ts.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { NOTICE_USAGE, noticeCaller, runNotice, type NoticeDeps } from './notice.js'
+import { NOTICE_LIST_ANSWER_MAX } from '../lib/dialNotice.js'
+import { formatAge, NOTICE_USAGE, noticeCaller, runNotice, type NoticeDeps } from './notice.js'
 
 const CLAUDE = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'sess-1' }
 
@@ -108,7 +109,22 @@ describe('harness device notify', () => {
   })
 
   it('the usage names the flags', () => {
-    expect(NOTICE_USAGE).toBe('harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act')
+    expect(NOTICE_USAGE).toBe('harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act; --list [--json] shows your open cards, --done <id>|all closes them')
+  })
+
+  it("notify prints shown and the card's id", async () => {
+    expect(await notify(['Q'], { result: 'shown', id: '3f9a1c2e' })).toMatchObject({ code: 0, out: ['shown 3f9a1c2e'], err: [] })
+    expect(await notify(['Q', '--json'], { result: 'shown', id: '3f9a1c2e' }))
+      .toMatchObject({ code: 0, out: ['{"result":"shown","id":"3f9a1c2e"}'] })
+  })
+
+  it('an answer without an id prints shown', async () => {
+    for (const id of [undefined, '', '3F9A1C2E', '3f9a1c2', '3f9a1c2e0', 7]) {
+      expect(await notify(['Q'], { result: 'shown', id }), String(id)).toMatchObject({ code: 0, out: ['shown'] })
+      expect(await notify(['Q', '--json'], { result: 'shown', id }), String(id)).toMatchObject({ code: 0, out: ['{"result":"shown"}'] })
+    }
+    // Only a card shown has an id to print.
+    expect(await notify(['Q'], { result: 'limited', id: '3f9a1c2e' })).toMatchObject({ code: 0, out: ['limited'] })
   })
 
   it('the caller is read from the command\'s own environment', () => {
@@ -127,5 +143,78 @@ describe('harness device notify', () => {
       { env: { ...CLAUDE, ORCA_PAIRING_CODE: 'secret-1' }, cwd: '/Users/p/code/api' })
     expect(Object.keys(sent[0]).sort()).toEqual(['engine', 'folder', 'sessionId', 'text', 'type'])
     expect(JSON.stringify(sent[0])).not.toContain('secret-1')
+  })
+})
+
+describe('--list and --done', () => {
+  const at = { env: CLAUDE, cwd: '/Users/p/code/api' }
+  const caller = { engine: 'claude', sessionId: 'sess-1', folder: 'api' }
+  const W = { id: '3f9a1c2e', ageS: 720, kind: 'waiting', line: 'Waiting · Which DB? · Suggest: Postgres' }
+  const P = { id: '0b7d4e11', ageS: 5, kind: 'proceeding', line: 'Proceeding · Migrate · Doing: Postgres' }
+
+  it("--list prints the caller's cards, one a line, oldest first", async () => {
+    const ask = vi.fn(async () => ({ cards: [W, P] }))
+    expect(await notify(['--list'], null, { ...at, ask })).toMatchObject({ code: 0, err: [], out: [
+      '3f9a1c2e 12m waiting Waiting · Which DB? · Suggest: Postgres',
+      '0b7d4e11 5s proceeding Proceeding · Migrate · Doing: Postgres',
+    ] })
+    expect(ask.mock.calls).toEqual([[{ type: 'noticeList', ...caller }, { maxBytes: NOTICE_LIST_ANSWER_MAX }]])
+    // The answer is another process's data: what is not a card is left out.
+    const odd = await notify(['--list'], { cards: [{ ...W, id: 'x' }, P, 'z'] }, at)
+    expect(odd.out).toEqual(['0b7d4e11 5s proceeding Proceeding · Migrate · Doing: Postgres'])
+  })
+
+  it('--list --json prints them as an array', async () => {
+    const listed = await notify(['--list', '--json'], { cards: [W, { ...P, extra: 'y' }] }, at)
+    expect(listed).toMatchObject({ code: 0, err: [] })
+    expect(listed.out).toHaveLength(1)
+    // Only a card's own fields.
+    expect(JSON.parse(listed.out[0])).toStrictEqual([W, P])
+  })
+
+  it('--list with none prints nothing, exit 0', async () => {
+    for (const answer of [{ cards: [] }, { cards: [{ ...W, ageS: -1 }] }, { cards: 'x' }, {}, null, 404, 429]) {
+      for (const words of [['--list'], ['--list', '--json']]) {
+        expect(await notify(words, answer, at), JSON.stringify([words, answer])).toMatchObject({ code: 0, out: [], err: [] })
+      }
+    }
+  })
+
+  it("--done <id> and --done all send the caller's ask and print nothing", async () => {
+    for (const id of ['3f9a1c2e', 'all']) {
+      for (const answer of [{ closed: 1 }, { closed: 0 }, null, 400]) {
+        expect(await notify(['--done', id], answer, at), JSON.stringify([id, answer]))
+          .toEqual({ code: 0, out: [], err: [], sent: [{ type: 'noticeDone', ...caller, id }] })
+      }
+    }
+    expect(await notify(['--done', 'all', '--json'], { closed: 2 }, at)).toMatchObject({ code: 0, out: [], err: [] })
+  })
+
+  it('--done with a malformed id sends nothing', async () => {
+    for (const words of [['--done'], ['--done', ''], ['--done', '3F9A1C2E'], ['--done', '3f9a1c2'], ['--done', 'ALL'], ['--done', '--list']]) {
+      expect(await notify(words, { closed: 1 }, at), JSON.stringify(words)).toEqual({ code: 0, out: [], err: [], sent: [] })
+    }
+  })
+
+  it("typed outside an agent's session, --list and --done send nothing", async () => {
+    for (const env of [{}, { CLAUDE_CODE_SESSION_ID: 'sess-1' }]) {
+      for (const words of [['--list'], ['--list', '--json'], ['--done', '3f9a1c2e'], ['--done', 'all']]) {
+        expect(await notify(words, { cards: [W] }, { env, cwd: '/Users/p/code/api' }), JSON.stringify([env, words]))
+          .toEqual({ code: 0, out: [], err: [], sent: [] })
+      }
+    }
+  })
+
+  it('--done wins over --list and over a question', async () => {
+    for (const words of [['--list', '--done', '3f9a1c2e'], ['Which', 'DB?', '--waiting', '--done', '3f9a1c2e', '--list']]) {
+      expect(await notify(words, { closed: 1 }, at), JSON.stringify(words))
+        .toEqual({ code: 0, out: [], err: [], sent: [{ type: 'noticeDone', ...caller, id: '3f9a1c2e' }] })
+    }
+    // --list over a question: nothing rings.
+    expect((await notify(['Which', 'DB?', '--list'], { cards: [] }, at)).sent).toEqual([{ type: 'noticeList', ...caller }])
+  })
+
+  it('formatAge: seconds under a minute, minutes under an hour, else hours', () => {
+    expect([0, 59, 60, 3599, 3600, 86_399].map(formatAge)).toEqual(['0s', '59s', '1m', '59m', '1h', '23h'])
   })
 })

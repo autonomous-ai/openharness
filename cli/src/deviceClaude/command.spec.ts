@@ -1598,12 +1598,21 @@ describe('harness device notify', () => {
       .toEqual([{ type: 'notice', text: 'Connect the VPN', engine: 'codex', sessionId: 't-1', folder: 'api' }])
   })
 
+  it("device notify prints the card's id", async () => {
+    const dataDir = folder()
+    await devicesAnswering(dataDir, '{"result":"shown","id":"3f9a1c2e"}')
+    expect(await device(['notify', 'Connect the VPN'], { dataDir, env: { CODEX_THREAD_ID: 't-1' }, cwd: '/code/api' }))
+      .toEqual({ code: 0, out: ['shown 3f9a1c2e'], err: [] })
+  })
+
   it('with no listener it prints no dial, exit 0', async () => {
     expect(await device(['notify', 'Connect the VPN'])).toEqual({ code: 0, out: ['no dial'], err: [] })
   })
 
   it('the usage names notify', () => {
     expect(DEVICE_USAGE).toContain('harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]')
+    expect(DEVICE_USAGE).toContain('--list [--json]')
+    expect(DEVICE_USAGE).toContain('--done <id>|all')
   })
 })
 
