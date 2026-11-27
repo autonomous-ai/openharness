@@ -16,7 +16,11 @@
  *   prompt: nothing printed, and the devices' one word for it;
  * - a block the engine lost: its end told once, when the hold goes quiet;
  * - a late report holds the end until it comes; no report: told at 6 s, and the session no longer waited for; a
- *   session that never reported rests on the grace, as before.
+ *   session that never reported rests on the grace, as before;
+ * - a Harness agent's yes, its report after its turn's done as Claude Code's reader ends the turn first: the person reads
+ *   as away through its continuation, whose notice rings with its tile on screen, and as there at its tile once the
+ *   continuation ended. The fake engine runs no plugin hook and continues on no block, so a turn sent to the agent stands
+ *   in for its continuation, which reaches the devices as one does: its first card after the yes, and its done.
  * No daemon log line holds an answer's words or a session id.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -105,6 +109,13 @@ describe('a second look when a turn stops', () => {
     return done
   }
 
+  /** The carried Claude Code Stop command, as Claude Code runs it in a session's shell ([env], in [cwd]): the plugin's
+   *  folder in place of `${CLAUDE_PLUGIN_ROOT}`, CLAUDE_CONFIG_DIR handed, and its TUI named in CLAUDE_CODE_ENTRYPOINT. */
+  const claudeLook = (d: IsolatedDaemon, env: NodeJS.ProcessEnv, cwd: string, input: Record<string, unknown>): Promise<Run> =>
+    run('/bin/sh', ['-c', stopCommand(d, 'claude').replaceAll('${CLAUDE_PLUGIN_ROOT}', carried(d))],
+      { ...env, CLAUDE_CONFIG_DIR: claudeHomeOf(d), CLAUDE_CODE_ENTRYPOINT: 'cli' }, cwd,
+      JSON.stringify({ cwd, hook_event_name: 'Stop', permission_mode: 'default', ...input }))
+
   /** Claude Code in an Orca terminal, its transcript in the daemon's Claude Code projects, where the answer is read. */
   function claudeSession(d: IsolatedDaemon, folder: string): Session {
     const s = new InOrca(d, folder, children)
@@ -129,12 +140,24 @@ describe('a second look when a turn stops', () => {
       answer: (text) => write({ type: 'assistant', message: { id: `msg_${randomUUID()}`, role: 'assistant', model: 'claude-e2e',
         content: [{ type: 'text', text }], stop_reason: 'end_turn' } }),
       stop: (fields) => s.hook('Stop', { transcript_path: transcript, permission_mode: 'default', ...fields }),
-      // Claude Code puts the plugin's folder in place of `${CLAUDE_PLUGIN_ROOT}`, hands CLAUDE_CONFIG_DIR, and names its
-      // TUI in CLAUDE_CODE_ENTRYPOINT.
-      look: (fields) => run('/bin/sh', ['-c', stopCommand(d, 'claude').replaceAll('${CLAUDE_PLUGIN_ROOT}', carried(d))],
-        { ...s.env, CLAUDE_CONFIG_DIR: claudeHomeOf(d), CLAUDE_CODE_ENTRYPOINT: 'cli' }, s.cwd,
-        JSON.stringify({ session_id: s.sessionId, transcript_path: transcript, cwd: s.cwd, hook_event_name: 'Stop', permission_mode: 'default', ...fields })),
+      look: (fields) => claudeLook(d, s.env, s.cwd, { session_id: s.sessionId, transcript_path: transcript, ...fields }),
     }
+  }
+
+  /** A Harness agent running Claude Code in a tmux pane, created as the desktop creates one, and the engine session the
+   *  core bound to it. Its engine runs Harness's own hooks; the test runs the plugin's Stop hook in its folder. */
+  async function harnessAgent(d: IsolatedDaemon, window: LocalClient, folder: string): Promise<{ id: string; sessionId: string; cwd: string; caller: Record<string, string> }> {
+    const cwd = join(d.projectsDir, folder)
+    mkdirSync(cwd, { recursive: true })
+    const created = await window.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const id = String(created.agent.id)
+    const sessionId = await until('the agent to bind its conversation', async () => {
+      const rows = (await window.request('agents_list', { includeStopped: true })).agents as Array<Record<string, unknown>>
+      const row = rows.find((agent) => agent.id === id)
+      return row?.sessionId && row.status === 'active' ? String(row.sessionId) : null
+    }, 60_000, 500)
+    return { id, sessionId, cwd, caller: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId } }
   }
 
   /** Codex in Ghostty, its rollout in the daemon's Codex home (a TUI's: its head's source is not `exec`). */
@@ -222,7 +245,7 @@ describe('a second look when a turn stops', () => {
   }
 
   /** The real `harness device notify`, run as the session's shell runs it. */
-  const notify = (d: IsolatedDaemon, s: Session): Promise<Run> =>
+  const notify = (d: IsolatedDaemon, s: Pick<Session, 'caller' | 'cwd'>): Promise<Run> =>
     run(process.execPath, [bundle.path, 'device', 'notify', LINE], { ...d.env, TMUX_PANE: '', ...s.caller }, s.cwd)
 
   const of = (dial: FakeDial, s: Session, t: string, since: number): DialMessage[] =>
@@ -244,7 +267,7 @@ describe('a second look when a turn stops', () => {
     d.log().split('\n').filter((line) => line.includes('[cable] notify · silent · rule:notice · notice · 0ms')).length
 
   /** No daemon log line holds an answer's words or a session's id. */
-  function clean(d: IsolatedDaemon, ...sessions: Session[]): void {
+  function clean(d: IsolatedDaemon, ...sessions: Array<Pick<Session, 'sessionId'>>): void {
     const secrets = [CANARY, ...sessions.map((s) => s.sessionId)]
     expect(d.log().split('\n').filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
   }
@@ -321,13 +344,10 @@ describe('a second look when a turn stops', () => {
     const since = dial.messages.length
     const before = nudges(d).length
     const answer = await turn(a, false)
-    const done = await turn(b, false)
-    await Promise.all([a.stop({ stop_hook_active: false, last_assistant_message: answer }), b.stop({ stop_hook_active: false, last_assistant_message: done })])
+    await a.stop({ stop_hook_active: false, last_assistant_message: answer })
     expect(await a.look({ stop_hook_active: false, last_assistant_message: answer })).toEqual(quiet)
-    // Its end waited for its report: nothing of it told before the hook had its answer.
-    const looked = dial.messages.length
-    expect(of(dial, a, 'turn.done', since)).toEqual([])
-    expect(dial.messages.indexOf(await summaryOf(dial, a, since))).toBeGreaterThanOrEqual(looked)
+    // Its end is told once: whether it waited for the report is the late report's case.
+    await summaryOf(dial, a, since)
     expect(of(dial, a, 'turn.done', since)).toHaveLength(1)
     await reported(d, before, ['no ask'])
     clean(d, a, b)
@@ -526,5 +546,44 @@ describe('a second look when a turn stops', () => {
     await summaryOf(dial, b, since)
     expect(arrived(dial, await summaryOf(dial, a, since)) - stopping).toBeLessThan(REPORT_WAIT_MS)
     clean(d, a, b)
+  })
+
+  it('a Harness agent, the person away: away through its continuation, whose notice rings, and there at its tile once it ended', async () => {
+    const { d, dial } = await attached('claude')
+    const window = await LocalClient.connect(d)
+    const h = await harnessAgent(d, window, 'stop-look-h')
+    await dial.next((m) => m.t === 'agent' && m.id === h.id, 45_000, 'the agent listed')
+    const asked = `${CANARY} Which database should the export use, Postgres or SQLite?`
+    const look = (): Promise<Run> => claudeLook(d, d.env, h.cwd, { session_id: h.sessionId, stop_hook_active: false, last_assistant_message: asked })
+    /** The person's prompt to it, and its turn's end on the dial: its done, which its Stop hook's report follows. */
+    const ended = async (content: string): Promise<void> => {
+      const since = dial.messages.length
+      window.send('message', { agentId: h.id, content })
+      await dial.next((m) => m.t === 'turn.done' && m.agentId === h.id, 45_000, 'its turn\'s end', since)
+    }
+    const before = nudges(d).length
+
+    // No tile of it on any window: the person is away.
+    await ended('pick the export database')
+    expect(await look()).toEqual(blocked)
+    // Its continuation, started at once as the engine starts one, then its tile on the window in front: the panes reach
+    // the devices before the tab, whose list is the barrier.
+    const since = dial.messages.length
+    window.send('message', { agentId: h.id, content: '!until stop-look-h' })
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === h.id, 45_000, 'its continuation', since)
+    window.send('app_panes', { agentIds: [h.id], foreground: true })
+    window.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [h.id], panes: 1 }], tiles: [] })
+    await dial.next((m) => m.t === 'agents.end' && m.tab === 't1', 45_000, 'the tab\'s list', since)
+    expect(await notify(d, h)).toMatchObject({ code: 0, stdout: 'shown\n' })
+    await dial.next((m) => m.t === 'question' && m.agentId === h.id, 45_000, 'the notice rung', since)
+    writeFileSync(join(d.engineConfig.root, 'stop-look-h.release'), '')
+    await dial.next((m) => m.t === 'turn.done' && m.agentId === h.id, 45_000, 'its continuation\'s end', since)
+
+    // Its continuation over: the person's next turn at its tile finds them there.
+    await ended('thanks')
+    expect(await look()).toEqual(quiet)
+    await reported(d, before, ['yes', 'present'])
+    window.close()
+    clean(d, h)
   })
 })
