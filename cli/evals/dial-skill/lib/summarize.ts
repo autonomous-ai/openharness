@@ -34,7 +34,8 @@ export interface Summary {
   /** Variant → condition: the paired difference in held-out recall (each case's mean hit) against its base's same
    *  condition, where a round's gain or fall beyond noise is read. */
   held_out_recall: Record<string, Record<string, Paired>>
-  /** Variant → condition: fisherOneSided of the base's and the variant's held-out need hits, run by run. */
+  /** Variant → condition: fisherOneSided of the base's and the variant's hits, run by run, over the held-out need
+   *  cases both scored, as `held_out_recall` pairs them. */
   held_out_recall_p: Record<string, Record<string, number>>
   best: string | null // _state.json's best round, by variant name
   /** _state.json's bases, by variant name: the round each listed variant's recall is paired with. */
@@ -105,15 +106,20 @@ function conditionOf(id: string): string {
   return base === id ? 'clean' : id.slice(base.length + 1)
 }
 
-function caseMeans(rows: Row[], key: (id: string) => string = id => id, field = 'score'): Map<string, number> {
+// Each case's values of a grade field, one per status-ok rep that has it.
+function caseValues(rows: Row[], key: (id: string) => string, field: string): Map<string, number[]> {
   const by = new Map<string, number[]>()
   for (const r of rows) {
     if (!ok(r) || typeof r.grade?.[field] !== 'number') continue
     const k = key(r.prompt_id)
     by.set(k, [...(by.get(k) ?? []), r.grade[field]])
   }
-  return new Map([...by].map(([id, xs]) => [id, mean(xs)]))
+  return by
 }
+
+const meansOf = (by: Map<string, number[]>) => new Map([...by].map(([id, xs]) => [id, mean(xs)]))
+
+const caseMeans = (rows: Row[], key: (id: string) => string = id => id) => meansOf(caseValues(rows, key, 'score'))
 
 // The deltas of a over b on the cases both have that keep accepts, with their t interval.
 function pairOf(a: Map<string, number>, b: Map<string, number>, keep: (id: string) => boolean): Paired | undefined {
@@ -229,8 +235,8 @@ export function summarize(flow: string): Summary {
   // Case means per variant and condition, keyed by the case's split id, so a row written before conditions pairs
   // with a clean one.
   const means: Record<string, Record<string, Map<string, number>>> = {}
-  // Recall per case, as means, the same way: a need run that did the harm has hit 0, as heldOut counts it.
-  const recalls: Record<string, Record<string, Map<string, number>>> = {}
+  // Each case's hits, run by run, keyed the same way: a need run that did the harm has hit 0, as heldOut counts it.
+  const hits: Record<string, Record<string, Map<string, number[]>>> = {}
   const warnings: string[] = []
   for (const v of variantsOf(flow)) {
     const rows = readJsonl<Row>(join(flow, v, 'results.jsonl'), warnings)
@@ -243,11 +249,11 @@ export function summarize(flow: string): Summary {
     const change = changeOf(flow, v)
     variants[v] = {}
     means[v] = {}
-    recalls[v] = {}
+    hits[v] = {}
     for (const c of conditions) {
       const rs = rows.filter(r => conditionOf(r.prompt_id) === c)
       means[v][c] = caseMeans(rs, splitIdOf)
-      recalls[v][c] = caseMeans(rs, splitIdOf, 'hit')
+      hits[v][c] = caseValues(rs, splitIdOf, 'hit')
       variants[v][c] = statsOf(rs, errs.filter(e => conditionOf(e.prompt_id) === c),
         probes.filter(p => probeCondition(p) === c), split, means[v][c], change)
     }
@@ -285,16 +291,21 @@ export function summarize(flow: string): Summary {
   const heldOutCase = (id: string) => split(id) === 'val' || split(id) === 'test'
   for (const v of Object.keys(variants)) {
     const base = bases[v] ?? best
-    const baseRecalls = base === null || base === v ? undefined : recalls[base]
-    if (!baseRecalls) continue
+    const baseHits = base === null || base === v ? undefined : hits[base]
+    if (!baseHits) continue
     heldOutRecall[v] = {}
     heldOutRecallP[v] = {}
     for (const c of Object.keys(variants[v])) {
-      const p = baseRecalls[c] && pairOf(recalls[v][c], baseRecalls[c], heldOutCase)
+      const [b, x] = [baseHits[c], hits[v][c]]
+      const p = b && pairOf(meansOf(x), meansOf(b), heldOutCase)
       if (!p) continue
       heldOutRecall[v][c] = p
-      const [b, x] = [variants[base!][c].held_out, variants[v][c].held_out]
-      heldOutRecallP[v][c] = fisherOneSided(b.hit, b.need, x.hit, x.need)
+      // Over the cases the pair counts: a round that ran val only meets its base's val runs, not its test ones too.
+      const runs = (by: Map<string, number[]>) => [...x.keys()].filter(id => heldOutCase(id) && b.has(id))
+        .flatMap(id => by.get(id)!)
+      const [bs, xs] = [runs(b), runs(x)]
+      const sum = (hs: number[]) => hs.reduce((s, h) => s + h, 0)
+      heldOutRecallP[v][c] = fisherOneSided(sum(bs), bs.length, sum(xs), xs.length)
     }
   }
   return { variants, paired, held_out_paired: heldOutPaired, held_out_recall: heldOutRecall,

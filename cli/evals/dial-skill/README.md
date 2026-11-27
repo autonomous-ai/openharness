@@ -26,7 +26,8 @@ acted on from a body read but not followed. The held-out table in `flow/narrativ
 per variant and condition; the targets are read there, in `crowd`. Its `recall vs base` is the paired 95% interval of
 each case's held-out recall against the same condition of the round `_state.json` `bases` names for it, else the best
 round's, so a round gains beyond noise when its low end is above 0 and falls when its high end is below 0. Its `recall
-p vs base` is Fisher's exact test, one-sided, on the held-out need hits counted by run against that same base.
+p vs base` is Fisher's exact test, one-sided, on the held-out need hits counted by run against that same base, over
+the cases both ran.
 `nudged` counts the runs a Stop hook's block gave one more model round.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
