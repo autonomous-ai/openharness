@@ -71,7 +71,7 @@ import { RECORDED_WEZTERM } from '../testing/recordedWezterm.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, NUDGE_MAX_BYTES, NUDGE_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_CARDS_MAX_BYTES, NOTICE_CARDS_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, NUDGE_MAX_BYTES, NUDGE_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
   WROTE_MAX_BYTES, WROTE_PER_SECOND, type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
@@ -849,8 +849,8 @@ const turnTo = (agentId: string): void => {
 
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
  *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
- *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, a Stop hook's report
- *  as `harness device claude stop` sends one, the tabs stream a
+ *  Notifications setting as a watch sends it, an agent's notice, the list of its cards and the close of one or all as
+ *  `harness device notify` sends them, a Stop hook's report as `harness device claude stop` sends one, the tabs stream a
  *  watch holds open, the dial stream Orca's Harness Device plugin holds open, the terminals and the workspace id of the
  *  worktree on Orca's screen as that plugin sends them (no workspace from an older plugin), and a VS Code window's stream
  *  and state as Harness's own extension sends them. */
@@ -867,6 +867,8 @@ function fakeListener() {
   const notify = (mode: unknown): unknown => (given[0].handlers.notify as ListenerHandler).handle({ type: 'notify', mode }, new AbortController().signal)
   const notice = (ask: Record<string, unknown>): unknown => (given[0].handlers.notice as ListenerHandler).handle({ type: 'notice', ...ask }, new AbortController().signal)
   const nudge = (ask: Record<string, unknown>): unknown => (given[0].handlers.nudge as ListenerHandler).handle({ type: 'nudge', ...ask }, new AbortController().signal)
+  const noticeList = (who: Record<string, unknown>): unknown => (given[0].handlers.noticeList as ListenerHandler).handle({ type: 'noticeList', ...who }, new AbortController().signal)
+  const noticeDone = (who: Record<string, unknown>, id: string): unknown => (given[0].handlers.noticeDone as ListenerHandler).handle({ type: 'noticeDone', ...who, id }, new AbortController().signal)
   const orcaFront = (terminals: unknown, workspace?: unknown): unknown => (given[0].handlers.orcaFront as ListenerHandler).handle({ type: 'orcaFront', terminals, workspace }, new AbortController().signal)
   /** The lines the devices write on the stream, its end, and whether it takes a line: one not drained yet does not. */
   const tabs = () => {
@@ -925,7 +927,7 @@ function fakeListener() {
    *  otherwise. */
   const vscodeState = (window: string, terminals: number[], active = terminals[0] ?? null, focused = true): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
     .handle({ type: 'vscode-state', window, terminals, active, focused }, new AbortController().signal)
-  return { given, close, listen, front, attach, notify, notice, nudge, orcaFront, tabs, dial, vscode, vscodeState }
+  return { given, close, listen, front, attach, notify, notice, noticeList, noticeDone, nudge, orcaFront, tabs, dial, vscode, vscodeState }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -985,13 +987,15 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream and what was written on it, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice, the Stop hook\'s report and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream and what was written on it, the dial stream, the worktree on Orca\'s screen, the Notifications setting, an agent\'s list and close of its cards, the notice, the Stop hook\'s report and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'wrote', 'dial', 'orcaFront', 'notify', 'notice', 'nudge', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'wrote', 'dial', 'orcaFront', 'notify', 'noticeList', 'noticeDone', 'notice', 'nudge', 'vscode', 'vscode-state'])
     expect(handlers.orcaFront).toMatchObject({ maxBytes: 8192, perSecond: 10 })
+    expect(handlers.noticeList).toMatchObject({ maxBytes: NOTICE_CARDS_MAX_BYTES, perSecond: NOTICE_CARDS_PER_SECOND })
+    expect(handlers.noticeDone).toMatchObject({ maxBytes: NOTICE_CARDS_MAX_BYTES, perSecond: NOTICE_CARDS_PER_SECOND })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.nudge).toMatchObject({ maxBytes: NUDGE_MAX_BYTES, perSecond: NUDGE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
@@ -9425,6 +9429,61 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
   })
 
+  // `harness device notify --list` and `--done` (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, "The
+  // agent's commands"): each names the caller's own cards alone, found as its notice finds it.
+  describe('the agent closes its cards', () => {
+    const OUTSIDE = { engine: 'claude', sessionId: 'sess-1', folder: 'api' }
+    const HARNESS = { engine: 'claude', sessionId: 's-h1', folder: 'api' }
+    /** A card's id, as the agent was given it: the first 8 characters of the uuid in its question id. */
+    const cardId = (questionId: string) => questionId.slice('shown:'.length, 'shown:'.length + 8)
+    const listed = (listener: ReturnType<typeof fakeListener>, who: Record<string, unknown>) =>
+      (listener.noticeList(who) as { cards: Array<{ id: string }> }).cards.map(({ id }) => id)
+
+    it('lists the caller\'s cards, oldest first, with their age in whole seconds; a Harness agent and an outside session in one folder apart', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: 'Waiting · Connect the VPN', ...OUTSIDE })
+      listener.notice({ text: LINE, ...HARNESS })
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      // Queued behind the waiting card: listed all the same.
+      listener.notice({ text: 'Proceeding · Running the staging tests', ...OUTSIDE })
+      await vi.advanceTimersByTimeAsync(30_999)
+      const [outside, own] = ids()
+      expect(listener.noticeList(OUTSIDE)).toEqual({ cards: [
+        { id: cardId(outside), ageS: 90, kind: 'waiting', line: 'Waiting · Connect the VPN' },
+        { id: expect.stringMatching(/^[0-9a-f]{8}$/), ageS: 30, kind: 'proceeding', line: 'Proceeding · Running the staging tests' },
+      ] })
+      expect(listener.noticeList(HARNESS)).toEqual({ cards: [{ id: cardId(own), ageS: 90, kind: 'plain', line: LINE }] })
+      expect(listener.noticeList({ engine: 'codex', sessionId: 'sess-1' })).toEqual({ cards: [] })
+      // A clock set back: a card shown ahead of it is new, never an age the command would drop.
+      vi.setSystemTime(Date.now() - 120_000)
+      expect(listener.noticeList(HARNESS)).toEqual({ cards: [{ id: cardId(own), ageS: 0, kind: 'plain', line: LINE }] })
+    })
+
+    it('closes the caller\'s card by its id, or all of them, and nothing of another\'s', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, ...OUTSIDE })
+      listener.notice({ text: LINE, ...HARNESS })
+      const [outside, own] = ids()
+      // Another agent's id, and an id no card has: nothing closes.
+      expect(listener.noticeDone(OUTSIDE, cardId(own))).toEqual({ closed: 0 })
+      expect(listener.noticeDone(OUTSIDE, 'ffffffff')).toEqual({ closed: 0 })
+      expect(calls('questionClose')).toEqual([])
+      expect(listener.noticeDone(OUTSIDE, cardId(outside))).toEqual({ closed: 1 })
+      expect(calls('questionClose')).toEqual([[ID, outside]])
+      expect(listed(listener, OUTSIDE)).toEqual([])
+      expect(listener.noticeDone(OUTSIDE, cardId(outside))).toEqual({ closed: 0 })
+      expect(listener.noticeDone(HARNESS, 'all')).toEqual({ closed: 1 })
+      expect(calls('questionClose')).toEqual([[ID, outside], ['h1', own]])
+      expect(listed(listener, HARNESS)).toEqual([])
+      // Fixed words: never the card's id, its line or its session.
+      expect(logs.filter((line) => line.startsWith('[device] notice ·'))).toEqual(['[device] notice · done', '[device] notice · done'])
+      expect(logs.filter((line) => [cardId(outside), cardId(own)].some((id) => line.includes(id)))).toEqual([])
+    })
+  })
+
   // The dial's face of that agent shows its ask while the question is open: a tap that brought it forward leaves it.
   it('its card stays as the person taps "In <app>" on the dial or the alert opens to be read', async () => {
     const { port, listener } = devices()
@@ -17013,6 +17072,12 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
   }
   const notice = (listener: ReturnType<typeof fakeListener>, agentId: string, text: string) =>
     expect(listener.notice({ text, engine: 'claude', sessionId: `s-${agentId}` })).toEqual({ result: 'shown' })
+  /** The session's card ids, oldest first, as its `harness device notify --list` reads them. */
+  const listed = (listener: ReturnType<typeof fakeListener>, sessionId: string) =>
+    (listener.noticeList({ engine: 'claude', sessionId }) as { cards: Array<{ id: string }> }).cards.map(({ id }) => id)
+  /** The session closes its card, as its `harness device notify --done <id>` does. */
+  const done = (listener: ReturnType<typeof fakeListener>, sessionId: string, id: string) =>
+    expect(listener.noticeDone({ engine: 'claude', sessionId }, id)).toEqual({ closed: 1 })
 
   it('writes the dial\'s day to dial-usage.json: connected on attach, used on a turn', async () => {
     vi.useFakeTimers()
@@ -17399,7 +17464,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       notice(listener, 'h2', 'Connect the VPN so I can run the staging tests')
       await vi.advanceTimersByTimeAsync(40_000)
       seen.host.tapped!('h2')
-      // A waiting notice that takes the place of its agent's own is the same wait: the person is still to act.
+      // A second waiting card, queued behind the first, rings nothing and opens no wait.
       notice(listener, 'h3', 'Waiting · Connect the VPN')
       await vi.advanceTimersByTimeAsync(60_000)
       notice(listener, 'h3', 'Waiting · Sign in to the registry')
@@ -17407,16 +17472,44 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(await waits(port)).toEqual({ dial_wait_dial_30s_to_2m: 1, dial_wait_none: 1 })
     })
 
-    it('a proceeding notice is no wait, and ends the wait of the notice it takes the place of as answered', async () => {
+    it('a proceeding notice is no wait, and ends the wait of the other card it takes the place of as answered', async () => {
       vi.useFakeTimers()
       const { port, listener } = withNotices()
       await attach(port)
       notice(listener, 'h1', 'Proceeding · Running the migration')
-      notice(listener, 'h2', 'Waiting · Connect the VPN')
+      notice(listener, 'h2', 'Connect the VPN so I can run the staging tests')
+      // A waiting card is a wait of its own: a proceeding card beside it answers nothing of it.
+      notice(listener, 'h3', 'Waiting · Connect the VPN')
       await vi.advanceTimersByTimeAsync(60_000)
       notice(listener, 'h2', 'Proceeding · Running the staging tests')
-      for (const agentId of ['h1', 'h2']) port.card({ type: 'commander_event', agentId, payload: { kind: 'turn_started' } })
+      notice(listener, 'h3', 'Proceeding · Running the staging tests')
+      for (const agentId of ['h1', 'h2', 'h3']) port.card({ type: 'commander_event', agentId, payload: { kind: 'turn_started' } })
       expect(await waits(port)).toEqual({ dial_wait_elsewhere_30s_to_2m: 1 })
+    })
+
+    it('a sixth waiting card ends the dropped card\'s wait with no answer', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = withNotices()
+      await attach(port)
+      for (let n = 1; n <= 6; n++) {
+        notice(listener, 'h1', `Waiting · Question ${n}`)
+        await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      }
+      expect(await waits(port)).toEqual({ dial_wait_none: 1 })
+    })
+
+    it('a tap answers the wait of the card the dial shows; the card that comes up next is no wait', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = withNotices()
+      await attach(port)
+      notice(listener, 'h1', 'Waiting · Connect the VPN')
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      notice(listener, 'h1', 'Waiting · Sign in to the registry')
+      seen.host.tapped!('h1')
+      done(listener, 's-h1', listed(listener, 's-h1')[0])
+      seen.host.tapped!('h1')
+      done(listener, 's-h1', listed(listener, 's-h1')[0])
+      expect(await waits(port)).toEqual({ dial_wait_dial_30s_to_2m: 1 })
     })
 
     it('an outside agent\'s wait', async () => {
@@ -17617,120 +17710,58 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/notify|VPN|registry|s-h1|canary-folder/)
     })
 
-    it('an outside agent\'s person prompt answers its notice, once', async () => {
-      const { port, listener } = withNotices()
-      port.observed(hook('session-start'))
-      await attach(port)
-      outsideNotice(listener, 'Waiting · Connect the VPN')
-      port.observed(hook('turn-start'))
-      port.observed(hook('turn-start'))
-      expect(await answered(port)).toBe(1)
-    })
-
-    it('another session\'s message spends it uncounted', async () => {
+    // 2026-11-27: another agent's message started the turn, and the card counted as answered went unseen. Only its agent
+    // can tell an answer, by closing its card (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, Data).
+    it('its agent\'s close within 10 minutes answers it; the person\'s prompt before it does not', async () => {
       vi.useFakeTimers()
       const { port, listener } = withNotices()
       port.observed(hook('session-start'))
       await attach(port)
       outsideNotice(listener, 'Waiting · Connect the VPN')
-      port.observed(hook('turn-start', { relayed: true }))
       port.observed(hook('turn-start'))
-      // The agent's next notice, a minute on: the person's prompt answers that one alone.
-      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
-      outsideNotice(listener, 'Waiting · Sign in to the registry')
-      port.observed(hook('turn-start'))
+      await vi.advanceTimersByTimeAsync(599_000)
+      done(listener, 'sess-1', listed(listener, 'sess-1')[0])
       expect(await answered(port)).toBe(1)
     })
 
-    it('a resumed session\'s session-start neither answers nor spends it', async () => {
+    it('the person\'s prompt alone answers none, nor does the dial\'s voice', async () => {
+      vi.useFakeTimers()
       const { port, listener } = withNotices()
       port.observed(hook('session-start'))
       await attach(port)
       outsideNotice(listener, 'Waiting · Connect the VPN')
-      port.observed(hook('session-start'))
       port.observed(hook('turn-start'))
-      expect(await answered(port)).toBe(1)
-    })
-
-    it('a Harness agent\'s own turn_started spends it; the dial\'s voice to it answers it', async () => {
-      vi.useFakeTimers()
-      const { port, listener } = withNotices()
-      await attach(port)
-      const turnStarted = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
-      const voice = (since = Date.now()) => seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since })
       notice(listener, 'h1', 'Waiting · Connect the VPN')
-      turnStarted()
-      // Spent: a voice begun after that turn started answers nothing.
-      await vi.advanceTimersByTimeAsync(1_000)
-      voice()
-      turnStarted()
-      // A voice waiting as its turn starts.
-      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
-      notice(listener, 'h1', 'Waiting · Sign in to the registry')
-      voice()
-      turnStarted()
-      // A send that returns after the turn its words started.
-      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
-      notice(listener, 'h1', 'Waiting · Approve the deploy')
-      const since = Date.now()
-      turnStarted()
-      voice(since)
-      expect(await answered(port)).toBe(2)
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      expect(await answered(port)).toBe(0)
     })
 
-    it('an agent a listing shows busy spends it uncounted', async () => {
+    it('its agent\'s close past 10 minutes, and its agent leaving, answer none', async () => {
       vi.useFakeTimers()
-      const subs: HerdrSubscriber[] = []
-      let list: Promise<HerdrAnswer> | undefined
-      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
-      const client: HerdrClient = {
-        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
-        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
-        prompt: async () => ({ outcome: 'sent' }),
-        socketStamp: () => '1:1',
-        binary: () => undefined,
-      }
-      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
-      const listener = fakeListener()
-      const { port } = start({ faults: ['fleet'], herdr: client, orca: onMac, tty: async () => undefined, listen: listener.listen, now: () => Date.now() })
-      seen.host.watching!(true)
-      port.swarms(null)
-      subs[0].started()
-      await list
-      const [{ id }] = (await host().listAgentSnapshot()).agents
-      /** A turn, as herdr's status tells it: idle, then at work. */
-      const turn = () => {
-        for (const status of ['idle', 'working']) {
-          subs[0].event('pane.agent_status_changed', { agent: 'claude', agent_status: status, pane_id: 'w1:p1', workspace_id: 'w1' })
-        }
-      }
-      const shown = (text: string) => expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
-      shown('Waiting · Connect the VPN')
-      turn()
-      // Spent: a voice begun after that turn started answers nothing.
-      await vi.advanceTimersByTimeAsync(1_000)
-      seen.host.voiceEnded!({ outcome: 'sent', agentId: id, since: Date.now() })
-      turn()
-      // The next notice, a minute on, which the dial's voice answers.
-      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
-      shown('Waiting · Sign in to the registry')
-      seen.host.voiceEnded!({ outcome: 'sent', agentId: id, since: Date.now() })
-      turn()
-      expect(await answered(port)).toBe(1)
+      const { port, listener } = withNotices()
+      port.observed(hook('session-start'))
+      await attach(port)
+      outsideNotice(listener, 'Waiting · Connect the VPN')
+      notice(listener, 'h1', 'Waiting · Connect the VPN')
+      await vi.advanceTimersByTimeAsync(600_000)
+      done(listener, 'sess-1', listed(listener, 'sess-1')[0])
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      expect(await answered(port)).toBe(0)
     })
 
-    it('a dial unplugged keeps it: the prompt hook answers it', async () => {
+    it('a dial unplugged keeps it: its agent\'s close answers it', async () => {
       const { port, listener } = withNotices()
       port.observed(hook('session-start'))
       await attach(port)
       outsideNotice(listener, 'Waiting · Connect the VPN')
       seen.host.watching!(false)
-      port.observed(hook('turn-start'))
+      done(listener, 'sess-1', listed(listener, 'sess-1')[0])
       expect(await answered(port)).toBe(1)
     })
 
     // Not a ring: the waits keep meaning the dial rang (docs/plans/2026-11-26-needs-you-right-design.md, Part 2).
-    it('a notice held quiet counts as such, opens no wait, and its answer counts', async () => {
+    it('a notice held quiet counts as such, opens no wait, and its close counts', async () => {
       vi.useFakeTimers()
       const { port, listener } = withNotices()
       await attach(port)
@@ -17741,12 +17772,9 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       outsideNotice(listener, 'Waiting · Connect the VPN')
       // Another agent's, the person not with it: rung, and a wait on the person as before.
       notice(listener, 'h1', 'Waiting · Connect the VPN')
-      port.observed(hook('turn-start'))
-      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
-      // A turn start ends no wait: both agents leave, and only the rung one's wait is counted.
+      done(listener, 'sess-1', listed(listener, 'sess-1')[0])
+      // Its agent leaving ends the rung one's wait with no answer.
       port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
-      port.observed(hook('session-end'))
-      await vi.advanceTimersByTimeAsync(11_000)
       const counts = await counted(port)
       expect(counts).toMatchObject({
         dial_notice_shown: 2, dial_notice_present: 1, dial_notice_answered_10m: 1, dial_notice_present_answered_10m: 1,
@@ -17774,9 +17802,8 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
         port.observed(hook('turn-stop'))
         await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
         port.observed(hook('turn-start'))
-        // A turn start ends no wait: its agent leaving does.
-        port.observed(hook('session-end'))
-        await vi.advanceTimersByTimeAsync(11_000)
+        // A turn start ends no wait: its agent's close does.
+        done(listener, 'sess-1', listed(listener, 'sess-1')[0])
         const counts = await counted(port)
         expect(counts).toMatchObject({ dial_notice_present: 1, dial_notice_present_roused: 1, dial_notice_present_answered_10m: 1 })
         expect(Object.entries(counts).filter(([name]) => name.startsWith('dial_wait_')).reduce((sum, [, n]) => sum + n, 0))

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { composeNotice, type NoticeAsk } from '../lib/dialNotice.js'
-import { type ListedAgent, listedAgent, type NoticeCaller, noticeKeys, Notices, NOTICE_WAITING_MAX, type StoredNotice } from './notices.js'
+import { type ListedAgent, listedAgent, type NoticeCaller, type NoticeEnd, noticeKeys, Notices, NOTICE_WAITING_MAX, type StoredNotice } from './notices.js'
 
 type Call = ['ask', string, string, unknown] | ['close', string, string] | ['hold', string, string, unknown]
 
@@ -26,6 +26,8 @@ function desk(opts: {
   const calls: Call[] = []
   const counted: string[][] = []
   const logs: string[] = []
+  /** Each card that went: its agent, its id, its kind and why. */
+  const ends: string[][] = []
   const notices = new Notices({
     connected: () => state.connected,
     resolve: (ask) => {
@@ -57,8 +59,9 @@ function desk(opts: {
       state.timers.push(timer)
       return () => { timer.live = false }
     },
+    closed: (agentId, { id, kind }, end) => { ends.push([agentId, id, kind, end]) },
   })
-  return { notices, state, calls, counted, logs, asks: () => calls.filter((c) => c[0] === 'ask') }
+  return { notices, state, calls, counted, logs, ends, asks: () => calls.filter((c) => c[0] === 'ask') }
 }
 
 const VPN = 'Connect the VPN so I can run the staging tests'
@@ -485,7 +488,7 @@ describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
   it('it is asked once, under a new id, and is no longer quiet', () => {
     const { notices, state, calls } = quietly()
     const changes = state.changes
-    expect(notices.rouse('a1')).toBe('plain')
+    expect(notices.rouse('a1')).toEqual({ id: cid(1), kind: 'plain' })
     expect(calls).toEqual([['close', 'a1', qid(1)], ['ask', 'a1', qid(1, 2), asked]])
     expect(notices.quiet('a1')).toBe(false)
     expect(notices.pending('a1')).toBe(true)
@@ -496,11 +499,11 @@ describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
     expect(calls).toEqual([])
   })
 
-  it.each(['waiting', 'proceeding', 'plain'] as const)('it answers the kind of a %s card', (kind) => {
+  it.each(['waiting', 'proceeding', 'plain'] as const)('it answers the id and the kind of a %s card', (kind) => {
     const { notices, state } = desk()
     state.present.add('a1')
     notices.notify(notice(composeNotice('q', 's', kind === 'plain' ? undefined : kind)))
-    expect(notices.rouse('a1')).toBe(kind)
+    expect(notices.rouse('a1')).toEqual({ id: cid(1), kind })
   })
 
   it('a rung card, a restored card and no card are left', () => {
@@ -530,7 +533,7 @@ describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
     expect(calls).toEqual([])
     expect(notices.quiet('p')).toBe(true)
     state.at = 20_000 + 3_600_000
-    expect(notices.rouse('p')).toBe('plain')
+    expect(notices.rouse('p')).toEqual({ id: cid(21), kind: 'plain' })
   })
 
   // Decided by the PM (2026-11-26): a dial that attaches later holds it, as today.
@@ -547,7 +550,7 @@ describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
     state.held.add('a1')
     state.present.add('a1')
     notices.notify(notice(VPN))
-    expect(notices.rouse('a1')).toBe('plain')
+    expect(notices.rouse('a1')).toEqual({ id: cid(1), kind: 'plain' })
     expect(calls).toEqual([['close', 'a1', qid(1)]])
     state.held.delete('a1')
     notices.reask('a1')
@@ -941,7 +944,7 @@ describe('several cards an agent', () => {
     say(rig, W(2))
     expect(rig.calls).toEqual([['hold', 'a', qid(1), card(W(1))], ['hold', 'a', qid(1), card(`${W(1)} (1/2)`)]])
     clear(rig)
-    expect(rig.notices.rouse('a')).toBe('waiting')
+    expect(rig.notices.rouse('a')).toEqual({ id: cid(1), kind: 'waiting' })
     expect(rig.calls).toEqual([['close', 'a', qid(1)], ['ask', 'a', qid(1, 3), card(`${W(1)} (1/2)`)]])
     expect(rig.notices.shown('a')).toEqual({ id: cid(1), kind: 'waiting' })
     expect(rig.notices.list('a').map(({ id }) => id)).toEqual([cid(1), cid(2)])
@@ -1176,5 +1179,58 @@ describe('a card goes at 24 hours', () => {
     expect(rig.notices.rows('m')).toEqual([{ agentId: 'a', machineId: 'm', question: true, text: W(2) }])
     pass(rig, 61_000)
     expect(lines(rig)).toEqual([])
+  })
+})
+
+// services/devices.ts ends each card's wait on the person by why it went: answered only when its agent closed it.
+describe('closed is told once for each card that goes, with why', () => {
+  type Rig = ReturnType<typeof desk>
+  /** [agentId]'s notice of [line], then the clock a minute on. */
+  const say = ({ notices, state }: Rig, line: string, agentId = 'a') => {
+    notices.notify(notice(line, agentId))
+    state.at += 61_000
+  }
+  // a's first card, the desk it is on, and what ends it, for every end there is.
+  const ENDS = {
+    done: [W(1), 'waiting', {}, (rig) => { rig.notices.done('a', cid(1)) }],
+    sixth: [W(1), 'waiting', {}, (rig) => { for (let n = 2; n <= 6; n++) say(rig, W(n)) }],
+    // Its second card is queued, so the hour's twenty still holds the others'.
+    full: [W(1), 'waiting', {}, (rig) => {
+      say(rig, W(2))
+      for (let n = 3; n <= 21; n++) say(rig, VPN, `o${n}`)
+    }],
+    replaced: [P(1), 'proceeding', {}, (rig) => say(rig, P(2))],
+    tapped: [W(1), 'waiting', { who: { name: 'api', engine: 'claude', machine: 'Mac mini' } }, (rig) => rig.notices.tapped('a')],
+    gone: [W(1), 'waiting', {}, (rig) => rig.notices.ended('a')],
+    detached: [W(1), 'waiting', { host: 'harness' }, (rig) => rig.notices.detached()],
+    expired: [W(1), 'waiting', {}, (rig) => {
+      rig.state.clock += 24 * 3_600_000
+      for (const timer of rig.state.timers.filter(({ live }) => live)) {
+        timer.live = false
+        timer.run()
+      }
+    }],
+  } satisfies Record<NoticeEnd, [string, string, Parameters<typeof desk>[0], (rig: Rig) => void]>
+
+  it.each(Object.entries(ENDS))('%s', (end, [line, kind, opts, ending]) => {
+    const rig = desk(opts)
+    say(rig, line)
+    expect(rig.ends).toEqual([])
+    ending(rig)
+    expect(rig.ends.filter(([, id]) => id === cid(1))).toEqual([['a', cid(1), kind, end]])
+    // Gone, it is not told again as the rest of its agent's cards go.
+    rig.notices.ended('a')
+    expect(rig.ends.filter(([, id]) => id === cid(1))).toEqual([['a', cid(1), kind, end]])
+  })
+
+  it('a card that moves to its agent\'s new id is not told, nor is a close of a card that is not there', () => {
+    const NOW = 1_800_000_000_000
+    const rig = desk({ clock: NOW, restored: [{ agentId: 'old', keys: ['claude:s1'], id: qid(1), line: W(1), host: 'orca', at: NOW - 60_000 }] })
+    rig.notices.look(false, () => [{ agentId: 'new', session: 'claude:s1', panes: [] }])
+    rig.notices.done('new', 'ffffffff')
+    rig.notices.done('old', cid(1))
+    expect(rig.ends).toEqual([])
+    rig.notices.done('new', cid(1))
+    expect(rig.ends).toEqual([['new', cid(1), 'waiting', 'done']])
   })
 })

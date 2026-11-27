@@ -924,71 +924,64 @@ describe('the dial skill\'s use', () => {
     expect(count(ANSWERED)).toBe(0)
   })
 
-  it('a person\'s prompt within 10 min of a shown notice answers it, once', () => {
+  // Each notice under its wait's key (services/devices.ts noticeWait): here its agent's id, so a turn start of that agent
+  // would find it.
+  it('a notice its agent closed within 10 minutes is answered, once', () => {
     const { usage, count } = rig()
     usage.noticeShown('a', false)
     vi.advanceTimersByTime(599_999)
-    usage.turnStarted('a', true)
+    usage.noticeEnded('a', true)
     expect(count(ANSWERED)).toBe(1)
-    usage.turnStarted('a', true)
+    usage.noticeEnded('a', true)
     expect(count(ANSWERED)).toBe(1)
+  })
+
+  it('a notice its agent closed at 10 minutes is not', () => {
+    const { usage, count } = rig()
     usage.noticeShown('a', false)
     vi.advanceTimersByTime(600_000)
-    usage.turnStarted('a', true)
-    expect(count(ANSWERED)).toBe(1)
-  })
-
-  // A Harness agent's turn_started, a listing's busy, a relayed prompt, a replayed or continued turn all arrive so.
-  it('a start whose source cannot be told spends it uncounted', () => {
-    const { usage, count } = rig()
-    usage.noticeShown('a', false)
-    usage.turnStarted('a')
-    usage.turnStarted('a', true)
+    usage.noticeEnded('a', true)
     expect(count(ANSWERED)).toBe(0)
   })
 
-  it('the dial\'s voice answers it: waiting as the turn starts, or begun before a turn it started; a hook that says dial counts once', () => {
+  it('a notice that went otherwise counts nothing, and is forgotten', () => {
+    const { usage, count } = rig()
+    usage.noticeShown('a', false)
+    usage.noticeEnded('a', false)
+    usage.noticeEnded('a', true)
+    expect(count(ANSWERED)).toBe(0)
+  })
+
+  // 2026-11-27: another agent's message started the turn, and the card counted as answered went unseen. Only its agent
+  // can tell an answer: no turn start, the person's prompt or the dial's voice, answers or spends a notice.
+  it('the person\'s prompt answers no notice, nor does the dial\'s voice', () => {
     const { usage, count } = rig()
     usage.attached(true)
     usage.noticeShown('a', false)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
-    usage.turnStarted('a')
-    expect(count(ANSWERED)).toBe(1)
-
-    // The turn starts before the send returns: it is the voice's, and so is the notice's answer.
-    usage.noticeShown('b', false)
+    usage.turnStarted('a', true)
+    // The voice waiting as the turn starts, and the turn started before the send returns.
+    usage.noticeShown('b', true)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: Date.now() })
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(61_000)
+    usage.noticeShown('b', true)
     const since = Date.now()
     usage.turnStarted('b')
-    vi.advanceTimersByTime(500)
     usage.voiceEnded({ outcome: 'sent', agentId: 'b', since })
     expect(count('dial_voice_delivered')).toBe(2)
-    expect(count(ANSWERED)).toBe(2)
-
-    // A turn the hook says the dial's words started counts once, though the voice's send returns after it.
-    usage.noticeShown('a', false)
-    const later = Date.now()
-    usage.turnStarted('a', true)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: later })
-    expect(count('dial_voice_delivered')).toBe(3)
-    expect(count(ANSWERED)).toBe(3)
-  })
-
-  it('a voice whose turn never starts answers nothing', () => {
-    const { usage, count } = rig()
-    usage.attached(true)
-    usage.noticeShown('a', false)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
-    vi.advanceTimersByTime(10_000)
     expect(count(ANSWERED)).toBe(0)
+    usage.noticeEnded('a', true)
+    usage.noticeEnded('b', true)
+    expect(count(ANSWERED)).toBe(2)
   })
 
-  it('a newer notice of the agent replaces the older, which ends uncounted', () => {
+  it('a notice shown again under its key replaces the older, which ends uncounted', () => {
     const { usage, count } = rig()
     usage.noticeShown('a', false)
     vi.advanceTimersByTime(540_000)
     usage.noticeShown('a', false)
     vi.advanceTimersByTime(540_000)
-    usage.turnStarted('a', true)
+    usage.noticeEnded('a', true)
     expect(count(ANSWERED)).toBe(1)
   })
 
@@ -996,12 +989,12 @@ describe('the dial skill\'s use', () => {
     const PRESENT = 'dial_notice_present'
     const PRESENT_ANSWERED = 'dial_notice_present_answered_10m'
 
-    it('a notice held quiet is counted, and so is its answer, apart', () => {
+    it('a quiet one counts both', () => {
       const { usage, count } = rig()
       usage.noticeShown('a', true)
       expect(count(PRESENT)).toBe(1)
       vi.advanceTimersByTime(599_999)
-      usage.turnStarted('a', true)
+      usage.noticeEnded('a', true)
       expect(count(ANSWERED)).toBe(1)
       expect(count(PRESENT_ANSWERED)).toBe(1)
     })
@@ -1013,7 +1006,7 @@ describe('the dial skill\'s use', () => {
       expect(count('dial_notice_present_roused')).toBe(1)
       expect(count(PRESENT)).toBe(1)
       vi.advanceTimersByTime(599_999)
-      usage.turnStarted('a', true)
+      usage.noticeEnded('a', true)
       expect(count(ANSWERED)).toBe(1)
       expect(count(PRESENT_ANSWERED)).toBe(1)
     })
@@ -1021,37 +1014,17 @@ describe('the dial skill\'s use', () => {
     it('a rung notice counts neither', () => {
       const { usage, count } = rig()
       usage.noticeShown('b', false)
-      usage.turnStarted('b', true)
+      usage.noticeEnded('b', true)
       expect(count(ANSWERED)).toBe(1)
       expect(count(PRESENT)).toBe(0)
       expect(count(PRESENT_ANSWERED)).toBe(0)
-    })
-
-    it('the dial\'s voice answers a quiet notice in either order', () => {
-      const { usage, count } = rig()
-      usage.attached(true)
-      usage.noticeShown('a', true)
-      usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
-      usage.turnStarted('a')
-      expect(count(PRESENT_ANSWERED)).toBe(1)
-
-      // The turn starts before the send returns: the quiet notice's answer is the voice's, once.
-      usage.noticeShown('b', true)
-      const since = Date.now()
-      usage.turnStarted('b')
-      vi.advanceTimersByTime(500)
-      usage.voiceEnded({ outcome: 'sent', agentId: 'b', since })
-      expect(count(PRESENT_ANSWERED)).toBe(2)
-      usage.turnStarted('b', true)
-      expect(count(PRESENT_ANSWERED)).toBe(2)
-      expect(count(ANSWERED)).toBe(2)
     })
 
     it('a newer rung notice replaces a quiet one', () => {
       const { usage, count } = rig()
       usage.noticeShown('a', true)
       usage.noticeShown('a', false)
-      usage.turnStarted('a', true)
+      usage.noticeEnded('a', true)
       expect(count(PRESENT)).toBe(1)
       expect(count(PRESENT_ANSWERED)).toBe(0)
       expect(count(ANSWERED)).toBe(1)
@@ -1061,7 +1034,7 @@ describe('the dial skill\'s use', () => {
       const { usage, count } = rig()
       usage.noticeShown('a', true)
       vi.advanceTimersByTime(600_000)
-      usage.turnStarted('a', true)
+      usage.noticeEnded('a', true)
       expect(count(ANSWERED)).toBe(0)
       expect(count(PRESENT_ANSWERED)).toBe(0)
     })
@@ -1071,16 +1044,16 @@ describe('the dial skill\'s use', () => {
     const ids = Array.from({ length: 21 }, (_, i) => `d${i}`)
     const { usage, count } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
     for (const id of ids) usage.noticeShown(id, false)
-    usage.turnStarted('d0', true)
+    usage.noticeEnded('d0', true)
     expect(count(ANSWERED)).toBe(0)
-    usage.turnStarted('d1', true)
+    usage.noticeEnded('d1', true)
     expect(count(ANSWERED)).toBe(1)
     usage.attached(true)
     usage.attached(false)
-    usage.turnStarted('d2', true)
+    usage.noticeEnded('d2', true)
     expect(count(ANSWERED)).toBe(2)
     usage.stop()
-    usage.turnStarted('d3', true)
+    usage.noticeEnded('d3', true)
     expect(count(ANSWERED)).toBe(2)
   })
 
