@@ -144,6 +144,14 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     }
   })
 
+  // sh runs each by its path, and a CRLF breaks its lines (`/bin/sh^M: bad interpreter`). cli.js carries their bytes from
+  // the checkout it is built in, a Windows one too, where core.autocrlf (GitHub's Windows images set it) would decide.
+  it("the device plugin's hook scripts are checked out with LF line ends on every platform", () => {
+    const { executable } = bundle('1.2.3')
+    const attributes = execFileSync('git', ['check-attr', 'eol', '--', ...executable], { cwd: REPO, encoding: 'utf8' })
+    expect(attributes.trim().split('\n')).toEqual(executable.map((path) => `${path}: eol: lf`))
+  })
+
   it('the folder writer takes every key the build carries', () => {
     const { files, executable } = bundle('1.2.3')
     expect(ensurePluginFolder(join(aTemp(), 'claude-marketplace'), files, executable)).toBe('written')
