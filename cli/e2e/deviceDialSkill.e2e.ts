@@ -19,7 +19,7 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
@@ -81,19 +81,6 @@ const daemonLsofLines = (d: IsolatedDaemon, ...args: string[]): string[] =>
 /** The open files `lsof` shows the daemon. */
 const daemonLsof = (d: IsolatedDaemon, ...args: string[]): string[] =>
   daemonLsofLines(d, ...args).filter((line) => line.startsWith('n')).map((line) => line.slice(1))
-
-/** Each process whose executable is under [folder]: `comm` is that path on macOS, /proc says it on Linux. */
-function executablesUnder(folder: string): number[] {
-  const under = (path: string): boolean => path.startsWith(`${folder}/`)
-  if (process.platform === 'linux') {
-    return readdirSync('/proc').filter((name) => /^\d+$/.test(name)).filter((pid) => {
-      try { return under(readlinkSync(`/proc/${pid}/exe`)) } catch { return false }
-    }).map(Number)
-  }
-  return execFileSync('ps', ['-axww', '-o', 'pid=,comm=']).toString().split('\n')
-    .map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match && under(match[2]))
-    .map((match) => Number(match[1]))
-}
 
 describe('the dial set up from its first attach', () => {
   let daemon: IsolatedDaemon | undefined
@@ -400,14 +387,8 @@ trust_level = "trusted"
     } finally {
       try { screen = tmux('capture-pane', '-p', '-t', 'codex') } catch { /* gone */ }
       try { tmux('kill-server') } catch { /* already gone */ }
-      // Codex's managed app-server runs from its home's packages/ and outlives the pane.
-      for (const pid of executablesUnder(home)) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
-      try {
-        await until('Codex\'s processes to end', () => executablesUnder(home).length === 0, 5_000, 100)
-      } catch {
-        for (const pid of executablesUnder(home)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
-      }
-      await until('no process left under the Codex home', () => executablesUnder(home).length === 0, 5_000, 100)
+      // Codex's app server outlives the pane: IsolatedDaemon.close() ends it through <home>/app-server-daemon/daemon.pid
+      // (rootProcesses.ts), so the sweep is the one cleanup and this case proves it.
     }
   })
 })
