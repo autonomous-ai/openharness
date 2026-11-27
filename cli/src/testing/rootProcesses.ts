@@ -243,7 +243,9 @@ function rootCodexDaemons(root: string): PidRow[] {
   const spared = new Set([process.pid, process.ppid, 1])
   const pids = codexPidFiles(root).filter((pid) => !spared.has(pid))
   if (pids.length === 0) return []
-  const made = statSync(root, { throwIfNoEntry: false })?.birthtimeMs ?? 0
+  // Any failure to read it (gone, not this account's to read) is no birth time: the rest of the sweep still runs.
+  let made = 0
+  try { made = statSync(root).birthtimeMs } catch { /* no birth time */ }
   if (!(made > 0)) {
     console.error(`[e2e sweep] no birth time for ${root}: no Codex app server its pid files name is ended`)
     return []
