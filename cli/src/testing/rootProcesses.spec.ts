@@ -209,11 +209,12 @@ describe('a Codex app server a pid file in the root names', () => {
   /** Past any pid a real machine gives: macOS's are under 100000, Linux's at most 4194304. */
   const NO_SUCH_PID = 4_194_305
 
-  it('is the test\'s while it is this account\'s, an app server, and started no sooner than the second before the root', () => {
+  it('is the test\'s while it is this account\'s, an app server, started no sooner than the second before the root, and as its pid file records', () => {
     // The root made at 10:00:00.400; `ps` gives a start to the second.
     const root = Date.parse('Mon Nov 23 10:00:00 2026') + 400
     const server = 'codex app-server --managed-daemon'
-    const pidRow = (pid: number, started: string, command = server, uid = 501): PidRow => ({ pid, uid, started, command })
+    const pidRow = (pid: number, started: string, command = server, uid = 501, recorded = started): PidRow =>
+      ({ pid, uid, started, command, recorded })
     const rows = [
       pidRow(10, 'Mon Nov 23 10:00:03 2026'),
       // Linux's start can name the second before the one the clock was in (spawnedRuns.ts daemonOf).
@@ -225,8 +226,12 @@ describe('a Codex app server a pid file in the root names', () => {
       pidRow(23, 'Mon Nov 23 10:00:03 2026', 'codex exec hi'),
       pidRow(24, 'Mon Nov 23 10:00:03 2026', '/x/codex-tools app-server'),
       pidRow(25, ''),
+      // Its pid file records the start of the process that had its pid before: the pid is another's since.
+      pidRow(26, 'Mon Nov 23 10:00:05 2026', server, 501, 'Mon Nov 23 10:00:03 2026'),
+      // The same start, spaced as another `ps` prints it (lib/harnessResources.ts reads it so too).
+      pidRow(13, 'Mon Nov 23 10:00:03 2026', server, 501, ' Mon Nov 23  10:00:03 2026\n'),
     ]
-    expect(codexDaemons(rows, root, 501)).toEqual([10, 11, 12])
+    expect(codexDaemons(rows, root, 501)).toEqual([10, 11, 12, 13])
   })
 
   it('is read from a pid file 4 folders below the root at most, never through a link, soft or hard', () => {
@@ -242,17 +247,18 @@ describe('a Codex app server a pid file in the root names', () => {
     // A hard link is the file outside the root under a second name.
     mkdirSync(join(root, 'd', 'app-server-daemon'), { recursive: true })
     linkSync(join(outside, 'codex', 'app-server-daemon', 'daemon.pid'), join(root, 'd', 'app-server-daemon', 'daemon.pid'))
-    expect(codexPidFiles(root).sort()).toEqual([1001, 1002])
+    expect(codexPidFiles(root).map((file) => file.pid).sort()).toEqual([1001, 1002])
   })
 
-  it('is no text that is not JSON, nor a pid that is not a safe integer over 1, nor a file over 16 KiB', () => {
+  it('is no text that is not JSON, nor a pid that is not a safe integer over 1, nor one with no start, nor a file over 16 KiB', () => {
     const root = folder()
-    const texts = ['not json', 'null', '{}', '{"pid":1}', '{"pid":0}', '{"pid":-5}', '{"pid":"1005"}', '{"pid":10.5}', `{"pid":${2 ** 53}}`]
+    const texts = ['not json', 'null', '{}', '{"pid":1}', '{"pid":0}', '{"pid":-5}', '{"pid":"1005"}', '{"pid":10.5}', `{"pid":${2 ** 53}}`,
+      '{"pid":1007}', '{"pid":1008,"processStartTime":5}']
     texts.forEach((text, n) => pidFile(join(root, `h${n}`, 'app-server-daemon', 'daemon.pid'), text))
     pidFile(join(root, 'good', 'app-server-daemon', 'daemon.pid'), daemonPid(1005))
     // Over 16 KiB, as the product reads none (lib/harnessResources.ts).
     pidFile(join(root, 'large', 'app-server-daemon', 'daemon.pid'), daemonPid(1006) + ' '.repeat(16_384))
-    expect(codexPidFiles(root)).toEqual([1005])
+    expect(codexPidFiles(root)).toEqual([{ pid: 1005, started: 'Mon Nov 23 10:00:03 2026' }])
   })
 
   it('is read from 16 pid files and 2,000 folders at most, a bound reached said once', () => {
@@ -284,7 +290,7 @@ describe('a Codex app server a pid file in the root names', () => {
       const launch = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs')
 const server = spawn(process.execPath, ['-e', ${JSON.stringify(IDLE)}, 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore', cwd: ${JSON.stringify(tmpdir())} })
 mkdirSync(${JSON.stringify(dirname(file))}, { recursive: true })
-const processStartTime = execFileSync('ps', ['-o', 'lstart=', '-p', String(server.pid)], { encoding: 'utf8' }).trim()
+const processStartTime = execFileSync('ps', ['-o', 'lstart=', '-p', String(server.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim()
 writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: server.pid, processStartTime }))
 server.unref()`
       const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })

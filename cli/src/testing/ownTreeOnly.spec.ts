@@ -242,31 +242,39 @@ const NOTED = new Map([[SERVER, LSTART], [HERDR, LSTART], [STALE, LSTART]])
 /** What descends from the noted processes that still run as themselves. */
 const NOTED_TREE = [SERVER, HELPER, CAT, HERDR, HERDR_PANE]
 
-const PERSONS = P(80), OTHERS = P(81), TESTS = P(82), HARD_LINKED = P(83)
+const PERSONS = P(80), OTHERS = P(81), TESTS = P(82), HARD_LINKED = P(83), REUSED = P(84)
 /**
- * Codex app servers, launchd's, each named by a pid file in [root], which this writes: the person's, started an hour
- * before the root; another account's and the test's, after it; and one of this account's after it whose pid file, written
- * outside the root, the root holds a hard link to.
+ * Codex app servers, launchd's, each named by a pid file in [root], which this writes with its start: the person's, started
+ * an hour before the root; another account's and the test's, after it; one of this account's after it whose pid file,
+ * written outside the root, the root holds a hard link to; and one of this account's after it whose pid file records the
+ * start of the server that had its pid before.
  */
 function codexServers(root: string): Made[] {
   const born = statSync(root).birthtimeMs
   const server = 'codex app-server --managed-daemon'
+  const before = lstart(new Date(born - 3_600_000)), after = lstart(new Date(born + 2_000))
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'codex-outside-')))
   folders.push(outside)
-  /** The pid file of a Codex home at [home] naming [pid]. */
-  const pidFile = (home: string, pid: number): string => {
+  /** The pid file of a Codex home at [home], naming [pid] as started at [started]. */
+  const pidFile = (home: string, pid: number, started = after): string => {
     mkdirSync(join(home, 'app-server-daemon'), { recursive: true })
-    writeFileSync(join(home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: LSTART }))
+    writeFileSync(join(home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: started }))
     return join(home, 'app-server-daemon', 'daemon.pid')
   }
-  for (const [home, pid] of [['person', PERSONS], ['other', OTHERS], ['test', TESTS]] as const) pidFile(join(root, 'home', home), pid)
+  pidFile(join(root, 'home', 'person'), PERSONS, before)
+  pidFile(join(root, 'home', 'other'), OTHERS)
+  pidFile(join(root, 'home', 'test'), TESTS)
   mkdirSync(join(root, 'home', 'hard', 'app-server-daemon'), { recursive: true })
   linkSync(pidFile(outside, HARD_LINKED), join(root, 'home', 'hard', 'app-server-daemon', 'daemon.pid'))
-  return [made(PERSONS, 1, PERSONS, server, '/Users/person', lstart(new Date(born - 3_600_000))),
-    made(OTHERS, 1, OTHERS, server, '/', lstart(new Date(born + 2_000)), UID + 1),
-    made(TESTS, 1, TESTS, server, '/', lstart(new Date(born + 2_000))),
-    made(HARD_LINKED, 1, HARD_LINKED, server, '/', lstart(new Date(born + 2_000)))]
+  pidFile(join(root, 'home', 'reused'), REUSED)
+  return [made(PERSONS, 1, PERSONS, server, '/Users/person', before),
+    made(OTHERS, 1, OTHERS, server, '/', after, UID + 1),
+    made(TESTS, 1, TESTS, server, '/', after),
+    made(HARD_LINKED, 1, HARD_LINKED, server, '/', after),
+    made(REUSED, 1, REUSED, server, '/', lstart(new Date(born + 5_000)))]
 }
+/** The pids codexServers' pid files in the root name, which the sweep reads. */
+const NAMED = [PERSONS, OTHERS, TESTS, REUSED]
 
 describe("the process table the harness reads of every process", () => {
   it('is each one\'s pid, parent and group, and nothing else', () => {
@@ -332,7 +340,7 @@ describe("the daemon's close sweep", () => {
     machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
     expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
     expect(machine.signals).toEqual([[TESTS, 'SIGKILL']])
-    expect(beyond([WORKER], [], [PERSONS, OTHERS, TESTS])).toEqual([])
+    expect(beyond([WORKER], [], NAMED)).toEqual([])
   })
 
   it.runIf(FOLDERS)("ends the tree's matches, and no Codex app server, said once, when the root's birth time cannot be read", async () => {
@@ -561,7 +569,7 @@ process.exit(status)
     expect(code, said).toBe(0)
     expect(readFileSync(signals, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as unknown)).toEqual([[TESTS, 'SIGKILL']])
     machine.runs = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { file: string; args: string[] })
-    expect(beyond([], [], [PERSONS, OTHERS, TESTS])).toEqual([])
+    expect(beyond([], [], NAMED)).toEqual([])
   })
 })
 

@@ -91,7 +91,7 @@ setInterval(() => {}, 1 << 30)`
     const launch = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs')
 const server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)', 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore', cwd: ${JSON.stringify(tmpdir())} })
 mkdirSync(${JSON.stringify(dirname(file))}, { recursive: true })
-const processStartTime = execFileSync('ps', ['-o', 'lstart=', '-p', String(server.pid)], { encoding: 'utf8' }).trim()
+const processStartTime = execFileSync('ps', ['-o', 'lstart=', '-p', String(server.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim()
 writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: server.pid, processStartTime }))
 server.unref()`
     const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })
