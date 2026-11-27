@@ -1,6 +1,7 @@
 import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { errorKind } from '../lib/log.js'
+import { removeQuietly } from '../lib/removePath.js'
 
 /**
  * How often a start waiting for another start's move looks again: an owner killed changes nothing beside the lock, and
@@ -128,7 +129,8 @@ function take(lock: string, pid: number, me: string): boolean {
     if (code(error) === 'EEXIST' || code(error) === 'ENOENT') return false
     throw error
   } finally {
-    rmSync(draft, { force: true })
+    // Quietly: once linked in, a throw here would say the lock was not taken while this process holds it.
+    removeQuietly(draft)
   }
 }
 
@@ -168,7 +170,7 @@ function drop(lock: string, owner: string, pid: number): void {
   try {
     if (readFileSync(aside, 'utf8') !== owner) linkSync(aside, join(lock, OWNER))
   } finally {
-    rmSync(aside, { force: true })
+    removeQuietly(aside)
   }
 }
 
