@@ -194,13 +194,21 @@ describe.skipIf(process.platform === 'win32')('a secret file the command cannot 
     expect(existsSync(file)).toBe(true)
   })
 
-  it('logout: a machine name it cannot delete is said in a word, and the sign-in is still removed and ended', async () => {
+  it('logout: a machine name it cannot delete is said in a word, the sign-in and machine list are still removed, and the daemon is not started again', async () => {
     const root = tempRoot()
     const signIn = seedSignIn(root)
     // A folder in the name's place: every start sets the data folder back to 0700, so a lock there cannot hold. Its
     // delete fails for real all the same, as root too, and its raw error names the path.
     const name = join(root, 'data', 'machine-name')
     mkdirSync(join(name, 'held'), { recursive: true })
+    // The account's machine list, which the next sign-in here would otherwise be handed.
+    const list = join(root, 'data', 'machines.json')
+    writeFileSync(list, '{}')
+    idleDaemon(root)
+    await serveDataFolder(root, (_req, res) => {
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ version: '0.0.0-test', pid: process.pid, corePid: process.pid }))
+    })
     const backend = await fakeBackend()
 
     const out = await run(root, ['logout', '--from-sign-out-button'], backend.base)
@@ -211,9 +219,11 @@ describe.skipIf(process.platform === 'win32')('a secret file the command cannot 
     expect(out.stderr).toContain('harness logout')
     expect(out.stderr).not.toContain(root)
     expect(out.stdout).not.toContain('Signed out')
+    expect(out.stderr).not.toContain('Failed to start adapter')
     expect(backend.paths).toContain('/api/auth/revoke')
     expect(existsSync(signIn)).toBe(false)
     expect(existsSync(name)).toBe(true)
+    expect(existsSync(list)).toBe(false)
   })
 
   it.skipIf(!modesHold)('reset: the sign-in still here is said, and the server still ends it', async () => {
