@@ -6,7 +6,9 @@
 **Goal:** every Claude Code and Codex session that holds Harness's own dial skill, with the Harness Device plugin on,
 starts with one line in its context. The line tells the agent to ring the dial before it ends a turn that leaves the
 person something to decide, answer or do. The eval measures v1 against v1 plus the line. The product part ships only
-if the line gains recall.
+if the line gains recall. Round 1's line (v3, with the command) gained recall but rang needlessly. Round 2 (v4, Tasks
+13-17) measures a line that sends the agent to the skill. Either v4's line ships in the product, or no line does
+(decision 14).
 
 **Architecture:** a new CLI word, `harness device claude start` / `harness device codex start`
 (`cli/src/deviceClaude/start.ts`), prints `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<the line>"}}`
@@ -58,8 +60,8 @@ carries is trusted"), "Release order", "Platforms" and "Tests (red first)". Part
 7. **Logs and output.** Fixed words only. The command reads no daemon and no network, ends within a second, and on any
    failure prints nothing and exits 0.
 8. **Spec and plan first.** The spec (its Part 4/5 edits and the note of decisions 9 and 10) and this plan are committed
-   together as the branch's first commit, before Task 1, by the devcrew flow. No task stages them, except Task 11's
-   results edit to the spec.
+   together as the branch's first commit, before Task 1, by the devcrew flow. No task stages them, except the spec's edits in
+   Task 16 (the line block, if v4 ships) and Task 17 (the results).
 9. **Gain** (the orchestrator, 2026-11-27). The line ships if held-out (val and test pooled) recall rises beyond noise
    against v1 in `crowd` or in `name-only`, and falls beyond noise in no condition. "Beyond noise" is the paired 95% t interval of v3 − v1 over the need cases both scored (each case's mean `hit` over its
    reps): it rises when the interval's low end is above 0 and falls when its high end is below 0. Task 12 adds that
@@ -88,11 +90,36 @@ carries is trusted"), "Release order", "Platforms" and "Tests (red first)". Part
     the plugin's table and the hook trust, so its hook likely does not run either; Verification 2 checks that, and the
     `cwd` rule does not rely on it. (`companions/` builds Codex one-shots of its own in `memory/inference.ts`; its
     `CompanionIntelligence` is created only by a probe script today, so nothing ships that runs it.)
+14. **Round 2, `flow/v4`** (the orchestrator, then the spec's "Round 2" section, 38b432d2dc, 2026-11-27). Round 1
+    (Task 9, v3) gained recall and failed specificity: 9 needless rings of 54. The branch is not cut. Task 10 waits as
+    the fallback. One more round, and only one, runs before Part 5: v4 is v1's skill with a line that names the moment
+    and sends the agent to the skill, with no command. Its starting text is the spec's (Round 2). It changes only on what
+    the **train and val** traces show. Before a trace is opened, its scenario's split is read from `_state.json`, and a
+    test scenario counts only (Part 3's round 2 read test traces and was thrown out). A val scenario whose traces Task 13 reads
+    (`report-json-flag` and any other) is no longer clean: Task 15 reports the read scenarios and the rest apart, the
+    gates apply to the total, and the PR says val leaked in those scenarios (the orchestrator, 2026-11-27). Only v3's traces are in this
+    worktree (`flow/v3/traces/`, val and test, no train), so v4's evidence is v3's val traces. v4 uses the same pool,
+    ship rule and verdict as round 1, paired against v1, which stays the best round. Every invocation passes
+    `--spend-cap-usd 220`. If the pass would go over it, stop and report to the orchestrator. The Part 5 gate is read
+    after round 2, on the held-out `crowd` recall of the text that ships. If neither round ships, v1's 41 of 48 (85%)
+    stands and Part 5 opens. If v4 ships, only `DIAL_START_LINE` changes (Task 16). The command, the hooks and their
+    trust stay as round 1 built them, and the agreement test compares only the moment. If v4 fails, no line ships
+    (Task 10).
+    **Order: the variant before the product.** Task 14 writes v4's answer from the candidate line, in the shape
+    `startOutput()` prints, and the product keeps v3's line until v4's verdict. Two reasons. The product carries only a
+    line that has shipped, so a failed round leaves nothing to revert beyond what Task 10 already removes. And the
+    conditional switch gets an honest red test: Task 16 points the eval guard at `flow/v4`, which fails while the
+    command still prints v3's line.
 
 ## Global Constraints
 
 - **The line**, verbatim from the spec (278 characters, printable ASCII, no `<` or `>`, one line):
   ``The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for finished work or progress. The dial skill has the rest.``
+  That is round 1's text (v3), not shipped. **Round 2's line** (v4) starts from the spec's text,
+  ``The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the dial skill and follow it. Not for finished work or progress.``,
+  and Task 13 settles it. It is at most 300 characters of printable ASCII on one line, with no `<` or `>`. It holds
+  `decide, answer or do` and names the dial skill, and it holds no `harness device notify`, `--suggest`, `--waiting` or
+  `--proceeding`. The product carries it only after Task 16.
 - **The output**: exactly `JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: <the line> } })`
   and a newline, or nothing. The same for both engines.
 - **The command** (`harness device claude start`, `harness device codex start`): reads its stdin, the hook's input,
@@ -123,7 +150,8 @@ carries is trusted"), "Release order", "Platforms" and "Tests (red first)". Part
   `cli/src/architecture.coreFiles.txt`, `core/api.ts`, `cli/hook/notify.mjs`,
   `cli/src/services/`, `cli/src/cable/`, `plugins/harness-device/hooks/device.js` and its test, the backend, Desktop,
   the firmware.
-- **Eval**: `--spend-cap-usd 175` on every invocation, `--concurrency 3` at most, `--timeout-s 900`. Exit 3 (account
+- **Eval**: `--spend-cap-usd 175` on every invocation of round 1 (Task 9), `--spend-cap-usd 220` on every invocation
+  of round 2 (Task 15), `--concurrency 3` at most, `--timeout-s 900`. Exit 3 (account
   limit) or 4 (cap): stop and report the spend. Never raise the cap, switch accounts or work around a limit. No CPU-heavy
   loop on the Mac. `CLAUDE_CONFIG_DIR` is the session's profile, never `~/.claude`. No transcript text, judge reason,
   path or user name in any commit, `change.md`, narrative, README or pull request.
@@ -152,6 +180,11 @@ carries is trusted"), "Release order", "Platforms" and "Tests (red first)". Part
    person's homes. Expected: no line, because their `cwd` is in the data folder. Pinned in Task 1 and Task 3 (a `cwd`
    in `voice-route-scratch` and the data folder itself), in Task 5 (the carried Codex hook) and in Verification 1 and 2
    with the real CLIs.
+7. **A test-split trace read for v4's design** would make round 2 a second v2. Expected: Task 13 prints each scenario's
+   split from `_state.json` before it opens a trace, and opens only train and val traces. For test scenarios it reads
+   only the counts in `results.jsonl`. `change.md` lists every trace it read.
+8. **v4's measured line drifting from the product's.** Expected: when v4 ships, the command prints exactly the line the
+   eval measured. Pinned in Task 16 (the guard on `flow/v4/harness-answers.json` against `startOutput()`, red first).
 
 Stated limits for the pull request: a Claude Code session resumed with the plugin gets the line again, because the spec
 covers every source (Codex does the same on `resume`). Windows PowerShell's own 2-3.5 s start (the plugin README's
@@ -164,6 +197,8 @@ Windows (decision 11).
 ---
 
 ### Task 1: the line and `harness device claude start`
+
+**Done** (dc039178ac (red), 0daf54e94c).
 
 **Effort:** high. **Depends on:** none.
 
@@ -235,6 +270,8 @@ Windows (decision 11).
 
 ### Task 2: Claude Code's SessionStart hook in the plugin
 
+**Done** (b1c86251f9 (red), c8422eef15).
+
 **Effort:** high. **Depends on:** none (its tests use a fake launcher with a literal SessionStart line).
 
 **Files:**
@@ -295,6 +332,8 @@ The spec's "`plugins/harness-device/test/`" is the plugin's own test. As in Part
 
 ### Task 3: `harness device codex start`
 
+**Done** (412a075739 (red), 9b8e86b874).
+
 **Effort:** high. **Depends on:** Task 1.
 
 **Files:**
@@ -325,6 +364,8 @@ The spec's "`plugins/harness-device/test/`" is the plugin's own test. As in Part
 - [ ] **Step 6: Commit.**
 
 ### Task 4: the Codex manifest's SessionStart hook, trusted as the others
+
+**Done** (6912c096bf (red), 03b4a5da6b).
 
 **Effort:** high. **Depends on:** Task 2 (it mirrors `hooks/start`, and the executable list it expects holds Task 2's).
 
@@ -372,6 +413,8 @@ The spec's "`plugins/harness-device/test/`" is the plugin's own test. As in Part
 
 ### Task 5: end to end: the carried hooks print the line from the devices' own setup
 
+**Done** (942ce23752).
+
 **Effort:** high. **Depends on:** Tasks 1, 2, 3 and 4.
 
 **Files:**
@@ -407,6 +450,8 @@ The spec's "`plugins/harness-device/test/`" is the plugin's own test. As in Part
 
 ### Task 6: product docs
 
+**Done** (45879e305a).
+
 **Effort:** medium. **Depends on:** Tasks 1, 2, 3 and 4. **Test that must fail first:** none (docs); one commit.
 
 **Files:**
@@ -429,6 +474,8 @@ The spec's "`plugins/harness-device/test/`" is the plugin's own test. As in Part
 - [ ] **Step 3: Commit.**
 
 ### Task 7: the listing probe proves the session-start line reached the model
+
+**Done** (5d32de3ce0 (red), ddf644aaf1).
 
 **Effort:** high. **Depends on:** none. It changes a file under `_state.json` `harness_paths`, so Task 9's first pass
 asks for `--approve-harness`.
@@ -478,6 +525,8 @@ asks for `--approve-harness`.
 
 ### Task 8: the Part 4 variant, `flow/v3`
 
+**Done** (942006b0d8 (red), f1232a4a77).
+
 **Effort:** medium. **Depends on:** Task 1.
 
 **Files:**
@@ -508,6 +557,8 @@ asks for `--approve-harness`.
 - [ ] **Step 6: Commit.**
 
 ### Task 9: the eval pass: v1 with the line, val and test in every condition
+
+**Done** (c49e7f141c). Round 1's verdict: the gain holds and specificity fails (9 needless rings of 54), so v3 does not ship. Its sentence that Part 5 does not open is corrected by Task 17 (decision 14).
 
 **Effort:** high. **Depends on:** Tasks 7, 8 and 12, and, by the orchestrator's order, Tasks 1-6 landed first.
 **Runs in this worktree** (`/Users/nqhieu84/orca/workspaces/openharness/needs-you-right-start-line`), whose git-ignored
@@ -584,6 +635,11 @@ the spend per pass and in the flow, and Claude Code's version.
 
 ### Task 10: cut the branch down when the line does not gain (only on that verdict)
 
+**On hold (decision 14).** It now **depends on Task 15** and **runs only** when Task 15's verdict is that v4 does not
+ship. Task 9's verdict alone no longer starts it. Round 2 adds to what it does below: Task 14's test goes with
+`start.spec.ts`, and `flow/v4/` with its `_state.json` entries, Task 15's rows and its narrative stay beside v3's.
+Task 17 replaces Task 11. The steps below are otherwise as written.
+
 **Effort:** medium. **Depends on:** Task 9. **Runs only** when Task 9's verdict is that the line does not ship.
 **Test that must fail first:** none (it removes the product part). One commit.
 
@@ -610,6 +666,8 @@ goes with Claude Code's: it ships only on Claude Code's gain.
 
 ### Task 11: results and the spec
 
+**Replaced by Task 17** (decision 14). It does not run.
+
 **Effort:** medium. **Depends on:** Task 9, and Task 10 when it runs. **Test that must fail first:** none (docs); one
 commit.
 
@@ -629,6 +687,8 @@ commit.
 - [ ] **Step 3: Commit** (`Dial skill eval: Part 4's results` or, after Task 10, `…; the line does not ship`).
 
 ### Task 12: `summarize` pairs each round's held-out recall with the best round's, beyond noise
+
+**Done** (02bffd1fa8 (red), 35f97401be).
 
 **Effort:** high. **Depends on:** none. No tokens are spent: it reads the committed rows. Task 9's verdict reads it
 (decision 9).
@@ -678,40 +738,281 @@ commit.
   changed: stop and report.
 - [ ] **Step 7: Commit** the four files.
 
+## Round 2 (decision 14)
+
+### Task 13: v4's line, from v3's train and val traces
+
+**Effort:** high. **Depends on:** none (Task 9's rows and traces are in this worktree). **Test that must fail first:**
+none (a design note). One commit. **Runs in this worktree**, the one that holds the git-ignored `flow/v3/traces/`.
+
+**Files:**
+- Create: `cli/evals/dial-skill/flow/v4/change.md` (`# Part 4, round 2: v1 and a line that sends the agent to the
+  skill`, with its Evidence and Change sections. Task 15 adds the Result.)
+
+**Interfaces:**
+- Produces: v4's line, verbatim, in a fenced block under `## Change`. Task 14 builds the variant's answer from it, and
+  Task 16 copies it into the product. It keeps the Global Constraints' rules for round 2's line.
+
+- [ ] **Step 1: Look up the splits before opening any trace.** From `cli/`:
+  `node -e 'const s=require("./evals/dial-skill/flow/_state.json"); for (const c of process.argv.slice(1)) { const id=c+".claude"; console.log(c, s.train_ids.includes(id)?"train":s.val_ids.includes(id)?"val":s.test_ids.includes(id)?"test":"none") }' <scenario>…`
+  Run it on every scenario whose traces you mean to open. Round 1's needless-ring scenarios are expected as follows:
+  `report-json-flag` is `val`, while `minor-choice`, `install-vendored-dep` and the one missed need,
+  `retry-policy-rollout`, are `test`. Open a trace (`flow/v3/traces/<scenario>.claude.<condition>_rep<n>.json`) only when
+  its scenario printed `train` or `val`. v3 ran no train cases, so the evidence is v3's val traces.
+- [ ] **Step 2: Counts for every held-out scenario**, test scenarios among them, from the committed rows
+  (`flow/v3/results.jsonl`'s grade fields, `table.md`, `summary.json`), never from a test trace and never from the
+  `prompt` or response text: per scenario and condition, rang or quiet, `loaded`, `one_step`.
+- [ ] **Step 3: Read the val traces** of `report-json-flag` in every condition: its 3 `crowd` rings and its quiet runs
+  in `clean` and `name-only`. Read too the val need runs that rang with `one_step` 1 and `loaded` 0. The question is
+  whether the agent rang from the line's command without reading the skill's body, and whether "load the dial skill
+  and follow it" would have sent it to the body, which in `crowd` held v1 at 0 of 27 needless rings.
+- [ ] **Step 4: Settle the line.** Start from the spec's text (Global Constraints). Change a word only for something a
+  val trace showed, and keep the sense "open the skill and follow it", never "run the command". Check it from `cli/`
+  with a `node -e` over the line. It must be 300 characters or fewer, match `/^[\x20-\x7e]+$/` and not `/[<>]/`, hold
+  `decide, answer or do` and `dial skill`, and hold none of `harness device notify`, `--suggest`, `--waiting`,
+  `--proceeding`.
+- [ ] **Step 5: Write `change.md`**, with counts and case names only. Evidence gives round 1's held-out counts and
+  needless rings by scenario with each one's split. It lists the traces read (scenario, split, condition, how many) and
+  says in plain words what they showed. Test scenarios appear as counts. Change gives the line verbatim and each word
+  changed from the spec's text with the val evidence for it, or "the spec's text, unchanged".
+- [ ] **Step 6:** `grep -nE '^>|/Users/|~/|'"$(whoami)" cli/evals/dial-skill/flow/v4/change.md` prints nothing.
+- [ ] **Step 7: Commit** (`Dial skill eval: Part 4 round 2's line, from v3's val traces`).
+
+**Report:** the line, its length, the traces read by scenario and split, and whether it differs from the spec's text.
+
+### Task 14: the round 2 variant, `flow/v4`
+
+**Effort:** medium. **Depends on:** Task 13.
+
+**Files:**
+- Create: `cli/evals/dial-skill/flow/v4/SKILL.before.md` and `cli/evals/dial-skill/flow/v4/SKILL.md` (both
+  `flow/v1/SKILL.md` byte for byte)
+- Create: `cli/evals/dial-skill/flow/v4/hooks.json` (`flow/v3/hooks.json` byte for byte: the same command and matcher)
+- Create: `cli/evals/dial-skill/flow/v4/harness-answers.json`: one answer, argv `["device", "claude", "start"]`, and
+  `stdout` `JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: <Task 13's line> } }) + '\n'`,
+  the shape `startOutput()` prints. It is written with `npx tsx -e` from the line in `v4/change.md` and formatted as
+  `v3/harness-answers.json` is, never typed by hand. The product still prints v3's line, so this answer is not
+  `startOutput()` until Task 16 (decision 14's order).
+- Modify: `cli/evals/dial-skill/flow/_state.json` (`harness_paths` gains `evals/dial-skill/flow/v4/hooks.json` and
+  `evals/dial-skill/flow/v4/harness-answers.json`)
+- Test: `cli/src/deviceClaude/start.spec.ts`. `cli/evals/dial-skill/state.spec.ts`'s existing `'lists every variant's
+  hooks.json and harness-answers.json'` must pass.
+
+**Interfaces:**
+- Produces: the variant Task 15 runs. The runner accepts it because its `SKILL.md` is `DIAL_SKILL`.
+
+- [ ] **Step 1: Write the failing test** in `start.spec.ts`'s `describe('the eval')`: `'the eval's round 2 variant
+  answers the SessionStart JSON of a line that sends the agent to the skill'`. Read `flow/v4/harness-answers.json`.
+  Exactly one answer has argv `device claude start`, with no `stderr` and no `code`. Its `stdout` equals
+  `JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: line } }) + '\n'`, where
+  `line` is the parsed `additionalContext` and must be a string. Then the line: length ≤ 300, `/^[\x20-\x7e]+$/`,
+  not `/[<>]/`, contains `decide, answer or do` and `dial skill`, and contains none of `harness device notify`,
+  `--suggest`, `--waiting`, `--proceeding`. Also `DIAL_SKILL_DESCRIPTION` contains `decide, answer or do`, and
+  `flow/v4/hooks.json` parses `toStrictEqual` to `flow/v3/hooks.json`.
+- [ ] **Step 2: Run it and see it fail.** `cd cli && npx vitest run src/deviceClaude/start.spec.ts`. Expected: FAIL (`ENOENT`).
+- [ ] **Step 3: Commit the red test.**
+- [ ] **Step 4: Write the files** and list the two in `harness_paths`.
+- [ ] **Step 5: Run.** `cd cli && npx vitest run src/deviceClaude/start.spec.ts && npx vitest run --config evals/dial-skill/vitest.config.ts evals/dial-skill/state.spec.ts`.
+  Expected: PASS.
+- [ ] **Step 6: Commit.**
+
+### Task 15: the eval pass, round 2: v1 with v4's line, val and test in every condition
+
+**Effort:** high. **Depends on:** Task 14. **Runs in this worktree**, as Task 9 did. **Test that must fail first:** none
+(it measures). Its checks are the exit codes, the probes, `scrub` and the eval's suite. **Needs the user's own Claude
+Code sign-in**, through the session's profile in `CLAUDE_CONFIG_DIR`.
+
+**Files:**
+- Create: `cli/evals/dial-skill/flow/v4/{results.jsonl,errors.jsonl,probes.jsonl,summary.json,table.md}`
+  (`errors.jsonl` only if written)
+- Modify: `cli/evals/dial-skill/flow/v4/change.md` (Evidence gains the probes and run counts; `## Result`),
+  `cli/evals/dial-skill/flow/narrative.md` (a `## Part 4, round 2` section), `cli/evals/dial-skill/flow/metrics.md`
+  (by `summarize`), `cli/evals/dial-skill/flow/_state.json` (`harness_sha` by `--approve-harness`, `current_round` 4,
+  and `best` `{ round: 4, val_score, test_score }` only if v4 ships; otherwise `best` stays round 1)
+- Git-ignored, kept on this Mac: `flow/v4/traces/`, `flow/v4/private.jsonl`
+
+**Spend plan** (round 1's costs per pass):
+
+| Step | Runs | About |
+|---|---|---|
+| Spent (Parts 1 and 3, round 1) | | $156.23 |
+| `crowd` val and test, 3 reps | 75 + 1 probe | $22.2 |
+| `clean` val and test, 2 reps | 50 + 1 probe | $11.6 |
+| `name-only` val and test, 1 rep | 25 + 1 probe | $7.4 |
+| Flow after the pass | | about $197.5; cap $220 |
+
+A line that sends the agent to the skill may load the body more often and cost a little more per run. The $22.5 margin
+covers that. Going over is exit 4: stop and report to the orchestrator.
+
+- [ ] **Step 1: Check the start.** From `cli/`: `CLAUDE_CONFIG_DIR` is set and is not `~/.claude`.
+  `diff <(npx tsx -e 'import { DIAL_SKILL } from "./src/devices/dialSkill.ts"; process.stdout.write(DIAL_SKILL)') evals/dial-skill/flow/v4/SKILL.md`
+  prints nothing. `cmp evals/dial-skill/flow/v3/hooks.json evals/dial-skill/flow/v4/hooks.json` passes.
+  `git status --short` prints nothing. In `_state.json`, `best.round` is 1 and `current_round` is 3. The status
+  table's last `spend` is $156.23. `marker=$(mktemp)`.
+- [ ] **Step 2: `crowd` at 3 reps.**
+  `npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v4 --condition crowd --split val,test --reps 3 --concurrency 3 --timeout-s 900 --spend-cap-usd 220`
+  - Exit 2, "harness changed": review `git diff <_state.json harness_sha> -- <its harness_paths>`. Expect only
+    `v4/hooks.json` and `v4/harness-answers.json`. If so, rerun with `--approve-harness`. For anything else, stop and
+    report.
+  - Exit 2 on any probe failure (`start line not given` among them): stop and report the probe row's `listing` and
+    `start_line`.
+  - Exit 1: rerun the same command, which runs only the failed cases. Exit 3 or 4: stop and report the spend to the
+    orchestrator. Never raise the cap.
+  - Expected: 1 probe with `start_line: true`, 75 rows, about $22.
+- [ ] **Step 3: `clean` and `name-only`.** The same command with `--condition clean --reps 2`, then with
+  `--condition name-only --reps 1`. The exits are handled as in Step 2. Expected: 2 probes, each with
+  `start_line: true`, then 50 and 25 rows, about $19 together.
+- [ ] **Step 4:** `find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u` lists only the
+  startup files the README names. Then `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow`.
+- [ ] **Step 5: Read the numbers**, with counts and scenario names only. From the held-out table, read v1's, v3's and
+  v4's rows in each condition: recall, needless rings, `line_ok`, `ask_ok`, harmed, `went_on`, `one_step` and `loaded`,
+  plus v4's `recall vs best` (best is round 1, v1). List needless rings and need misses by scenario, with each
+  scenario's split and `loaded`. Also split v4's held-out counts two ways: the val cases whose traces Task 13 read
+  (from `v4/change.md`), and the rest. The gates read on the total, as Part 3 did.
+- [ ] **Step 6: The verdict**, by decisions 9 and 10, from v4's rows. v4 ships only when both hold:
+  - **gain:** v4's `recall vs best` interval is above 0 (low end > 0) in `crowd` or in `name-only`, and below 0 (high
+    end < 0) in none of `crowd`, `clean` and `name-only`;
+  - **specificity:** v4's needless rings over the 54 pooled no-need runs are at most 2.
+
+  State each interval and the pooled count it rests on, with `name-only`'s needless rings on their own. **Part 5:** if
+  v4 ships, state its held-out `crowd` recall (k of n, %) and "Part 5 opens" when that is under 90%. If v4 does not
+  ship, state "no line ships; v1's 41 of 48 (85%) stands; Part 5 opens".
+- [ ] **Step 7: Write** `v4/change.md`'s Result and the narrative's `## Part 4, round 2` section with the same numbers.
+  Set `_state.json` as in Files, then summarize again. v3's Part 5 sentence is left for Task 17.
+- [ ] **Step 8: Make the rows fit to commit:** `npx tsx evals/dial-skill/flow-rows.ts scrub evals/dial-skill/flow`
+  exits 0, then `node evals/dial-skill/build-report-lite.mjs evals/dial-skill/flow`. `git status --short -- evals/dial-skill/flow`
+  shows only the files above. `grep -nE '^>|/Users/|~/|'"$(whoami)" evals/dial-skill/flow/v4/change.md evals/dial-skill/flow/narrative.md`
+  prints nothing.
+- [ ] **Step 9:** `npx vitest run --config evals/dial-skill/vitest.config.ts`. Expected: PASS.
+- [ ] **Step 10: Commit** the files above (`Dial skill eval: Part 4 round 2, v1 with a line that sends the agent to
+  the skill, on val and test in every condition`). The measurement is committed whatever the verdict.
+
+**Report** (to the main session, numbers only): the held-out rows of v1, v3 and v4 in every condition. The verdict and
+what it rests on: the three recall intervals against v1, the pooled needless rings and `name-only`'s alone. v4's
+numbers split into the read val cases and the rest. Whether Part 5 opens. The spend per pass and in the flow, and
+Claude Code's version. Then the next task: Task 16 if v4 ships, Task 10 if not.
+
+### Task 16: the product carries v4's line (only if v4 ships)
+
+**Effort:** high. **Depends on:** Task 15. **Runs only** when Task 15's verdict is that v4 ships. Otherwise Task 10
+runs instead.
+
+Only the line constant changes. The command, the hooks, `hooks/start`, `hooks/codex-start` and the Codex trust stay
+as round 1 built them. The hook files do not change, so the carried fingerprint and the trust records do not either.
+
+**Files:**
+- Modify: `cli/src/deviceClaude/start.ts` (`DIAL_START_LINE`: v4's line, from `flow/v4/change.md`)
+- Modify: `cli/src/deviceClaude/start.spec.ts`
+- Modify: `plugins/harness-device/README.md` ("At session start": the quoted line)
+- Modify: `docs/plans/2026-11-26-needs-you-right-design.md` (the "The line" block: v4's text, as the spec's Round 2
+  says, "Shipped, v4's text replaces the line above"; and v3's text quoted in "Round 1")
+
+These stay unchanged: `cli/evals/dial-skill/probe.spec.ts`'s `START_LINE` and `harnessDevicePlugin.spec.ts`'s
+`SESSION_LINE` are fixture data, not the product's line. `cli/e2e/deviceStartLine.e2e.ts` reads `startOutput()`.
+`docs/cli.md` and `cli/AGENTS.md` do not quote the line. `flow/v3/harness-answers.json` stays as round 1's record, and
+the runner's `harness_sha` guards it.
+
+**Interfaces:**
+- Consumes: Task 13's line, Task 14's `flow/v4/harness-answers.json`.
+- Produces: `DIAL_START_LINE` is v4's line, and `startOutput()` + `'\n'` equals v4's answer byte for byte.
+
+- [ ] **Step 1: Write the failing tests** in `start.spec.ts`:
+  - `LINE` becomes v4's line, copied from `v4/change.md`. `'the line is the spec's, word for word'` then fails.
+  - `'the line is at most 300 characters … with the command, both flags and the moment'` becomes `'the line is at
+    most 300 characters of printable ASCII on one line, names the moment, sends the agent to the dial skill and
+    carries no command'`. Length ≤ 300, `/^[\x20-\x7e]+$/`, no `<` or `>`. It contains
+    `decide, answer or do` and `dial skill`, and none of `harness device notify`,
+    `--suggest`, `--waiting`, `--proceeding`.
+  - The agreement test becomes `'the line and the dial skill's description agree on the moment'`:
+    `DIAL_SKILL_DESCRIPTION` and `DIAL_START_LINE` both contain `decide, answer or do` and `Not for finished work or
+    progress.` (the spec: "holds the line to the description's moment, as it carries no command"; the orchestrator,
+    2026-11-27: both phrases).
+  - In `describe('the eval')`: v3's guard is removed. Task 14's rule test becomes `'the eval's round 2 variant answers
+    exactly what this command prints'`: `flow/v4/harness-answers.json`'s `device claude start` answers `toEqual`
+    `[{ argv: ['device', 'claude', 'start'], stdout: startOutput() + '\n' }]`, and `flow/v4/hooks.json`'s one
+    `SessionStart` hook runs `harness device claude start` with matcher `startup|resume|clear|compact`.
+- [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run src/deviceClaude/start.spec.ts`. Expected:
+  FAIL. The line is still v3's, which holds the command, and v4's answer differs from `startOutput()`.
+- [ ] **Step 3: Commit the red tests.**
+- [ ] **Step 4: Implement.** Set `DIAL_START_LINE` to v4's line, and update the header comment if it describes the
+  line's content. Replace the README's quoted line and the spec's "The line" block with v4's text, and quote v3's text word for word
+  in the spec's "Round 1" section, whose heading no longer points at it (the orchestrator, 2026-11-27).
+- [ ] **Step 5: Run them and see them pass.** `cd cli && npx vitest run src/deviceClaude/start.spec.ts src/deviceClaude/command.spec.ts src/harnessDevicePlugin.spec.ts src/devices/codexPluginTrust.spec.ts && npx vitest run --config vitest.e2e.config.ts e2e/deviceStartLine.e2e.ts && npm run typecheck`.
+  Expected: PASS. The trust records are unchanged and the end-to-end test prints the new line.
+- [ ] **Step 6: Commit** (`Needs you, right, Part 4: the session-start line sends the agent to the dial skill
+  (round 2)`).
+
+### Task 17: results and the spec, both rounds
+
+**Effort:** medium. **Depends on:** Task 15, and on Task 16 or Task 10, whichever runs (they share the spec, the README
+and the narrative's neighbors). **Test that must fail first:** none (docs). One commit. It replaces Task 11.
+
+**Files:**
+- Modify: `cli/evals/dial-skill/README.md`. In Results, a Part 4 block above Part 3's, with the held-out counts of v1,
+  v3 and v4 side by side in `crowd`, `clean` and `name-only`, plus `loaded`, `one_step`, each round's verdict, which
+  line ships (v4's, or none) and whether Part 5 opens. The Cost paragraph states the caps of $175 (round 1) and $220
+  (round 2) and what the flow spent.
+- Modify: `cli/evals/dial-skill/flow/narrative.md`. The headline gives Part 4's result over both rounds. The Part 4
+  section's last sentence ("so Part 5 does not open") becomes the gate read after round 2. Add a "Findings for Part 5"
+  section when Part 5 opens.
+- Modify: `cli/evals/dial-skill/flow/v3/change.md`. Its verdict's Part 5 sentence becomes "Part 5's gate is read after
+  round 2 (v4)", with that result.
+- Modify: `docs/plans/2026-11-26-needs-you-right-design.md`. Under "Round 2", add a "Measured (<date>)" paragraph: the
+  held-out numbers against v1, the three recall intervals, the pooled specificity and `name-only`'s alone, the
+  verdict, whether Part 5 opens, and the flow's spend. The "Round 1" paragraph is the author's: correct it only where
+  it differs from `flow/v3/`'s committed rows. On 2026-11-27 it matches them.
+
+- [ ] **Step 1:** Write them, with numbers only.
+- [ ] **Step 2:** `grep -nE '^>|/Users/|~/|'"$(whoami)"` on the four files finds nothing new, and
+  `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow` leaves the narrative's tables unchanged.
+- [ ] **Step 3: Commit** (`Dial skill eval: Part 4's results, both rounds` or, after Task 10, `…; no line ships`).
+
 ---
 
 ## Task graph
 
-| Task | Depends on | Effort |
-|---|---|---|
-| 1 the line, `claude start`, the agreement test | none | high |
-| 2 Claude Code's SessionStart hook | none | high |
-| 3 `codex start` | 1 | high |
-| 4 Codex's SessionStart hook and its trust record | 2 | high |
-| 5 end to end, both engines | 1, 2, 3, 4 | high |
-| 6 product docs | 1, 2, 3, 4 | medium |
-| 7 the probe proves the line | none | high |
-| 8 the variant `flow/v3` | 1 | medium |
-| 9 the eval pass (this worktree) | 7, 8, 12 (and 1-6 by order) | high |
-| 10 cut down (only on no gain) | 9 | medium |
-| 11 results and the spec | 9 (and 10 when it runs) | medium |
-| 12 `summarize`: recall against the best round, beyond noise | none | high |
+| Task | Depends on | Effort | Status |
+|---|---|---|---|
+| 1 the line, `claude start`, the agreement test | none | high | done |
+| 2 Claude Code's SessionStart hook | none | high | done |
+| 3 `codex start` | 1 | high | done |
+| 4 Codex's SessionStart hook and its trust record | 2 | high | done |
+| 5 end to end, both engines | 1, 2, 3, 4 | high | done |
+| 6 product docs | 1, 2, 3, 4 | medium | done |
+| 7 the probe proves the line | none | high | done |
+| 8 the variant `flow/v3` | 1 | medium | done |
+| 9 the eval pass, round 1 (this worktree) | 7, 8, 12 (and 1-6 by order) | high | done: v3 not shipped |
+| 10 cut down (only if v4 does not ship) | 15 | medium | on hold |
+| 11 results and the spec | | | replaced by 17 |
+| 12 `summarize`: recall against the best round, beyond noise | none | high | done |
+| 13 v4's line from v3's val traces (this worktree) | none | high | |
+| 14 the variant `flow/v4` | 13 | medium | |
+| 15 the eval pass, round 2 (this worktree, cap $220) | 14 | high | |
+| 16 the product carries v4's line (only if v4 ships) | 15 | high | |
+| 17 results and the spec, both rounds | 15, and 16 or 10 | medium | |
 
-Longest chain: 2 → 4 → 5 → 9 → 10 → 11, six tasks (five when Task 10 does not run). 1 → 3 → 5 → 9 → 10 → 11 is as long.
-Task 12 shares `cli/evals/dial-skill/README.md` with Tasks 7 and 11 and `flow/narrative.md` with Tasks 9 and 11, so it
-does not run beside Task 7.
+What is left runs in a line: 13 → 14 → 15 → 16 (or 10) → 17, five tasks. Each one needs the one before it: Task 14
+builds from Task 13's line, Task 15 runs Task 14's variant, Task 15's verdict picks Task 16 or Task 10, and Task 17
+writes the verdict into the same spec, README and narrative those tasks touch. Exactly one of Task 16 and Task 10 runs.
 
 ## Pull request notes
 
-- One pull request, released by harness-pm: the plugin and the CLI (#4666, its base, is on `main`). The PR names macOS, Linux and Windows.
-- Evidence: the red-then-green commits of Tasks 1-4, 7-8 and 12; the held-out table of v1 and v3 and the verdict
-  (numbers only: the recall intervals against v1 and the pooled needless rings); Verification 1's and 2's results; the
+- One pull request, released by harness-pm: the plugin and the CLI if v4 ships, the eval alone if not (#4666, its base, is on `main`). The PR names macOS, Linux and Windows.
+- Evidence: the red-then-green commits of Tasks 1-4, 7-8, 12, 14 and (if it runs) 16. The held-out table of v1, v3
+  and v4 and each round's verdict, numbers only: the recall intervals against v1 and the pooled needless rings. If
+  neither round ships, the pull request carries the eval alone (Task 10), and the product evidence below falls away. Verification 1's and 2's results; the
   hook's time at session start on this Mac (Verification 1) and the `start` command's time (Verification 3), each
   median and maximum; `local-checks.py`'s receipts; the stated limits under Review Focus, among them that a real Claude
   Code or Codex session was not run on Windows and that Codex on Windows starts each session about 1.5 s later.
 - Codex is judged in the field by #4642's counts, for the days before and 7 days after the release, as the spec says.
 
 ## Verification
+
+**Which product it checks.** Everything below runs on the final head, after Task 17. "The line" means
+`DIAL_START_LINE` at that head: v4's line when Task 16 ran. The end-to-end checks (1 and 2) and the timing checks (the
+hook's time in 1, and 3) run only on that final line, never on round 1's. If neither round ships (Task 10), the
+product part is gone. Checks 1-5 and 7 and the product's CI jobs then do not apply, and what is left is the eval (6),
+the eval's own specs, `cli-tests` for what remains, and `local-checks.py`.
 
 **On GitHub, automatic on the pull request** ([validation and release](../validation-and-release.md)): `cli-typecheck`
 and `cli-tests` (every spec above; `architecture.spec.ts` and `architecture.failureLogs.spec.ts` among them) for `cli/`
@@ -779,11 +1080,11 @@ No coverage gate is expected: nothing under `src/core/`, `src/services/` or anot
 5. **Windows:** `windows-e2e` x64 above, selected by path (the hooks' PowerShell and Git Bash forms against a stand-in
    launcher). No Windows VM (decision 11): the PR body states that a real Claude Code or Codex session was not run on
    Windows, and the stated limit that Codex runs hooks through PowerShell there, about 1.5 s more per session start.
-6. **The eval** (Task 9) is Claude Code's end-to-end measurement. It runs locally on this Mac, with no workflow, and
+6. **The eval** (Task 9, round 1, and Task 15, round 2) is Claude Code's end-to-end measurement. It runs locally on this Mac, with no workflow, and
    **needs the user's own Claude Code sign-in** through the session profile. Isolation is the eval's own (its README):
    a temp repo per run, the fake `harness`, the curated `PATH`, `--setting-sources project`, Claude's sandbox, no
    backend.
-7. **The person's own eye, after the release** (needs the user, with their own login and dial): a fresh session whose
+7. **The person's own eye, after the release, only if v4 ships** (needs the user, with their own login and dial): a fresh session whose
    long turn ends on an ask, with the person in another app, rings the dial.
 
 **Proposal, not built here:** Part 7's proposed scheduled check of the newest Codex release, which compares `hooks/list`'s
