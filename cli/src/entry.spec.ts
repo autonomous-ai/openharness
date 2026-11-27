@@ -56,6 +56,24 @@ it.skipIf(process.platform === 'win32')('a master whose home move throws ends wi
     .toEqual({ status: 1, stderr: expect.stringMatching(/^[\d-]+ [\d:.]+ \[harnessd\] the master stopped on an uncaught error: Error\n$/) })
 }, 60_000)
 
+// The Windows follower, `harness device claude inbox <session id>`, runs as long as the session and used to evaluate the
+// whole CLI to poll one route (inboxCommand.ts). Here the CLI, the core, the terminal UI and the end-to-end encryption are
+// each replaced by a module that says it was reached and ends: the follower reaches none of them.
+it('follows a session\'s inbox without loading the whole CLI', () => {
+  const home = mkdtempSync(join(tmpdir(), 'inbox-entry-')); homes.push(home)
+  const heavy = ['/src/cli.ts', '/src/core/', '/src/tui/', '/src/lib/e2ee/']
+  const preload = `import { registerHooks } from 'node:module'; const heavy = ${JSON.stringify(heavy)}; `
+    + 'registerHooks({ resolve(specifier, context, next) { const resolved = next(specifier, context); '
+    + 'const hit = heavy.find(part => new URL(resolved.url).pathname.includes(part)); '
+    + "const stub = 'process.stderr.write(' + JSON.stringify(hit + ' was loaded') + '); process.exit(3)'; "
+    + "return hit ? { url: 'data:text/javascript,' + encodeURIComponent(stub), shortCircuit: true } : resolved } })"
+  const run = spawnSync(process.execPath, ['--import', LOADER, '--import', `data:text/javascript,${encodeURIComponent(preload)}`, ENTRY, 'device', 'claude', 'inbox', 'not-a-session-id'], {
+    encoding: 'utf8', timeout: 30_000, windowsHide: true,
+    env: { ...WINDOWS_ENV, PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: join(home, 'data') },
+  })
+  expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, stdout: '{"off":true}\n', stderr: '' })
+}, 60_000)
+
 it('allows a call it cannot read, and one with no input at all', () => {
   for (const input of ['not json', '']) {
     const home = mkdtempSync(join(tmpdir(), 'retired-guard-')); homes.push(home)
