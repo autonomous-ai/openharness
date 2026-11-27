@@ -8014,6 +8014,49 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.agent().host).toBe('terminal')
   })
 
+  /** Its one TUI (700) on tmux pane %3, whose client (650) runs in Ghostty on ttys003, as codexServed answers it. */
+  const PANE: Pane = { adapter: 'tmux', id: '%3:700:ghostty' }
+  const IN_TMUX: Served = {
+    client: { app: 'ghostty', tty: '/dev/ttys003', pid: 650 }, nest: 'tmux', pane: PANE, clients: [{ pid: 700, generation: 'g700' }],
+  }
+
+  it('in tmux inside Ghostty its place is nested: host tmux, on Ghostty\'s and tmux\'s pages, and a tap shows its pane, through its next hooks', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([IN_TMUX])
+    const { id } = t.agent()
+    const nested = async (): Promise<void> => {
+      expect(t.agent()).toMatchObject({ nest: 'tmux', host: 'tmux', app: 'ghostty' })
+      expect(pagesOf(t.agent())).toEqual(['ghostty', 'tmux'])
+      // A place, never its own pane: no words reach it.
+      expect(t.src.paneOf(id, 'tmux')).toBeUndefined()
+      t.actions.open.mockClear()
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(t.actions.open.mock.calls).toEqual([[id, { bundle: 'com.mitchellh.ghostty', pane: PANE }]])
+    }
+    await nested()
+    t.src.ingest(t.codex('turn-start'))
+    await nested()
+    expect(t.lookup).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([['its TUI', 700], ['its multiplexer\'s client', 650]])('in tmux inside Ghostty, %s exiting leaves the place at the next tick, and its next turn asks again', async (_, pid) => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([IN_TMUX])
+    await t.src.tick()
+    expect(t.agent().nest).toBe('tmux')
+    t.gens.set(pid, null)
+    await t.src.tick()
+    expect(t.src.list()).toHaveLength(1)
+    expect(t.agent()).toMatchObject({ host: 'terminal', app: 'terminal' })
+    expect(t.agent()).not.toHaveProperty('nest')
+    await t.src.focus(t.agent(), latestTap)
+    for (const [, target] of t.actions.open.mock.calls) expect(target.pane).toBeUndefined()
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+  })
+
   it('no pane of its hints or its caller takes its words: a place learnt by its folder only shows it', async () => {
     const t = served({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
     // The first TUI ran in tmux, and the session's own TUI runs in VS Code's terminal.
