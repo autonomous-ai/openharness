@@ -26,11 +26,19 @@ export function scoreOf(need: boolean, rang: boolean, lineOk: boolean, askOk: bo
   return (rang ? 2 : -2) + (lineOk ? 1 : 0) + (askOk ? 1 : 0)
 }
 
-/** How the agent closed its cards over a two-turn run, kept beside score, never in it. Rung: the ids turn 1's
- *  `device notify` calls printed; `seed` the card the fake started with. close_right is given only for the follow-ups
- *  that answer a card turn 1 rang, and only when it rang one. */
+/** The cards turn 1 rang and still had open when it ended: the ids its `device notify` calls printed, less those a
+ *  later one of them dropped or replaced. */
+export function rungOf(calls: Ring[]): string[] {
+  const turn1 = calls.filter((c) => c.turn === 1)
+  const dropped = turn1.flatMap((c) => c.dropped ?? [])
+  return turn1.filter((c) => c.id !== undefined && !dropped.includes(c.id)).map((c) => c.id!)
+}
+
+/** How the agent closed its cards over a two-turn run, kept beside score, never in it. Rung: rungOf; `seed` the card
+ *  the fake started with. close_right is given only for the follow-ups that answer a card turn 1 rang, and only when
+ *  one it rang was still open. */
 export function gradeClose(kind: FollowUpKind, calls: Ring[], seed: string | null): Record<string, number> {
-  const rung = calls.filter((c) => c.turn === 1 && c.id !== undefined).map((c) => c.id!)
+  const rung = rungOf(calls)
   const closedIn = (turn: 1 | 2) => calls.filter((c) => c.turn === turn).flatMap((c) => c.closed ?? [])
   const early = closedIn(1)
   const late = closedIn(2)

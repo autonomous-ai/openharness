@@ -22,6 +22,8 @@ export interface Ring {
   id?: string
   /** The ids a `--done` closed. */
   closed?: string[]
+  /** The ids a `device notify` dropped (a sixth waiting card) or replaced (a new other card): no longer open. */
+  dropped?: string[]
   /** Set on a Stop hook's call the fake answered with a block: the run took one more model round. */
   blocked?: true
 }
@@ -283,6 +285,7 @@ interface Recorded {
   code: number
   id?: string
   closed?: string[]
+  dropped?: string[]
   /** A Stop hook's call: whether the fake blocked it. */
   blocked?: boolean
 }
@@ -515,15 +518,19 @@ if (notify && done !== undefined) {
   } else if (${noDial}) {
     console.log(json ? JSON.stringify({ result: 'no dial' }) : 'no dial')
   } else {
-    // A new other card replaces the other; a sixth waiting card drops the oldest.
-    const open = cards().filter((card) => kind === 'waiting' || card.kind === 'waiting')
+    // A new other card replaces the other; a sixth waiting card drops the oldest. Either is recorded, so the grader
+    // does not ask turn 2 to close a card turn 1 no longer had open.
+    const before = cards()
+    const open = before.filter((card) => kind === 'waiting' || card.kind === 'waiting')
     let id
-    do id = randomBytes(4).toString('hex'); while (open.some((card) => card.id === id))
+    do id = randomBytes(4).toString('hex'); while (before.some((card) => card.id === id))
     open.push({ id, at: Date.now(), kind, line })
     const waiting = open.filter((card) => card.kind === 'waiting')
     if (waiting.length > 5) open.splice(open.indexOf(waiting[0]), 1)
     keep(open)
     call.id = id
+    const dropped = before.filter((card) => !open.includes(card)).map((card) => card.id)
+    if (dropped.length > 0) call.dropped = dropped
     console.log(json ? JSON.stringify({ result: 'shown', id }) : 'shown ' + id)
   }
 } else if (answer?.stop) {
