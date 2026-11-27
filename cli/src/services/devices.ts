@@ -77,7 +77,8 @@ import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsProcesses, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pagesOf } from '../cable/hosts/select.js'
-import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
+import { createTabsAdapter, isTabApp, readTabTty, runPs, type Tab, type TabApp, type TabTty } from '../cable/hosts/tabs.js'
+import { readTabProcess, readTtyReaders, tabsTyping, type TabProcess } from '../cable/hosts/tabsType.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
@@ -109,6 +110,7 @@ import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
+import { trustedCodexHomes } from '../lib/codexProfiles.js'
 import { noticeKind, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
@@ -177,7 +179,7 @@ export interface DevicesDeps {
   rex?: ReturnType<typeof rexFinder>
   /** For this service's tests: how `codex` is found and run, what it runs under, and the read of the login shell that
    *  both take (cable/hosts/codexQueue.ts). */
-  codex?: Omit<CodexQueueDeps, 'home' | 'cwd'>
+  codex?: Omit<CodexQueueDeps, 'cwd'>
   /** For this service's tests: herdr's socket (cable/hosts/herdrClient.ts). */
   herdr?: HerdrClient
   /** For this service's tests: Herdr Core's socket (cable/hosts/hcClient.ts). */
@@ -208,8 +210,15 @@ export interface DevicesDeps {
    *  (services/inline.ts). Elsewhere inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so
    *  the core's process opens no socket for the devices, and the dial follows no app in front there. */
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
-  /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
-  tty?: (pid: number) => Promise<string | undefined>
+  /** For this service's tests: how an agent's tty and its process's start are read; `ps` by default
+   *  (cable/hosts/tabs.ts). */
+  tty?: (pid: number) => Promise<TabTty | undefined>
+  /** For this service's tests: how a tab's process is read before the dial's words go to it, its tty, groups and start;
+   *  `ps` by default (cable/hosts/tabsType.ts readTabProcess). */
+  tabProcess?: (pid: number) => Promise<TabProcess | undefined>
+  /** For this service's tests: the processes reading a tab's tty as their stdin; `lsof` by default
+   *  (cable/hosts/tabsType.ts readTtyReaders). */
+  ttyReaders?: (tty: string) => Promise<readonly number[] | undefined>
   /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
    *  (cable/hosts/vscodeTerminals.ts). */
   processParents?: VscodeTerminalsDeps['processes']
@@ -623,12 +632,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     cursorCli: () => editorCli(cursorExtension), desktopLauncher: harnessDesktopLauncher, count: (outcome) => raiseCount('window', outcome) }) : undefined)
   const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude', windows })
   const claudePane = (localId: string): Pane => ({ adapter: claude.id, id: localId })
-  // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
-  const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps(chatGptPackage)), home: env.CODEX_HOME, cwd: homedir() })
+  // Run from the home folder, so no project's .codex/ is read; each send names the Codex home whose config it loads.
+  const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps(chatGptPackage)), cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
   // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
-  // by its tty: elsewhere no agent's is read, and none has a tab.
-  const tabs = tabsStream()
+  // by its tty: elsewhere no agent's is read, and none has a tab. The dial's words go on it too, for Harness Device to
+  // write into a Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md); its timers stop
+  // with the devices.
+  const tabs = tabsStream({ after: timerIn('tabs') })
   // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
   // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
   // count's timer stops with the devices.
@@ -654,7 +665,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     after: timerIn('vscode'),
     log,
   })
-  const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
+  const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTabTty : undefined
   /** Whether [app] reports its selected tab here: a tab app, where the devices read ttys (macOS). */
   const reportsTabs = (app: string): app is TabApp => ttyOf !== undefined && isTabApp(app)
   /** The tab each tab app reported selected last: set by every tab report, and an app's dropped when another app, or
@@ -841,14 +852,24 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // iTerm2 and Ghostty.
     createWeztermTabAdapter({ ...apps, front: () => cableHost.latestFront() }),
     createKittyTabAdapter({ ...kittyDeps, front: () => cableHost.latestFront(), processes: readProcessNames, tty: readTtyName }),
-    createTabsAdapter({
+    { ...createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
         if (!tabs.select(tab, raise)) return false
         selects.note(tab.tty)
         return true
       },
-    }),
+    }), ...tabsTyping({
+      line: () => tabs.line(),
+      // Asked only in the observed source's own send, so the source is there: the source is built after its adapters.
+      shared: (app, tty, pid) => observed!.othersOnTty(app, tty, pid),
+      // Asked only for a pane with a proof, which only macOS's ttys give.
+      process: deps.tabProcess ?? readTabProcess,
+      readers: deps.ttyReaders ?? readTtyReaders,
+      // Only pid and ppid are read, but the check lets words into a tty: /bin/ps, never one from the PATH.
+      processes: () => readProcessNames((_ps, args, bounds) => runPs([...args], bounds)),
+      after: timerIn('tabs'),
+    }) },
   ].map(noting)]
   const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin, raise, windows,
     windowOf: (agentId) => observed?.windowOf(agentId),
@@ -989,10 +1010,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // as `codex queue` says while it queues the wake's (cable/hosts/appWake.ts waitsFor).
     codexQueue: {
       can: (isApp) => codexQueue.can(isApp),
-      send: (threadId, text, isApp) =>
-        appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp),
+      send: (threadId, text, isApp, home) =>
+        appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp, home),
     },
-    codexHome: env.CODEX_HOME,
+    // Harness's own records alone: its CODEX_HOME and the homes it adopted, held 1 s, and the profiles the
+    // person linked. Orca's Codex homes stay out: Orca's own route types into its terminals.
+    codexHomes: trustedCodexHomes(() => codexHomeRoots(env.CODEX_HOME), monotonic),
     claudeHome,
     claudePluginState,
     count: (what) => voiced(countWord(what)),
@@ -1158,6 +1181,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // notes the dial's own switch, so the title the app then shows is its echo.
     openThread: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
     queue: codexQueue,
+    // The ChatGPT app's threads run in its own home, which its source offers voice for only when it is this one.
+    codexHome: env.CODEX_HOME,
     monotonic,
     log,
     count: voiced,
@@ -3107,6 +3132,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
     thread: threadHandler((title) => part.call('dial', () => threadReported(title))),
     tabs: tabs.handler,
+    wrote: tabs.wrote,
     dial: dial.handler,
     orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals, workspace) => part.call('orca', () => orcaFronted(terminals, workspace))),
     notify: notifyHandler((mode) => {

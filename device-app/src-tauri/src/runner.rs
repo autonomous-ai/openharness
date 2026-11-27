@@ -8,7 +8,7 @@ use crate::loginitem::LoginItem;
 use crate::logs;
 use crate::open::Opener;
 use crate::state::StateFile;
-use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
+use crate::tabs::{Next, Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts, Typing, Written};
 use crate::types::{Effect, Event, ExportFailure, Log, LoginEvent};
 use crate::update::AppUpdater;
 use crate::watch::{self, Watch};
@@ -70,12 +70,17 @@ struct Tabs {
 #[derive(Default)]
 struct TabState {
     follow: TabFollow,
+    /// The number of the watch whose typings wait in `follow`: a new watch drops those of the one before, so they are
+    /// all of one.
+    typings_of: u64,
     /// The runner has gone: the tab thread ends.
     ended: bool,
 }
 
 /// The tab thread's next call, or the lines for the log that came with none.
 enum Call {
+    /// The oldest typing, and the number of the watch it came from: its answer goes to that watch alone.
+    Typing(Next, u64),
     Select(Select),
     Poll(TabApp),
     Said(Vec<String>),
@@ -88,13 +93,25 @@ impl Tabs {
         self.changed.notify_one();
     }
 
+    /// A typing from the watch numbered `number`, and a word to the tab thread. The line is its answer, and the log its
+    /// lines, when the rules answer it at once.
+    fn typed(&self, number: u64, typing: Typing) -> Out {
+        let mut state = self.state.lock().unwrap();
+        state.typings_of = number;
+        let out = state.follow.typed(typing, Instant::now());
+        drop(state);
+        self.changed.notify_one();
+        out
+    }
+
     fn end(&self) {
         self.state.lock().unwrap().ended = true;
         self.changed.notify_one();
     }
 
-    /// Waits for the next call: a waiting select first, else a poll `every` after the last one began. With neither to
-    /// do it waits with no timer. None once the runner has gone, and what the rules said before it went is taken first.
+    /// Waits for the next call: the oldest typing first, as its 500 ms bound is the tightest, then a waiting select,
+    /// else a poll `every` after the last one began. With none to do it waits with no timer. None once the runner has
+    /// gone, and what the rules said before it went is taken first.
     fn next(&self, every: Duration, polled_at: Option<Instant>) -> Option<Call> {
         let mut state = self.state.lock().unwrap();
         loop {
@@ -104,6 +121,9 @@ impl Tabs {
             }
             if state.ended {
                 return None;
+            }
+            if let Some(next) = state.follow.next_typing(Instant::now()) {
+                return Some(Call::Typing(next, state.typings_of));
             }
             if let Some(select) = state.follow.next_select(Instant::now()) {
                 return Some(Call::Select(select));
@@ -324,7 +344,7 @@ impl Shared {
         thread::spawn(move || send(work(&*updater)));
     }
 
-    fn spawn_watch(&self) {
+    fn spawn_watch(self: &Arc<Self>) {
         let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
         let mut watch = self.watch.lock().unwrap();
         // Numbered before the watch it replaces stops: that one's late WatchExit(Some(0)) would read as the app
@@ -341,6 +361,8 @@ impl Shared {
         }
         let (watching, send, tabs) = (self.watching.clone(), self.send.clone(), self.tabs.clone());
         let (selecting, selects) = (self.watching.clone(), self.tabs.clone());
+        // Weakly: the watch's thread keeps its callbacks for as long as it runs, and the runner must still go.
+        let typed = Arc::downgrade(self);
         let spawned = watch::spawn_watch(
             &*cli,
             self.doors.log.clone(),
@@ -363,6 +385,11 @@ impl Shared {
                 let current = selecting.lock().unwrap();
                 if *current == number {
                     selects.tell(|follow| follow.select(app, tty, raise, Instant::now()));
+                }
+            },
+            move |typing| {
+                if let Some(shared) = typed.upgrade() {
+                    shared.typed(number, typing);
                 }
             },
         );
@@ -402,8 +429,39 @@ impl Shared {
         }
     }
 
-    /// The tab thread: one call at a time, until the runner goes. A tab line goes to the watch running now, and only
-    /// each answer's outcome to the log.
+    /// A typing from the watch numbered `number`, on its thread. One the rules answer at once is answered to that watch,
+    /// and logged, now: the devices wait on it, and the tab thread may be held for minutes.
+    fn typed(&self, number: u64, typing: Typing) {
+        // Held through the tell, as a select's: a newer watch cannot take its number in between and have this one's
+        // typing run for it.
+        let current = self.watching.lock().unwrap();
+        if *current != number {
+            return;
+        }
+        let out = self.tabs.typed(number, typing);
+        drop(current);
+        if let Some(line) = &out.line {
+            self.wrote(number, line);
+        }
+        for line in out.log {
+            self.doors.log.line(&line);
+        }
+    }
+
+    /// A typing's answer, to the watch numbered `number` while it is the one running: a newer watch never hears of an
+    /// older one's words.
+    fn wrote(&self, number: u64, line: &str) {
+        // `watch` first, as spawn_watch takes them, and held through the write.
+        let watch = self.watch.lock().unwrap();
+        if *self.watching.lock().unwrap() == number
+            && let Some(watch) = watch.as_ref()
+        {
+            watch.wrote(line);
+        }
+    }
+
+    /// The tab thread: one call at a time, until the runner goes. A tab line goes to the watch running now, a typing's
+    /// answer to the watch it came from, and only each answer's outcome to the log.
     fn follow_tabs(&self, every: Duration) {
         let (scripts, started_at) = (&self.doors.tabs, Instant::now());
         let mut polled_at = None;
@@ -415,7 +473,8 @@ impl Shared {
                     polled_at = Some(start);
                     Some(*app)
                 }
-                Call::Said(_) => None,
+                // A typing is answered even when its app does not run.
+                Call::Typing(..) | Call::Said(_) => None,
             };
             // An Apple Event to an app that is not running would launch it, and the app in front may have just quit.
             if app.is_some_and(|app| !scripts.running(app)) {
@@ -423,6 +482,29 @@ impl Shared {
             }
             let out = match call {
                 Call::Said(log) => Out { line: None, log },
+                Call::Typing(next, number) => {
+                    let out = match next {
+                        Next::Refused { line, log } => Out { line: Some(line), log: log.into_iter().collect() },
+                        Next::Run(typing) => {
+                            let app = typing.app();
+                            // The terminal may have quit since the words, and an event would launch it again: one
+                            // that does not run has no session.
+                            let done = if !scripts.running(app) {
+                                Ok(Written::NoSession)
+                            } else {
+                                match &typing {
+                                    Typing::Write { tty, text, .. } => scripts.write_text(app, tty, text),
+                                    Typing::Enter { tty, .. } => scripts.send_enter(app, tty),
+                                }
+                            };
+                            self.tabs.answer(|follow| follow.written(&typing, done))
+                        }
+                    };
+                    if let Some(line) = &out.line {
+                        self.wrote(number, line);
+                    }
+                    out
+                }
                 Call::Select(Select { app, tty, frontmost, raise }) => {
                     let done =
                         if raise { scripts.focus_tty(app, &tty) } else { scripts.select_tty(app, &tty, frontmost) };
@@ -484,10 +566,10 @@ mod tests {
     use crate::loginitem::LoginItem;
     use crate::open::Opener;
     use crate::state::StateFile;
-    use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
+    use crate::tabs::{LATE_WRITE, NoTabs, Selected, TYPING_QUEUED, TabApp, TabError, TabScripts, Written};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuItem, NotifyMode, Output, Saved,
+        DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MemoryLog, MenuItem, NotifyMode, Output, Saved,
         UpdateFailure, VoiceLang,
     };
     use crate::update::AppUpdater;
@@ -510,6 +592,8 @@ mod tests {
     const VSCODE: &str = "com.microsoft.VSCode";
     const GHOSTTY_LINE: &str = r#"{"front":"com.mitchellh.ghostty"}"#;
     const VSCODE_LINE: &str = r#"{"front":"com.microsoft.VSCode"}"#;
+    /// What the app first tells every watch on its stdin: it answers each write and Enter line.
+    const WRITES: &str = r#"{"writes":true}"#;
     /// A watch that keeps what it reads on its stdin until it is stopped.
     const RECORDING: [&str; 2] = [r#"{"attached":false}"#, "@record"];
     /// The same, with the dial attached.
@@ -520,6 +604,14 @@ mod tests {
     const OTHER: &str = "/dev/ttys024";
     const SELECT: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#;
     const RAISE: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":true}}"#;
+    /// Taps on agents in Ghostty, the one app that takes a typing: a tap's select runs with Ghostty in the back, where a
+    /// swipe's does not.
+    const TAP: &str = r#"{"select":{"app":"ghostty","tty":"/dev/ttys023","raise":true}}"#;
+    const TAP_OTHER: &str = r#"{"select":{"app":"ghostty","tty":"/dev/ttys024","raise":true}}"#;
+    const ID: &str = "0123456789abcdef";
+    const NEXT_ID: &str = "00000000000000ff";
+    const ENTER_ID: &str = "fedcba9876543210";
+    const ENTER: &str = r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023"}}"#;
     /// Every test runner's poll interval: short, so a test waits on calls, never on the clock.
     const EVERY: Duration = Duration::from_millis(20);
     const CHATGPT_LINE: &str = r#"{"front":"com.openai.codex"}"#;
@@ -634,6 +726,8 @@ mod tests {
         not_running: AtomicBool,
         /// What selected_tty answers, in turn; the last one again once the others are used.
         ttys: Mutex<VecDeque<Result<Option<String>, TabError>>>,
+        /// What write_text and send_enter answer, in turn; Done once the others are used.
+        writes: Mutex<VecDeque<Result<Written, TabError>>>,
         calls: Mutex<Vec<String>>,
         called: Condvar,
         shut: Mutex<bool>,
@@ -668,10 +762,37 @@ mod tests {
             self.until(|calls| calls.iter().filter(|call| call.starts_with("selected_tty")).count() >= n)
         }
 
+        /// Waits until a call has started after the first one that starts with `prefix`: the tab thread has handled
+        /// that one's answer.
+        fn after(&self, prefix: &str) -> Vec<String> {
+            self.until(|calls| {
+                calls.iter().position(|call| call.starts_with(prefix)).is_some_and(|at| at + 1 < calls.len())
+            })
+        }
+
+        /// The write_text and send_enter calls so far.
+        fn typed(&self) -> Vec<String> {
+            let calls = self.calls.lock().unwrap();
+            calls
+                .iter()
+                .filter(|call| call.starts_with("write_text") || call.starts_with("send_enter"))
+                .cloned()
+                .collect()
+        }
+
+        fn written(&self) -> Result<Written, TabError> {
+            self.writes.lock().unwrap().pop_front().unwrap_or(Ok(Written::Done))
+        }
+
         /// No call starts for ten ticks: there are still `n`.
         fn still(&self, n: usize) {
+            self.still_for(n, EVERY * 10);
+        }
+
+        /// No call starts for `wait`: there are still `n`.
+        fn still_for(&self, n: usize, wait: Duration) {
             let calls = self.calls.lock().unwrap();
-            let (calls, _) = self.called.wait_timeout_while(calls, EVERY * 10, |calls| calls.len() == n).unwrap();
+            let (calls, _) = self.called.wait_timeout_while(calls, wait, |calls| calls.len() == n).unwrap();
             assert_eq!(calls.len(), n, "{calls:?}");
         }
 
@@ -714,6 +835,16 @@ mod tests {
         fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError> {
             self.call(format!("focus_tty {} {tty}", app.name()));
             Ok(Selected::Done)
+        }
+
+        fn write_text(&self, app: TabApp, tty: &str, text: &str) -> Result<Written, TabError> {
+            self.call(format!("write_text {} {tty} {text}", app.name()));
+            self.written()
+        }
+
+        fn send_enter(&self, app: TabApp, tty: &str) -> Result<Written, TabError> {
+            self.call(format!("send_enter {} {tty}", app.name()));
+            self.written()
         }
     }
 
@@ -920,6 +1051,20 @@ mod tests {
 
     fn tab(tty: &str) -> String {
         format!(r#"{{"tab":{{"app":"terminal-app","tty":"{tty}"}}}}"#)
+    }
+
+    /// A watch's write line of `text` for Ghostty's tty TTY.
+    fn write(id: &str, text: &str) -> String {
+        format!(r#"{{"write":{{"id":"{id}","app":"ghostty","tty":"{TTY}","text":"{text}"}}}}"#)
+    }
+
+    fn wrote(id: &str, ok: bool) -> String {
+        format!(r#"{{"wrote":{{"id":"{id}","ok":{ok}}}}}"#)
+    }
+
+    /// The `tabs:` lines of the log.
+    fn tabs_said(log: &MemoryLog) -> Vec<String> {
+        log.lines().into_iter().filter(|line| line.starts_with("tabs:")).collect()
     }
 
     #[test]
@@ -1220,7 +1365,7 @@ mod tests {
         // An app with no name: the watch takes it as no listed app in front.
         fronts.tell("");
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
     }
 
     #[test]
@@ -1233,10 +1378,10 @@ mod tests {
         assert_eq!(w.runner.run(Effect::SetSound(false)), None);
         assert_eq!(w.runner.run(Effect::SetSound(true)), None);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [off, on]);
+        assert_eq!(w.fake.stdin(), [WRITES, off, on]);
         // With no watch running there is nothing to write to.
         assert_eq!(w.runner.run(Effect::SetSound(false)), None);
-        assert_eq!(w.fake.stdin(), [off, on]);
+        assert_eq!(w.fake.stdin(), [WRITES, off, on]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("muted")), "{lines:?}");
         assert_eq!(w.rest(), []);
@@ -1252,10 +1397,10 @@ mod tests {
         assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
         assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::Full)), None);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [you, full]);
+        assert_eq!(w.fake.stdin(), [WRITES, you, full]);
         // With no watch running there is nothing to write to.
         assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
-        assert_eq!(w.fake.stdin(), [you, full]);
+        assert_eq!(w.fake.stdin(), [WRITES, you, full]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("notify")), "{lines:?}");
         assert_eq!(w.rest(), []);
@@ -1271,10 +1416,10 @@ mod tests {
         assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Vi)), None);
         assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Ja)), None);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [vi, ja]);
+        assert_eq!(w.fake.stdin(), [WRITES, vi, ja]);
         // With no watch running there is nothing to write to.
         assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Vi)), None);
-        assert_eq!(w.fake.stdin(), [vi, ja]);
+        assert_eq!(w.fake.stdin(), [WRITES, vi, ja]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("voiceLang")), "{lines:?}");
         assert_eq!(w.rest(), []);
@@ -1287,18 +1432,19 @@ mod tests {
         // In front before any watch ran: the first is told it as it starts.
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE]);
         // Changed while no watch ran: the next is told the new one.
         fronts.tell(VSCODE);
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE, WRITES, VSCODE_LINE]);
         // A watch that replaces a running one is told it too, once.
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert!(wait_gone(w.fake.pids()[2]));
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, VSCODE_LINE, VSCODE_LINE]);
+        let watches = [WRITES, GHOSTTY_LINE, WRITES, VSCODE_LINE, WRITES, VSCODE_LINE, WRITES, VSCODE_LINE];
+        assert_eq!(w.fake.stdin(), watches);
     }
 
     #[test]
@@ -1310,7 +1456,7 @@ mod tests {
             fronts.tell(value);
         }
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
     }
 
     #[test]
@@ -1344,7 +1490,7 @@ mod tests {
             ["running Terminal", "selected_tty Terminal", "running Terminal", "selected_tty Terminal"]
         );
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), TERMINAL_LINE.to_string(), tab(TTY)]);
     }
 
     #[test]
@@ -1377,7 +1523,7 @@ mod tests {
         // The fifth starts once the first four answers are handled.
         scripts.polls(5);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
     }
 
     #[test]
@@ -1393,7 +1539,7 @@ mod tests {
         scripts.gate(false);
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE, VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, TERMINAL_LINE, VSCODE_LINE]);
     }
 
     #[test]
@@ -1504,7 +1650,7 @@ mod tests {
         assert_eq!(scripts.calls(3)[..3], ["running Terminal"; 3]);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert!(scripts.calls(0).iter().all(|call| call == "running Terminal"), "{:?}", scripts.calls(0));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, TERMINAL_LINE]);
     }
 
     #[test]
@@ -1560,7 +1706,7 @@ mod tests {
         let (log, doubles, stdin) = (w.fake.log(), w.doubles.clone(), w.fake.stdin());
         assert_eq!(w.rest(), []);
         // The ttys went to the watch, and nowhere else.
-        assert_eq!(stdin, [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
+        assert_eq!(stdin, [WRITES.to_string(), TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
         let lines = log.lines();
         assert_eq!(lines.iter().filter(|line| *line == "tabs: Terminal select ok").count(), 2, "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("ttys")), "{lines:?}");
@@ -1582,12 +1728,298 @@ mod tests {
     }
 
     #[test]
+    fn a_write_and_its_enter_after_an_ok_poll_each_run_once_and_are_answered_ok() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(GHOSTTY, &scripts);
+        let words = write(ID, "hi");
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@wait go", &words, ENTER, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // A poll answered: macOS lets Harness Device script Ghostty.
+        scripts.polls(1);
+        w.fake.touch("go");
+        let calls = scripts.after("send_enter");
+        assert_eq!(scripts.typed(), ["write_text Ghostty /dev/ttys023 hi", "send_enter Ghostty /dev/ttys023"]);
+        // Each asked first whether Ghostty runs.
+        for typed in ["write_text", "send_enter"] {
+            let at = calls.iter().position(|call| call.starts_with(typed)).unwrap();
+            assert_eq!(calls[at - 1], "running Ghostty", "{calls:?}");
+        }
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), GHOSTTY_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, true)]
+        );
+    }
+
+    #[test]
+    fn a_write_no_session_of_its_tty_takes_is_answered_no() {
+        let scripts = Arc::new(Scripts::default());
+        scripts.writes.lock().unwrap().push_back(Ok(Written::NoSession));
+        let (w, _fronts) = world_with_tabs(GHOSTTY, &scripts);
+        let words = write(ID, "hi");
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@wait go", &words, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.polls(1);
+        w.fake.touch("go");
+        scripts.after("write_text");
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), GHOSTTY_LINE.to_string(), wrote(ID, false)]);
+        // It leaves Ghostty on.
+        assert!(tabs_said(&w.fake.log()).is_empty());
+    }
+
+    #[test]
+    fn an_enter_for_a_terminal_that_quit_since_the_words_makes_no_call_and_is_answered_no() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "hi");
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, TAP, "@wait words", &words, "@wait enter", ENTER, TAP_OTHER, "@record"],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
+        w.fake.touch("words");
+        assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 hi"]);
+        // Ghostty quits between the words and the Enter: an event to it would launch it again.
+        scripts.not_running.store(true, Ordering::SeqCst);
+        w.fake.touch("enter");
+        // The Enter asks whether it runs and goes no further, as the select after it does once the Enter is answered.
+        assert_eq!(scripts.calls(6)[4..], ["running Ghostty", "running Ghostty"]);
+        scripts.still(6);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, false)]
+        );
+    }
+
+    #[test]
+    fn a_typing_for_an_app_no_poll_or_select_answered_yet_makes_no_call_and_is_answered_no() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "hi");
+        // The select after the write is taken once the write is answered.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, &words, TAP, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
+        let log = w.fake.log();
+        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        scripts.still(2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
+        // A typing answered unrun says why in one fixed line, which names the app alone.
+        assert_eq!(tabs_said(&log), ["tabs: Ghostty write refused · no answer yet", "tabs: Ghostty select ok"]);
+    }
+
+    #[test]
+    fn a_typing_past_a_full_queue_is_answered_no_at_once_in_one_fixed_line() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let ids: Vec<String> = (0..=TYPING_QUEUED).map(|n| format!("{n:016x}")).collect();
+        let words: Vec<String> = ids.iter().map(|id| write(id, "the words spoken")).collect();
+        // The status after the writes says they have all come.
+        let mut lines = vec![r#"{"attached":true}"#, TAP, "@wait go"];
+        lines.extend(words.iter().map(String::as_str));
+        lines.extend([r#"{"attached":true}"#, "@record"]);
+        w.fake.script("hardware watch --json", &lines);
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // The select is held, as macOS's consent prompt would hold it, and the writes queue behind it.
+        assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        // The one past the queue is answered and said while the call is still held.
+        let log = w.fake.log();
+        assert_eq!(tabs_said(&log), ["tabs: Ghostty write refused · queue full"]);
+        // The queued ones wait past the bound, and are dropped late once the call answers.
+        scripts.still_for(2, LATE_WRITE + EVERY);
+        scripts.gate(false);
+        let late = |lines: &[String]| lines.iter().filter(|line| *line == "tabs: Ghostty write dropped late").count();
+        log.until(|lines| late(lines) == TYPING_QUEUED);
+        scripts.still(2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        // The one past the queue was answered first.
+        let mut answers = vec![WRITES.to_string(), VSCODE_LINE.to_string(), wrote(&ids[TYPING_QUEUED], false)];
+        answers.extend(ids[..TYPING_QUEUED].iter().map(|id| wrote(id, false)));
+        assert_eq!(w.fake.stdin(), answers);
+        assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
+    }
+
+    #[test]
+    fn a_write_that_waited_past_500_ms_behind_a_held_call_makes_no_call_and_is_one_fixed_line() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "the words spoken");
+        // The status after the write says it has come.
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, TAP, "@wait go", &words, r#"{"attached":true}"#, "@record"],
+        );
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // The select is held, as macOS's consent prompt would hold it.
+        assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        // Nothing runs around the held call while the write waits past the bound.
+        scripts.still_for(2, LATE_WRITE + EVERY);
+        scripts.gate(false);
+        let log = w.fake.log();
+        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
+        scripts.still(2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
+        // The late line names the app alone: no line holds the tty or the words.
+        assert_eq!(tabs_said(&log), ["tabs: Ghostty select ok", "tabs: Ghostty write dropped late"]);
+        assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
+    }
+
+    #[test]
+    fn typings_run_in_the_order_they_came_and_before_a_select_waiting_with_them() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
+        // The select comes before the writes, and the status after them says they have all come.
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, TAP, "@wait go", TAP_OTHER, &one, &two, r#"{"attached":true}"#, "@record"],
+        );
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        scripts.gate(false);
+        assert_eq!(
+            scripts.calls(8)[2..],
+            [
+                "running Ghostty",
+                "write_text Ghostty /dev/ttys023 one",
+                "running Ghostty",
+                "write_text Ghostty /dev/ttys023 two",
+                "running Ghostty",
+                "focus_tty Ghostty /dev/ttys024",
+            ]
+        );
+        scripts.still(8);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, true), wrote(NEXT_ID, true)]
+        );
+    }
+
+    #[test]
+    fn an_older_watchs_typing_is_answered_to_no_watch() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two, r#"{"attached":true}"#, "@record"],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        let log = w.fake.log();
+        // Answered, so Ghostty may be scripted, and the select's call has passed the gate.
+        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        // The first write's call is held, and the second waits behind it.
+        scripts.gate(true);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 one"]);
+        // Harness Device starts a new watch meanwhile.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP_OTHER, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert!(wait_gone(w.fake.pids()[0]));
+        scripts.gate(false);
+        // The new watch's select runs once the old watch's write is answered; the old watch's second write never runs.
+        assert_eq!(scripts.calls(6)[4..], ["running Ghostty", "focus_tty Ghostty /dev/ttys024"]);
+        scripts.still(6);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        // Neither watch heard of the words: the one that sent them had gone, and the one after never sent them.
+        assert_eq!(w.fake.stdin(), [WRITES, VSCODE_LINE, WRITES, VSCODE_LINE]);
+    }
+
+    #[test]
+    fn a_stopped_watchs_typing_makes_no_call() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "hi");
+        // Its child prints the words once its stdin has closed, then a status that says they have come.
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, TAP, "@record", &words, r#"{"attached":true}"#, "@wait end"],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // Answered, so Ghostty may be scripted.
+        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        assert_eq!(w.runner.run(Effect::StopWatch), None);
+        assert_eq!(w.next(), a_dial());
+        scripts.still(2);
+        w.fake.touch("end");
+        assert_eq!(w.next(), Event::WatchExit(Some(0)));
+        // The words' answer had no watch to go to.
+        assert_eq!(w.fake.stdin(), [WRITES, VSCODE_LINE]);
+    }
+
+    #[test]
+    fn a_watch_that_ends_drops_its_typings_waiting() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
+        // It ends by itself after the words.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        // The first write's call is held, and the second waits behind it as the watch ends.
+        scripts.gate(true);
+        w.fake.touch("go");
+        assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 one"]);
+        assert_eq!(w.next(), Event::WatchExit(Some(0)));
+        scripts.gate(false);
+        // The devices took the stream's end for the second write's answer: run now, it could meet another send's words.
+        scripts.still(4);
+    }
+
+    #[test]
+    fn a_typing_for_an_app_turned_off_is_answered_no_at_once() {
+        let scripts = Arc::new(Scripts::default());
+        scripts.writes.lock().unwrap().push_back(Err(TabError::Denied));
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "the words spoken"), write(NEXT_ID, "the words spoken"));
+        // The watch's own thread answers the second: the status after it comes once that answer is written.
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, TAP, "@wait one", &one, "@wait two", &two, r#"{"attached":true}"#, "@record"],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        let log = w.fake.log();
+        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        // The person said no to Automation for Ghostty as the first words came.
+        w.fake.touch("one");
+        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty not allowed"));
+        w.fake.touch("two");
+        assert_eq!(w.next(), a_dial());
+        scripts.still(4);
+        assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 the words spoken"]);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false), wrote(NEXT_ID, false)]
+        );
+        // No line holds the tty or the words.
+        assert_eq!(tabs_said(&log), ["tabs: Ghostty select ok", "tabs: Ghostty not allowed"]);
+        assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
+    }
+
+    #[test]
     fn chatgpt_in_front_is_its_front_line_and_nothing_more() {
         let (w, _fronts) = world_in_front_of("com.openai.codex");
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [CHATGPT_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, CHATGPT_LINE]);
         assert!(w.fake.log().lines().iter().all(|line| !line.starts_with("chatgpt:")));
     }
 

@@ -7,6 +7,7 @@ import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { TYPE_LINE_MAX, typingOf, wroteOf } from '../cable/hosts/tabsLines.js'
 import { threadTitleOf } from '../cable/hosts/threadTitle.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
 import { askDevices, streamDevices, tellDevices } from './listenerClient.js'
@@ -64,11 +65,13 @@ export const DEVICES_USAGE = `harness hardware — your Harness hardware across 
 Offline computers never receive queued changes. A write is complete only when confirmed.`
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
-  /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
+  /** The Harness Device app writes on it `{"writes":true}` first, as it answers each write and enter line the watch
+   *  prints, then a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
    *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, a `{"thread":"<title>"}`
    *  line each time the title of ChatGPT's window in front does, a `{"muted":<bool>}` line each time its Sound item is
-   *  clicked, a `{"voiceLang":"<code>"}` line each time a Voice language item is, and a `{"notify":"full"|"you"}` line
-   *  each time a Notifications item is. */
+   *  clicked, a `{"voiceLang":"<code>"}` line each time a Voice language item is, a `{"notify":"full"|"you"}` line
+   *  each time a Notifications item is, and a `{"wrote":{"id","ok"}}` line each time it ran, or refused, a write or
+   *  enter line the watch printed. */
   stdin: {
     on(event: 'end' | 'close', listener: () => void): unknown
     on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
@@ -78,17 +81,18 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
   print(line: string): void
   /** stderr: stdout carries only the app's NDJSON. */
   printError(line: string): void
-  /** Tells the devices' own listener which app is in front, which tab is selected in it, or which ChatGPT thread is
-   *  open: true when it took it. `tellDevices` by default. */
-  tell?: (message: { type: 'front'; app: string } | { type: 'tab'; app: string; tty: string } | { type: 'thread'; title: string }) => Promise<boolean>
+  /** Tells the devices' own listener which app is in front, which tab is selected in it, which ChatGPT thread is
+   *  open, or how Harness Device answered a write: true when it took it. `tellDevices` by default. */
+  tell?: (message: { type: 'front'; app: string } | { type: 'tab'; app: string; tty: string } | { type: 'thread'; title: string }
+    | { type: 'wrote'; id: string; ok: boolean }) => Promise<boolean>
   /** Opens the devices' stream of the tabs a swipe or a tap selects, handing on each chunk until it ends or [signal]
    *  aborts: true when it had opened. One asked with `standby` opens only while no other watch holds it.
    *  `streamDevices` by default. */
-  selects?: (message: { type: 'tabs'; standby?: true }, chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
+  selects?: (message: { type: 'tabs'; standby?: true; writes?: true }, chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
   /** Hands the Notifications setting to the devices' listener, which keeps it: its answer, the status of one that is
    *  not a 200, null for none. `askDevices` by default, bounded at NOTIFY_ANSWER_MS. */
   notifyMode?: (mode: NotifyMode) => Promise<Record<string, unknown> | number | null>
-  /** For this command's tests: the platform the devices' stream is opened for. */
+  /** For this command's tests: the platform the devices' stream is opened for, and whose write lines are printed. */
   platform?: NodeJS.Platform
 }
 
@@ -247,13 +251,26 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     // no stream is open, so the two do not take it from each other once a second.
     let replaced = false
     const platform = deps.platform ?? process.platform
+    // Whether Harness Device said on stdin that it answers write and enter lines, taken only on macOS, where it types.
+    // Harness Device 0.1.x never says it and drops them unanswered: the stream then says nothing of writes, and the
+    // devices send no words on it.
+    let writes = false
     const listening = platform === 'win32' || devicesListenerPath(dataDir, platform) !== null
     const selects = deps.selects ?? ((message, chunk, signal) => streamDevices(dataDir, message, chunk, { signal }))
-    // A select as Harness Device reads it: the tab, and `"raise":true` for a tap's. Nothing else of the line goes on.
-    const printSelect = (line: string): void => {
+    // A write or enter line goes on as its checked fields alone, only to a Harness Device that said writes. A select as
+    // Harness Device reads it: the tab, and `"raise":true` for a tap's. Nothing else of the line goes on, and none of it
+    // reaches stderr: the watch's stderr is Harness Device's log line by line (DA/cli.rs).
+    const printStreamLine = (line: string): void => {
       if (settled) return
       let value: unknown
       try { value = JSON.parse(line) } catch { return }
+      const typing = typingOf(value)
+      if (typing) {
+        // typingOf refuses a lone surrogate, which Harness Device cannot read into its text.
+        if (writes) deps.print(JSON.stringify(typing))
+        return
+      }
+      if (Buffer.byteLength(line) > SELECT_LINE_MAX) return
       const selected = tabOf(value)
       if (!selected) return
       const { raise } = value as { raise?: unknown }
@@ -265,9 +282,11 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       clearTimeout(reopen)
       stream = new AbortController()
       let taken = false
-      // Lines of its own: the start of a line an ended stream left never joins the next stream's first.
-      const read = lines(SELECT_LINE_MAX, line => { if (line === REPLACED_LINE) taken = true; else printSelect(line) })
-      void selects(replaced ? { type: 'tabs', standby: true } : { type: 'tabs' }, read, stream.signal).then(hadOpened => {
+      // Lines of its own: the start of a line an ended stream left never joins the next stream's first. TYPE_LINE_MAX
+      // counts the newline, which a line handed on has not.
+      const read = lines(TYPE_LINE_MAX - 1, line => { if (line === REPLACED_LINE) taken = true; else printStreamLine(line) })
+      const message = { type: 'tabs' as const, ...(replaced && { standby: true as const }), ...(writes && { writes: true as const }) }
+      void selects(message, read, stream.signal).then(hadOpened => {
         stream = undefined
         if (settled) return
         if (hadOpened) {
@@ -388,14 +407,26 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
-      let value: { front?: unknown; tab?: unknown; thread?: unknown; muted?: unknown; voiceLang?: unknown; notify?: unknown } | null
+      let value: { front?: unknown; tab?: unknown; thread?: unknown; muted?: unknown; voiceLang?: unknown; notify?: unknown; wrote?: unknown; writes?: unknown } | null
       try { value = JSON.parse(line) } catch { return }
+      // Harness Device's first line, `writes` alone, taken once: a stream already open without it is let go, and opened
+      // again saying it on its usual wait.
+      if (value?.writes === true && Object.keys(value).length === 1) {
+        if (platform !== 'darwin' || writes) return
+        writes = true
+        stream?.abort()
+        return
+      }
       // The Sound item's click: exactly one boolean `muted`, so no other line, nor a key beside it, changes the dial.
       if (typeof value?.muted === 'boolean' && Object.keys(value).length === 1) return sound.change(value.muted)
       // A Voice language item's click, held to the same: exactly one of the six, alone.
       if (isVoiceLang(value?.voiceLang) && Object.keys(value).length === 1) return voice.change(value.voiceLang)
       // A Notifications item's click, held to the same: exactly one known mode, alone.
       if (isNotifyMode(value?.notify) && Object.keys(value).length === 1) return notify(value.notify)
+      // Harness Device's answer to a write, `wrote` alone: told at once, each in a tell of its own, as the devices wait
+      // on each id up to TYPE_ANSWER_MS.
+      const wrote = wroteOf(value?.wrote)
+      if (wrote && Object.keys(value!).length === 1) return void tell({ type: 'wrote', ...wrote })
       // The title of ChatGPT's window, held to the same: `thread` alone, and the rule Harness Device keeps.
       const title = threadTitleOf(value?.thread)
       if (title !== null && Object.keys(value!).length === 1) {

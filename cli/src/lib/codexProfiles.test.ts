@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
 
 // Pass-through, recording what the shared writer does on disk: the renames and the opens.
@@ -41,6 +41,9 @@ async function loadModule(): Promise<typeof CodexProfilesModule> {
 }
 
 const emptyDiscovery = { home: '/nonexistent-empty-home', environment: {} }
+
+/** An absolute path on this host, as a link takes it: a drive letter's on Windows. */
+const abs = (name: string): string => process.platform === 'win32' ? `C:\\${name}` : `/${name}`
 
 describe('codexProfiles', () => {
   beforeEach(() => {
@@ -241,5 +244,129 @@ describe('codexProfiles', () => {
     const { listCodexProfiles } = await loadModule()
     writeFileSync(join(dataDir, 'codex-profiles.json'), 'not json', { mode: 0o600 })
     expect(listCodexProfiles([], emptyDiscovery)).toEqual([])
+  })
+
+  // Windows has no mode bits: the data folder's place protects the list there.
+  it.skipIf(process.platform === 'win32')('the linked homes are read and the list keeps its mode', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    writeFileSync(file, JSON.stringify(['/a', '/b']))
+    chmodSync(file, 0o600)
+    expect(readLinkedCodexHomes()).toEqual(['/a', '/b'])
+
+    // The linker's reader makes this one 0o600.
+    chmodSync(file, 0o640)
+    expect(readLinkedCodexHomes()).toEqual(['/a', '/b'])
+    expect(statSync(file).mode & 0o777).toBe(0o640)
+  })
+
+  it.skipIf(process.platform === 'win32')('a linked list another account could write names no home', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    writeFileSync(file, JSON.stringify(['/a']))
+    for (const mode of [0o660, 0o606]) {
+      chmodSync(file, mode)
+      expect(readLinkedCodexHomes()).toEqual([])
+      expect(statSync(file).mode & 0o777).toBe(mode)
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('a link at the linked list names no home', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const elsewhere = join(home, 'elsewhere.json')
+    writeFileSync(elsewhere, JSON.stringify(['/a']))
+    chmodSync(elsewhere, 0o600)
+    symlinkSync(elsewhere, join(dataDir, 'codex-profiles.json'))
+    expect(readLinkedCodexHomes()).toEqual([])
+  })
+
+  it('a linked list that is not JSON names no home and stays where it is', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    writeFileSync(file, '["/a', { mode: 0o600 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(readLinkedCodexHomes()).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe('["/a')
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a missing linked list, or one over 1 MiB, names no home', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    expect(readLinkedCodexHomes()).toEqual([])
+    writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(['/a', 'x'.repeat(1024 * 1024)]), { mode: 0o600 })
+    expect(readLinkedCodexHomes()).toEqual([])
+  })
+
+  it('a linked list names its first 256 homes', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const listed = Array.from({ length: 300 }, (_, i) => abs(`h${i}`))
+    writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(listed), { mode: 0o600 })
+    expect(readLinkedCodexHomes()).toEqual(listed.slice(0, 256))
+  })
+
+  // The queue loads the home's config.toml: an entry no link could have written (resolveCodexProfilePath) names none.
+  it('a linked list names only absolute homes of at most 4096 characters with no control character', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const longest = abs('x').padEnd(4096, 'x')
+    const listed = [abs('a'), 'relative/b', abs('c\nd'), abs('e\x7f'), longest, `${longest}x`, abs('f')]
+    writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(listed), { mode: 0o600 })
+    expect(readLinkedCodexHomes()).toEqual([abs('a'), longest, abs('f')])
+  })
+
+  /** As queueHome reads them: each home with its resolved sessions folder. */
+  const listed = (...homes: string[]) => homes.map((home) => ({ home, sessions: resolve(home, 'sessions') }))
+
+  it('the trusted homes are the own ones, each also by its real path, then the linked ones as stored, once, deepest first', async () => {
+    const { trustedCodexHomes } = await loadModule()
+    const real = (path: string) => path === '/o' ? '/private/o' : path === '/gone' ? null : path
+    expect(trustedCodexHomes(() => ['/o'], () => 0, () => ['/l'], real)()).toEqual(listed('/private/o', '/o', '/l'))
+    // Linked by its real path, and an own home whose real path cannot be read now.
+    expect(trustedCodexHomes(() => ['/o', '/gone'], () => 0, () => ['/private/o', '/l'], real)())
+      .toEqual(listed('/private/o', '/o', '/gone', '/l'))
+  })
+
+  // queueHome takes the first whose sessions folder holds the rollout: a home inside another's is the session's.
+  it('a home inside another home\'s sessions folder comes before it, each sessions folder resolved', async () => {
+    const { trustedCodexHomes } = await loadModule()
+    expect(trustedCodexHomes(() => ['/h/a', '/h/x/../y'], () => 0, () => ['/h/a/sessions/b'], (path) => path)())
+      .toEqual([...listed('/h/a/sessions/b', '/h/a'), { home: '/h/x/../y', sessions: resolve('/h/y/sessions') }])
+  })
+
+  // linkCodexProfile stores a profile by its real path: a linked home on a dead network volume never blocks a look.
+  it('only the own homes are asked their real path, never a linked one', async () => {
+    const { trustedCodexHomes } = await loadModule()
+    const real = vi.fn((path: string) => path)
+    trustedCodexHomes(() => ['/o'], () => 0, () => ['/l1', '/l2'], real)()
+    expect(real.mock.calls).toEqual([['/o']])
+  })
+
+  it('the own homes are held 1 s, the linked list and the real paths 30 s', async () => {
+    const { trustedCodexHomes, OWN_HOMES_MS, TRUSTED_HOMES_MS } = await loadModule()
+    expect([OWN_HOMES_MS, TRUSTED_HOMES_MS]).toEqual([1_000, 30_000])
+    let clock = 0
+    let ownHomes = ['/o']
+    const own = vi.fn(() => ownHomes)
+    const read = vi.fn(() => ['/l'])
+    const real = vi.fn((path: string) => path)
+    const homes = trustedCodexHomes(own, () => clock, read, real)
+    for (let call = 0; call < 100; call++) {
+      clock = call * 9
+      homes()
+    }
+    expect([own, read, real].map((fn) => fn.mock.calls.length)).toEqual([1, 1, 1])
+
+    // An adopted home counts within the second.
+    ownHomes = ['/o', '/adopted']
+    clock = 1_000
+    expect(homes()).toEqual(listed('/o', '/adopted', '/l'))
+    expect([own, read, real].map((fn) => fn.mock.calls.length)).toEqual([2, 1, 2])
+    clock = 1_999
+    homes()
+    expect(own).toHaveBeenCalledTimes(2)
+
+    clock = 30_000
+    homes()
+    expect([own, read, real].map((fn) => fn.mock.calls.length)).toEqual([3, 2, 4])
   })
 })

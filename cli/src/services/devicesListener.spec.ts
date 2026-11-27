@@ -16,8 +16,10 @@ import {
   frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
   NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS, ORCA_FRONT_MAX_WORKSPACE, ORCA_FRONT_PER_SECOND, orcaFrontHandler,
   REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, THREAD_MAX_BYTES, THREAD_PER_SECOND, threadHandler,
-  TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
+  TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, WRITES_PENDING, WROTE_MAX_BYTES, WROTE_PER_SECOND,
+  type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
 } from './devicesListener.js'
+import type { TabsWrite } from '../cable/hosts/tabsLines.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
 import { noticeCaller } from '../devices/notice.js'
 import type { NotifyMode } from '../cable/notifyMode.js'
@@ -132,6 +134,8 @@ const MINUTE = 60_000
 const LIVE = '{"type":"live"}'
 const TABS = '{"type":"tabs"}'
 const STANDBY = '{"type":"tabs","standby":true}'
+/** As a watch Harness Device told writes opens it: the one stream a person's words go on. */
+const WRITES = '{"type":"tabs","writes":true}'
 const REPLACED = '{"replaced":true}'
 const TAB: Tab = { app: 'terminal-app', tty: '/dev/ttys023' }
 
@@ -1264,6 +1268,54 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       for (const text of [...lines, ...answers]) expect(text).not.toMatch(/ttys|5f3a|terminal-app|iterm/)
       expect(reported).toHaveLength(TAB_PER_SECOND)
     })
+
+    it('the longest tabs open, standby and writes both false, is a stream; a byte more is 413', async () => {
+      const tabs = tabsStream()
+      const { path } = await open({ tabs: tabs.handler })
+      const longest = '{"type":"tabs","standby":false,"writes":false}'
+      const watch = await asked(path, longest)
+      expect(watch.status).toBe(200)
+      expect(tabs.isOpen()).toBe(true)
+      watch.close()
+      expect((await asked(path, `${longest.slice(0, -1)} }`)).status).toBe(413)
+    })
+
+    it('a tabs open whose writes is not a boolean is 400 and opens nothing', async () => {
+      const tabs = tabsStream()
+      const { path } = await open({ tabs: tabs.handler })
+      for (const writes of ['1', '"true"', 'null', '{}']) {
+        expect((await asked(path, `{"type":"tabs","writes":${writes}}`)).status, writes).toBe(400)
+      }
+      expect(tabs.isOpen()).toBe(false)
+    })
+
+    it('words go to the watch under 16 random hex, their Enter under another, and each wrote posted to the listener answers its own', async () => {
+      const tabs = tabsStream()
+      const { path, lines } = await open({ tabs: tabs.handler, wrote: tabs.wrote })
+      const watch = await asked(path, WRITES)
+      const words = tabs.line()!.send({ write: { app: 'ghostty', tty: '/dev/ttys003', text: 'hi 5f3a' } })
+      const [written] = await watch.got(1)
+      const { id } = (JSON.parse(written!) as { write: { id: string } }).write
+      expect(id).toMatch(/^[0-9a-f]{16}$/)
+      expect(written).toBe(`{"write":{"id":"${id}","app":"ghostty","tty":"/dev/ttys003","text":"hi 5f3a"}}`)
+      expect((await connection(path).send(JSON.stringify({ type: 'wrote', id, ok: true }))).status).toBe(204)
+      expect(await words.answer).toBe('ok')
+      await words.settled
+
+      // The listener's own stream says when the line drained.
+      expect(await tabs.line()!.ready(3_000)).toBe(true)
+      const enter = tabs.line()!.send({ enter: { app: 'ghostty', tty: '/dev/ttys003' } })
+      const pressed = (await watch.got(2))[1]!
+      const other = (JSON.parse(pressed) as { enter: { id: string } }).enter.id
+      expect(other).toMatch(/^[0-9a-f]{16}$/)
+      expect(other).not.toBe(id)
+      expect(pressed).toBe(`{"enter":{"id":"${other}","app":"ghostty","tty":"/dev/ttys003"}}`)
+      expect((await connection(path).send(JSON.stringify({ type: 'wrote', id: other, ok: 1 }))).status).toBe(400)
+      expect((await connection(path).send(JSON.stringify({ type: 'wrote', id: other, ok: false }))).status).toBe(204)
+      expect(await enter.answer).toBe('refused')
+      await enter.settled
+      expect(lines).toEqual(['[devices] listener open'])
+    })
   })
 
   // Windows: the pipe stood in for by a socket named harness-<32 hex>, as pipeAuth.spec.ts does.
@@ -1615,14 +1667,412 @@ describe('thread', () => {
 })
 
 describe('tabs', () => {
-  it('the tabs stream is two a second on a connection, and its longest message, a standby false, fits', () => {
+  it('the tabs stream is two a second on a connection, and its longest message, standby and writes false, fits exactly', () => {
     const { handler } = tabsStream()
     expect(Object.keys(handler).sort()).toEqual(['maxBytes', 'open', 'perSecond'])
     expect(handler).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
-    expect([TABS_MAX_BYTES, TABS_PER_SECOND]).toEqual([32, 2])
-    const longest = Buffer.byteLength('{"type":"tabs","standby":false}')
-    expect(longest).toBe(31)
-    expect(longest).toBeLessThanOrEqual(TABS_MAX_BYTES)
+    expect([TABS_MAX_BYTES, TABS_PER_SECOND]).toEqual([46, 2])
+    expect(Buffer.byteLength('{"type":"tabs","standby":false,"writes":false}')).toBe(TABS_MAX_BYTES)
+  })
+
+  describe('a person\'s words on it', () => {
+    const gone = new AbortController().signal
+    const WRITE = { write: { app: 'ghostty', tty: '/dev/ttys003', text: 'hi' } } satisfies TabsWrite
+    const ENTER = { enter: { app: 'ghostty', tty: '/dev/ttys003' } } satisfies TabsWrite
+    const ITERM: Tab = { app: 'iterm', tty: '/dev/ttys003' }
+    /** The fake ids, in the order they are handed out. */
+    const ID = (n: number): string => `abcdef${String(n).padStart(10, '0')}`
+    const wrote = (id: string, ok: boolean): Record<string, unknown> => ({ type: 'wrote', id, ok })
+
+    /** A stream as the listener hands one to open: it takes a line only while writable, as the listener's does, and
+     *  the test says when a line has drained and when the stream ends. */
+    function watched() {
+      const ended = new AbortController()
+      const lines: unknown[] = []
+      let writable = false
+      let run = (): void => {}
+      const stream: ListenerStream = {
+        write: (line) => {
+          if (!writable) return false
+          writable = false
+          lines.push(line)
+          return true
+        },
+        onWritable: (listener) => { run = listener },
+        ended: ended.signal,
+      }
+      const drain = (): void => {
+        writable = true
+        run()
+      }
+      return { stream, lines, drain, end: (reason: StreamEnd) => { writable = false; ended.abort(reason) } }
+    }
+
+    /** A tabs stream with ids that count up and timers the test runs by hand, and how to open a watch on it. */
+    function typed() {
+      let next = 0
+      const timers: { ms: number; run: () => void; live: boolean }[] = []
+      const tabs = tabsStream({
+        id: () => ID(++next),
+        after: (ms, run) => {
+          const timer = { ms, run, live: true }
+          timers.push(timer)
+          return () => { timer.live = false }
+        },
+      })
+      /** Runs every timer of `ms` not yet run or let go. */
+      const fire = (ms: number): void => {
+        for (const timer of timers) {
+          if (!timer.live || timer.ms !== ms) continue
+          timer.live = false
+          timer.run()
+        }
+      }
+      const live = (): number[] => timers.filter((timer) => timer.live).map((timer) => timer.ms)
+      /** A watch Harness Device told writes, opened as the listener opens one: it is writable once open has returned. */
+      const watch = () => {
+        const one = watched()
+        tabs.handler.open({ type: 'tabs', writes: true }, one.stream)
+        one.drain()
+        return one
+      }
+      return { tabs, fire, live, watch }
+    }
+
+    /** Whether [promise] has settled once every job queued so far has run. */
+    async function settledYet(promise: Promise<unknown>): Promise<boolean> {
+      let done = false
+      void promise.then(() => { done = true })
+      await new Promise((resolve) => setImmediate(resolve))
+      return done
+    }
+
+    it('the wrote handler is its two limits and handle, 64 bytes and 10 a second; its longest message fits', () => {
+      const { wrote: handler } = tabsStream()
+      expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+      expect(handler).toMatchObject({ maxBytes: WROTE_MAX_BYTES, perSecond: WROTE_PER_SECOND })
+      expect([WROTE_MAX_BYTES, WROTE_PER_SECOND, WRITES_PENDING]).toEqual([64, 10, 8])
+      const longest = Buffer.byteLength(JSON.stringify(wrote('f'.repeat(16), false)))
+      expect(longest).toBe(51)
+      expect(longest).toBeLessThan(WROTE_MAX_BYTES)
+    })
+
+    // PM decision 3 (2026-11-25): Harness Device 0.1.x drops a write or Enter line unanswered, and never tells its watch
+    // writes, so the watch does not say it.
+    it('line is none for a stream whose watch did not say writes, or said false, and a select still goes on it', () => {
+      const { tabs } = typed()
+      for (const message of [{ type: 'tabs' }, { type: 'tabs', writes: false }, { type: 'tabs', standby: true }]) {
+        const one = watched()
+        expect(tabs.handler.open(message, one.stream)).toBeUndefined()
+        one.drain()
+        expect(tabs.isOpen()).toBe(true)
+        expect(tabs.line()).toBeUndefined()
+        expect(tabs.select(ITERM, false)).toBe(true)
+        expect(one.lines).toEqual([ITERM])
+      }
+    })
+
+    it('a newer stream whose watch did not say writes leaves no line, the older one not yet ended', () => {
+      const { tabs, watch } = typed()
+      const older = watch()
+      expect(tabs.line()).toBeDefined()
+      tabs.handler.open({ type: 'tabs' }, watched().stream)
+      expect(tabs.line()).toBeUndefined()
+      older.end('replaced')
+      expect(tabs.line()).toBeUndefined()
+    })
+
+    it('writes that is not a boolean is refused, and leaves the open stream\'s line as it was', () => {
+      const { tabs, watch } = typed()
+      watch()
+      const line = tabs.line()
+      for (const writes of ['true', 1, null, {}]) {
+        expect(tabs.handler.open({ type: 'tabs', writes }, watched().stream)).toBe(REFUSED)
+      }
+      expect(tabs.line()).toBe(line)
+    })
+
+    it('line is none with no stream open, the same object while one is, and none once it ended', () => {
+      const { tabs, watch } = typed()
+      expect(tabs.line()).toBeUndefined()
+      const one = watch()
+      const line = tabs.line()!
+      expect(line.ended.aborted).toBe(false)
+      line.send(WRITE)
+      expect(tabs.line()).toBe(line)
+      one.end('gone')
+      expect(line.ended.aborted).toBe(true)
+      expect(tabs.line()).toBeUndefined()
+    })
+
+    it('words go as {"write":{id,app,tty,text}} and their Enter as {"enter":{id,app,tty}}, each under an id of its own, and nothing else the caller held', () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      tabs.line()!.send({ write: { ...WRITE.write, title: 'marker-5f3a' } } as TabsWrite)
+      one.drain()
+      tabs.line()!.send({ enter: { ...ENTER.enter, text: 'hi' } } as TabsWrite)
+      expect(one.lines.map((line) => JSON.stringify(line))).toEqual([
+        `{"write":{"id":"${ID(1)}","app":"ghostty","tty":"/dev/ttys003","text":"hi"}}`,
+        `{"enter":{"id":"${ID(2)}","app":"ghostty","tty":"/dev/ttys003"}}`,
+      ])
+    })
+
+    it('the watch\'s wrote answers its send: ok is ok, not ok is refused, each settled and its 3 s let go', async () => {
+      const { tabs, live, watch } = typed()
+      const one = watch()
+      const words = tabs.line()!.send(WRITE)
+      expect(live()).toEqual([3_000])
+      expect(await settledYet(words.answer)).toBe(false)
+      expect(tabs.wrote.handle(wrote(ID(1), true), gone)).toBeUndefined()
+      expect(await words.answer).toBe('ok')
+      expect(await settledYet(words.settled)).toBe(true)
+
+      one.drain()
+      const enter = tabs.line()!.send(ENTER)
+      expect(tabs.wrote.handle(wrote(ID(2), false), gone)).toBeUndefined()
+      expect(await enter.answer).toBe('refused')
+      expect(await settledYet(enter.settled)).toBe(true)
+      expect(live()).toEqual([])
+    })
+
+    it('no wrote in 3 s answers unanswered and leaves it unsettled; a late wrote settles it and changes no answer', async () => {
+      const { tabs, fire, watch } = typed()
+      watch()
+      const words = tabs.line()!.send(WRITE)
+      fire(3_000)
+      expect(await words.answer).toBe('unanswered')
+      expect(await settledYet(words.settled)).toBe(false)
+      expect(tabs.wrote.handle(wrote(ID(1), true), gone)).toBeUndefined()
+      expect(await settledYet(words.settled)).toBe(true)
+      expect(await words.answer).toBe('unanswered')
+    })
+
+    it('an unanswered send is settled by its stream\'s end and keeps its answer', async () => {
+      const { tabs, fire, watch } = typed()
+      const one = watch()
+      const words = tabs.line()!.send(WRITE)
+      fire(3_000)
+      expect(await settledYet(words.settled)).toBe(false)
+      one.end('stalled')
+      expect(await settledYet(words.settled)).toBe(true)
+      expect(await words.answer).toBe('unanswered')
+    })
+
+    it('a stream that ends before the wrote answers ended and settles; a send on its line then is ended, with nothing written', async () => {
+      const { tabs, live, watch } = typed()
+      const one = watch()
+      const line = tabs.line()!
+      const words = line.send(WRITE)
+      one.end('gone')
+      expect(await words.answer).toBe('ended')
+      expect(await settledYet(words.settled)).toBe(true)
+      expect(live()).toEqual([])
+      expect(tabs.wrote.handle(wrote(ID(1), true), gone)).toBeUndefined()
+      expect(await words.answer).toBe('ended')
+
+      const late = line.send(ENTER)
+      expect(await late.answer).toBe('ended')
+      expect(await settledYet(late.settled)).toBe(true)
+      expect(one.lines).toHaveLength(1)
+    })
+
+    it('a wrote for an id nobody sent, one already answered, or one of a replaced stream is taken and answers nothing', async () => {
+      const { tabs, watch } = typed()
+      const older = watch()
+      const old = tabs.line()!.send(WRITE)
+      watch()
+      older.end('replaced')
+      expect(await old.answer).toBe('ended')
+      const words = tabs.line()!.send(WRITE)
+      for (const id of [ID(9), ID(1)]) expect(tabs.wrote.handle(wrote(id, true), gone), id).toBeUndefined()
+      expect(await settledYet(words.answer)).toBe(false)
+      expect(tabs.wrote.handle(wrote(ID(2), false), gone)).toBeUndefined()
+      expect(tabs.wrote.handle(wrote(ID(2), true), gone)).toBeUndefined()
+      expect(await words.answer).toBe('refused')
+    })
+
+    it('a wrote with another key, an id not 16 lowercase hex, or an ok not a boolean is refused and answers nothing', async () => {
+      const { tabs, watch } = typed()
+      watch()
+      const words = tabs.line()!.send(WRITE)
+      const bad: Record<string, unknown>[] = [
+        { ...wrote(ID(1), true), extra: 1 }, wrote(ID(1).slice(1), true), wrote(`${ID(1)}0`, true), wrote(ID(1).toUpperCase(), true),
+        { type: 'wrote', id: ID(1), ok: 1 }, { type: 'wrote', id: ID(1), ok: 'true' }, { type: 'wrote', id: ID(1) }, { type: 'wrote', ok: true },
+      ]
+      for (const body of bad) expect(tabs.wrote.handle(body, gone), JSON.stringify(body)).toBe(REFUSED)
+      expect(await settledYet(words.answer)).toBe(false)
+    })
+
+    it('a typing whose line would pass 64 KiB answers unanswered at once and writes nothing; the next one is written', async () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      const long = tabs.line()!.send({ write: { ...WRITE.write, text: 'x'.repeat(65_536) } })
+      expect(await long.answer).toBe('unanswered')
+      expect(await settledYet(long.settled)).toBe(true)
+      expect(one.lines).toEqual([])
+      tabs.line()!.send(WRITE)
+      expect(one.lines).toHaveLength(1)
+    })
+
+    it('a typing the watch would drop answers unanswered and is settled at once, writing nothing: no tty is held for it', async () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      const dropped = [
+        { write: { ...WRITE.write, text: 'hi\u0007' } },
+        { write: { ...WRITE.write, text: '' } },
+        { enter: { ...ENTER.enter, tty: '/dev/disk0' } },
+        // iTerm2's write reaches every pane its Broadcast Input joins.
+        { write: { ...WRITE.write, app: 'iterm' } } as unknown as TabsWrite,
+        { enter: { ...ENTER.enter, app: 'iterm' } } as unknown as TabsWrite,
+      ] satisfies TabsWrite[]
+      for (const typing of dropped) {
+        const sent = tabs.line()!.send(typing)
+        expect(await settledYet(sent.settled)).toBe(true)
+        expect(await settledYet(sent.answer)).toBe(true)
+        expect(await sent.answer).toBe('unanswered')
+      }
+      expect(one.lines).toEqual([])
+      tabs.line()!.send(WRITE)
+      expect(one.lines).toHaveLength(1)
+    })
+
+    it('a ninth send while eight wait for their wrote answers unanswered at once and writes nothing; an answer makes room', async () => {
+      const { tabs, fire, watch } = typed()
+      const one = watch()
+      for (let i = 0; i < 8; i++) {
+        tabs.line()!.send(WRITE)
+        one.drain()
+      }
+      // Still waiting past their 3 s: each holds its tty's lock until it settles.
+      fire(3_000)
+      const ninth = tabs.line()!.send(WRITE)
+      expect(await ninth.answer).toBe('unanswered')
+      expect(await settledYet(ninth.settled)).toBe(true)
+      expect(one.lines).toHaveLength(8)
+
+      tabs.wrote.handle(wrote(ID(1), true), gone)
+      const tenth = tabs.line()!.send(WRITE)
+      expect(one.lines).toHaveLength(9)
+      expect(await settledYet(tenth.answer)).toBe(false)
+    })
+
+    it('while a select drains the line is not writable, and a send answers unanswered with nothing written', async () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      const line = tabs.line()!
+      expect(line.writable()).toBe(true)
+      expect(tabs.select(ITERM, false)).toBe(true)
+      expect(line.writable()).toBe(false)
+      const words = line.send(WRITE)
+      expect(await words.answer).toBe('unanswered')
+      expect(await settledYet(words.settled)).toBe(true)
+      expect(one.lines).toEqual([ITERM])
+      one.drain()
+      expect(line.writable()).toBe(true)
+    })
+
+    it('a select is written whenever the stream takes it, as before words went on it: twice in a row on a stream that never said it can take a line, where words are not', async () => {
+      const { tabs } = typed()
+      const lines: unknown[] = []
+      // As the devices' own tests fake the stream: it takes every line and never runs onWritable.
+      tabs.handler.open({ type: 'tabs', writes: true }, {
+        write: (line) => {
+          lines.push(line)
+          return true
+        },
+        onWritable: () => {},
+        ended: new AbortController().signal,
+      })
+      expect(tabs.select(ITERM, false)).toBe(true)
+      expect(tabs.select(ITERM, true)).toBe(true)
+      expect(tabs.line()!.writable()).toBe(false)
+      expect(await tabs.line()!.send(WRITE).answer).toBe('unanswered')
+      expect(lines).toEqual([ITERM, { ...ITERM, raise: true }])
+    })
+
+    it('a select is never held by words: it goes while they wait for their wrote, and one that takes a drain a waiter woke at leaves that waiter\'s words unanswered', async () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      const line = tabs.line()!
+      const words = line.send(WRITE)
+      const woken = line.ready(500)
+      one.drain()
+      expect(await woken).toBe(true)
+      expect(tabs.select(ITERM, false)).toBe(true)
+      expect(await line.send(ENTER).answer).toBe('unanswered')
+      expect(one.lines.map((line) => JSON.stringify(line))).toEqual([
+        `{"write":{"id":"${ID(1)}","app":"ghostty","tty":"/dev/ttys003","text":"hi"}}`,
+        '{"app":"iterm","tty":"/dev/ttys003"}',
+      ])
+      expect(tabs.wrote.handle(wrote(ID(1), true), gone)).toBeUndefined()
+      expect(await words.answer).toBe('ok')
+    })
+
+    it('every waiter wakes at a drain, and the first words written take it: the next words answer unanswered with nothing written', async () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      const line = tabs.line()!
+      tabs.select(ITERM, false)
+      const waiters = [line.ready(500), line.ready(500)]
+      one.drain()
+      expect(await Promise.all(waiters)).toEqual([true, true])
+      line.send(WRITE)
+      expect(line.writable()).toBe(false)
+      expect(await line.send(WRITE).answer).toBe('unanswered')
+      expect(one.lines).toHaveLength(2)
+    })
+
+    it('ready is true at once while writable, true as a line drains, false at its time, and false as the stream ends or after', async () => {
+      const { tabs, fire, live, watch } = typed()
+      const one = watch()
+      const line = tabs.line()!
+      expect(await line.ready(500)).toBe(true)
+
+      tabs.select(ITERM, false)
+      const drained = line.ready(500)
+      expect(await settledYet(drained)).toBe(false)
+      one.drain()
+      expect(await drained).toBe(true)
+      expect(live()).toEqual([])
+
+      tabs.select(ITERM, false)
+      const late = line.ready(500)
+      fire(500)
+      expect(await late).toBe(false)
+
+      const ending = line.ready(500)
+      one.end('gone')
+      expect(await ending).toBe(false)
+      expect(live()).toEqual([])
+      expect(await line.ready(500)).toBe(false)
+    })
+
+    it('a newer stream replaces the old: what the old one sent answers ended, line is the newer one\'s, and selects and words go to it', async () => {
+      const { tabs, watch } = typed()
+      const older = watch()
+      const before = tabs.line()!
+      const old = before.send(WRITE)
+      const newer = watch()
+      older.end('replaced')
+      expect(await old.answer).toBe('ended')
+      expect(await settledYet(old.settled)).toBe(true)
+      const after = tabs.line()!
+      expect(after).not.toBe(before)
+      expect([before.ended.aborted, after.ended.aborted]).toEqual([true, false])
+      expect(before.writable()).toBe(false)
+      expect(tabs.isOpen()).toBe(true)
+
+      const words = after.send(WRITE)
+      expect(tabs.wrote.handle(wrote(ID(1), true), gone)).toBeUndefined()
+      expect(await settledYet(words.answer)).toBe(false)
+      newer.drain()
+      expect(tabs.select(ITERM, true)).toBe(true)
+      expect(newer.lines.map((line) => JSON.stringify(line))).toEqual([
+        `{"write":{"id":"${ID(2)}","app":"ghostty","tty":"/dev/ttys003","text":"hi"}}`,
+        '{"app":"iterm","tty":"/dev/ttys003","raise":true}',
+      ])
+      expect(older.lines).toHaveLength(1)
+    })
   })
 })
 

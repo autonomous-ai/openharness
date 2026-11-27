@@ -88,7 +88,19 @@ plain TypeScript in `ui/`.
   Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
-  passes the tty check and reaches a script only as a handler parameter, never in its text.
+  and a text pass the checks and reach a script only as handler parameters, never in its text.
+- **Spoken text and terminal writes.** A text reaches a terminal only through Ghostty's fixed `write_text` and
+  `send_enter` handlers in `tabs_macos.rs`, as a handler parameter, after the watch's and the app's checks. Never
+  Terminal, whose `do script` runs the text as a command. Never iTerm2: its `write` goes to every pane its Broadcast
+  Input joins, where a shell would run the words, and its dictionary has no broadcast property to check. Never
+  keystrokes, System Events or `do script`. It goes to exactly one terminal of that tty, in every window; to an app
+  whose poll or select answered without an error in this run; and a typing older than 500 ms on the tab thread is
+  dropped. Its answer goes only to the watch it came from. Every watch, still started as `hardware watch --json`, reads
+  `{"writes":true}` first on its stdin (`watch.rs`): only a watch that read it is sent words, so one Harness Device
+  0.1.x runs, which drops them, is sent none. A text is never logged: a typing's `tabs:` line names the app and whether
+  it was a write or an Enter. Words reach Ghostty only in a build whose terminal has `tty` (`«property Gtty»`): 1.3.0
+  and 1.3.1 lack it, and only Ghostty's main branch has it. Any other Ghostty is turned off the first time a poll or
+  select reads a terminal's tty (`tabs: Ghostty has no tty`).
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,
   iTerm2 or Ghostty, never a tty.
 - **One entitlement.** `src-tauri/Entitlements.plist` holds `com.apple.security.automation.apple-events` and no other

@@ -28,6 +28,9 @@ import { ORCA_CHAT_TIMEOUT_MS } from '../cable/hosts/orcaChatSource.js'
 import type { RexPane, RexReads } from '../cable/hosts/rex.js'
 import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
+import type { TabTty } from '../cable/hosts/tabs.js'
+import type { TabProcess } from '../cable/hosts/tabsType.js'
+import { settleMs } from '../cable/hosts/twoStep.js'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
@@ -51,6 +54,7 @@ import type { VscodeEditor, VscodeExtensionDeps } from '../devices/vscodeExtensi
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
+import * as engineHomes from '../lib/engineHomes.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { ExternalProvider, ProcessView, RunningProcess } from '../lib/sessionSearch/externals/types.js'
 import type { TierInput } from '../lib/notifyTier.js'
@@ -67,7 +71,7 @@ import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
-  type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
+  WROTE_MAX_BYTES, WROTE_PER_SECOND, type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
 // A dial's and a route's refusal, in words holding a path: the daemon's log must name them by length alone.
@@ -94,6 +98,9 @@ vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object
 // fake.
 vi.mock('../devices/orcaPlugin.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/orcaPluginSetup.js', async (real) => ({ ...await real<object>() }))
+// A copy too, so a spec can give the devices the homes Harness adopted without adopting one for the whole file: an
+// adoption stays in the module for as long as it is loaded.
+vi.mock('../lib/engineHomes.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -214,7 +221,9 @@ const readers = vi.hoisted(() => ({
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[], _rows?: readonly unknown[]) => new Map<number, string>()),
   record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
-  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
+  processes: vi.fn(async (_exec?: unknown) => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
+  // What /bin/ps under psEnv prints (cable/hosts/tabs.ts runPs): nothing, never this machine's processes.
+  ps: vi.fn(async (_args: string[], _bounds: { timeout: number; maxBuffer: number }): Promise<string | null> => null),
   // A process's terminal, as its made-up row gives it: the table the devices read holds none.
   tty: vi.fn(async (pid: number): Promise<string | undefined> => (await readers.processes()).find((p) => p.pid === pid)?.tty),
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
@@ -261,6 +270,10 @@ vi.mock('../cable/hosts/codexServed.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/codexServed.js')>(),
   servedLookup: (platform: NodeJS.Platform) =>
     (platform === 'win32' ? undefined : async (asks: readonly unknown[]) => asks.map(() => undefined)),
+}))
+vi.mock('../cable/hosts/tabs.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/tabs.js')>(),
+  runPs: readers.ps,
 }))
 // Where tmux is: on the PATH, so no spec asks the developer's login shell.
 vi.mock('../lib/tmuxOnPath.js', async (real) => ({
@@ -658,7 +671,7 @@ afterEach(() => {
 /** What cli.js carries for Claude Code's marketplace, cut to its own file. */
 const CLAUDE_PLUGIN: ClaudePluginFiles = { files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n' }, executable: [] }
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; codexFound?: DevicesDeps['codexFound'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; tabProcess?: DevicesDeps['tabProcess']; ttyReaders?: DevicesDeps['ttyReaders']; claude?: DevicesDeps['claude'] | null; codexFound?: DevicesDeps['codexFound'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -708,6 +721,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     onCoreGone: (run) => { gone.push(run) },
     listen: over.listen,
     tty: over.tty,
+    // A tab's process and the readers of its tty that are not read unless the spec gives its own: no spec runs ps or lsof.
+    tabProcess: over.tabProcess ?? (async () => undefined),
+    ttyReaders: over.ttyReaders ?? (async () => undefined),
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
     // A `codex` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
@@ -912,12 +928,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream and what was written on it, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'wrote', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
     expect(handlers.orcaFront).toMatchObject({ maxBytes: 8192, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
@@ -927,6 +943,8 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
     expect(handlers.thread).toMatchObject({ maxBytes: THREAD_MAX_BYTES, perSecond: THREAD_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
+    expect(handlers.wrote).toMatchObject({ maxBytes: WROTE_MAX_BYTES, perSecond: WROTE_PER_SECOND })
+    expect([WROTE_MAX_BYTES, WROTE_PER_SECOND]).toEqual([64, 10])
     expect(handlers.dial).toMatchObject({ maxBytes: 64, perSecond: 1 })
     expect(handlers.notify).toMatchObject({ maxBytes: NOTIFY_MAX_BYTES, perSecond: NOTIFY_PER_SECOND })
     // The listener's own handlers: a name that is no app id, a session id that is no UUID, and an app with no tabs, are
@@ -3979,7 +3997,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       readers.apps.mockResolvedValueOnce(new Map([[5242, 'ghostty']]))
       found('sess-1', 4242)
       found('sess-2', 5242)
-      const tty = vi.fn(async (_pid: number) => 'ttys040')
+      const tty = vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: 'ttys040' }))
       const { port } = startHere({ tty, orca: { ...mac, run: tmuxRun } })
       attach(port)
       await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
@@ -4324,7 +4342,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         onTestFinished(() => { readers.apps.mockImplementation(own) })
         const herdr = herdrRows([['w1:p1', 'sess-3'], ['w1:p2', 'sess-4']])
         const listener = fakeListener()
-        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, tty: async (pid) => pid === 4101 ? '/dev/ttys001' : undefined,
+        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, tty: async (pid) => pid === 4101 ? { tty: '/dev/ttys001' } : undefined,
           orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run } })
         if (how === 'hooked') {
           port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))
@@ -6539,7 +6557,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   /** The Claude Code agent in a Terminal tab, on macOS, its dial on the cable and its tty read. */
   const inTab = async (over: Parameters<typeof start>[0] = {}, hostHints: Record<string, string> = {}) => {
     const listener = fakeListener()
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => TTY)
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: TTY }))
     const started = startHere({ orca: mac, listen: listener.listen, tty, ...over })
     started.port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal', ...hostHints } }))
     attach(started.port)
@@ -6863,6 +6881,34 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     expect(orcaRuns).toEqual([])
   })
 
+  // `codex queue` loads the home's config.toml (cable/hosts/observed.ts queueHome): only Harness's own lists name one, and
+  // Orca's route types into its own terminals.
+  it('the queue runs under the home of Harness\'s that holds the rollout: its own, an adopted one, a linked profile, never an Orca account\'s', async () => {
+    const homes = realpathSync(mkdtempSync(join(tmpdir(), 'devices-codex-homes-')))
+    onTestFinished(() => rmSync(homes, { recursive: true, force: true }))
+    const [adopted, linked, orcaCodex] = ['adopted', 'linked', 'orca'].map((name) => join(homes, name))
+    vi.spyOn(engineHomes, 'codexHomeRoots').mockImplementation((own) => [own, adopted])
+    // As the linker keeps it (lib/codexProfiles.ts): the profile by its real path, in the data folder, this account's alone.
+    const profiles = join(env.ADAPTER_DATA_DIR, 'codex-profiles.json')
+    writeFileSync(profiles, JSON.stringify([linked]), { mode: 0o600 })
+    onTestFinished(() => rmSync(profiles, { force: true }))
+    const sessions = [env.CODEX_HOME, adopted, linked, orcaCodex].map((home, i) => {
+      const sessionId = `0000000${i}-a3b7-7270-b39e-1245893274c1`
+      const rollout = join(home, 'sessions', '2026', '11', '15', `rollout-2026-11-15T16-07-59-${sessionId}.jsonl`)
+      return { home, sessionId, id: observedAgentId('codex', sessionId), rollout }
+    })
+    const { port } = start({ faults: ['fleet'], orcaHomes: fakeOrcaHomes({ claude: [], codex: [orcaCodex] }) })
+    sessions.forEach(({ sessionId, rollout }, i) => port.observed(hook('session-start', { sessionId, transcriptPath: rollout, callerPid: 4300 + i })))
+    seen.host.watching!(true)
+    port.swarms(null)
+    const trusted = sessions.slice(0, 3)
+    for (const { id } of trusted) expect(await host().sendTurn(id, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([, args, { env: run }]) => [args[2], run.CODEX_HOME])).toEqual(trusted.map(({ sessionId, home }) => [sessionId, home]))
+    expect(await host().sendTurn(sessions[3].id, 'run the tests')).toMatchObject({ ok: false })
+    expect(codexRuns).toHaveLength(3)
+    expect(logs.filter((line) => sessions.some(({ home }) => line.includes(home)))).toEqual([])
+  })
+
   it('a failed queue is said in one line with its exit code, then today\'s route answers', async () => {
     started({ codex: ending(1) })
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Codex could not take it. Try again.' })
@@ -7160,7 +7206,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     vi.useFakeTimers()
     const listener = fakeListener()
     const started = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now(),
-      tty: async () => '/dev/ttys023' })
+      tty: async () => ({ tty: '/dev/ttys023' }) })
     const front = (to: string) => { expect(listener.front(to)).toBeUndefined() }
     const attach = (sessionId: string) => { expect(listener.attach(sessionId)).toBeUndefined() }
     started.port.observed(hook('session-start'))
@@ -7574,7 +7620,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     vi.useFakeTimers()
     const listener = fakeListener()
     const { port } = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now(),
-      tty: async () => '/dev/ttys023' })
+      tty: async () => ({ tty: '/dev/ttys023' }) })
     readers.known.set(S, 'terminal')
     readers.owners.set(S, { engine: 'claude', pid: 4300, record: '/s/4300.json' })
     readers.rows.set(S, { cwd: '/work/api', transcriptPath: null })
@@ -7629,7 +7675,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     vi.useFakeTimers()
     clock = 0
     const listener = fakeListener()
-    const tty = vi.fn(async (pid: number): Promise<string | undefined> => ttyOf(pid - 4241))
+    const tty = vi.fn(async (pid: number): Promise<TabTty | undefined> => ({ tty: ttyOf(pid - 4241) }))
     const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: run ?? orca.run }, listen: listener.listen, tty, now: () => clock })
     for (let n = 1; n <= agents; n++) started.port.observed(hook(n))
     seen.host.watching!(true)
@@ -8041,6 +8087,192 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
   })
 })
 
+// The dial's words typed into an agent's own Ghostty tab, on the tabs stream a watch holds open, which Harness Device
+// writes and answers (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md). ps, lsof and the watch are fakes.
+describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md)', () => {
+  const A = observedAgentId('claude', 'sess-1')
+  const B = observedAgentId('claude', 'sess-2')
+  /** Agent n's tty and its process: /dev/ttys003 and 4101 for A, /dev/ttys004 and 4102 for B. */
+  const ttyOf = (n: number) => `/dev/ttys00${2 + n}`
+  const pidOf = (n: number) => 4100 + n
+  const nOf = (pid: number) => pid - 4100
+  /** When agent n's process started, as ps reads it (lib/lstart.ts). */
+  const startOf = (n: number) => `ps:${1_764_064_800_000 + n}`
+  const GHOSTTY = { TERM_PROGRAM: 'ghostty' }
+  const ITERM = { TERM_PROGRAM: 'iTerm.app' }
+  /** Claude Code in a tab of its own, as its hook says: A in api, B in web. */
+  const hook = (n: number, hostHints: Record<string, string>): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: n === 1 ? '/work/api' : '/work/web', callerPid: pidOf(n),
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints,
+  })
+  /** Each agent under the login shell of its own tab (4001, 4002). */
+  const ROWS: ProcessRow[] = [1, 2].flatMap((n) => [
+    { pid: pidOf(n), ppid: 4000 + n, tty: ttyOf(n).slice('/dev/'.length), executable: 'claude' },
+    { pid: 4000 + n, ppid: 1, tty: ttyOf(n).slice('/dev/'.length), executable: '-zsh' },
+  ])
+  const host = () => seen.dial as unknown as DaemonCableHost
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  type Typing = { write?: { id: string; app: string; tty: string; text: string }; enter?: { id: string; app: string; tty: string } }
+
+  /** A watch holding the tabs stream open, as the listener runs one: it takes a line once the last has drained, a moment
+   *  after its write, and tells Harness Device's answer to each write and Enter as `wrote`, through the listener's own
+   *  handler: ok at once, unless the spec answers by hand. It says `writes`, as a watch Harness Device told writes
+   *  does, unless [writes] is false. */
+  const watch = (listener: ReturnType<typeof fakeListener>, answers: boolean, writes: boolean) => {
+    const lines: Typing[] = []
+    let writable = false
+    let drained = (): void => {}
+    const ready = (): void => { writable = true; drained() }
+    const wrote = (id: string, ok = true): unknown =>
+      (listener.given[0].handlers.wrote as ListenerHandler).handle({ type: 'wrote', id, ok }, new AbortController().signal)
+    expect((listener.given[0].handlers.tabs as ListenerStreamHandler).open(writes ? { type: 'tabs', writes: true } : { type: 'tabs' }, {
+      write: (line) => {
+        if (!writable) return false
+        writable = false
+        const typing = line as Typing
+        lines.push(typing)
+        void Promise.resolve().then(ready)
+        const id = (typing.write ?? typing.enter)?.id
+        if (answers && id !== undefined) void Promise.resolve().then(() => wrote(id))
+        return true
+      },
+      onWritable: (run) => { drained = run },
+      ended: new AbortController().signal,
+    })).toBeUndefined()
+    // The listener tells a stream it can take a line once it has opened.
+    ready()
+    return { lines, wrote }
+  }
+
+  /** On macOS, `agents` of A and B in tabs of their own (Ghostty's unless `hostHints` say), their ttys and starts read,
+   *  each the lead of its tty's foreground group and with its shell alone on its stdin beside it, a dial on the cable
+   *  with no window, and a watch's stream open, saying `writes` unless [writes] is false. */
+  const inTabs = async ({ agents = 1, hostHints = GHOSTTY, answers = true, writes = true }: { agents?: number; hostHints?: Record<string, string>; answers?: boolean; writes?: boolean } = {}) => {
+    vi.useFakeTimers()
+    readers.processes.mockResolvedValue(ROWS)
+    const listener = fakeListener()
+    const tty = vi.fn(async (pid: number): Promise<TabTty | undefined> => ({ tty: ttyOf(nOf(pid)), start: startOf(nOf(pid)) }))
+    const tabProcess = vi.fn(async (pid: number): Promise<TabProcess | undefined> =>
+      ({ tty: ttyOf(nOf(pid)), pgid: pid, tpgid: pid, start: startOf(nOf(pid)) }))
+    const ttyReaders = vi.fn(async (tty: string): Promise<readonly number[] | undefined> => {
+      const n = [1, 2].find((one) => ttyOf(one) === tty)
+      return n === undefined ? [] : [pidOf(n), 4000 + n]
+    })
+    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, listen: listener.listen, tty, tabProcess, ttyReaders })
+    for (let n = 1; n <= agents; n++) started.port.observed(hook(n, hostHints))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    await Promise.all(tty.mock.results.map(({ value }) => value))
+    return { ...started, tabProcess, ttyReaders, watch: watch(listener, answers, writes) }
+  }
+  /** The dial's capabilities of that agent: `v` while its words have a way in. */
+  const caps = async (agentId: string) => (await host().listAgentSnapshot()).agents.find(({ id }) => id === agentId)?.caps
+  /** The dial's words to that agent, given the time of their settle. */
+  const say = async (agentId: string, text: string) => {
+    const sent = host().sendTurn(agentId, text)
+    await vi.advanceTimersByTimeAsync(settleMs(text))
+    return sent
+  }
+  /** Each line as what it is and the tty it names, a write's text beside it. */
+  const named = (lines: Typing[]) => lines.map(({ write, enter }) => (write ? ['write', write.tty, write.text] : ['enter', enter!.tty]))
+  const ID = /^[0-9a-f]{16}$/
+
+  it('words for an agent in Ghostty: its text written, the settle, its Enter written, and the dial is told sent', async () => {
+    const { watch } = await inTabs({ answers: false })
+    expect(await caps(A)).toContain('v')
+    const sent = host().sendTurn(A, 'run the tests')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.lines).toEqual([{ write: { id: expect.stringMatching(ID), app: 'ghostty', tty: ttyOf(1), text: 'run the tests' } }])
+    expect(watch.wrote(watch.lines[0].write!.id)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(settleMs('run the tests') - 1)
+    expect(watch.lines).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(watch.lines.slice(1)).toEqual([{ enter: { id: expect.stringMatching(ID), app: 'ghostty', tty: ttyOf(1) } }])
+    expect(watch.lines[1].enter!.id).not.toBe(watch.lines[0].write!.id)
+    watch.wrote(watch.lines[1].enter!.id)
+    expect(await sent).toEqual({ ok: true })
+    expect(said()).toEqual(['[device] voice · tabs'])
+    const secrets = ['ttys', 'run the tests', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // PM decision 3 (2026-11-25): Harness Device 0.1.x drops write and enter lines unanswered, and never tells its watch
+  // writes, so the watch does not say it. Claude Code lists voice with no route all the same (#4648): its voice start is
+  // refused with how to reach it.
+  it('a watch whose stream did not say writes gives no route: no line, no probe, and the dial is told how to reach it', async () => {
+    const { watch, tabProcess, ttyReaders } = await inTabs({ writes: false })
+    expect(await caps(A)).toContain('v')
+    expect(host().voiceRefusal(A)).toBe(CLAUDE_PLUGIN_OFF)
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
+    expect(said()).toEqual(['[device] voice · no-answer'])
+  })
+
+  // PM decision 2 (2026-11-25): iTerm2's write reaches every pane its Broadcast Input joins, where a shell would run the
+  // words, and nothing can see it on.
+  it('an agent in iTerm2 gets no line and no probe: refused, and the dial is told it did not answer', async () => {
+    const { watch, tabProcess, ttyReaders } = await inTabs({ hostHints: ITERM })
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
+    expect(said()).toEqual(['[device] voice · no-answer'])
+  })
+
+  it('the table the stdin check reads is /bin/ps\'s under psEnv, not a ps from the PATH', async () => {
+    await inTabs()
+    readers.processes.mockClear()
+    expect(await say(A, 'run the tests')).toEqual({ ok: true })
+    // Checked before the words and again before their Enter.
+    const execs = readers.processes.mock.calls.map(([exec]) => exec)
+    expect(execs).toEqual([expect.any(Function), expect.any(Function)])
+    const bounds = { timeout: 1_000, maxBuffer: 65_536 }
+    for (const exec of execs) {
+      await (exec as (command: string, args: readonly string[], options: typeof bounds) => Promise<string | null>)('ps', ['-axo', 'pid=,ppid=,comm='], bounds)
+    }
+    expect(readers.ps.mock.calls).toEqual([[['-axo', 'pid=,ppid=,comm='], bounds], [['-axo', 'pid=,ppid=,comm='], bounds]])
+  })
+
+  it('wrong session: words for A never make a line naming B\'s tty, and with another start on A\'s tty none at all', async () => {
+    const { watch, tabProcess } = await inTabs({ agents: 2 })
+    expect(await say(A, 'run the tests')).toEqual({ ok: true })
+    expect(named(watch.lines)).toEqual([['write', ttyOf(1), 'run the tests'], ['enter', ttyOf(1)]])
+    // Another process on A's tty since its proof was read: ps reads another start there.
+    tabProcess.mockImplementation(async (pid) => ({ tty: ttyOf(nOf(pid)), pgid: pid, tpgid: pid, start: startOf(nOf(pid) + 8) }))
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toHaveLength(2)
+    expect(said()).toEqual(['[device] voice · tabs', '[device] voice · refused (tabs · process)'])
+    expect(watch.lines.filter(({ write, enter }) => (write ?? enter)!.tty === ttyOf(2))).toEqual([])
+  })
+
+  // Review Focus 5: the lock is per tty, so neither send waits on the other.
+  it('words to A and to B at once: each write and Enter names its own tty, and B\'s write goes before A\'s Enter', async () => {
+    const { watch } = await inTabs({ agents: 2 })
+    const both = Promise.all([host().sendTurn(A, 'words for api'), host().sendTurn(B, 'words for web')])
+    await vi.advanceTimersByTimeAsync(settleMs('words for api'))
+    expect(await both).toEqual([{ ok: true }, { ok: true }])
+    expect(named(watch.lines)).toEqual([
+      ['write', ttyOf(1), 'words for api'], ['write', ttyOf(2), 'words for web'], ['enter', ttyOf(1)], ['enter', ttyOf(2)],
+    ])
+  })
+
+  it('an agent that does not lead its tty\'s foreground group takes nothing: refused (tabs · background)', async () => {
+    const { watch, tabProcess } = await inTabs()
+    // After a Ctrl-Z its shell leads the tty's foreground group: the words would run as a command.
+    tabProcess.mockImplementation(async (pid) => ({ tty: ttyOf(1), pgid: pid, tpgid: 4001, start: startOf(1) }))
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect(said()).toEqual(['[device] voice · refused (tabs · background)'])
+  })
+
+  it('an agent in Terminal takes no words: no line, no probe, and the dial is told it did not answer', async () => {
+    const { watch, tabProcess, ttyReaders } = await inTabs({ hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } })
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
+  })
+})
+
 // The tmux agent is on the page of the app that holds its client too: selecting that tab moves the dial to it there, and
 // turns no page (Diego, 2026-11-26).
 describe('selecting a tmux client\'s tab moves the dial on the terminal app\'s page (docs/plans/2026-11-26-dial-mux-host-pages-design.md §3)', () => {
@@ -8061,7 +8293,7 @@ describe('selecting a tmux client\'s tab moves the dial on the terminal app\'s p
     clock = 0
     readers.processes.mockResolvedValue(TMUX_IN_ITERM)
     const listener = fakeListener()
-    const tty = vi.fn(async (pid: number): Promise<string | undefined> => (pid === 4101 ? PLAIN_TAB : undefined))
+    const tty = vi.fn(async (pid: number): Promise<TabTty | undefined> => (pid === 4101 ? { tty: PLAIN_TAB } : undefined))
     const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: tmuxInItermRun }, listen: listener.listen, tty, now: () => clock })
     started.port.observed(hooked('sess-t', 4110, { __CFBundleIdentifier: 'com.apple.Terminal' }))
     if (plain) started.port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))

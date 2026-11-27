@@ -226,8 +226,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   once and that poll reaches the devices; a client that goes first is told as a notice. What a local tool tells
   the devices (first the app in front, from `harness hardware watch`) goes to their own listener
   (src/services/devicesListener.ts), never through the core: a new message is a handler registered there by its
-  type, with its own body and rate limits, beside `front`, `tab`, `thread`, the
-  title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
+  type, with its own body and rate limits, beside `front`, `tab`, `wrote`, Harness Device's answer to a spoken text
+  or its Enter sent on the `tabs` stream, `thread`, the title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
   from `harness device notify`, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
   Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). The listener runs on every
@@ -236,7 +236,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   change: a known gap. A handler of a second kind holds a stream open,
   one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
   answered 409), and is told when the stream can take a line (`onWritable`) and why it
-  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
+  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select and, only on a stream
+  opened with `writes` (a watch Harness Device told `{"writes":true}` on its stdin), send a person's words and their
+  Enter, each answered by the watch's `wrote`; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
   (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
   `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension

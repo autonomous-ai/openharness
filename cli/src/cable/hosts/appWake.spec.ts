@@ -21,6 +21,8 @@ const SECOND_TARGET: WakeTarget = {
 const OTHER = 'cccccccc-0000-4000-8000-000000000003'
 const THIRD = 'cccccccc-0000-4000-8000-000000000004'
 const WORDS = 'run the tests'
+/** The Codex home the ChatGPT wake queues under: the daemon's CODEX_HOME, as devices.ts gives it. */
+const CODEX_HOME = '/daemon/codex-home'
 const NONE = { change: 0, poll: 0, timers: 0 }
 const LOG = /^\[claude-app\] wake · (too long|open failed|timeout|ended|busy|stopped|refused|sent · \d+ ms)$/
 const COUNT = /^wake-(too-long|open-failed|timeout|ended|busy|stopped|sent|refused)$/
@@ -50,7 +52,9 @@ interface Delivered { sessionId: string | undefined; text: string; inPoll: boole
 /** A ChatGPT thread's link, answered by hand. */
 interface Link { args: [string, string]; resolve(answer: PaneSwitch): void; reject(error: Error): void }
 /** What the fake `codex queue` was handed, answered by hand. */
-interface Queued { threadId: string; text: string; isApp: boolean; resolve(result: CodexQueueResult): void; reject(error: Error): void }
+interface Queued {
+  threadId: string; text: string; isApp: boolean; home: string; resolve(result: CodexQueueResult): void; reject(error: Error): void
+}
 
 /** A wake on fakes: links the test answers by hand, an observed source listing the test's copies, a mod whose polls
  *  the test opens and which records every delivery, a ChatGPT link and a `codex queue` the test answers by hand, and
@@ -102,9 +106,10 @@ function setup() {
     openThread: (threadId, agentId) =>
       new Promise<PaneSwitch>((resolve, reject) => links.push({ args: [threadId, agentId], resolve, reject })),
     queue: {
-      send: (threadId, text, isApp) =>
-        new Promise<CodexQueueResult>((resolve, reject) => queued.push({ threadId, text, isApp, resolve, reject })),
+      send: (threadId, text, isApp, home) =>
+        new Promise<CodexQueueResult>((resolve, reject) => queued.push({ threadId, text, isApp, home, resolve, reject })),
     },
+    codexHome: CODEX_HOME,
     monotonic: () => now,
     log: (line) => lines.push(line),
     count: (what) => counts.push(what),
@@ -144,7 +149,7 @@ function setup() {
     /** The ChatGPT threads whose queue received words, in order: the same gate. */
     threads: () => queued.map(({ threadId }) => threadId),
     /** What each `codex queue` was handed. */
-    words: () => queued.map(({ threadId, text, isApp }) => ({ threadId, text, isApp })),
+    words: () => queued.map(({ threadId, text, isApp, home }) => ({ threadId, text, isApp, home })),
     /** The listeners and timers still held. */
     left: () => ({ change: changes.size, poll: polls.size, timers: timers.filter((x) => !x.cancelled && !x.fired).length }),
     everListened: () => listened > 0,
@@ -588,7 +593,7 @@ describe("the ChatGPT app's wake (docs/plans/2026-11-23-dial-chatgpt-voice-resti
     for (const what of counts.splice(0)) expect([COUNT, CODEX_COUNT].some((form) => form.test(what)), what).toBe(true)
   })
 
-  it("the link, then one queue call to the target's thread with the exact words; its answer is the wake's", async () => {
+  it("the link, then one queue call to the target's thread with the exact words, under the wake's Codex home; its answer is the wake's", async () => {
     const t = setup()
     const sent = track(t.wake.send(CODEX, WORDS))
     expect(t.links.map(({ args }) => args)).toEqual([[THREAD, CODEX.agentId]])
@@ -597,7 +602,7 @@ describe("the ChatGPT app's wake (docs/plans/2026-11-23-dial-chatgpt-voice-resti
     expect(t.threads()).toEqual([])
     t.links[0].resolve('ok')
     await turn()
-    expect(t.words()).toEqual([{ threadId: THREAD, text: WORDS, isApp: true }])
+    expect(t.words()).toEqual([{ threadId: THREAD, text: WORDS, isApp: true, home: CODEX_HOME }])
     t.advance(250)
     t.queued[0].resolve({ outcome: 'queued' })
     await turn()
