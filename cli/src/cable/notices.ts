@@ -93,7 +93,7 @@ export function listedAgent(agentId: string, agent: KeyedAgent): ListedAgent {
 }
 
 /** Why a card went. */
-export type NoticeEnd = 'done' | 'sixth' | 'full' | 'replaced' | 'tapped' | 'gone' | 'detached' | 'expired'
+export type NoticeEnd = 'done' | 'prompted' | 'sixth' | 'full' | 'replaced' | 'tapped' | 'gone' | 'detached' | 'expired'
 
 /** A notice's answer and, when shown, its card: `id` the agent closes it by, `rang` when it was asked now. */
 export interface NoticeOutcome { result: NoticeResult; card?: { id: string; kind: NoticeKind; quiet: boolean; rang: boolean } }
@@ -215,6 +215,13 @@ export class Notices {
     const going = this.mine(caller).filter((card) => id === 'all' || cardId(card.id) === id)
     this.drop(going, 'done')
     return going.length
+  }
+
+  /** The person's own next prompt to that agent, typed or by the dial's words, never another session's message: its other
+   *  card was for the person, who has acted, so it goes, as before 2026-11-27. Its waiting cards stay until it closes them
+   *  (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5). */
+  prompted(caller: Mine): void {
+    this.drop(this.mine(caller).filter(({ kind }) => kind !== 'waiting'), 'prompted')
   }
 
   /** That agent's cards, oldest first, each with its own line. */

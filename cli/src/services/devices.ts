@@ -2159,14 +2159,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
     after: timerIn('notices'),
-    // Its wait ends as it goes: answered only when its agent closed it, the one sure sign the person answered. A card
-    // replaced leaves its wait to the card that took its key (noticeShown).
+    // Its wait ends as it goes: answered only when its agent closed it, the one sure sign the person answered, or when the
+    // person's own prompt closed an other card. A card replaced leaves its wait to the card that took its key
+    // (noticeShown).
     closed: (agentId, card, end) => {
       if (end === 'replaced') return
       const key = noticeWait(agentId, card)
+      const answered = end === 'done' || end === 'prompted'
       count((usage) => {
-        usage.waitEnded(key, end === 'done' ? 'answered' : 'gone')
-        usage.noticeEnded(key, end === 'done')
+        usage.waitEnded(key, answered ? 'answered' : 'gone')
+        usage.noticeEnded(key, answered)
       })
     },
   })
@@ -3809,6 +3811,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (caller && (source === 'person' || source === 'dial' || event.event === 'session-end')) {
           clearRang(caller)
           clearNudged(caller)
+        }
+        // The person's own prompt to it, by the dial's words too, never another session's message (2026-11-27): its other
+        // card goes, as before; its waiting cards stay until it closes them (rule 5). Found as its notice found it; only
+        // Claude Code and Codex ring.
+        if ((source === 'person' || source === 'dial') && (event.engine === 'claude' || event.engine === 'codex')) {
+          const found = noticeCaller({ text: '', engine: event.engine, sessionId: event.sessionId })
+          part.call('notices', () => notices.prompted(found))
         }
         // The interrupt is a hooked agent's alone (Decision 2): a Harness agent's aborted turn ends as a finished one does.
         if (event.event === 'turn-aborted') count((usage) => usage.turnAborted(observedAgentId(event.engine, event.sessionId)))
