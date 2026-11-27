@@ -3799,8 +3799,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     observed: (event) => {
       part.call('observed', () => {
         if (!observed) {
-          // Its agent is gone (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5): with the source off
-          // no list holds a caller no list held, whose card is under its session's id, so nothing else would end it.
+          // Its agent is gone (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5). With the source off
+          // no list holds this session: its card is kept under the session's id, and nothing else would end it.
           if (event.event === 'session-end') endNotice(observedAgentId(event.engine, event.sessionId))
           return
         }
