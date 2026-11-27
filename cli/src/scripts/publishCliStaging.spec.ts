@@ -59,6 +59,17 @@ describe.skipIf(process.platform === 'win32')('publish-cli-staging.sh', () => {
     expect(log).not.toMatch(/ cp /)
   })
 
+  it('refuses a version whose inbox.mjs is already there, before the bundle and without uploading', () => {
+    const root = scratch()
+    const path = `${shim(root, 'case "$3" in */inbox.mjs) exit 0;; *) echo "One or more URLs matched no objects" >&2; exit 1;; esac')}:${process.env.PATH}`
+    const result = run(['0.4.18-dev.win1', '--no-build'], { PATH: path, CLI_DIST_DIR: join(root, 'none') })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/staging/cli/0.4.18-dev.win1/inbox.mjs already exists')
+    const log = readFileSync(join(root, 'gcloud.log'), 'utf8')
+    expect(log).toContain('storage ls gs://s3-autonomous-upgrade-3/harness/staging/cli/0.4.18-dev.win1/inbox.mjs')
+    expect(log).not.toMatch(/ cp /)
+  })
+
   it('aborts, uploading nothing, when gcloud fails for a reason other than not found', () => {
     const root = scratch()
     const path = `${shim(root, 'echo "ERROR: Reauthentication failed" >&2; exit 1')}:${process.env.PATH}`
@@ -74,6 +85,19 @@ describe.skipIf(process.platform === 'win32')('publish-cli-staging.sh', () => {
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('is missing')
     expect(existsSync(join(root, 'dist'))).toBe(false)
+    expect(existsSync(join(root, 'out'))).toBe(false)
+  })
+
+  it('stops on a bundle without inbox.mjs', () => {
+    const root = scratch()
+    const dist = join(root, 'dist')
+    mkdirSync(dist)
+    writeFileSync(join(dist, 'cli.js'), '#!/usr/bin/env node\n')
+    writeFileSync(join(dist, 'notify.mjs'), '')
+    const result = run(['0.4.18-dev.win1', '--no-build'], { DRY_RUN: '1', DRY_RUN_OUT: join(root, 'out'), CLI_DIST_DIR: dist })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('inbox.mjs')
+    expect(result.stderr).toContain('is missing')
     expect(existsSync(join(root, 'out'))).toBe(false)
   })
 })
