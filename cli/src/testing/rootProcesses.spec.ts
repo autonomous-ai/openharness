@@ -3,6 +3,7 @@ import { once } from 'node:events'
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertTestRoot, codexDaemons, codexPidFiles, endRootProcesses, lsofFolders, ownFolders, rootProcesses, workingFolders, type PidRow } from './rootProcesses.js'
 import { alive, commandLines, processTable, startTimes, type NamedRow } from './spawnedRuns.js'
@@ -277,12 +278,13 @@ describe('a Codex app server a pid file in the root names', () => {
   })
 
   describe.skipIf(process.platform === 'win32')('in a real root', () => {
-    let server: { pid: number; started: string } | undefined
-    // Only the stand-in this spec started, while its pid is still that process by the start recorded as it started: the
-    // person's own Codex app servers run on this machine, and one could have its pid since.
+    let standIns: Array<{ pid: number; started: string }> = []
+    // Only the stand-ins this spec started, while each pid is still that process by the start recorded as it started: the
+    // person's own Codex app servers run on this machine, and one could have such a pid since.
     afterEach(() => {
-      if (server !== undefined && startTimes([server.pid]).get(server.pid) === server.started) process.kill(server.pid, 'SIGKILL')
-      server = undefined
+      const now = startTimes(standIns.map(({ pid }) => pid))
+      for (const { pid, started } of standIns) if (now.get(pid) === started) process.kill(pid, 'SIGKILL')
+      standIns = []
     })
 
     /** A stand-in for `codex app-server --managed-daemon`, as it starts: detached by a launcher that writes its pid file
@@ -297,11 +299,59 @@ server.unref()`
       const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })
       expect((await once(launcher, 'exit'))[0]).toBe(0)
       const { pid, processStartTime } = JSON.parse(readFileSync(file, 'utf8')) as { pid: number; processStartTime: string }
-      server = { pid, started: processStartTime }
+      standIns.push({ pid, started: processStartTime })
       // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
       await until(() => commandLines([pid]).get(pid)?.includes('app-server --managed-daemon') || null)
       return pid
     }
+
+    /**
+     * A stand-in for Codex 0.172's managed pair, as it starts: a launcher that exits, leaving launchd `codex app-server
+     * daemon pid-update-loop` run as [loop], working outside the root, which starts the app server as its child in a group
+     * of its own and records it in `<CODEX_HOME>/app-server-daemon/daemon.pid`, [home] its CODEX_HOME, and itself in
+     * `daemon-updater.pid` beside it when [recorded], as Codex does. Neither names more of the root than [loop] does. Their
+     * pids, once each runs its own command line.
+     */
+    async function standInPair(home: string, loop: string, recorded = true): Promise<{ loop: number; server: number }> {
+      const updater = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs'), { join } = require('node:path')
+const started = (pid) => execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim()
+const server = spawn(process.execPath, ['-e', ${JSON.stringify(IDLE)}, 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore' })
+const pair = { loop: { pid: process.pid, started: started(process.pid) }, server: { pid: server.pid, started: started(server.pid) } }
+const dir = join(process.env.CODEX_HOME, 'app-server-daemon')
+mkdirSync(dir, { recursive: true })
+writeFileSync(join(dir, 'daemon.pid'), JSON.stringify({ pid: pair.server.pid, processStartTime: pair.server.started }))
+if (process.env.RECORDED) writeFileSync(join(dir, 'daemon-updater.pid'), JSON.stringify({ pid: pair.loop.pid, processStartTime: pair.loop.started }))
+console.log(JSON.stringify(pair))
+${IDLE}`
+      const launch = `const loop = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(updater)}, 'app-server', 'daemon', 'pid-update-loop'], { argv0: process.env.LOOP, detached: true, stdio: ['ignore', 'pipe', 'ignore'], cwd: ${JSON.stringify(tmpdir())} })
+require('node:readline').createInterface({ input: loop.stdout }).once('line', (line) => { console.log(line); process.exit(0) })`
+      const env = { ...process.env, CODEX_HOME: home, LOOP: loop, RECORDED: recorded ? '1' : '' }
+      const launcher = spawn(process.execPath, ['-e', launch], { stdio: ['ignore', 'pipe', 'ignore'], env })
+      const [said] = await once(createInterface({ input: launcher.stdout! }), 'line') as [string]
+      const pair = JSON.parse(said) as { loop: { pid: number; started: string }; server: { pid: number; started: string } }
+      standIns.push(pair.loop, pair.server)
+      expect((await once(launcher, 'exit'))[0]).toBe(0)
+      // Until each runs its own command line: a process not yet past its exec still shows its parent's.
+      await until(() => commandLines([pair.loop.pid]).get(pair.loop.pid)?.includes('app-server daemon pid-update-loop') || null)
+      await until(() => commandLines([pair.server.pid]).get(pair.server.pid)?.includes('app-server --managed-daemon') || null)
+      return { loop: pair.loop.pid, server: pair.server.pid }
+    }
+
+    // Codex 0.172's updater outlived close() in the real-Codex dial skill case: launchd's, as its server is, and working
+    // in the root's work folder, outside the test's tree. Codex records it beside its server.
+    it('is ended with the updater Codex records beside it, its parent, though both left the test\'s tree', async () => {
+      const root = folder('htmux-'), home = join(root, 'home', 'codex')
+      const pair = await standInPair(home, join(home, 'packages', 'bin', 'codex'))
+      expect(await endRootProcesses(root, new Map())).toEqual([])
+      expect([alive(pair.server), alive(pair.loop)]).toEqual([false, false])
+    })
+
+    it('never ends the app server\'s parent no pid file in the root records: the person\'s own updater', async () => {
+      const root = folder('htmux-')
+      const pair = await standInPair(join(root, 'home', 'codex'), 'codex', false)
+      expect(await endRootProcesses(root, new Map())).toEqual([])
+      expect([alive(pair.server), alive(pair.loop)]).toEqual([false, true])
+    })
 
     it('is ended by the close sweep, though it left the test\'s tree, names nothing of the root and works outside it', async () => {
       const root = folder('htmux-')
