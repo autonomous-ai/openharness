@@ -555,6 +555,21 @@ The change:
    - Not `notify.mjs`. It is not one of the core process's files, but every session of every engine runs it, the core
      installs it, and its rule is "the event and the tool's name only, never a tool's input or what is asked". The
      spike found the plugin can carry trusted hooks, so no fallback there is needed.
+   - **In the background** (the PM, 2026-11-27, after release). Both hooks carry `"async": true`, which Codex 0.172
+     takes for `PermissionRequest` and `PreToolUse`: it starts the hook and does not wait for it. The hook decides
+     nothing, so what Codex does is unchanged; only its dialog no longer waits. As first released (CLI 0.6.95, no
+     `async`), each ask waited for the hook: about 250 ms on macOS and 1.5 s on Windows, where Codex runs it through
+     Windows PowerShell 5.1. The pull request shows Codex's own hook log for an async run and the time to the dialog.
+   - `async` is part of each hook's declaration hash, so the trust records change with it: the setup's update after
+     the CLI update installs the new copy and writes its records, as for any change of the plugin. Its end-to-end
+     case: the 0.6.95 copy trusted, the update, the new copy trusted, no review asked of the person.
+   - **A post that lands after the answer.** Running in the background, the post can reach the devices after the
+     person has answered in Codex, likelier on Windows. The dial may then show, and ring, an ask already answered. It
+     must never stay: the card closes once the session's record grows past the post (`checkWorking`,
+     `ASK_SETTLE_MS`) or at the session's next event, and a post that lands after its turn's Stop shows nothing where
+     the devices can tell from what they hold; where they cannot, the pull request says so and it closes at the next
+     event. Its end-to-end case: answered before the post, the card gone within one `checkWorking` round after the
+     record grows.
 2. **Who reviews it, read where the ask is heard** (the PM, 2026-11-26, from Codex 0.172.0's source). A
    `PermissionRequest`'s input says nothing of whether a dialog follows; the hook runs before Codex's automatic review,
    which is a model session of its own with hooks off; and the next event of a command it approves is `PostToolUse`,
@@ -593,6 +608,8 @@ What it gives up, on purpose: with automatic review on, a command the review pas
 today; so does a Default-mode question form where Codex's experimental setting turns it on. A ring at every command the review approves would be the anti-goal; a missed escalation is today's behavior.
 So, by item 3, does a second ask for a command the person allowed with plain "Yes": a ring at every command the
 person already allowed for the session would be the same anti-goal.
+With the hooks in the background, an ask the person answers before the post lands can still ring once, then close:
+rare, and the price of a dialog that no longer waits for Harness.
 And if Codex renames the field or the line, every Codex ask outside a pane goes quiet again, as today: the command's
 spec pins a record written by Codex 0.172, and the Codex release checks read it again.
 
@@ -618,8 +635,10 @@ Answered by the spike (2026-11-26), and used by Part 4 too:
   that session drops, in another session rings; a question form asked twice rings twice; the 65th line pushes out
   the first; a session's lines go with its agent); an end-to-end case with the fake Codex engine, its record holding
   each reviewer and mode.
-- **Its time** (the PM, 2026-11-27). The hook runs before every Codex permission ask, so the pull request gives its
-  time from start to exit, in a short turn and with the record's line at the 16 MiB bound.
+- **Its time** (the PM, 2026-11-27). The hook runs at every Codex permission ask, so the pull request gives its
+  time from start to exit, in a short turn and with the record's line at the 16 MiB bound. Measured at release
+  (median of 5): macOS 238 to 269 ms, Windows 1.49 to 1.54 s, all of it added to the wait for Codex's dialog until
+  the hooks ran in the background.
 - **Docs:** `plugins/harness-device/README.md`, the devices row of `cli/AGENTS.md`, and the hook-driven status plan's
   limit 4, which this narrows.
 
