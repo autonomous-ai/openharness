@@ -166,10 +166,12 @@ impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
-        Runner::polling_every(doors, send, POLL_EVERY, watch::STOP_GRACE, Arc::new(Instant::now))
+        Runner::within(doors, send, POLL_EVERY, watch::STOP_GRACE, Arc::new(Instant::now))
     }
 
-    fn polling_every(
+    /// `new`'s runner on the timings given: the poll's interval, a stopped watch's grace, and the clock that dates a
+    /// typing or a select. Only tests give others.
+    fn within(
         doors: Doors,
         send: Arc<dyn Fn(Event) + Send + Sync>,
         every: Duration,
@@ -1031,7 +1033,7 @@ mod tests {
         let hands = Arc::new(Hands { start: Instant::now(), moved: AtomicU64::default() });
         let clock = hands.clone();
         // A watch these tests stop ends by itself: on a loaded machine the fake can take past STOP_GRACE to.
-        let runner = Runner::polling_every(doors, send, EVERY, WAIT, Arc::new(move || clock.now()));
+        let runner = Runner::within(doors, send, EVERY, WAIT, Arc::new(move || clock.now()));
         World { fake, home, doubles, events, hands, runner }
     }
 
