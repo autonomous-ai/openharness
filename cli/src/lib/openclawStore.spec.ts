@@ -85,6 +85,9 @@ describe('a Windows TUI\'s state folder, from the files harness-pty reads it hol
     const brood = Array.from({ length: 32 }, (_, n) => at(20_000 + n, 10104, 30 + n))
     await expect(nativeOpenFiles(10104, 'win32', failed, tableOf(launcher, ...brood))).rejects.toThrow()
     expect(asked).toEqual([[4243], [4244], [4245]])
+    // 32 in all is one run: all are asked for.
+    await expect(nativeOpenFiles(10104, 'win32', failed, tableOf(launcher, ...brood.slice(1)))).rejects.toThrow()
+    expect(asked.at(-1)).toEqual([10104, ...brood.slice(1).map(row => row.pid)])
   })
 })
 
