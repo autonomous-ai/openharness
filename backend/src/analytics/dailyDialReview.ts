@@ -138,13 +138,14 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
         ...line('Quiet: the person was with that agent', noticed, sum('dial_notice_present')),
         ...line("Quiet, answered: the person's prompt within 10 min", noticed, sum('dial_notice_present_answered_10m')),
         ...line("Quiet, rung: the person had gone by its turn's end", noticed, sum('dial_notice_present_roused')),
-        // The second look asks only where Harness's skill is on, so its computers are the skill's.
-        ...DIAL_SKILL_ENGINES.flatMap(e => [
-          ...line(`${e}: second looks, yes (skill computer-days; yeses)`, computerDays(`dial_skill_${e}_installation_days`),
-            sum(`dial_nudge_${e}`)),
-          ...line(`${e}: second looks, rang after (skill computer-days; rings)`, computerDays(`dial_skill_${e}_installation_days`),
-            sum(`dial_nudge_${e}_rang`)),
-        ]),
+        // The second look asks only where Harness's skill is on, so its computers are the skill's. Those show before any
+        // CLI counts a yes, so an engine's rows wait for one; then its rang row shows even at 0, as 0 rings is the signal.
+        ...DIAL_SKILL_ENGINES.flatMap(e => {
+          const yeses = sum(`dial_nudge_${e}`), skill = computerDays(`dial_skill_${e}_installation_days`)
+          if (!COLUMNS.some(k => yeses(k) > 0)) return []
+          return [...line(`${e}: second looks, yes (skill computer-days; yeses)`, skill, yeses),
+            ...line(`${e}: second looks, rang after (skill computer-days; rings)`, skill, sum(`dial_nudge_${e}_rang`))]
+        }),
       ] },
       { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, distinct(sum(`dial_first_agent_first_${b}_installations`)))),
