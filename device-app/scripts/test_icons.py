@@ -71,7 +71,8 @@ class Tray(unittest.TestCase):
             return [[round(share, 9) for share in row] for row in rows]
 
         # A square on half pixels: its corners cover a quarter of a pixel, its sides a half, its middle all.
-        self.assertEqual(covered("M0.5 0.5 H2.5 V2.5 H0.5 Z", 3, 3), [[0.25, 0.5, 0.25], [0.5, 1, 0.5], [0.25, 0.5, 0.25]])
+        self.assertEqual(covered("M0.5 0.5 H2.5 V2.5 H0.5 Z", 3, 3),
+                         [[0.25, 0.5, 0.25], [0.5, 1, 0.5], [0.25, 0.5, 0.25]])
         # The same square from a unit one, scaled by 2 and moved by half a pixel.
         self.assertEqual(covered("M0 0 H1 V1 H0 Z", 3, 3, 2, (0.5, 0.5)), covered("M0.5 0.5 H2.5 V2.5 H0.5 Z", 3, 3))
         # Two squares wound alike cover their overlap once; one wound the other way inside another is a hole.
@@ -150,7 +151,7 @@ class App(unittest.TestCase):
 
     def test_the_committed_app_pngs_are_what_app_writes_from_app_1024(self):
         with tempfile.TemporaryDirectory() as out:
-            icons.write_app(icons.load_source(ICONS / "app-1024.png"), Path(out))
+            icons.write_app(icons.load_source(icons.APP_SOURCE), Path(out))
             for name, size in APP.items():
                 committed, written = decode((ICONS / name).read_bytes()), decode((Path(out) / name).read_bytes())
                 self.assertEqual(committed[0], (size, size), name)

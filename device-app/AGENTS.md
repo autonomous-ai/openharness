@@ -26,9 +26,9 @@ plain TypeScript in `ui/`.
 - `cd src-tauri && cargo tauri build --debug`: the app bundle. A local build is version 0.0.0 and never checks for
   updates: only a build the release stamped with its version updates itself.
 - `cd ui && npm run gallery`: every screen in every state, both themes (`ui/gallery.html`).
-- `python3 scripts/icons.py tray` and `python3 scripts/icons.py app src-tauri/icons/app-1024.png`: the tray PNGs from
-  `harness-mark.svg`, and the Linux PNGs from the design team's 1024 px icon (Harness_AppIcon, dark).
-  `icon.icns` and `icon.ico` are that set's files, copied as is.
+- `python3 scripts/icons.py tray` and `python3 scripts/icons.py app`: the tray PNGs from `harness-mark.svg`, and the
+  Linux PNGs from `app-1024.png`, the design team's 1024 px icon (Harness_AppIcon, dark). `icon.icns` and `icon.ico`
+  are that set's files, copied as is.
 - `cd src-tauri && cargo test --locked --lib -- --ignored scratch_terminal_windows`, on a Mac, run from another
   terminal app than Terminal, with Terminal running and another app in front: the Terminal scripts against two Terminal
   windows the test opens and closes. macOS may first ask to let that terminal app control Terminal.
@@ -45,7 +45,7 @@ plain TypeScript in `ui/`.
   CDN; GitHub-hosted runners only, as it changes `/etc/hosts` and the trust store. PR CI runs all but `macos.sh` and
   `appimage-starts.sh`, which stay by hand
   ([What PR CI does not run](../docs/validation-and-release.md#what-pr-ci-does-not-run)).
-- `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules. How a release is cut:
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules, and the icons'. How a release is cut:
   [RELEASE.md](RELEASE.md). `test_windows_sign.py` runs `windows-sign.ps1` under `pwsh` where it is installed (CI's
   Linux leg); without `pwsh`, and on Windows, those tests skip.
 

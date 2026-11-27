@@ -3,8 +3,8 @@ the same way on any machine.
 
     python3 device-app/scripts/icons.py tray
         tray.png, tray-light.png and tray-dark.png, from harness-mark.svg (the Harness mark, one path).
-    python3 device-app/scripts/icons.py app device-app/src-tauri/icons/app-1024.png
-        icon.png (512 px), 32x32.png, 128x128.png and 128x128@2x.png (256 px), from a 1024x1024 PNG.
+    python3 device-app/scripts/icons.py app
+        icon.png (512 px), 32x32.png, 128x128.png and 128x128@2x.png (256 px), from app-1024.png.
 
 The app icons are the design team's Harness_AppIcon set, dark variant: icon.icns (Harness_macOS_dark.icns) and
 icon.ico (Harness_win_dark.ico) are their files copied as is, and app-1024.png is their Harness_win-linux_dark.png,
@@ -23,11 +23,13 @@ import zlib
 
 ICONS = Path(__file__).resolve().parent.parent / "src-tauri" / "icons"
 MARK = ICONS / "harness-mark.svg"
+APP_SOURCE = ICONS / "app-1024.png"
 PNG = b"\x89PNG\r\n\x1a\n"
 
-# name, width, height, RGB, scale, offset. macOS draws a tray icon 18 points tall and keeps its aspect ratio, so the
-# template is 44x36 (22x18 points): the mark 40 px wide. Windows and Linux draw one at 16 px (32 at 200 %): the mark
-# 32 px wide. Every pixel holds the glyph's colour, even where it is clear, so the files are fully determined.
+# name, width, height, RGB, scale, offset (the mark centred, to the nearest whole pixel). macOS draws a tray icon 18
+# points tall and keeps its aspect ratio, so the template is 44x36 (22x18 points): the mark 40 px wide. Windows and
+# Linux draw one at 16 px (32 at 200 %): the mark 32 px wide. Every pixel holds the glyph's colour, even where it is
+# clear, so the files are fully determined.
 TRAYS = (
     ("tray.png", 44, 36, (0, 0, 0), 0.2, (2, 6)),  # a macOS template: only its alpha counts
     ("tray-light.png", 32, 32, (255, 255, 255), 0.16, (0, 7)),  # for a dark panel: Windows' dark taskbar, Linux
@@ -295,10 +297,10 @@ def main(argv):
     try:
         if argv == ["tray"]:
             write_trays(ICONS)
-        elif len(argv) == 2 and argv[0] == "app":
-            write_app(load_source(argv[1]), ICONS)
+        elif argv == ["app"]:
+            write_app(load_source(APP_SOURCE), ICONS)
         else:
-            sys.exit("usage: icons.py tray | icons.py app <source.png>")
+            sys.exit("usage: icons.py tray | icons.py app")
     except ValueError as error:
         sys.exit(f"icons.py: {error}")
 
