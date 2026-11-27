@@ -11,6 +11,7 @@ import { NativeFiles } from './kit/nativeFiles.js'
 import type { ControlIdentityRule } from './kit/controlIdentity.js'
 import { nativeFileKey } from './kit/nativePaths.js'
 import { nativeUnavailable } from './kit/nativeEvidence.js'
+import { hostPlatform } from './kit/windowsFiles.js'
 import { sessionStoreOf } from './sessionStoreContracts.js'
 import type { AgentEngine } from './types.js'
 
@@ -71,15 +72,56 @@ function futureDirectory(files: NativeFiles, path: string): { path: string; pres
   }
 }
 
+/** A session id that names its transcript (Claude's, grok's, agy's, copilot's): a UUID, checked before any name is
+ * built from one, so the name holds no `/`, `..` or other character. */
+export const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** [path] is named `<sessionId>.jsonl`, as Claude names a session's transcript. NTFS names are case-blind. */
+export function namedForSession(path: string, sessionId: string): boolean {
+  if (!SESSION_UUID.test(sessionId)) return false
+  const name = basename(path), expected = `${sessionId}.jsonl`
+  return hostPlatform() === 'win32' ? name.toLowerCase() === expected.toLowerCase() : name === expected
+}
+
+/** Claude reports its transcript at SessionStart and writes it at the first prompt (and after `/clear`), so a new pane
+ * logged "SessionStart held · IdentityReadUnavailable" until then. The folder's name is Claude's encoding of a cwd, which
+ * no exact match survived (`/tmp` and `/private/tmp`, truncated long names, the shell's cwd after `/clear`), so only the
+ * shape is admitted: `<root>/<folder>/<name>` under a root the core holds, the folder a real one of this user's or not
+ * there yet, the name an absent leaf. Once written, the file is read through every usual check. */
+function unwrittenProjectTranscript(files: NativeFiles, path: string,
+  directories: ReturnType<typeof transcriptRootEvidence>['directories'], verify: (selected?: string) => void) {
+  // Folder and root are read from the spelling, so a `.` or `..` step would name another place than the one walked:
+  // `<root>/./<name>` would pass as a folder under the root while the file sits in the root itself.
+  if (path.split(/[\\/]/).some(step => step === '.' || step === '..')) {
+    return nativeUnavailable('an unwritten transcript has an unresolved path step')
+  }
+  const folder = dirname(path), grand = files.locate(dirname(folder), true)
+  const root = grand && directories.find(directory => nativeFileKey(directory.info) === nativeFileKey(grand.info))
+  if (!root) return { valid: false, files, matchingRoots: [], verify }
+  // The walk to the file already proved a present folder a directory. Its route must be its own: a link there, even
+  // to a sibling folder or to nothing, is refused.
+  const step = join(grand.path, basename(folder)), parent = files.locate(folder, true)
+  if (parent ? parent.path !== step : !files.paths.absentLeaf(step)) return nativeUnavailable('the announced transcript parent is a link')
+  if (parent && typeof process.getuid === 'function' && parent.info.uid !== BigInt(process.getuid())) {
+    return nativeUnavailable('the announced transcript parent has an unconfirmed owner')
+  }
+  if (parent && !files.paths.absentLeaf(join(step, basename(path)))) {
+    return nativeUnavailable('the announced transcript is not a proven absent leaf')
+  }
+  return { valid: true, files, matchingRoots: [root], verify }
+}
+
 /** A caller can supply its explicit synchronous batch proofs and verify them before publication.
- * Only core-derived locators may name directories that the engine has not written yet. */
+ * Only core-derived locators, and Claude's of their shape, may name directories that the engine has not written yet. */
 export function transcriptEvidence(engine: AgentEngine, path: string, profile?: string,
   allowMissing: boolean | 'derived' = false, snapshot?: EngineHomeSnapshot, roots?: ReturnType<typeof transcriptRootEvidence>,
 ) {
   const files = new NativeFiles(), root = transcriptRoot[engine]
   const scope = roots ?? transcriptRootEvidence(engine, profile, snapshot)
+  const verify = (selected = path): void => { files.verify(selected); if (!roots) scope.verify() }
   const location = root ? files.file(path, true) : null
   if (!location && allowMissing === 'derived') {
+    if (sessionStoreOf(engine)?.byId.layout === 'projects') return unwrittenProjectTranscript(files, path, scope.directories, verify)
     if (typeof root !== 'function') return nativeUnavailable('the unwritten transcript has no deterministic root')
     const parent = futureDirectory(files, dirname(path)), declared = futureDirectory(files, root())
     const actual = join(parent.path, basename(path))
@@ -87,9 +129,7 @@ export function transcriptEvidence(engine: AgentEngine, path: string, profile?: 
       return nativeUnavailable('the announced transcript is not a proven absent leaf')
     }
     const member = relative(declared.path, actual)
-    return { valid: !!member && staysInside(member), files,
-      matchingRoots: scope.directories,
-      verify(selected = path): void { files.verify(selected); if (!roots) scope.verify() } }
+    return { valid: !!member && staysInside(member), files, matchingRoots: scope.directories, verify }
   }
   const parent = !location && allowMissing ? files.locate(dirname(path), true) : null
   if (parent && !parent.info.isDirectory()) return nativeUnavailable('the announced transcript parent is not a directory')
@@ -104,10 +144,7 @@ export function transcriptEvidence(engine: AgentEngine, path: string, profile?: 
   const valid = !!actual && matchingRoots.length > 0 && (engine !== 'cursor'
     || (!!basename(actual).replace(/\.jsonl$/, '') && basename(dirname(actual)) === basename(actual).replace(/\.jsonl$/, '')
       && basename(dirname(dirname(actual))) === 'agent-transcripts'))
-  return {
-    valid, files, matchingRoots,
-    verify(selected = path): void { files.verify(selected); if (!roots) scope.verify() },
-  }
+  return { valid, files, matchingRoots, verify }
 }
 
 /** Parent repair requires the complete declared pool, including unreadable or excluded candidates. */
