@@ -201,12 +201,14 @@ export const deviceService = {
    */
   async recordHello(input: {
     deviceId: string
+    cliVersion?: string | null
     firmwareVersion?: string | null
     chip?: string | null
     ssid?: string | null
     rssi?: number | null
   }): Promise<void> {
-    const data: Record<string, unknown> = {}
+    const data: Prisma.DeviceBindingUpdateManyMutationInput = {}
+    if (input.cliVersion) data.cliVersion = input.cliVersion
     if (input.firmwareVersion) data.firmwareVersion = input.firmwareVersion
     if (input.chip) data.chip = input.chip
     if (input.ssid) data.ssid = input.ssid
