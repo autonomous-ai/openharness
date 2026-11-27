@@ -793,7 +793,7 @@ export function startSelfUpdater(opts: {
   // they passed their canary: when the lock was busy (a `harness start` or `harness update`
   // mid-flight), or the canary could not be written, the next tick should try again from there, not
   // from the whole download.
-  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean; ptyProtocol: number; node: string | null } | null = null
+  let verified: (CliBuild & { entry: string; version: string; canaried: boolean; ptyProtocol: number; node: string | null }) | null = null
   // The manifest's build, when it failed in a way it would fail again, and when it may be tried again.
   let refused: { entry: string; tries: number; until: number } | null = null
   // Said once per version: the check repeats every interval.
@@ -868,7 +868,8 @@ export function startSelfUpdater(opts: {
         toldRejected = entry.version
         return
       }
-      const key = `${entry.version} ${entry.cli.sha256} ${entry.notify.sha256}`
+      // The inbox.mjs this platform stages is part of the build: a release that changes only it is downloaded again.
+      const key = `${entry.version} ${entry.cli.sha256} ${entry.notify.sha256} ${inboxOf(entry, platform)?.sha256 ?? '-'}`
       if (refused?.entry === key && now() < refused.until) return
       const refuse = (why: string): void => {
         const tries = refused?.entry === key ? refused.tries + 1 : 1
@@ -880,27 +881,25 @@ export function startSelfUpdater(opts: {
       if (verified?.entry !== key) {
         console.log(`[update] newer build available: ${installed} → ${entry.version}`)
         verified = null
-        let cliBuf: Buffer
-        let notifyBuf: Buffer
+        let build: CliBuild
         try {
-          cliBuf = await downloadVerified(entry.cli, download)
-          notifyBuf = await downloadVerified(entry.notify, download)
+          build = await downloadBuild(entry, platform, download)
         } catch (error) {
           if (!(error instanceof DigestMismatchError)) throw error
           refuse(`does not match its manifest (${errorKind(error)})`)
           return
         }
-        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL, node: null }
+        verified = { ...build, entry: key, version: entry.version, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL, node: null }
       }
       if (halted) return
       if (!verified.canaried) {
         let next = opts.node ? await nodeToMoveTo(opts.node.ensure, entry.version) : null
         if (halted) return
-        let result = await runCanary(verified.cliBuf, opts.dir, entry.version, CANARY_TIMEOUT_MS, next ?? managedNodePath())
+        let result = await runCanary(verified.cliBuf, opts.dir, entry.version, CANARY_TIMEOUT_MS, next ?? managedNodePath(), verified.inboxBuf)
         if (halted) return
         if (next && !result.ok && result.problem !== 'unwritable') {
           // The build or the new Node: asked on the Node the next start runs on without the switch.
-          const without = await runCanary(verified.cliBuf, opts.dir, entry.version)
+          const without = await runCanary(verified.cliBuf, opts.dir, entry.version, CANARY_TIMEOUT_MS, managedNodePath(), verified.inboxBuf)
           if (halted) return
           if (without.ok) {
             console.error(`[update] ${entry.version} does not run on the new Node (${result.ended}) — it goes in on the Node the daemon runs on`)
@@ -949,7 +948,7 @@ export function startSelfUpdater(opts: {
         // read again now, could fail and count as this CLI's protocol. One that went in is the caller's (`withLock`).
         const shortNow = host ? (ready.ptyProtocol > host.protocol ? host.protocol : null) : hostShortOf(ready.ptyProtocol)
         if (shortNow !== null) { waitForHost(ready.version, ready.ptyProtocol, shortNow); return }
-        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform, opts.node?.running ?? null)
+        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform, opts.node?.running ?? null, ready.inboxBuf)
         // Named only now, on the probation the stage began: a rollback puts it back.
         if (ready.node) {
           try { nameNode(ready.node, platform) } catch (error) {
