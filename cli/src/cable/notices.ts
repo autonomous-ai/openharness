@@ -132,6 +132,9 @@ interface Pending {
   silent?: true
   /** Restored, and no row until its agent is listed: a card no list holds (`who`) never waits. */
   unfound?: true
+  /** Asked once, so it rang: sent again (another question of its agent closed, a dial attached), it is held, as the
+   *  person was rung for it and may have answered it already. */
+  asked?: true
 }
 
 /** What an agent shows on the dial: its oldest waiting card, else its other card, and how many cards it holds. */
@@ -236,15 +239,15 @@ export class Notices {
   }
 
   /** Another question of that agent closed, which took the card's place on the dial or held it back: the card shown is
-   *  asked, under its id, unless one is still open. Nothing for an agent with none. A restored, quiet or silent row comes
-   *  back by a drawer replace, as no question frame carries it. */
+   *  asked, under its id, when it never was, unless one is still open. Nothing for an agent with none. One asked
+   *  already, a restored, quiet or silent one, comes back held, by a drawer replace, as no question frame carries it. */
   reask(agentId: string): void {
     if (this.send(agentId)) this.deps.redraw([agentId])
   }
 
-  /** A dial attached: each agent's card shown is sent again, under its id, a live one asked, a restored, quiet or silent
-   *  one held. No redraw: the attach's greeting replaces the drawer after its carousel push, and a close still in an
-   *  agent's order came with its own reask, whose redraw waits behind it. */
+  /** A dial attached: each agent's card shown is sent again, under its id, asked when it never was, else held. No
+   *  redraw: the attach's greeting replaces the drawer after its carousel push, and a close still in an agent's order
+   *  came with its own reask, whose redraw waits behind it. */
   attached(): void {
     for (const agentId of this.faces().keys()) this.send(agentId)
   }
@@ -423,18 +426,19 @@ export class Notices {
     return now.m !== was.m && this.send(agentId, true)
   }
 
-  /** The card that agent shows, with its place, to every dial: a live one asked; a restored, quiet or silent one held, as
-   *  is one whose place alone changed, whose new line the drawer's replace carries with no second ring. Nothing for one
-   *  waiting for its agent or covered by another question of it. Whether one was held. */
+  /** The card that agent shows, with its place, to every dial: a live one asked, once; one asked already, a restored,
+   *  quiet or silent one held, as is one whose place alone changed, whose new line the drawer's replace carries with no
+   *  second ring. Nothing for one waiting for its agent or covered by another question of it. Whether one was held. */
   private send(agentId: string, placeChanged = false): boolean {
     const face = this.faces().get(agentId)
     if (!face || face.card.unfound || this.deps.held(agentId)) return false
     const { card, m } = face
     const questions = noticeQuestions(placed(card.line, m), card.host)
-    if (placeChanged || card.restored || card.quiet || card.silent) {
+    if (placeChanged || card.asked || card.restored || card.quiet || card.silent) {
       this.deps.hold(agentId, card.id, questions)
       return true
     }
+    card.asked = true
     this.deps.ask(agentId, card.id, questions)
     return false
   }
