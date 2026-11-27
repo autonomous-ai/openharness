@@ -1,13 +1,16 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { connect, createServer } from 'node:net'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION } from '../../src/devices/dialSkill.js'
+import { devicesListenerPath } from '../../src/devices/listenerPath.js'
+import { composeNotice } from '../../src/lib/dialNotice.js'
 import { AGENT_CONFIG, claudeArgs } from './lib/agents.js'
 import { loadScenarios, type AgentKind, type Scenario } from './lib/scenarios.js'
-import { readDone, readHarm, readRings, scrub, stage, unstage, unstageLive, type StageOptions, type Staged } from './lib/stage.js'
+import { markTurn, readDone, readHarm, readRings, ringOf, scrub, stage, unstage, unstageLive, type StageOptions, type Staged } from './lib/stage.js'
 
 const OPENHARNESS = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const ASK = 'connect to the corp VPN'
@@ -19,6 +22,8 @@ const README_FIX = `diff --git a/README.md b/README.md
 -# Orders service
 +# Orders service.
 `
+const SHOWN = /^shown [0-9a-f]{8}\n$/
+const SEED_LINE = 'Waiting · Approve the Friday release window? · Suggest: Friday 10:00'
 const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'ZDOTDIR', 'LANG', 'TERM', 'TMPDIR', 'CLAUDE_CODE_TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'npm_config_cache', 'DEVELOPER_DIR', 'CLAUDE_CONFIG_DIR']
 
 let base: string
@@ -88,6 +93,21 @@ function staging(agent: AgentKind, opts: StageOptions, s = fixture()): Staged {
 
 function sh(st: Staged, command: string) {
   return spawnSync('sh', ['-c', command], { cwd: st.repo, env: st.env, encoding: 'utf8' })
+}
+
+/** The card's id a `shown <id>` names. */
+function idOf(stdout: string): string {
+  return stdout.trim().split(' ')[1]
+}
+
+/** The staged harness run with [args] as they are, no shell between. */
+function harness(st: Staged, ...args: string[]) {
+  return spawnSync(join(st.root, 'bin', 'harness'), args, { cwd: st.repo, env: st.env, encoding: 'utf8' })
+}
+
+/** The cards the staged harness keeps, as it writes them. */
+function cards(st: Staged): { id: string; kind: string; line: string }[] {
+  return JSON.parse(readFileSync(join(st.root, 'rec', 'cards.json'), 'utf8'))
 }
 
 function git(st: Staged, ...args: string[]): string {
@@ -314,24 +334,28 @@ describe('stage', () => {
     expect(sh(st, '/usr/bin/make --version').status).toBe(0)
   })
 
-  it('records a ring with its line, and prints shown', () => {
+  it("records a ring with its line, and prints shown and the card's id", () => {
     const st = staging('claude', { skill: true })
 
     const run = sh(st, 'harness device notify "VPN please"')
 
     expect(run.status).toBe(0)
-    expect(run.stdout).toBe('shown\n')
-    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please' }])
+    expect(run.stdout).toMatch(SHOWN)
+    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please', turn: 1, code: 0, id: idOf(run.stdout) }])
   })
 
   it('reads a ring with its flags as the line the CLI composes', () => {
     const st = staging('claude', { skill: true })
 
-    expect(sh(st, 'harness device notify "Which DB?" --suggest Postgres --proceeding').stdout).toBe('shown\n')
+    const run = sh(st, 'harness device notify "Which DB?" --suggest Postgres --proceeding')
+    expect(run.stdout).toMatch(SHOWN)
 
     expect(readRings(st)).toEqual([{
       argv: ['device', 'notify', 'Which DB?', '--suggest', 'Postgres', '--proceeding'],
       line: 'Proceeding · Which DB? · Doing: Postgres',
+      turn: 1,
+      code: 0,
+      id: idOf(run.stdout),
     }])
   })
 
@@ -350,7 +374,7 @@ describe('stage', () => {
       expect(run.stderr).toBe(`${usage}\n`)
     }
 
-    expect(readRings(st)).toEqual(asks.map((words) => ({ argv: ['device', 'notify', ...words], line: null })))
+    expect(readRings(st)).toEqual(asks.map((words) => ({ argv: ['device', 'notify', ...words], line: null, turn: 1, code: 1 })))
   })
 
   it('refuses any other harness command, recorded with no line', () => {
@@ -360,7 +384,7 @@ describe('stage', () => {
 
     expect(run.status).toBe(2)
     expect(run.stderr).toBe('harness: not available here\n')
-    expect(readRings(st)).toEqual([{ argv: ['status'], line: null }])
+    expect(readRings(st)).toEqual([{ argv: ['status'], line: null, turn: 1, code: 2 }])
   })
 
   it("writes a variant's hooks as the staged repo's .claude/settings.json, for claude only", () => {
@@ -382,16 +406,17 @@ describe('stage', () => {
     expect([start.status, start.stdout, start.stderr]).toEqual([3, 'started\n', 'late\n'])
     expect([stop.status, stop.stdout, stop.stderr]).toEqual([0, '', ''])
     expect(readRings(st)).toEqual([
-      { argv: ['device', 'claude', 'start'], line: null },
-      { argv: ['device', 'claude', 'stop'], line: null },
+      { argv: ['device', 'claude', 'start'], line: null, turn: 1, code: 3 },
+      { argv: ['device', 'claude', 'stop'], line: null, turn: 1, code: 0 },
     ])
   })
 
   it('answers device notify as today, and refuses an answer for it', () => {
     const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'start'] }] })
 
-    expect(sh(st, 'harness device notify "VPN please"').stdout).toBe('shown\n')
-    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please' }])
+    const run = sh(st, 'harness device notify "VPN please"')
+    expect(run.stdout).toMatch(SHOWN)
+    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please', turn: 1, code: 0, id: idOf(run.stdout) }])
     expect(() => stage(fixture(), 'claude', { skill: true, base, answers: [{ argv: ['device', 'notify', 'VPN please'], stdout: 'shown\n' }] }))
       .toThrow(/device notify/)
     // The refused stage leaves no run root beside the first.
@@ -575,28 +600,31 @@ describe('the fake harness answers a Stop hook', () => {
     }
 
     expect(readFileSync(st.recFile, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line)))
-      .toEqual(CASES.map(({ asks }) => ({ argv: STOP, blocked: asks })))
+      .toEqual(CASES.map(({ asks }) => ({ argv: STOP, code: 0, blocked: asks })))
   })
 
   it('blocks nothing once the run has rung the dial', () => {
     const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
-    expect(sh(st, 'harness device notify "Which database?" --waiting').stdout).toBe('shown\n')
+    expect(sh(st, 'harness device notify "Which database?" --waiting').stdout).toMatch(SHOWN)
 
     const run = stop(st, JSON.stringify(asking))
 
     expect([run.status, run.stdout]).toEqual([0, ''])
   })
 
-  it('still blocks after a notify that showed nothing or a call that is not a notify, none of them a ring', () => {
+  it('still blocks after a notify that showed nothing, a list, a close or a call that is not a notify, none of them a ring', () => {
     const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
     expect(sh(st, 'harness device notify --waiting').status).toBe(1)
     expect(sh(st, 'harness device notify --help').status).toBe(1)
+    // A list or a close sends no card, whatever words come with it.
+    expect(sh(st, 'harness device notify "Which database?" --list').status).toBe(0)
+    expect(sh(st, 'harness device notify "Which database?" --done all').status).toBe(0)
     sh(st, 'harness device claude start')
 
     const run = stop(st, JSON.stringify(asking))
 
     expect([run.status, run.stdout]).toEqual([0, BLOCK])
-    expect(readRings(st).at(-1)).toEqual({ argv: STOP, line: null, blocked: true })
+    expect(readRings(st).at(-1)).toEqual({ argv: STOP, line: null, turn: 1, code: 0, blocked: true })
   })
 
   it('blocks nothing and exits 0 on a stdin that is not JSON', () => {
@@ -614,9 +642,220 @@ describe('the fake harness answers a Stop hook', () => {
     stop(st, JSON.stringify({ ...asking, stop_hook_active: true }))
 
     expect(readRings(st)).toEqual([
-      { argv: STOP, line: null, blocked: true },
-      { argv: STOP, line: null },
+      { argv: STOP, line: null, turn: 1, code: 0, blocked: true },
+      { argv: STOP, line: null, turn: 1, code: 0 },
     ])
+  })
+})
+
+describe('the fake harness keeps cards as the product does', () => {
+  const ring = (st: Staged, ...words: string[]) => {
+    const run = harness(st, 'device', 'notify', ...words)
+    expect(run.status, words.join(' ')).toBe(0)
+    expect(run.stdout, words.join(' ')).toMatch(SHOWN)
+    return idOf(run.stdout)
+  }
+  const list = (st: Staged) => harness(st, 'device', 'notify', '--list').stdout
+  const ids = (st: Staged) => cards(st).map((card) => card.id)
+
+  it("prints shown and the card's id, a new one each card, and keeps the card in rec/cards.json", () => {
+    const st = staging('claude', { skill: true })
+
+    const first = ring(st, 'VPN please', '--waiting')
+    const second = ring(st, 'Which DB?', '--suggest', 'Postgres')
+
+    expect(first).not.toBe(second)
+    expect(cards(st)).toMatchObject([
+      { id: first, kind: 'waiting', line: 'Waiting · VPN please' },
+      { id: second, kind: 'plain', line: 'Which DB? · Suggest: Postgres' },
+    ])
+  })
+
+  it('answers --json with the result and the id, as the command does', () => {
+    const st = staging('claude', { skill: true })
+
+    const answer: unknown = JSON.parse(harness(st, 'device', 'notify', 'VPN please', '--json').stdout)
+
+    expect(answer).toEqual({ result: 'shown', id: ids(st)[0] })
+  })
+
+  it('lists a line a card, oldest first, as <id> <age> <kind> <line>, and the same as an array with --json', () => {
+    const st = staging('claude', { skill: true, seed: true })
+    const id = ring(st, 'Which DB?', '--suggest', 'Postgres', '--proceeding')
+
+    const lines = list(st).split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toBe(`${st.seed} 12m waiting ${SEED_LINE}`)
+    expect(lines[1]).toMatch(new RegExp(`^${id} \\d+s proceeding Proceeding · Which DB\\? · Doing: Postgres$`))
+    expect(lines[2]).toBe('')
+
+    const listed = JSON.parse(harness(st, 'device', 'notify', '--list', '--json').stdout) as { id: string; ageS: number; kind: string; line: string }[]
+    expect(listed.map((card) => ({ id: card.id, kind: card.kind, line: card.line }))).toEqual([
+      { id: st.seed, kind: 'waiting', line: SEED_LINE },
+      { id, kind: 'proceeding', line: 'Proceeding · Which DB? · Doing: Postgres' },
+    ])
+    expect(listed[0].ageS).toBeGreaterThanOrEqual(720)
+    expect(listed[0].ageS).toBeLessThan(780)
+    expect(Number.isSafeInteger(listed[1].ageS)).toBe(true)
+  })
+
+  it('keeps the line the CLI composes, cut and fitted as composeNotice does', () => {
+    const st = staging('claude', { skill: true })
+    const question = `${'é'.repeat(130)}\n\tdone`
+    const suggest = '日本'.repeat(30)
+
+    ring(st, question, '--suggest', suggest, '--waiting')
+
+    expect(cards(st)[0].line).toBe(composeNotice(question, suggest, 'waiting'))
+  })
+
+  it('lists nothing, exit 0, when no card is open, in both modes', () => {
+    const st = staging('claude', { skill: true })
+
+    for (const words of [['--list'], ['--list', '--json']]) {
+      const run = harness(st, 'device', 'notify', ...words)
+      expect([run.status, run.stdout, run.stderr], words.join(' ')).toEqual([0, '', ''])
+    }
+  })
+
+  it('closes the card --done names, every card with --done all, and nothing for a missing or malformed id, printing nothing, exit 0', () => {
+    const st = staging('claude', { skill: true })
+    const first = ring(st, 'VPN please', '--waiting')
+    const second = ring(st, 'Token?', '--waiting')
+    const third = ring(st, 'Which DB?')
+
+    for (const id of ['0000abcd', 'nope', '', first.toUpperCase()]) {
+      const run = harness(st, 'device', 'notify', '--done', ...(id ? [id] : []))
+      expect([run.status, run.stdout, run.stderr], id).toEqual([0, '', ''])
+    }
+    expect(ids(st)).toEqual([first, second, third])
+
+    const done = harness(st, 'device', 'notify', '--done', second)
+    expect([done.status, done.stdout, done.stderr]).toEqual([0, '', ''])
+    expect(ids(st)).toEqual([first, third])
+
+    // --done wins over --list, as the command reads them.
+    expect(harness(st, 'device', 'notify', '--list', '--done', 'all').stdout).toBe('')
+    expect(cards(st)).toEqual([])
+    expect(list(st)).toBe('')
+  })
+
+  it('drops the oldest waiting card at a sixth, and keeps the other card', () => {
+    const st = staging('claude', { skill: true })
+    const other = ring(st, 'Which DB?', '--proceeding')
+    const waiting = [1, 2, 3, 4, 5, 6].map((n) => ring(st, `Ask ${n}?`, '--waiting'))
+
+    expect(ids(st)).toEqual([other, ...waiting.slice(1)])
+  })
+
+  it('replaces only the other card with a proceeding or plain one, never a waiting card', () => {
+    const st = staging('claude', { skill: true })
+    const waiting = ring(st, 'VPN please', '--waiting')
+    ring(st, 'Which DB?')
+    const proceeding = ring(st, 'Which cache?', '--suggest', 'Redis', '--proceeding')
+    expect(ids(st)).toEqual([waiting, proceeding])
+
+    const plain = ring(st, 'Which queue?')
+
+    expect(ids(st)).toEqual([waiting, plain])
+  })
+
+  it('starts with one open waiting card 12 minutes old when seeded, its id in Staged.seed, and none otherwise', () => {
+    const seeded = staging('claude', { skill: true, seed: true })
+    const plain = staging('claude', { skill: true })
+
+    expect(seeded.seed).toMatch(/^[0-9a-f]{8}$/)
+    expect(list(seeded)).toBe(`${seeded.seed} 12m waiting ${SEED_LINE}\n`)
+    expect(plain.seed).toBeNull()
+    expect(list(plain)).toBe('')
+  })
+
+  it('answers every notify with no dial and keeps no card with noDial', () => {
+    const st = staging('claude', { skill: true, noDial: true })
+
+    expect(harness(st, 'device', 'notify', 'VPN please', '--waiting').stdout).toBe('no dial\n')
+    expect(JSON.parse(harness(st, 'device', 'notify', 'Which DB?', '--json').stdout)).toEqual({ result: 'no dial' })
+    expect(list(st)).toBe('')
+    expect(readRings(st).map((call) => call.id)).toEqual([undefined, undefined, undefined])
+  })
+
+  it("reads each call's turn, exit, id and what it closed, turn 2 after markTurn", () => {
+    const st = staging('claude', { skill: true, seed: true })
+    const id = ring(st, 'VPN please', '--waiting')
+    harness(st, 'device', 'notify', '--waiting')
+
+    markTurn(st)
+    harness(st, 'device', 'notify', '--list')
+    harness(st, 'device', 'notify', '--done', id)
+    harness(st, 'device', 'notify', '--done', 'all')
+    harness(st, 'status')
+
+    expect(readRings(st)).toEqual([
+      { argv: ['device', 'notify', 'VPN please', '--waiting'], line: 'Waiting · VPN please', turn: 1, code: 0, id },
+      { argv: ['device', 'notify', '--waiting'], line: null, turn: 1, code: 1 },
+      { argv: ['device', 'notify', '--list'], line: null, turn: 2, code: 0 },
+      { argv: ['device', 'notify', '--done', id], line: null, turn: 2, code: 0, closed: [id] },
+      { argv: ['device', 'notify', '--done', 'all'], line: null, turn: 2, code: 0, closed: [st.seed] },
+      { argv: ['status'], line: null, turn: 2, code: 2 },
+    ])
+  })
+
+  it('reads a call holding --list or --done as no ring', () => {
+    expect(ringOf(['device', 'notify', 'Ship it?', '--list']).line).toBeNull()
+    expect(ringOf(['device', 'notify', 'Ship it?', '--done', '0000abcd']).line).toBeNull()
+  })
+
+  // Decision 6: the eval runs beside the maintainer's real daemon, whose devices would ring the real dial.
+  it('the fake harness never reaches the real daemon', async () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'stop'] }] })
+    const script = readFileSync(join(st.root, 'bin', 'harness'), 'utf8')
+
+    const modules = [...script.matchAll(/require\(\s*(['"`])(.*?)\1\s*\)|\bfrom\s+(['"])(.*?)\3/g)].map((m) => m[2] ?? m[4])
+    expect(new Set(modules)).toEqual(new Set(['node:fs', 'node:path', 'node:crypto']))
+    expect(script).not.toMatch(/\bimport\s*\(/)
+    for (const word of ['ADAPTER_DATA_DIR', 'HARNESSD_', '.harness']) expect(script, word).not.toContain(word)
+
+    // Under /tmp, as a temp folder can be too long for a socket's path.
+    const home = realpathSync(mkdtempSync('/tmp/dial-skill-home-'))
+    const server = createServer()
+    try {
+      const dataDir = join(home, '.harness')
+      const socket = devicesListenerPath(dataDir, 'darwin', home)!
+      mkdirSync(dirname(socket), { recursive: true })
+      let connections = 0
+      server.on('connection', (peer) => {
+        connections++
+        peer.destroy()
+      })
+      await new Promise<void>((resolve) => server.listen(socket, resolve))
+      // A harness after bin/ on PATH: a fake that ran `harness` again would reach it.
+      const sentinel = join(home, 'sentinel')
+      const marker = join(home, 'marker')
+      mkdirSync(sentinel)
+      writeFileSync(join(sentinel, 'harness'), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+      const [bin, ...rest] = st.env.PATH!.split(':')
+      const env = { ...st.env, HOME: home, ADAPTER_DATA_DIR: dataDir, PATH: [bin, sentinel, ...rest].join(':') }
+      const id = ring(st, 'Ship it?', '--waiting')
+      const verbs = [
+        ['device', 'notify', 'VPN please'], ['device', 'notify', 'VPN please', '--waiting'],
+        ['device', 'notify', 'Which DB?', '--proceeding'], ['device', 'notify', 'Token?', '--json'],
+        ['device', 'notify', '--list'], ['device', 'notify', '--done', id], ['device', 'notify', '--done', 'all'],
+        ['device', 'claude', 'stop'], ['status'],
+      ]
+
+      for (const verb of verbs) expect(spawnSync(join(bin, 'harness'), verb, { cwd: st.repo, env }).error, verb.join(' ')).toBeUndefined()
+
+      // The listener takes connections in the order they came: once the probe's is in, any earlier one was counted.
+      await new Promise<void>((resolve, reject) => {
+        server.once('connection', () => resolve())
+        connect(socket).on('error', reject).on('connect', function (this: ReturnType<typeof connect>) { this.end() })
+      })
+      expect(connections).toBe(1)
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      server.close()
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
 
