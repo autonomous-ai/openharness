@@ -102,6 +102,17 @@ const CODEX_STOP_INPUT = JSON.stringify({
   stop_hook_active: false,
   last_assistant_message: 'Should I push the branch?',
 })
+// Each PowerShell form, by the launcher call it makes. Codex's PreToolUse runs its PermissionRequest command.
+const WINDOWS_FORMS = [
+  { name: 'Claude Code PermissionRequest', command: () => permissionHook().command, call: 'device claude asked' },
+  { name: 'Claude Code SessionStart', command: () => startHook().command, call: 'device claude start' },
+  { name: 'Claude Code Stop', command: () => stopHook().command, call: 'device claude stop' },
+  { name: 'Codex PermissionRequest', command: () => codexHook().command, call: 'device codex asked' },
+  { name: 'Codex SessionStart', command: () => codexStartHook().command, call: 'device codex start' },
+  { name: 'Codex Stop', command: () => codexStopHook().command, call: 'device codex stop' },
+]
+// 1 MiB: past a pipe's buffer on any platform (a Linux socket pair's holds about 208 KB).
+const LONG_INPUT = JSON.stringify({ ...JSON.parse(STOP_INPUT), last_assistant_message: `${'x'.repeat(1 << 20)}?` })
 
 const tmpDirs: string[] = []
 // Every child has exited when spawnSync returns, but Windows still holds a just-run copy of node.exe for a moment (its
@@ -157,12 +168,12 @@ function runStopHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 /**
- * Runs [hook] as an engine does: [input] written to its stdin without waiting for the hook to read it, so a hook that
- * leaves it unread fails the write. spawnSync's write of a long input to a reader that starts late can stall on macOS
- * (Node 24), so this one is the engine's own, asynchronous kind.
+ * Runs [file] with [args] as an engine runs a hook: [input] written to its stdin without waiting for the hook to read
+ * it, so a hook that leaves it unread fails the write. spawnSync's write of a long input to a reader that starts late
+ * can stall on macOS (Node 24), so this one is the engine's own, asynchronous kind.
  */
-async function runAsEngine(hook: string, input: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(hook, [], { env })
+async function runAsEngine(file: string, args: string[], input: string, options: { env: NodeJS.ProcessEnv; cwd?: string }) {
+  const child = spawn(file, args, options)
   let stdout = ''
   let stderr = ''
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
@@ -471,15 +482,11 @@ describe('the harness-device plugin', () => {
     expect(readFileSync(STOP, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
   })
 
-  // The native command inherits the hook's stdin as Claude Code wrote it; PowerShell reading or re-piping it would
-  // re-encode the person's text.
-  it('the Stop Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device claude stop once with its stdin untouched, writes only the block, and exits 0', () => {
+  it('the Stop Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device claude stop once, writes only the block, and exits 0', () => {
     const windows = windowsForm(stopHook().command)
     expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
     expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
     expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
-    expect(windows).not.toContain('[Console]::In')
-    expect(windows).not.toMatch(/\|\s*&\s*\$h/)
     const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
     const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
     expect(profile).toBeGreaterThan(-1)
@@ -707,15 +714,11 @@ describe('the harness-device plugin', () => {
     expect(readFileSync(CODEX_STOP, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
   })
 
-  // The native command inherits the hook's stdin as Codex wrote it; PowerShell reading or re-piping it would re-encode
-  // the person's text.
-  it('the Codex Stop Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device codex stop once with its stdin untouched, writes only the block, and exits 0', () => {
+  it('the Codex Stop Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device codex stop once, writes only the block, and exits 0', () => {
     const windows = windowsForm(codexStopHook().command)
     expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
     expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
     expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
-    expect(windows).not.toContain('[Console]::In')
-    expect(windows).not.toMatch(/\|\s*&\s*\$h/)
     const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
     const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
     expect(profile).toBeGreaterThan(-1)
@@ -727,12 +730,25 @@ describe('the harness-device plugin', () => {
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
   })
 
+  // The native command inherits the hook's stdin as the engine wrote it; PowerShell reading or re-piping it before the
+  // launcher would re-encode the person's text. What the launcher leaves, or all of it with none, is read after, as
+  // hooks/stop does (below). Only the mod's early exit reads before: it runs no launcher.
+  it.each(WINDOWS_FORMS)('the $name Windows form reads its input to its end after the launcher, never before it or into it', ({ command, call }) => {
+    const windows = windowsForm(command())
+    const launched = windows.indexOf(call)
+    expect(launched).toBeGreaterThan(-1)
+    const before = windows.slice(0, launched).replace('if ($env:HARNESS_DEVICE_MOD_ASKS) { $null = [Console]::In.ReadToEnd(); exit 0 };', '')
+    expect(before).not.toContain('[Console]::In')
+    expect(windows).not.toMatch(/\$input\b/i)
+    expect(windows).not.toMatch(/\|\s*&\s*\$h/)
+    expect(windows.slice(launched).match(/\[Console\]::In/g)).toHaveLength(1)
+    expect(windows.trimEnd().endsWith('}; $null = [Console]::In.ReadToEnd(); exit 0')).toBe(true)
+  })
+
   // A launcher that stops reading early (an older CLI printing its usage, or one past its bound) leaves the rest of the
   // input in the pipe, as no launcher does: unread, the engine's write of one longer than the pipe holds fails, and the
   // hook with it, its output dropped.
-  // 1 MiB: past a pipe's buffer on any platform (a Linux socket pair's holds about 208 KB).
   posix.each(['asked', 'start', 'stop', 'codex-asked', 'codex-start', 'codex-stop'])('hooks/%s reads a long input to its end, after a launcher that reads none of it and with none', async (name) => {
-    const input = JSON.stringify({ ...JSON.parse(STOP_INPUT), last_assistant_message: `${'x'.repeat(1 << 20)}?` })
     for (const launcher of ['#!/bin/sh\necho "usage: harness device" >&2\nexit 1\n', null]) {
       const home = tempDir()
       if (launcher) {
@@ -740,7 +756,7 @@ describe('the harness-device plugin', () => {
         writeFileSync(join(home, '.local', 'bin', 'harness'), launcher)
         chmodSync(join(home, '.local', 'bin', 'harness'), 0o755)
       }
-      const result = await runAsEngine(join(pluginRoot, 'hooks', name), input, { HOME: home, PATH: '/usr/bin:/bin' })
+      const result = await runAsEngine(join(pluginRoot, 'hooks', name), [], LONG_INPUT, { env: { HOME: home, PATH: '/usr/bin:/bin' } })
       expect(result, launcher ?? 'no launcher').toStrictEqual({ writeError: null, status: 0, stdout: '', stderr: '' })
     }
   })
@@ -1003,4 +1019,21 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     const median = (sorted[4] + sorted[5]) / 2
     console.log(`[measure] stop report · Codex PowerShell · median ${Math.round(median)} · max ${Math.round(sorted[9])} · past 6 s ${times.filter((ms) => ms > 6_000).length}`)
   }, 180_000)
+
+  // As hooks/stop off Windows: a launcher that reads none of a long input (an older CLI printing its usage), or none,
+  // must not fail the engine's write. Each engine's PowerShell runs the form as above.
+  it.each(WINDOWS_FORMS)('PowerShell: the $name form reads a long input to its end, after a launcher that reads none of it and with none', async ({ command, call }) => {
+    const args = call.startsWith('device claude')
+      ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command().replaceAll('${CLAUDE_PLUGIN_ROOT}', '${env:CLAUDE_PLUGIN_ROOT}') + SUFFIX]
+      : ['-NoProfile', '-Command', command()]
+    for (const launcher of [true, false]) {
+      const { profile, cwd, env } = place()
+      if (launcher) {
+        standIn(profile, cwd, 1)
+        writeFileSync(join(cwd, 'device.js'), "process.stderr.write('usage: harness device')\nprocess.exitCode = 1\n")
+      }
+      const result = await runAsEngine(powershell, args, LONG_INPUT, { cwd, env: { ...env, CLAUDE_PLUGIN_ROOT: pluginRoot, PLUGIN_ROOT: pluginRoot } })
+      expect(result, launcher ? 'a launcher that reads none' : 'no launcher').toStrictEqual({ writeError: null, status: 0, stdout: '', stderr: '' })
+    }
+  }, 60_000)
 })
