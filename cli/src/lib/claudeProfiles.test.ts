@@ -140,6 +140,21 @@ describe('claudeProfiles', () => {
       '[state] claude-profiles.json could not be read (not valid JSON); kept as claude-profiles.json.unreadable, starting empty.')
   })
 
+  it('throws the error that stopped the list\'s write, not the one of its temporary\'s removal', async () => {
+    const { linkClaudeProfile } = await loadModule()
+    // The module as the one just loaded imports it ('fs' and 'node:fs' are one module here).
+    const fs = await import('node:fs')
+    const folder = join(home, 'custom')
+    mkdirSync(folder)
+    const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw denied })
+    // What Windows answers to the removal of a file another program still holds.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+    expect(() => linkClaudeProfile(folder, machineId)).toThrow(denied)
+  })
+
   it('a profile list that cannot be read for a moment is not written over', async () => {
     const { linkClaudeProfile } = await loadModule()
     const file = join(dataDir, 'claude-profiles.json')

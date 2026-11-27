@@ -249,4 +249,22 @@ describe('the list of saved APIs without their keys', () => {
     expect(store.list()).toEqual([saved])
     expect(list()).toEqual({ version: 1, connections: [saved] })
   })
+
+  it('says the error that stopped the list\'s write, not the one of its temporary\'s removal', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { renameSync } = vi.mocked(fs)
+    const actual = renameSync.getMockImplementation()!
+    renameSync.mockImplementation((from, to) => {
+      if (String(to).endsWith('list.json')) throw Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+      actual(from, to)
+    })
+    // What Windows answers to the removal of a file another program still holds.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+    try {
+      store.save(custom)
+    } finally { renameSync.mockImplementation(actual) }
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/The list of saved APIs.* · EACCES$/))
+  })
 })

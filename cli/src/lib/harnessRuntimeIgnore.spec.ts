@@ -1,13 +1,26 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import * as fs from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
+
+// A copy of the module, so a test can make a removal fail.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const roots: string[] = []
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'runtime-ignore-')); roots.push(root); return root }
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+/** What Windows answers to the removal of a file another program still holds. */
+const holdRemovals = () => {
+  const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+  vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+  vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+}
 /** A workspace with Harness's folder made, as a launch makes it before writing the ignore file. */
 const workspace = () => { const root = fixture(); mkdirSync(join(root, '.harness')); return root }
 
@@ -62,5 +75,21 @@ describe('the Harness folder\'s ignore file', () => {
     symlinkSync(target, join(root, '.harness', '.gitignore'))
     expect(() => ignoreHarnessRuntime(root)).toThrow(/symlink|plain/i)
     expect(readFileSync(target, 'utf8')).toBe('Keep these rules')
+  })
+
+  it('throws the error that stopped the write, not the one of its temporary\'s removal', () => {
+    const root = workspace()
+    const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw denied })
+    holdRemovals()
+    expect(() => ignoreHarnessRuntime(root)).toThrow(denied)
+  })
+
+  it('writes the rules when a removal would throw', () => {
+    const root = workspace()
+    holdRemovals()
+    ignoreHarnessRuntime(root)
+    expect(readFileSync(join(root, '.harness', '.gitignore'), 'utf8')).toBe('runtime/\nlegacy-AGENTS.md\n/.gitignore\n')
+    expect(readdirSync(join(root, '.harness'))).toEqual(['.gitignore'])
   })
 })

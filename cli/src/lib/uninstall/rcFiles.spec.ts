@@ -1,3 +1,4 @@
+import * as fs from 'node:fs'
 import { chmodSync, existsSync, lstatSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -92,7 +93,10 @@ describe('install.sh', () => {
 
 describe('removeHarnessPathLines', () => {
   const dirs: string[] = []
-  afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
 
   it('names the files that hold the installer\'s pair, and changes none of them', () => {
     const home = mkdtempSync(join(tmpdir(), 'rc-files-'))
@@ -176,6 +180,20 @@ describe('removeHarnessPathLines', () => {
     expect(outcomes[1]).toMatchObject({ file: join(h, '.bashrc'), removed: 1 })
     expect(readFileSync(join(h, '.zshrc'), 'utf8')).toBe(installed('a\n'))
     expect(readdirSync(h).filter((n) => n.includes('harness-uninstall'))).toEqual([])
+  })
+
+  it('reports the error that stopped a file\'s edit, not the one of its temporary\'s removal, and still handles the next file', () => {
+    const h = home()
+    writeFileSync(join(h, '.zshrc'), installed('a\n'))
+    writeFileSync(join(h, '.bashrc'), installed('b\n'))
+    fsState.failRename = true
+    // What Windows answers to the removal of a file another program still holds.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+    const outcomes = removeHarnessPathLines(h)
+    expect(outcomes[0]).toMatchObject({ file: join(h, '.zshrc'), removed: 0, failed: 'rename refused' })
+    expect(outcomes[1]).toMatchObject({ file: join(h, '.bashrc'), removed: 1 })
   })
 
   // POSIX-only: asserts file modes, which Windows does not keep.

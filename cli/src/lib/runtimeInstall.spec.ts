@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os'
 import { systemRoot } from './windows/powershell.js'
 
 /** A write of exactly `text` reaches the disk half way, then the disk is full. `events`: each flush (of a file or a
- *  folder) and each rename's target, as they happened. */
-const tear = vi.hoisted(() => ({ text: undefined as string | undefined, events: [] as string[] }))
+ *  folder) and each rename's target, as they happened. `heldStaging`: a staging folder's removal throws EBUSY, as Windows
+ *  answers for a file in it another program still holds. */
+const tear = vi.hoisted(() => ({ text: undefined as string | undefined, events: [] as string[], heldStaging: false }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
@@ -21,6 +22,10 @@ vi.mock('node:fs', async (original) => {
       throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { tear.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      if (tear.heldStaging && String(args[0]).includes('-staging-')) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+      return actual.rmSync(...args)
+    },
     fsyncSync: (fd: number) => { tear.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
   }
 })
@@ -112,6 +117,7 @@ describe('ensureManagedRuntime', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    tear.heldStaging = false
     rmSync(root, { recursive: true, force: true })
     for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
       delete process.env[key]
@@ -189,6 +195,27 @@ describe('ensureManagedRuntime', () => {
     expect(await ensureManagedRuntime()).toBeNull()
     expect(existsSync(join(runtimeDir, 'current-node'))).toBe(false)
     expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
+  })
+
+  it('takes a runtime it laid down when its staging cannot be removed', async () => {
+    const key = currentPlatformKey()
+    const { bytes, root: archiveRoot } = buildArchive('v22.23.6', key)
+    stubFetch(manifestFor('node', key, 'v22.23.6', bytes, archiveRoot), bytes)
+    const { ensureManagedRuntime } = await load()
+    tear.heldStaging = true
+
+    expect(await ensureManagedRuntime()).toBe(join(runtimeDir, `node-v22.23.6-${key}`, 'bin', 'node'))
+  })
+
+  it('keeps what it has when the archive does not unpack and its staging cannot be removed', async () => {
+    const key = currentPlatformKey()
+    const bytes = Buffer.from('not a gzipped tarball')
+    stubFetch(manifestFor('node', key, 'v22.23.7', bytes, `node-v22.23.7-${key}`), bytes)
+    const { ensureManagedRuntime } = await load()
+    tear.heldStaging = true
+
+    expect(await ensureManagedRuntime()).toBeNull()
+    expect(existsSync(join(runtimeDir, 'current-node'))).toBe(false)
   })
 
   it('downloads a runtime with no deadline, only a silence of five minutes: a slow link must be able to finish it', async () => {
