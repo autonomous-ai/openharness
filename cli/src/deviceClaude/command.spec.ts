@@ -17,6 +17,7 @@ import { parse as parseToml } from 'smol-toml'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readOrcaConnected, readPluginHomes, readRemoved, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
+import { askDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { createDevicesProof, DEVICES_TOKEN_FILE, devicesPipe, devicesRecordPath, writeDevicesRecord } from '../devices/listenerPipe.js'
 import { writeDaemonRecord } from '../lib/daemonRecord.js'
@@ -28,12 +29,19 @@ import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import { startOutput } from './start.js'
-import { stopOutput } from './stop.js'
+import { NUDGE_ANSWER_MS, stopOutput } from './stop.js'
 import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { carriedCodexHash, installedRoot } from '../devices/codexPlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { orcaPluginRun, type OrcaPluginFiles, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
+
+// The real askDevices, watched: a stop's ask is bounded by what it hands askDevices, which a test with no listener
+// cannot see otherwise.
+vi.mock(import('../devices/listenerClient.js'), async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, askDevices: vi.fn(actual.askDevices) }
+})
 
 // @ts-expect-error — plain ESM with no declaration file
 const { readOrcaPluginBundle } = await import('../../scripts/lib/orcaPluginBundle.mjs') as {
@@ -644,6 +652,19 @@ describe('harness device claude stop', () => {
     expect(await device(['claude', 'stop'], { stdin: chunks(JSON.stringify(STOP_INPUT)), env: TUI, ask, claude: noClaude }))
       .toEqual({ code: 0, out: [stopOutput()], err: [] })
     expect(ask.mock.calls).toStrictEqual([[{ type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true }]])
+  })
+
+  // The turn's end waits on this answer: the devices get NUDGE_ANSWER_MS, not askDevices' own 2 s.
+  it('claude stop asks the devices\' listener of its data folder within NUDGE_ANSWER_MS', async () => {
+    skillIn(claudeHome)
+    const dataDir = folder()
+    const asked = vi.mocked(askDevices)
+    asked.mockClear()
+    asked.mockResolvedValueOnce({ nudge: true })
+    expect(await device(['claude', 'stop'], { dataDir, stdin: chunks(JSON.stringify(STOP_INPUT)), env: TUI, claude: noClaude }))
+      .toEqual({ code: 0, out: [stopOutput()], err: [] })
+    expect(asked.mock.calls)
+      .toStrictEqual([[dataDir, { type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true }, { timeoutMs: NUDGE_ANSWER_MS }]])
   })
 
   it.each<[string, (dataDir: string) => { env?: NodeJS.ProcessEnv; answer?: Record<string, unknown> } | void, number]>([
