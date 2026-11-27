@@ -589,7 +589,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
@@ -794,13 +794,8 @@ mod tests {
 
         /// No call starts for ten ticks: there are still `n`.
         fn still(&self, n: usize) {
-            self.still_for(n, EVERY * 10);
-        }
-
-        /// No call starts for `wait`: there are still `n`.
-        fn still_for(&self, n: usize, wait: Duration) {
             let calls = self.calls.lock().unwrap();
-            let (calls, _) = self.called.wait_timeout_while(calls, wait, |calls| calls.len() == n).unwrap();
+            let (calls, _) = self.called.wait_timeout_while(calls, EVERY * 10, |calls| calls.len() == n).unwrap();
             assert_eq!(calls.len(), n, "{calls:?}");
         }
 
@@ -912,11 +907,29 @@ mod tests {
         std::os::unix::fs::symlink(fake_harness(), bin.join("harness")).unwrap();
     }
 
+    /// The runner's clock in a test: it stands still until the test moves it, so no load on the machine ages a
+    /// typing or a select, and a test that needs one aged moves it past the bound at once.
+    struct Hands {
+        start: Instant,
+        moved: Mutex<Duration>,
+    }
+
+    impl Hands {
+        fn now(&self) -> Instant {
+            self.start + *self.moved.lock().unwrap()
+        }
+
+        fn advance(&self, by: Duration) {
+            *self.moved.lock().unwrap() += by;
+        }
+    }
+
     struct World {
         fake: Fake,
         home: tempfile::TempDir,
         doubles: Arc<Doubles>,
         events: mpsc::Receiver<Event>,
+        hands: Arc<Hands>,
         runner: Runner,
     }
 
@@ -999,9 +1012,11 @@ mod tests {
         let send = Arc::new(move |event| {
             let _ = sender.send(event);
         });
+        let hands = Arc::new(Hands { start: Instant::now(), moved: Mutex::default() });
+        let clock = hands.clone();
         // A watch these tests stop ends by itself: on a loaded machine the fake can take past STOP_GRACE to.
-        let runner = Runner::polling_every(doors, send, EVERY, WAIT);
-        World { fake, home, doubles, events, runner }
+        let runner = Runner::polling_every(doors, send, EVERY, WAIT, Arc::new(move || clock.now()));
+        World { fake, home, doubles, events, hands, runner }
     }
 
     fn doors(fake: &Fake, home: &Path, doubles: &Arc<Doubles>) -> Doors {
@@ -1842,7 +1857,7 @@ mod tests {
         let log = w.fake.log();
         assert_eq!(tabs_said(&log), ["tabs: Ghostty write refused · queue full"]);
         // The queued ones wait past the bound, and are dropped late once the call answers.
-        scripts.still_for(2, LATE_WRITE + EVERY);
+        w.hands.advance(LATE_WRITE + Duration::from_millis(1));
         scripts.gate(false);
         let late = |lines: &[String]| lines.iter().filter(|line| *line == "tabs: Ghostty write dropped late").count();
         log.until(|lines| late(lines) == TYPING_QUEUED);
@@ -1871,8 +1886,8 @@ mod tests {
         assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
         w.fake.touch("go");
         assert_eq!(w.next(), a_dial());
-        // Nothing runs around the held call while the write waits past the bound.
-        scripts.still_for(2, LATE_WRITE + EVERY);
+        // The write waits past the bound behind the held call.
+        w.hands.advance(LATE_WRITE + Duration::from_millis(1));
         scripts.gate(false);
         let log = w.fake.log();
         log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
