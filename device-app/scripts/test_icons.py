@@ -26,9 +26,10 @@ def paeth(left, up, up_left):
     return left if pa <= pb and pa <= pc else up if pb <= pc else up_left
 
 
-def png(width, height, colour, raw_rows, filters, depth=8, interlace=0):
-    """A PNG of `raw_rows` (unfiltered bytes per row), each row filtered by its entry in `filters`: this test's own
-    encoder, so the decoder is checked against something it did not write."""
+def png(width, height, colour, raw_rows, filters, depth=8, interlace=0, extra=()):
+    """A PNG of `raw_rows` (unfiltered bytes per row), each row filtered by its entry in `filters`, with the `extra`
+    (kind, body) chunks before its data: this test's own encoder, so the decoder is checked against something it did
+    not write."""
     bpp = 3 if colour == 2 else 4
     data, prior = bytearray(), bytes(len(raw_rows[0]))
     for row, kind in zip(raw_rows, filters):
@@ -45,8 +46,8 @@ def png(width, height, colour, raw_rows, filters, depth=8, interlace=0):
         return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
 
     header = struct.pack(">IIBBBBB", width, height, depth, colour, 0, 0, interlace)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(data), 1))
-            + chunk(b"IEND", b""))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + b"".join(chunk(kind, body) for kind, body in extra)
+            + chunk(b"IDAT", zlib.compress(bytes(data), 1)) + chunk(b"IEND", b""))
 
 
 def decode(data):
@@ -91,6 +92,8 @@ class Png(unittest.TestCase):
         row = [bytes(8)]
         for name, data in (("16-bit", png(1, 1, 6, row, [0], depth=16)), ("palette", png(2, 1, 3, row, [0])),
                            ("grey", png(2, 1, 0, row, [0])), ("interlaced", png(2, 1, 6, row, [0], interlace=1)),
+                           # An RGB image whose tRNS makes one colour clear: read as opaque, its clear pixels would show.
+                           ("transparent colour", png(2, 1, 2, [bytes(6)], [0], extra=((b"tRNS", bytes(6)),))),
                            ("not a PNG", b"GIF89a")):
             with self.subTest(name), self.assertRaises(ValueError):
                 icons.decode_png(data)
