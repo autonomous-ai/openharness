@@ -289,29 +289,39 @@ describe('startSelfUpdater', () => {
     // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
     // the machine over leaves no timer and no way back. This is why the updater's process, once it has
     // staged, exits to be started again as the new build (services/updaterProcess.ts).
-    serveUpdate()
-    const dir = tempDir()
-    let staged = 0
-    let checks = 0
-    const counted = globalThis.fetch as typeof fetch
-    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
-      if (String(args[0]).endsWith('metadata.json')) checks++
-      return counted(...args)
-    })
-    const poller = startSelfUpdater({
-      currentVersion: '1.0.0',
-      url: 'https://updates.test/metadata.json',
-      key: 'adapter',
-      dir,
-      intervalMs: 20,
-      onStaged: () => { staged++ },   // deliberately does NOT exit or restart
-    })
-    await vi.waitFor(() => expect(staged).toBe(1))
-    const after = checks
-    await new Promise((r) => setTimeout(r, 120)) // six intervals' worth
-    poller.stop()
-    expect(staged).toBe(1)
-    expect(checks, 'the poller never ticks again once a staged build has been handed over').toBe(after)
+    // The updater's clock is a fake one: the test waits for the stage as long as the real canary takes (vi.waitFor's 1 s
+    // gave up first on a loaded Mac), and six intervals then pass for certain, not as many as 120 ms of a busy loop allow.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      serveUpdate()
+      const dir = tempDir()
+      let staged = 0
+      let handedOver: () => void = () => {}
+      const stagedOnce = new Promise<void>((resolve) => { handedOver = resolve })
+      let checks = 0
+      const counted = globalThis.fetch as typeof fetch
+      vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+        if (String(args[0]).endsWith('metadata.json')) checks++
+        return counted(...args)
+      })
+      const poller = startSelfUpdater({
+        currentVersion: '1.0.0',
+        url: 'https://updates.test/metadata.json',
+        key: 'adapter',
+        dir,
+        intervalMs: 20,
+        onStaged: () => { staged++; handedOver() },   // deliberately does NOT exit or restart
+      })
+      await vi.advanceTimersByTimeAsync(20) // the first check
+      await stagedOnce
+      const after = checks
+      await vi.advanceTimersByTimeAsync(6 * 20)
+      poller.stop()
+      expect(staged).toBe(1)
+      expect(checks, 'the poller never ticks again once a staged build has been handed over').toBe(after)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not check on start; the first check lands on the slot, the next on the following one', async () => {
