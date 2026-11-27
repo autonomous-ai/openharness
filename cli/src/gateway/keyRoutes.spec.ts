@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { keyRoutes, type KeyOps } from './keyRoutes.js'
+import { SecretNotDeleted } from '../lib/deleteSecretFile.js'
 
 const OK = { status: 200, body: { ok: true } }
 
@@ -59,15 +60,19 @@ describe('the keys\' routes, answered by the gateway', () => {
     ops.setRemotePassword.mockRejectedValueOnce('not an error')
     expect(await routes('POST', '/api/remote-password/set', '{"password":"pw"}')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     // `harness remote-password clear` reads this word, and does not clear the file behind the daemon's back.
-    ops.clearRemotePassword.mockRejectedValueOnce(new Error('REMOTE_PASSWORD_NOT_DELETED (EBUSY)'))
+    ops.clearRemotePassword.mockRejectedValueOnce(new SecretNotDeleted('REMOTE_PASSWORD_NOT_DELETED', 'EBUSY'))
     expect(await routes('POST', '/api/remote-password/clear', undefined)).toEqual({ status: 500, body: { error: 'REMOTE_PASSWORD_NOT_DELETED (EBUSY)' } })
+    // Any other failure of a clear keeps its message (it may name the file) out of the answer.
+    ops.clearRemotePassword.mockRejectedValueOnce(new Error('unreadable /home/someone/.harness/e2e/remotePassword.json'))
+    expect(await routes('POST', '/api/remote-password/clear', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     ops.groupSync.mockRejectedValueOnce(new Error('roster unreadable'))
     expect(await routes('POST', '/api/group/sync', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     ops.listPairs.mockRejectedValueOnce('gone')
     expect(await routes('GET', '/api/pairs', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     // A body of JSON that holds no record, reached for a field, as the door's catch-all answered it.
     expect(await routes('POST', '/api/pair', 'null')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(log.mock.calls).toEqual([['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] GET KEY_ROUTE_FAILED · string'],
+    expect(log.mock.calls).toEqual([['[gateway] POST /api/remote-password/clear REMOTE_PASSWORD_NOT_DELETED (EBUSY)'],
+      ['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] GET KEY_ROUTE_FAILED · string'],
       ['[gateway] POST KEY_ROUTE_FAILED · TypeError']])
   })
 
