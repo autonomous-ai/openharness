@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeCommand, EXIT, replyCommand, resumeCommand, waitCommand, type ClientDeps } from './commands.js'
+import { closeCommand, EXIT, replyCommand, resumeCommand, showCommand, waitCommand, type ClientDeps } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { ProgramRecords } from './program.js'
@@ -68,6 +68,18 @@ const own = (agentId: string, name = 'openclaw-1', over: Partial<Parameters<Prog
 
 const reply = (h: ReturnType<typeof harness>, name = 'openclaw-1', extra: string[] = []) =>
   replyCommand([name, '--program-token-file', token, '--json', ...extra, '--', 'turn', 'on', 'the', 'light'], h.deps)
+
+it("shows a program's exited engine without advising it to close, and keeps its token check", async () => {
+  const d = new FakeDaemon()
+  d.frames = [frame('a1', { engineLiveness: 'gone' }), frame('a2', { name: 'other', engineLiveness: 'gone' })]
+  own('a1')
+  const h = harness(d)
+  const show = (name: string) => showCommand([name, '--program-token-file', token, '--json'], h.deps)
+  expect(await show('openclaw-1')).toBe(EXIT.ok)
+  expect(JSON.parse(h.out[0])).toMatchObject({ state: 'stopped', startedBy: 'program', next: [] })
+  expect(await show('other')).toBe(EXIT.refused)
+  expect(JSON.parse(h.out[1])).toMatchObject({ error: 'NOT_YOURS' })
+})
 
 describe('harness reply to a program\'s own harness (#4393)', () => {
   it('returns taken with the input id once the engine took the words, signed out and with programs-reply off', async () => {

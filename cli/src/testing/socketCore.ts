@@ -65,6 +65,7 @@ export function bindAgentList(socket: BackendSocket, over: Partial<AgentListDeps
     stoppedAgents,
     toProject: (s) => socket.toProject(s),
     toStoppedProject: (s) => socket.toStoppedProject(s),
+    runtimeChanging: () => false,
     ...monitorOf(socket),
     monitorActivityProvider: null,
     monitorCompletions: socket.monitorCompletions,

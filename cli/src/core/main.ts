@@ -523,6 +523,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
   const restorePanes = createPaneOperations()
   const restartJobs = new AgentRestartCoordinator()
+  const runtimeChanging = (id: string) => restorePanes.busy(id) || restartJobs.busy(id)
   // Moving agents off a drained pty host (lib/hostMove/): how long each has been idle and untouched, the one gate an
   // agent's input waits in while it changes host, and the agents a move a dead daemon left may still run beside
   // (`removeOrphanMovePanes` below), held this start: neither restored, nor discovered, nor moved.
@@ -1549,6 +1550,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.agentsProvider = createAgentList({
     registry, stoppedAgents, monitorActivityProvider: asking.monitorActivity, monitorCompletions: backend.monitorCompletions,
     toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
+    runtimeChanging,
     // The monitor's readings, through its port (services/monitor.ts): none while it is off.
     harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
     cloudFrames: () => cloud.frames(),
@@ -2931,7 +2933,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopNative: (session, current) => nativeControls.stop(session, current),
   })
   // A message sent while an engine is being replaced waits for the new one instead of being refused.
-  terminals.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId))
+  terminals.whileChanging(runtimeChanging)
   const sameRestartTarget = paneSwap.sameRestartTarget
   const paneSwapDeps = paneSwap.paneSwapDeps
   const liveBypassPermission = paneSwap.liveBypassPermission
@@ -3009,7 +3011,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   stoppingReaderSession = session => stopJobs.get(session.agentId)
   launchCancelled = id => stopJobs.has(id)
   restoreCancelled = (agentId) => stopJobs.has(agentId) || pinnedControls.has(agentId) || moveHeld.has(agentId) || (restartJobs.operation(agentId) !== undefined && restartJobs.operation(agentId) !== 'restart')
-  binding.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId) || stopJobs.has(agentId))
+  binding.whileChanging(id => runtimeChanging(id) || stopJobs.has(id))
   const stopAgent = lifecycle.stopAgent
   const stopTerminalAgent = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
   backend.stopProvider = (payload) => cloud.stop(String(payload.agentId ?? payload.sessionId ?? '')) ?? stopTerminalAgent(payload)
@@ -3100,8 +3102,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       activity: moveActivity,
       quiet: hostQuiet,
       lookedAt: moveLookedAt,
-      busy: (agentId) => restartJobs.busy(agentId) || stopJobs.has(agentId) || restorePanes.busy(agentId) || pinnedControls.has(agentId)
-        || moveHeld.has(agentId),
+      busy: id => runtimeChanging(id) || stopJobs.has(id) || pinnedControls.has(id) || moveHeld.has(id),
       move: async (row) => {
         let outcome: MoveOutcome | null = null
         const reply = await restartJobs.run(row.agentId, async (current) => {

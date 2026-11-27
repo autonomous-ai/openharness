@@ -392,7 +392,9 @@ No core change, no new service.
   agent, and so is a caller the daemon did not answer about: they may look, not close or start.
 - **Listing.** Live harnesses only, unless a verb needs the stopped ones (`ps --all`, a name no live harness has,
   a waited-on harness that left the list): with every stopped one the list took 128 ms against 10 ms here (391
-  harnesses, 21 live).
+  harnesses, 21 live). On macOS and Linux, `ps`, `show` and `wait` ask the owning daemon to check the recorded
+  processes of tmux harnesses. An exited engine reads as stopped even while discovery keeps its pane in the live list.
+  If that check cannot tell, `ps` and `show` report unknown and `wait` keeps waiting.
 - **`ps`**: `agents_list`, plus `agent_recent` (the daemon's stored turn summaries and the person's last asks,
   no transcript read) for up to 40 live harnesses. 0.8 s for 22 harnesses on the owner's Mac.
 - **`show`**: `agent_close` in `inspect` mode for needs-input (the screen, as the windows read it), and
