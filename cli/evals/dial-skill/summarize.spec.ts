@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseClaudeStream } from './lib/parse.js'
-import { aggregateTable, fisherOneSided, headline, heldOutTable, runTable, summarize, writeSummaries } from './lib/summarize.js'
+import { aggregateTable, closeGate, closeTable, fisherOneSided, headline, heldOutTable, runTable, summarize, writeSummaries } from './lib/summarize.js'
 
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
 const JUDGE = { judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
@@ -543,6 +543,130 @@ describe('headline', () => {
   })
 })
 
+describe('the close gates', () => {
+  /** A two-turn run: turn 1 graded as any need run, turn 2's close fields beside it. */
+  const followUp = (id: string, rep: number, kind: string, close: Record<string, number>,
+    grade: Record<string, number> = need(4, 1, 1, 1), extra: Record<string, unknown> = {}) =>
+    row(id, rep, { ...grade, ...close }, { meta: { scenario: id.split('.')[0], agent: id.split('.')[1], follow_up: kind }, ...extra })
+  const append = (v: string, rows: object[]) => {
+    mkdirSync(join(flow, v), { recursive: true })
+    appendFileSync(join(flow, v, 'results.jsonl'), jsonl(rows))
+  }
+  /** One crowd run of each held-out need case (d, e, h) with `hit`, and `needless` rings on the no-need case f. */
+  const crowd = (v: string, { hit = 1, needless = 0 } = {}) => append(v, [
+    ...['d', 'e', 'h'].map(c => row(`${c}.claude.crowd`, 0, hit ? need(4, 1, 1, 1) : need(-2, 0, null, 0))),
+    ...Array.from({ length: needless }, (_, rep) => row('f.claude.crowd', rep, noNeed(-1, 1))),
+    row('f.claude.crowd', needless, noNeed(0, 0)),
+  ])
+  /** n answer and answer-one runs, the first k closed right, on a case round 4 never ran, so recall pairs skip it. */
+  const rights = (k: number, n: number) => append('v7', Array.from({ length: n }, (_, rep) =>
+    followUp('g.oracle.crowd', rep, rep % 2 ? 'answer-one' : 'answer', { close_right: rep < k ? 1 : 0, close_wrong: 0, close_errors: 0 })))
+  const wrongs = (from: number, n: number) => append('v7', Array.from({ length: n }, (_, k) =>
+    followUp('e.claude.crowd', from + k, 'relay', { close_wrong: 1, close_errors: 0 })))
+
+  beforeEach(() => crowd('v4', { needless: 1 }))
+
+  it('counts each kind over the scored held-out runs, train and unscored runs left out', () => {
+    crowd('v7')
+    append('v7', [
+      followUp('d.claude.crowd', 10, 'answer', { close_right: 1, close_wrong: 0, close_errors: 0 }),
+      followUp('d.claude.crowd', 11, 'answer', { close_right: 0, close_wrong: 0, close_errors: 1 }),
+      followUp('h.claude.crowd', 10, 'answer-one', { close_right: 1, close_wrong: 1, close_errors: 0 }),
+      // Turn 1 rang no card: nothing to close right, so no close_right.
+      followUp('h.claude.crowd', 11, 'answer-one', { close_wrong: 0, close_errors: 0 }, need(-2, 0, null, 0)),
+      followUp('e.claude.crowd', 10, 'relay', { close_wrong: 1, close_errors: 0 }),
+      followUp('e.claude.crowd', 11, 'new-request', { close_wrong: 0, close_errors: 0 }),
+      followUp('g.oracle.crowd', 0, 'unrung', { close_wrong: 0, close_errors: 2 }),
+      // A train run and a truncated one are in no count.
+      followUp('a.claude.crowd', 0, 'answer', { close_right: 0, close_wrong: 3, close_errors: 1 }),
+      followUp('d.claude.crowd', 12, 'relay', { close_wrong: 1, close_errors: 1 }, need(4, 1, 1, 1), { status: 'truncated' }),
+    ])
+    const s = summarize(flow)
+    expect(s.close.v7.crowd).toEqual({
+      right: 2, right_n: 3, wrong: 2, errors: 3, unrung: 1,
+      by_kind: {
+        answer: { runs: 2, right: 1, wrong: 0 }, 'answer-one': { runs: 2, right: 1, wrong: 1 },
+        relay: { runs: 1, wrong: 1 }, 'new-request': { runs: 1, wrong: 0 }, unrung: { runs: 1, wrong: 0 },
+      },
+    })
+    expect(s.close.v4).toBeUndefined()
+  })
+
+  it('passes a right close on 13 of 14 answer and answer-one runs', () => {
+    crowd('v7')
+    rights(13, 14)
+    expect(closeGate(summarize(flow), 'v7')).toEqual({ right: true, wrong: true, ring: true, pass: true })
+  })
+
+  it('fails a right close on 12 of 14', () => {
+    crowd('v7')
+    rights(12, 14)
+    expect(closeGate(summarize(flow), 'v7')).toEqual({ right: false, wrong: true, ring: true, pass: false })
+  })
+
+  it('passes 1 wrong close and fails 2', () => {
+    crowd('v7')
+    rights(14, 14)
+    wrongs(10, 1)
+    expect(closeGate(summarize(flow), 'v7').wrong).toBe(true)
+    wrongs(11, 1)
+    expect(closeGate(summarize(flow), 'v7')).toEqual({ right: true, wrong: false, ring: true, pass: false })
+  })
+
+  it('fails the ring gate when held-out recall falls below round 4\'s beyond noise', () => {
+    crowd('v7', { hit: 0 })
+    rights(14, 14)
+    const s = summarize(flow)
+    expect(s.close_recall.v7.crowd.ci_hi).toBeLessThan(0)
+    expect(closeGate(s, 'v7')).toEqual({ right: true, wrong: true, ring: false, pass: false })
+  })
+
+  it('passes one needless ring over round 4\'s and fails two', () => {
+    crowd('v7', { needless: 2 })
+    rights(14, 14)
+    expect(closeGate(summarize(flow), 'v7').ring).toBe(true)
+    rmSync(join(flow, 'v7'), { recursive: true })
+    crowd('v7', { needless: 3 })
+    rights(14, 14)
+    expect(closeGate(summarize(flow), 'v7')).toEqual({ right: true, wrong: true, ring: false, pass: false })
+  })
+
+  it('passes nothing for a variant with no follow-up runs', () => {
+    expect(closeGate(summarize(flow), 'v4')).toEqual({ right: false, wrong: false, ring: false, pass: false })
+  })
+
+  describe('in narrative.md', () => {
+    beforeEach(() => {
+      writeFileSync(join(flow, 'narrative.md'), '<!-- status -->\n<!-- /status -->\n<!-- held-out -->\n<!-- /held-out -->\n'
+        + '<!-- close -->\nold close\n<!-- /close -->\n\nThe story so far.\n')
+      writeFileSync(join(flow, 'metrics.md'), '<!-- aggregate -->\n<!-- /aggregate -->\n')
+    })
+
+    it('writes the close table between its markers', () => {
+      crowd('v7')
+      rights(13, 14)
+      wrongs(10, 1)
+      // Gates are read in crowd alone: another condition's row leaves them blank.
+      append('v7', [followUp('d.claude', 10, 'answer', { close_right: 1, close_wrong: 0, close_errors: 1 })])
+      writeSummaries(flow)
+      const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
+      expect(narrative).toContain('<!-- close -->\n'
+        + '| variant | condition | right | wrong | errors | rang no card | by kind | right ≥ 90% | wrong ≤ 1 | ring |\n'
+        + '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
+        + '| v7 | clean | 1 of 1 | 0 | 1 | 0 | answer 1 runs, 1 right, 0 wrong |  |  |  |\n'
+        + '| v7 | crowd | 13 of 14 | 1 | 0 | 0 | answer 7 runs, 7 right, 0 wrong; answer-one 7 runs, 6 right, 0 wrong; '
+        + 'relay 1 runs, 1 wrong | pass | pass | pass |\n'
+        + '<!-- /close -->\n\nThe story so far.\n')
+      expect(closeTable(summarize(flow))).toBe(narrative.slice(narrative.indexOf('| variant'), narrative.indexOf('\n<!-- /close -->')))
+    })
+
+    it('writes nothing between them before any follow-up run', () => {
+      writeSummaries(flow)
+      expect(readFileSync(join(flow, 'narrative.md'), 'utf8')).toContain('<!-- close -->\n\n<!-- /close -->')
+    })
+  })
+})
+
 describe('spend', () => {
   /** What a flow of one baseline run billed with `usage` comes to. */
   function spendOf(usage: object): number | null {
@@ -570,7 +694,7 @@ describe('spend', () => {
 describe('writeSummaries', () => {
   beforeEach(() => {
     writeFileSync(join(flow, 'narrative.md'),
-      '# Dial skill hill-climb\n\n<!-- status -->\nold status\n<!-- /status -->\n\n<!-- held-out -->\nold held-out\n<!-- /held-out -->\n\nThe story so far.\n')
+      '# Dial skill hill-climb\n\n<!-- status -->\nold status\n<!-- /status -->\n\n<!-- held-out -->\nold held-out\n<!-- /held-out -->\n\n<!-- close -->\nold close\n<!-- /close -->\n\nThe story so far.\n')
     writeFileSync(join(flow, 'metrics.md'),
       '# Metrics\n\nscore: the objective.\n\n<!-- aggregate -->\nold aggregate\n<!-- /aggregate -->\n\nEnd notes.\n')
   })
@@ -612,7 +736,7 @@ describe('writeSummaries', () => {
     writeSummaries(flow)
     const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
     expect(narrative.startsWith('# Dial skill hill-climb\n\n<!-- status -->\n')).toBe(true)
-    expect(narrative.endsWith('<!-- /held-out -->\n\nThe story so far.\n')).toBe(true)
+    expect(narrative.endsWith('<!-- /close -->\n\nThe story so far.\n')).toBe(true)
     expect(narrative).not.toContain('old status')
     expect(narrative.match(/<!-- status -->/g)).toHaveLength(1)
     expect(narrative).toContain('| round | condition | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |')
@@ -648,7 +772,7 @@ describe('writeSummaries', () => {
 
   it.each(['baseline/table.md', 'narrative.md', 'metrics.md'])('refuses to write %s through a symlink', (path) => {
     const target = join(flow, 'target.md')
-    const text = '<!-- status -->\n<!-- /status -->\n<!-- held-out -->\n<!-- /held-out -->\n<!-- aggregate -->\n<!-- /aggregate -->\n'
+    const text = '<!-- status -->\n<!-- /status -->\n<!-- held-out -->\n<!-- /held-out -->\n<!-- close -->\n<!-- /close -->\n<!-- aggregate -->\n<!-- /aggregate -->\n'
     writeFileSync(target, text)
     rmSync(join(flow, path), { force: true })
     symlinkSync(target, join(flow, path))
