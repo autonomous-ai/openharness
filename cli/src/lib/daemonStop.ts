@@ -7,7 +7,7 @@
  * a holder that has been busy for longer than the wait is reported and then overridden.
  */
 
-import { removeQuietly } from './removePath.js'
+import { rmSync } from 'fs'
 import { env } from '../config/env.js'
 import { readStatusFile } from '../harnessd/master.js'
 import type { ProcessRow } from './processTable.js'
@@ -162,7 +162,8 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
         return { pid: null, stopped: false }
       }
       // A pid file naming nothing is debris from a crash; nobody else can be relying on it.
-      removeQuietly(PID_FILE)
+      // Not recursive: a folder at the pid file's name is not ours to delete.
+      try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       return { pid: null, stopped: false }
     }
     if (deps.windows) {
@@ -186,7 +187,8 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
 /** Only if it is still OUR daemon's file: a stopped daemon removes its own pid on the way out, and a daemon that
  *  came up meanwhile — impossible under the lock, but cheap to respect — must not lose its record to us. */
 function forgetPid(deps: StopDeps, pid: number): void {
-  if (deps.readPid() === pid) removeQuietly(PID_FILE)
+  // Not recursive: a folder at the pid file's name is not ours to delete.
+  if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
   if (!deps.isAlive(pid)) clearReexecMarker(pid)
 }
 
@@ -213,7 +215,8 @@ async function stopOnWindows(deps: StopDeps, windows: WindowsStopDeps, pid: numb
     // Windows hands a freed pid to the next process quickly: a pid file whose pid is proven another process's now is
     // debris, as a dead pid's is (`stopDaemonProcess`), and Harness is not running under it.
     if (master.verdict === 'not') {
-      if (deps.readPid() === pid) removeQuietly(PID_FILE)
+      // Not recursive: a folder at the pid file's name is not ours to delete.
+      if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
       return { pid: null, stopped: false }
     }
     // Could not tell: left running, and the pid file kept, so a `harness stop` tried again still finds it.
@@ -254,7 +257,8 @@ async function stopThroughPlatform(deps: StopDeps): Promise<number | null> {
     await deps.sleep(150)
   }
   const pid = deps.readPid()
-  if (pid === master) removeQuietly(PID_FILE)
+  // Not recursive: a folder at the pid file's name is not ours to delete.
+  if (pid === master) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
   // A daemon `harness start` spawned beside the platform's (two supervisors, which `harness service`
   // exists to prevent) is the signals' to stop.
   if (pid !== null && pid !== master && deps.isAlive(pid)) return null

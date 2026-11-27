@@ -34,9 +34,10 @@ export function removePath(path: string): void {
 }
 
 /**
- * removePath for a path the caller may leave behind (its own temporary, a pid file, a marker, a staging name), its own
- * failure dropped: a file Windows still holds throws EBUSY or EPERM, and thrown from a `catch` or `finally` it replaced
- * the error that failed the work (codexPluginTrust.ts's replaceConfigText).
+ * removePath for the call's own temporary or staging name, its own failure dropped: a file Windows still holds throws
+ * EBUSY or EPERM, and thrown from a `catch` or `finally` it replaced the error that failed the work
+ * (codexPluginTrust.ts's replaceConfigText). Never for a fixed name (a pid file, a marker): it removes a folder with
+ * what is in it, and a folder at a fixed name is not the caller's.
  */
 export function removeQuietly(path: string): void {
   try { removePath(path) } catch { /* left behind: see above */ }

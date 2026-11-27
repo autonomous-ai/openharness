@@ -11,13 +11,12 @@
  * mid-write) or `harness uninstall` is at work (a daemon holds the files being removed), whichever supervisor runs it:
  * this scheduled task or the Harness Device app.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { harnessPath } from '../config/harnessHome.js'
 import { PID_FILE, isAlive, pidFileWrittenMs, readPid } from './daemonState.js'
 import { FLASHER_DIR } from './flasherDir.js'
 import { settlePidFile } from './pidFileSettle.js'
-import { removeQuietly } from './removePath.js'
 import { UNINSTALL_MARKER } from './uninstall/marker.js'
 import {
   describeSpawnLockOwner, readSpawnLockOwner, releaseAbandonedSpawnLock, spawnLockOwnerReused, type SpawnLockOwner,
@@ -149,7 +148,8 @@ function defaultIfDownIo(): IfDownIo {
     readPid,
     isAlive,
     pidFileWrittenMs: () => pidFileWrittenMs(),
-    forgetPid: (pid) => { if (readPid() === pid) removeQuietly(PID_FILE) /* the next tick looks again */ },
+    // Not recursive: a folder at the pid file's name is not ours to delete.
+    forgetPid: (pid) => { if (readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* the next tick looks again */ } } },
     rows: () => windowsProcessRows(null),
     readLockOwner: () => readSpawnLockOwner(),
     lockOwnerAlive: (owner) => lockOwnerAlive(owner.pid, lockStartMarker(owner)),

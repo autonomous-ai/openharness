@@ -138,12 +138,7 @@ function holds(folder: string, lean: LeanBundle): boolean {
   return true
 }
 
-/** The master's one way to remove a path whose removal's failure is ignored: a path left is the next master's to
- *  remove, and a failed removal never replaces the error on its way. A declaration, not a const: `reexec.ts` imports it
- *  and this file imports `sha256File` from there, a cycle safe because neither is called before both have loaded. */
-export function removeQuietly(path: string): void {
-  try { rmSync(path, { recursive: true, force: true }) } catch { /* left for the next master */ }
-}
+const removeQuietly = (path: string): void => { try { rmSync(path, { recursive: true, force: true }) } catch { /* the next master tries again */ } }
 const changedAt = (path: string): number => { try { return lstatSync(path).mtimeMs } catch { return 0 } }
 
 /** The pids that claim [folder], with when each claimed it. */

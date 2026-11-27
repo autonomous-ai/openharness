@@ -57,7 +57,7 @@ export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buff
     if (existsSync(folder)) renameSync(folder, join(cliDir, `.${version}.${Date.now()}.old`))
     renameSync(temporary, folder)
   } catch (error) {
-    removeQuietly(temporary) // not this call's to clear
+    removeQuietly(temporary) // left if it will not go: the write's error is thrown
     throw error
   }
   return folder
