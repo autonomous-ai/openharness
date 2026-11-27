@@ -102,8 +102,9 @@ export interface NoticeOutcome { result: NoticeResult; card?: { id: string; kind
 const LOGGED: Partial<Record<NoticeEnd, string>> = { done: 'done', sixth: 'dropped · sixth', expired: 'expired' }
 
 const CARD_ID_CHARS = 8
-/** A card's id: the first characters of the uuid in its question id (`shown:<uuid>`), which a rouse keeps. */
-const cardId = (questionId: string): string => questionId.slice(SHOWN_ONLY_PREFIX.length, SHOWN_ONLY_PREFIX.length + CARD_ID_CHARS)
+/** A card's id: the first characters of the uuid in its question id (`shown:<uuid>`), which a rouse keeps. The desk and
+ *  its file (noticeFile.ts) read it the same way. */
+export const cardId = (questionId: string): string => questionId.slice(SHOWN_ONLY_PREFIX.length, SHOWN_ONLY_PREFIX.length + CARD_ID_CHARS)
 
 /** The line, then [place], within NOTICE_LINE_MAX_BYTES: the line cut between letters, with `…`, when they do not fit. */
 const fitBytes = (line: string, place = ''): string => Buffer.byteLength(line + place) <= NOTICE_LINE_MAX_BYTES

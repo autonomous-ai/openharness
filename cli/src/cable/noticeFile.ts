@@ -8,7 +8,7 @@ import { errorKind } from '../lib/log.js'
 import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
 import {
-  NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICE_WAITING_MAX, NOTICES_PENDING_MAX, type StoredNotice,
+  cardId, NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICE_WAITING_MAX, NOTICES_PENDING_MAX, type StoredNotice,
 } from './notices.js'
 
 export const NOTICES_FILE = 'dial-notices.json'
@@ -50,9 +50,6 @@ const isStoredNotice = (card: unknown): card is StoredNotice => {
     && (who === undefined || isWho(who))
     && typeof at === 'number' && Number.isSafeInteger(at) && at >= 0
 }
-
-/** The id an agent closes its card by: the first 8 characters of the uuid in its question id, as the desk reads it. */
-const cardId = (id: string): string => id.slice(SHOWN_ONLY_PREFIX.length, SHOWN_ONLY_PREFIX.length + 8)
 
 /** The cards as the desk keeps them: an agent's NOTICE_WAITING_MAX waiting cards at most and one other, no two of one
  *  id. At most NOTICES_PENDING_MAX cards, so each count's scan is bounded. */
