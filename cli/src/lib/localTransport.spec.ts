@@ -6,11 +6,11 @@
  */
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { createServer, globalAgent, type IncomingMessage, type Server } from 'node:http'
-import type { AddressInfo, Socket } from 'node:net'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { writeDaemonRecord } from './daemonRecord.js'
 import { isTrustedLocal, listenLocalSocket, pipeProofOf } from './localSocket.js'
@@ -225,23 +225,41 @@ describe('a request whose caller the daemon could not look up in time', () => {
   })
 })
 
-describe.skipIf(process.platform === 'win32')('fetchOverSocket on a socket kept alive', () => {
-  it('fifty requests over one kept-alive socket leave one error listener', async () => {
-    const served = await listenLocalSocket((req, res) => { req.resume(); req.on('end', () => res.end('ok')) }, join(folder().data, 'kept.sock'))
+describe.skipIf(process.platform === 'win32')('fetchOverSocket and a listener that closes each connection after its answer', () => {
+  it('three requests in a row are each answered, on a connection of their own, and each handled once', async () => {
+    let connections = 0, handled = 0
+    // As the devices listener does once its idle timer runs: the connection ends right after the answer.
+    const served = await listenLocalSocket((req, res) => {
+      req.resume()
+      req.on('end', () => { handled++; res.end('{"ok":true}', () => req.socket.destroy()) })
+    }, join(folder().data, 'closing.sock'))
+    served.server.on('connection', () => { connections++ })
     tolerant(served.server)
     cleanup.push(served.close)
-    const made = vi.spyOn(globalAgent, 'createConnection')
-    cleanup.push(() => made.mockRestore())
     const send = fetchOverSocket(served.path)
-    const errorListeners: number[] = []
-    for (let i = 0; i < 50; i++) {
-      expect(await (await send('http://devices.invalid/', { method: 'POST', body: '{}' })).text()).toBe('ok')
-      // The agent frees the socket on the tick after the answer ends: the next request is sent on it.
-      await new Promise((resolve) => setImmediate(resolve))
-      errorListeners.push((made.mock.results[0]!.value as Socket).listeners('error').filter((listener) => listener.name !== 'freeSocketErrorListener').length)
+    const statuses: number[] = []
+    for (let i = 0; i < 3; i++) {
+      const answer = await send('http://devices.invalid/', { method: 'POST', body: '{}' })
+      await answer.text()
+      statuses.push(answer.status)
     }
-    expect(made).toHaveBeenCalledTimes(1)
-    // Node's own for a free socket aside.
-    expect(errorListeners).toEqual(Array(50).fill(1))
+    expect(statuses).toEqual([200, 200, 200])
+    expect(handled).toBe(3)
+    expect(connections).toBe(3)
+  })
+
+  it('a streamed answer\'s first chunk arrives before its end', async () => {
+    let finish = (): void => {}
+    const served = await listenLocalSocket((req, res) => {
+      req.resume()
+      req.on('end', () => { res.write('first'); finish = () => res.end() })
+    }, join(folder().data, 'stream.sock'))
+    tolerant(served.server)
+    cleanup.push(served.close)
+    const answer = await fetchOverSocket(served.path)('http://devices.invalid/', { method: 'POST', body: '{}' })
+    const reader = answer.body!.getReader()
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('first')
+    finish()
+    expect((await reader.read()).done).toBe(true)
   })
 })
