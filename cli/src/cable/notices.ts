@@ -333,12 +333,6 @@ export class Notices {
     return [...this.cards.values()].some((card) => card.agentId === agentId)
   }
 
-  /** Whether that agent holds a waiting card: its turn ends stay silent until it closes it (rule 8). A proceeding or
-   *  plain card rarely gets an answer, so it would silence its agent for a day. */
-  waiting(agentId: string): boolean {
-    return [...this.cards.values()].some((card) => card.agentId === agentId && card.kind === 'waiting')
-  }
-
   /** Every pending card as its file keeps it, oldest first. */
   stored(): StoredNotice[] {
     return [...this.cards.values()].map(({ agentId, keys, id, line, host, who, at }) =>

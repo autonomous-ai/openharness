@@ -1853,8 +1853,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
   }
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
-   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent held a waiting card as the
-   *  card came (toDial). */
+   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent held a card as the card came
+   *  (toDial). */
   const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
     // A turn starting or ending says whether its agent's last one failed; a sub-agent's or a restored card is not its turn.
@@ -1909,8 +1909,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
-      // Its agent waits on the person by a card it rang: the dial keeps one drawer row an agent, so a summary that rang or
-      // listed would replace the card's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
+      // Its agent holds a card: the dial keeps one drawer row an agent, so a summary that rang or listed would replace the
+      // card's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
       if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       // The person watched an outside agent end: its tile alone, in Needs you too. A Harness agent's keeps `onScreen`.
       const row = outside(agentId)
@@ -1949,9 +1949,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       void cable.turnError(event.agentId, event.text).then(() => cardBack(event.agentId, 'alert'))
     }
   }
-  /** A recap that rang or listed, or a failed turn, took its agent's drawer row: the dial keeps one an agent. The card
-   *  that agent still holds stays on the dial (rule 8: a proceeding or plain one leaves its turn ends to ring, and a failed
-   *  turn rings whatever it holds), so its row goes back over it, after the frame that took it. */
+  /** A failed turn rings whatever card its agent holds (rule 8), and its recap or error took that agent's drawer row: the
+   *  dial keeps one an agent. The card stays on the dial, so its row goes back over it, after the frame that took it. */
   const cardBack = (agentId: string, tier: Tier): void => part.call('notices', () => {
     if (tier !== 'silent' && notices.pending(agentId)) redrawNotices([agentId])
   })
@@ -2009,8 +2008,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
     // (TOKENS_WAIT_MS), and the agent may close its card meanwhile. The card may be from an earlier turn: a turn start no
     // longer closes a waiting card, so each turn end stays silent until its agent closes it or it goes at 24 hours
-    // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8). Only a waiting card's.
-    const notice = event.kind === 'summary' && notices.waiting(event.agentId)
+    // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8).
+    const notice = event.kind === 'summary' && notices.pending(event.agentId)
     // So is the end it may announce: a turn started while the card waits is the agent's next, and spends it.
     if (event.kind === 'summary' || event.kind === 'error') count((usage) => usage.turnEnded(event.agentId))
     inOrder(event.agentId, () => dispatch(event, notice))
