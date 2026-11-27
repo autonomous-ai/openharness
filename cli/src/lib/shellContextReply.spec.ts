@@ -1,9 +1,13 @@
-import { afterEach, expect, it } from 'vitest'
-import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterEach, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
+import { chmodSync, closeSync, constants, mkdirSync, mkdtempSync, openSync, readSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { shellContextReply } from './shellContextReply.js'
+
+// Spy-able, to change the folder between the catalog's move and its staged name's removal.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const homes: string[] = []
 const context = '8c73ea55-683a-4207-a9aa-ab8a9e813bea'
@@ -14,7 +18,7 @@ function fixture() {
   mkdirSync(dir,{recursive:true,mode:0o700})
   return {home, file:join(dir,payload.id)}
 }
-afterEach(() => { for (const h of homes.splice(0)) rmSync(h,{recursive:true,force:true}) })
+afterEach(() => { vi.restoreAllMocks(); for (const h of homes.splice(0)) rmSync(h,{recursive:true,force:true}) })
 it('writes data only to the waiting private FIFO and never needs terminal input', () => {
   const {home,file} = fixture()
   execFileSync('/usr/bin/mkfifo',['-m','600',file])
@@ -56,6 +60,19 @@ it('delivers a large catalog atomically with a short FIFO acknowledgement', () =
     expect(readSync(fd,buffer)).toBeGreaterThan(0)
     expect(shellContextReply({...payload,data:'x'.repeat(8*1024*1024)},home)).toBe(false)
   } finally { closeSync(fd) }
+})
+it('answers a delivered catalog as delivered when its staged name cannot be removed', () => {
+  const {home,file} = fixture()
+  execFileSync('/usr/bin/mkfifo',['-m','600',file])
+  const fd = openSync(file,constants.O_RDWR | constants.O_NONBLOCK)
+  // The catalog is in place; then the folder can no longer be searched, so the staged name's removal fails (EACCES).
+  const rename = fs.renameSync
+  vi.spyOn(fs,'renameSync').mockImplementation((from,to) => { rename(from,to); chmodSync(dirname(file),0o600) })
+  try {
+    expect(shellContextReply({...payload,data:{rows:[]}},home)).toBe(true)
+    const buffer = Buffer.alloc(512)
+    expect(readSync(fd,buffer)).toBeGreaterThan(0)
+  } finally { chmodSync(dirname(file),0o700); closeSync(fd) }
 })
 it('does not follow a catalog symlink or write a catalog for an absent reader', () => {
   const {home,file} = fixture()

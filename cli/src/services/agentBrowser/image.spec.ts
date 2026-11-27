@@ -1,3 +1,5 @@
+import * as fs from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +12,9 @@ vi.mock('node:child_process', async (importOriginal) =>
   (await import('./fakePodman.js')).trackingFakes(await importOriginal<typeof import('node:child_process')>()))
 // The login shell is never started in a spec.
 vi.mock('../../lib/loginShellEnv.js', () => ({ oneShotParentEnv: () => ({ ...process.env }) }))
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
+vi.mock('node:fs/promises', async (original) => ({ ...await original<object>() }))
 
 const NOW = new Date('2026-11-10T12:00:00Z')
 const TAG = `harness-browser:${browserAssetsHash()}-2026w46`
@@ -209,6 +214,26 @@ describe('ensureImage', () => {
     fake.reply('build', { code: 1, stderr: 'broken' })
     await expect(ensureImage(podman, NOW, () => {})).rejects.toThrow('broken')
     expect(existsSync(context!.dir)).toBe(false)
+  })
+
+  it('a context dir Windows still holds is left: it never fails the build or replaces its error', async () => {
+    const held = (path: unknown) => String(path).includes('harness-browser-build-')
+    const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    const rm = fsPromises.rm, rmSync = fs.rmSync
+    vi.spyOn(fsPromises, 'rm').mockImplementation(async (path, options) => { if (held(path)) throw busy(); return rm(path, options) })
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (held(path)) throw busy(); rmSync(path, options) })
+    const dirs: string[] = []
+    try {
+      fake.reply(LIST, { stdout: '[]' })
+      await expect(ensureImage(podman, NOW, () => {})).resolves.toBe(TAG)
+      dirs.push(context!.dir)
+      fake.reply('build', { code: 1, stderr: 'broken' })
+      await expect(ensureImage(podman, NOW, () => {})).rejects.toThrow('broken')
+      dirs.push(context!.dir)
+    } finally {
+      vi.restoreAllMocks()
+      for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('a listing Podman cannot answer fails the call', async () => {

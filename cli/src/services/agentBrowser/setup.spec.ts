@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import * as fs from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -8,6 +10,10 @@ import type { Availability, Podman } from './podman.js'
 import { PodmanError } from './podman.js'
 import { PODMAN_RELEASE } from './podmanRelease.js'
 import { canAskForPassword, Setup, type SetupStep } from './setup.js'
+
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
+vi.mock('node:fs/promises', async (original) => ({ ...await original<object>() }))
 
 const GiB = 1024 ** 3
 const TEN_MINUTES = 10 * 60_000
@@ -212,6 +218,23 @@ describe('Setup', () => {
     expect(error.state).toBe('podman_install_failed')
     expect(error.message).toContain('User canceled')
     expect(r.podmanRuns).toEqual([])
+  })
+
+  it('an installer folder Windows still holds is left: it never fails the install or replaces its error', async () => {
+    const held = (path: unknown) => String(path).includes('harness-podman-')
+    const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    const rm = fsPromises.rm, rmSync = fs.rmSync
+    vi.spyOn(fsPromises, 'rm').mockImplementation(async (path, options) => { if (held(path)) throw busy(); return rm(path, options) })
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (held(path)) throw busy(); rmSync(path, options) })
+    const installed = rig()
+    const cancelled = rig({ runCode: () => 1, runStderr: '0:89: execution error: User canceled. (-128)\n' })
+    try {
+      await installed.setup.run({ step: null })
+      expect((await failure(cancelled.setup.run({ step: null }))).message).toContain('User canceled')
+    } finally {
+      vi.restoreAllMocks()
+      for (const { to } of [...installed.downloads, ...cancelled.downloads]) rmSync(dirname(to), { recursive: true, force: true })
+    }
   })
 
   it('Linux uses pkexec with the distro\'s package manager', async () => {
