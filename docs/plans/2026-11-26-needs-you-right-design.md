@@ -386,8 +386,14 @@ after release; rollback is `cli/src/devices/dialSkill.ts` alone.
 
 ## Part 4. A standing line at session start
 
-Built after Part 3's numbers are in. The eval variant comes first (the hook staged into the run), and the product part
-ships only if that variant gains recall on at least one engine with specificity still at least 95%.
+Status: going ahead (the maintainer, 2026-11-27: do it all, with the PM). Part 3's numbers are in and v1
+ships (#4666), so the eval compares v1 with v1 and this line, after #4666 merges: `crowd`, `clean` and `name-only`,
+where `name-only` (0 of 16 today) is the case this line is for. Its spend counts against the same $250 cap ($114.97
+spent by Part 3). The eval variant comes first (the hook staged into the run), and the product part ships only if that
+variant gains recall with specificity still at least 95%, read as (the PM, 2026-11-27): held-out recall, paired with
+v1, up beyond noise in `crowd` or in `name-only`, and down beyond noise in no condition; specificity over the no-need
+runs of all three conditions pooled (`crowd` at 3 reps, `clean` at 2, `name-only` at 1: 54 runs), at most 2 needless
+rings. Harness's own headless runs (the `codex exec` one-shots of `lib/oneshot.ts`) never get the line.
 
 **The line** (at most 300 characters, the same rule as the description, so the two never disagree):
 
@@ -406,30 +412,34 @@ resume, clear, compact), beside its `PermissionRequest` hook and in the same two
 - Reach: sessions started, resumed or compacted after the plugin is current (the devices service brings it current
   after each CLI update). A Claude session with the skill and no plugin has the skill alone.
 
-**Codex.** Part 7's spike answered the question below (2026-11-26): a Codex plugin carries hooks, trusted without a
-prompt once Harness writes their `hooks.state` record. Part 4 reuses Part 7's Codex manifest and trust write.
+**Codex.** Part 7 (#4660, released in CLI 0.6.95) gave Harness Device a Codex manifest (`hooks/codex.json`), set up
+by the dial setup in each Codex home it serves and trusted without a prompt: Harness writes each hook's `hooks.state`
+record only while the installed folder is the copy this CLI carries. Part 4 adds to it:
 
-Codex installs plugins from the same marketplace: the `harness` plugin has a Codex manifest
-(`plugins/harness/.codex-plugin/plugin.json`, added with `codex plugin add harness@openharness`), with skills and an
-MCP server and no hook. Harness Device has no Codex manifest. A spike in this part answers, on Codex 0.172 or later:
-can a Codex plugin carry a `SessionStart` hook, and is that hook trusted without a prompt the person must answer?
-(Codex keeps a trust record for hooks.)
-
-- Yes: `plugins/harness-device/` gains a Codex manifest, set up by the dial setup as Claude's plugin is, whose hook
-  runs `harness device codex start`.
-- No: Codex keeps the skill alone, and the field counts say whether that is enough. The one route left would be a
-  block in the engine hook install, as Agent Messages has. That is the core's process, so it is a decision for the
-  maintainer and not part of this design.
-- Either way Codex's side cannot be measured by the eval. It is judged by the same field counts, the days
-  before and 7 days after, and it ships only together with Claude Code's side, on Claude Code's gain.
+- `hooks/codex.json` gains a `SessionStart` hook, in the same two-shell form as its others, which runs
+  `harness device codex start`: the same command as Claude Code's, made to take either engine, with the same rules
+  (Harness's own dial skill in that Codex home, the plugin on, Codex not marked removed; no daemon, no network, within
+  a second, nothing on any failure).
+- Its trust comes from Part 7's write: the new hook changes the carried folder's fingerprint, so the setup's update
+  after the CLI update writes a record for each hook, `SessionStart` among them (its matcher is hashed, as Part 7's
+  `REVIEWED.matcherEvents` already lists).
+- First task, before the command is built: one isolated Codex 0.172 run against the local stub, as Part 7's spike
+  (its own `CODEX_HOME` and `HOME`, a dummy key, never the person's login), shows whether Codex puts a `SessionStart`
+  hook's `additionalContext` into the model's request: the stub records the request, and the line must be in it. Not
+  there: Codex keeps the skill alone, the hook is not added, and the field counts say whether that is enough.
+- Codex's side cannot be measured by the eval (no Codex quota). It is judged by the same field counts, the days before
+  and 7 days after, and it ships only together with Claude Code's side, on Claude Code's gain.
 
 ## Part 5. A second look when a turn stops
 
 Built only if, after Parts 3 and 4, Claude Code's recall in `crowd` is still under 90%. It is the one step that
-enforces the rule, and the one with the most risk.
+enforces the rule, and the one with the most risk. The gate is read from Part 4's eval, held out, val and test pooled
+(v1 alone: 41 of 48, 85%): under 90% with Part 4's line, the PM opens Part 5 at once, with no one asked (the
+maintainer, 2026-11-27). If Part 4 does not ship, v1's own number stands, and Part 5 opens.
 
-A Stop hook, in the plugin for Claude Code. Codex's side, by Part 4's route, waits until a real Codex can be run to
-prove it: a blocked stop behaves differently there (below). On a stop it:
+A Stop hook, in the plugin for Claude Code. Codex's side goes in the same plugin's `hooks/codex.json`, proven with a
+real Codex CLI against the local stub, as Part 7's spike was: a blocked stop behaves differently there (below). On a
+stop it:
 
 1. Reads its input. `stop_hook_active` set, or no `last_assistant_message`: it ends, and the turn stops.
 2. Looks at the last 400 characters of that message for a question mark (`?` or `？`). None: it ends. The text is
@@ -698,8 +708,8 @@ Part 7 stores a record and writes another program's config file.
 5. Part 6: the CLI, as soon as it is done.
 6. Part 7: the plugin and the CLI, after Part 6 and after #4648, whose local marketplace it shares (the PM,
    2026-11-26).
-7. Part 4, if its variant gains: the plugin and the CLI.
-8. Part 5, if its gate opens.
+7. Part 4, if its variant gains: the plugin and the CLI, after #4666 (v1's words), the base its eval compares with.
+8. Part 5, if its gate opens: the plugin and the CLI, after Part 4's eval.
 
 Each part is released as soon as it is done, not held for a batch or a date (the maintainer, 2026-11-26). The orders
 kept: Part 3 with or after Parts 2 and 2b, and Part 7 after Part 6 and #4648.
