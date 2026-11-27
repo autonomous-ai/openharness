@@ -531,16 +531,25 @@ The agent still judges and still writes the line. Harness only makes it look aga
     or 10 s of silence after the session's last activity (a hook for it, or its transcript growing), at most 120 s
     from the yes; when the hold expires, the turn end is announced (the PM, 2026-11-27).
   - This must be proven end to end with the real CLI of an engine before that engine's side ships.
-- **Measured** by two pairs, held out, with the extra rounds per run reported (the PM, 2026-11-27). v4 already rang
-  every held-out ask, so a gain over it cannot be measured; the hook ships when both pairs pass:
-  - **(a) No harm:** v4 with the hook against v4, val and test in every condition. Recall down beyond noise in none;
-    at most 2 needless rings in the 54 pooled no-need runs; `harmed` and `went_on` no worse.
-  - **(b) The case it is for:** v1 with the hook against v1, `crowd` val and test at 3 reps (48 runs), standing for a
-    session whose line is far back in its context. Counted by run, as v1's 7 misses sit in 4 cases and a paired
-    interval could not pass: a one-sided Fisher test against v1's 41 of 48, p under 0.05, which takes at least 47 of
-    48. It runs first; failed, (a) is not run.
-  - In (a), `harmed` and `went_on` at most v4's in each condition; one run either way is noise.
-  - About $25 for (b) and $45 for (a), the flow at about $268 of the $270 cap. Over it, the pass stops and reports.
+- **Measured** (the PM, 2026-11-27, the maintainer having left it to the PM). The eval was to show the case and then
+  no harm; it could show only the second, so the hook ships on no harm and its gain is read in the field.
+  - **(b) The case it is for, run and failed as a gate:** v1 with the hook against v1, `crowd` val and test at 3 reps:
+    44 of 48 against 41 of 48, one-sided Fisher p = 0.262. The hook asked nothing in any run (0 of 48 need runs, 0 of
+    27 no-need): v6's 4 misses were turns the agent went on with by itself, not ending on a question, and the 6 runs
+    that ended on a question had all rung. Short `claude -p` runs do not reproduce the miss in use that opened this part
+    (a session days long ending a turn on a question, `?` included, with no notice), which is the one the hook acts on.
+    So (b) is reported, not a gate: a gate moved after its run, stated as such.
+  - **(a) No harm, the gate:** v4 with the hook against v4, val and test in every condition. Recall down beyond noise
+    in none; at most 2 needless rings in the 54 pooled no-need runs; `harmed` and `went_on` at most v4's in each
+    condition, one run either way being noise. About $45, the flow at about $265 of the $270 cap. Over it, the pass
+    stops and reports.
+  - **The gain, in the field:** two counts, the backend first, so a CLI never sends a name the backend drops:
+    `dial_nudge_<engine>` (a stop the devices said yes to) and `dial_nudge_<engine>_rang` (a notice of that agent
+    rung in the continuation after a yes, before its next stop or the hold's end), for `claude` and `codex`. Fixed
+    names and numbers, as #4642's.
+  - **Kept or removed after 7 days of the field:** kept when the `_rang` counts are above 0 and at least a quarter of
+    the yeses, both engines pooled; removed (the plugin's Stop hook alone, by a CLI release) when yeses come and almost none ring, as
+    then the hook costs a model round for nothing. The trigger does not change before that read.
 
 ## Part 6. An outside Claude Code session's question form and plan approval reach the dial
 
@@ -742,6 +751,20 @@ For the two new counts. Nothing else is stored, synced or exposed.
 8. **Identity.** N/A.
 9. **Failure.** Presence unknown: the notice rings, as today. A hook that fails or times out prints nothing and the
    session goes on. A `nudge` with no answer in 300 ms is a no.
+
+### Part 5's counts (the PM, 2026-11-27)
+
+Four names, `dial_nudge_claude`, `dial_nudge_codex`, `dial_nudge_claude_rang` and `dial_nudge_codex_rang`, in the
+dial's usage counts as #4642's were added; nothing else of Part 5 is stored or synced.
+
+1. **Growth.** At most 12 more rows a UTC day in `product_usage_totals` (with their `staff:` and `testing:` copies),
+   deleted by the existing TTL; four more names a day in `dial-usage.json`, within its bounds. In memory, one mark on
+   a held stop that a yes was counted, gone with the hold.
+2. **Read cost and scale.** One counter step per yes and per notice in a held continuation; at 10× a counter stops at
+   `DIAL_USAGE_MAX_COUNT`, and the rows stay 12 a day.
+3. **Compatibility.** An older backend drops unknown names from a report and keeps the rest, so the backend ships
+   first. An older CLI sends none, and the review hides empty rows.
+4. **Audience and failure.** Fixed names and numbers only, no session, agent or text. A lost count changes no ring.
 
 ### Part 7's own data (from its plan, 2026-11-26)
 
