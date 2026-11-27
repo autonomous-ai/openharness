@@ -1,9 +1,9 @@
 {
-  "current_round": 2,
+  "current_round": 4,
   "best": {
-    "round": 1,
-    "val_score": 2.35,
-    "test_score": 1.69
+    "round": 4,
+    "val_score": 2.23,
+    "test_score": 2.5
   },
   "reps": 2,
   "goal": {
@@ -524,7 +524,11 @@
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Pocket/ContentView.swift",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Pocket/PocketApp.swift",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Secrets.xcconfig",
-    "evals/dial-skill/scenarios/xcode-license-sudo/scenario.json"
+    "evals/dial-skill/scenarios/xcode-license-sudo/scenario.json",
+    "evals/dial-skill/flow/v3/hooks.json",
+    "evals/dial-skill/flow/v3/harness-answers.json",
+    "evals/dial-skill/flow/v4/hooks.json",
+    "evals/dial-skill/flow/v4/harness-answers.json"
   ],
   "metrics": [
     {
@@ -597,5 +601,5 @@
       "label": "Rings"
     }
   ],
-  "harness_sha": "063866219e9ce856c40023a6cf4f1b8a7dd6ecbb0cc7f6c4f90b58306b9a19f5"
+  "harness_sha": "075877463b552dbfa96f2ae1ec311f8055e995e88c9f2e143dea90a71b08e6b0"
 }

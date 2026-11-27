@@ -134,13 +134,22 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     expect(files['plugins/harness-device/hooks/codex.json']).toBe(readFileSync(join(root, 'plugins/harness-device/hooks/codex.json'), 'utf8'))
   })
 
-  it('hooks/asked and hooks/codex-asked alone are executable, as in the checkout', () => {
+  it("the device plugin's hook scripts alone are executable, as in the checkout", () => {
     const { files, executable } = bundle('1.2.3')
-    expect(executable).toEqual(['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked'])
+    expect(executable).toEqual(['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked', 'plugins/harness-device/hooks/start',
+      'plugins/harness-device/hooks/codex-start'])
     if (process.platform === 'win32') return
     for (const key of Object.keys(files).filter((key) => key !== '.claude-plugin/marketplace.json')) {
       expect((statSync(join(REPO, key)).mode & 0o100) !== 0, key).toBe(executable.includes(key))
     }
+  })
+
+  // sh runs each by its path, and a CRLF breaks its lines (`/bin/sh^M: bad interpreter`). cli.js carries their bytes from
+  // the checkout it is built in, a Windows one too, where core.autocrlf (GitHub's Windows images set it) would decide.
+  it("the device plugin's hook scripts are checked out with LF line ends on every platform", () => {
+    const { executable } = bundle('1.2.3')
+    const attributes = execFileSync('git', ['check-attr', 'eol', '--', ...executable], { cwd: REPO, encoding: 'utf8' })
+    expect(attributes.trim().split('\n')).toEqual(executable.map((path) => `${path}: eol: lf`))
   })
 
   it('the folder writer takes every key the build carries', () => {

@@ -27,6 +27,7 @@ import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
+import { startOutput } from './start.js'
 import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { carriedCodexHash, installedRoot } from '../devices/codexPlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
@@ -584,6 +585,41 @@ describe('harness device claude attach', () => {
 
   it('is not in DEVICE_USAGE', () => {
     expect(DEVICE_USAGE).not.toMatch(/attach/)
+  })
+})
+
+// No daemon socket anywhere: the line is decided from the hook's input and three files.
+describe('harness device claude start', () => {
+  const START_INPUT = { session_id: 's-1', hook_event_name: 'SessionStart', source: 'startup', cwd: '/repo' }
+  const noClaude = () => { throw new Error('start never looks for claude') }
+
+  it('prints the line with Harness\'s skill in the session\'s home and the plugin on, and exits 0', async () => {
+    skillIn(claudeHome)
+    expect(await device(['claude', 'start'], { stdin: chunks(JSON.stringify(START_INPUT)), claude: noClaude }))
+      .toEqual({ code: 0, out: [startOutput()], err: [] })
+  })
+
+  it.each<[string, (dataDir: string, codexHome: string) => AsyncIterable<string> | void]>([
+    ['the plugin uninstalled', () => { skillIn(claudeHome); pluginOn(false) }],
+    ['the plugin turned off', () => { skillIn(claudeHome); writeFileSync(settings, JSON.stringify({ enabledPlugins: { 'harness-device@openharness': false } })) }],
+    ['Claude Code removed', (dataDir) => { skillIn(claudeHome); writeRemoved(dataDir, 'claude', true) }],
+    ['no skill', () => {}],
+    ['the person\'s own dial skill', () => { skillIn(claudeHome, PERSONS) }],
+    ['Harness\'s skill in a Codex home only', (_dataDir, codexHome) => { skillIn(codexHome) }],
+    ['a session in the voice router\'s folder (a Harness one-shot)', (dataDir) => {
+      skillIn(claudeHome)
+      return chunks(JSON.stringify({ ...START_INPUT, cwd: join(dataDir, 'voice-route-scratch') }))
+    }],
+    ['no input', () => { skillIn(claudeHome); return chunks() }],
+  ])('prints nothing and exits 0: %s', async (_name, arrange) => {
+    const dataDir = folder()
+    const codexHome = folder()
+    const stdin = arrange(dataDir, codexHome) ?? chunks(JSON.stringify(START_INPUT))
+    expect(await device(['claude', 'start'], { dataDir, codexHome, stdin, claude: noClaude })).toEqual({ code: 0, out: [], err: [] })
+  })
+
+  it('start is not in DEVICE_USAGE', () => {
+    expect(DEVICE_USAGE).not.toMatch(/device (claude|codex) start/)
   })
 })
 
@@ -1381,6 +1417,46 @@ describe('harness device codex', () => {
       .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: true, enabled: false })] })
     expect(await device(['codex', 'enable'], windows)).toEqual({ code: 0, out: [], err: [] })
     expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+  })
+
+  /** Codex's SessionStart hook input as Codex 0.172.0 gives it. */
+  const CODEX_START_INPUT = {
+    session_id: '019abc00-0000-7000-8000-000000000001', transcript_path: '/rollout.jsonl', cwd: '/repo',
+    hook_event_name: 'SessionStart', model: 'gpt-5.5', permission_mode: 'default', source: 'startup',
+  }
+  const noCodex = () => { throw new Error('start never looks for codex') }
+
+  /** A Codex home with the plugin on in its config.toml and Harness's skill in its skills folder. */
+  function codexHomeOn(): string {
+    const codexHome = folder()
+    writeFileSync(join(codexHome, 'config.toml'), CODEX_PLUGIN_ON)
+    skillIn(codexHome)
+    return codexHome
+  }
+
+  it('codex start prints the line with Harness\'s skill in the Codex home and the plugin on there, and exits 0', async () => {
+    expect(await device(['codex', 'start'], { codexHome: codexHomeOn(), stdin: chunks(JSON.stringify(CODEX_START_INPUT)), codex: noCodex }))
+      .toEqual({ code: 0, out: [startOutput()], err: [] })
+  })
+
+  it.each<[string, (dataDir: string, codexHome: string) => AsyncIterable<string> | void]>([
+    ['Codex removed', (dataDir) => { writeRemoved(dataDir, 'codex', true) }],
+    ['the plugin turned off', (_dataDir, codexHome) => { writeFileSync(join(codexHome, 'config.toml'), `[plugins."${CODEX_PLUGIN}"]\nenabled = false\n`) }],
+    ['no plugin table', (_dataDir, codexHome) => { writeFileSync(join(codexHome, 'config.toml'), OWN_MARKETPLACE) }],
+    ['no config.toml', (_dataDir, codexHome) => { rmSync(join(codexHome, 'config.toml')) }],
+    ['a config.toml that does not parse', (_dataDir, codexHome) => { writeFileSync(join(codexHome, 'config.toml'), `${CODEX_PLUGIN_ON}[[[\n`) }],
+    ['no skill', (_dataDir, codexHome) => { rmSync(join(codexHome, 'skills'), { recursive: true }) }],
+    ['the person\'s own dial skill', (_dataDir, codexHome) => { skillIn(codexHome, PERSONS) }],
+    ['Harness\'s skill in the Claude Code home only', (_dataDir, codexHome) => {
+      rmSync(join(codexHome, 'skills'), { recursive: true })
+      skillIn(claudeHome)
+    }],
+    ['a session in the voice router\'s folder (a Harness one-shot)', (dataDir) => chunks(JSON.stringify({ ...CODEX_START_INPUT, cwd: join(dataDir, 'voice-route-scratch') }))],
+  ])('codex start prints nothing and exits 0: %s', async (_name, arrange) => {
+    const dataDir = folder()
+    const codexHome = codexHomeOn()
+    const stdin = arrange(dataDir, codexHome) ?? chunks(JSON.stringify(CODEX_START_INPUT))
+    expect(await device(['codex', 'start'], { dataDir, codexHome, stdin, codex: noCodex })).toEqual({ code: 0, out: [], err: [] })
   })
 
   it('codex with no verb, another verb or an extra word prints the usage and exits 1', async () => {

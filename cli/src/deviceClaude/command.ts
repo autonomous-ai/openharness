@@ -1,13 +1,15 @@
 /**
  * `harness device claude …` and `harness device codex …`: status, enable and disable, the way to take away or bring back
- * what the devices service sets up by itself once a dial has attached here, and three words the harness-device plugin
- * runs that a person never types: `asked` (its PermissionRequest hook), `link` (its mod, for the daemon's socket and the
- * devices' listener's), and `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
+ * what the devices service sets up by itself once a dial has attached here, and the words the harness-device plugin
+ * runs that a person never types: `asked` (its PermissionRequest hook), `start` (its SessionStart hook, start.ts: the
+ * line a session starts with), `link` (its mod, for the daemon's socket and the devices' listener's), and
+ * `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
  * neither reach the daemon's pipe nor the devices' nor sign for either: this process holds the session's poll and
  * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `codex asked` is the
- * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), never typed either. `disable` marks the
- * engine removed in dial-skill.json, which the devices service then leaves alone, and removes Harness's skill from the
- * engine's default home, from each folder an enable wrote and from each the service recorded in dial-setup.json.
+ * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), and `codex start` its SessionStart hook's, never typed
+ * either. `disable` marks the engine removed in dial-skill.json, which the devices service then leaves alone, and
+ * removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the service
+ * recorded in dial-setup.json.
  * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
  * recorded; a folder an earlier enable wrote with another home is not written again.
  * Codex's two also hold its harness-device plugin (devices/codexPlugin.ts) in the engine's default home and in each home
@@ -54,9 +56,10 @@ import { daemonPost, runAsked } from './asked.js'
 import { runCodexAsked } from './codexAsked.js'
 import { CALLER_LIVENESS, createDaemonProof, followInbox } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
+import { ownSkillIn, runStart } from './start.js'
 
-/** `asked`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and typed by
- *  hand they only wait on stdin or the dial, print a path or turn the dial. `vscode status`, `cursor status` and
+/** `asked`, `start`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and
+ *  typed by hand they only wait on stdin or the dial, print a path or a line, or turn the dial. `vscode status`, `cursor status` and
  *  `orca status` are too: each app shows whether Harness's extension or plugin is on. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code, Cursor and Orca to follow it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
@@ -184,6 +187,8 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       // Prints nothing, ever: what the hook prints, Claude Code reads as its decision.
       return runAsked({ stdin: deps.stdin, post })
     }
+    case 'start':
+      return runStart({ stdin: deps.stdin, dataDir: deps.dataDir, acts: () => pluginActs(deps.dataDir) && ownSkillIn(claudeHome()), out: deps.out })
     case 'link': {
       // The socket alone: a request over it is trusted by the filesystem, so the mod is handed no credential. Where
       // there is none (Windows), or the plugin is off or removed, no answer, and the mod tries again later.
@@ -228,6 +233,12 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
       // Prints nothing, ever: what the hook prints, Codex reads as its decision.
       return runCodexAsked({ stdin: deps.stdin, post, codexHome: deps.codexHome })
     }
+    case 'start':
+      // A config.toml that does not parse is not on: Codex cannot start a session on it.
+      return runStart({
+        stdin: deps.stdin, dataDir: deps.dataDir, out: deps.out,
+        acts: () => readRemoved(deps.dataDir).codex !== true && codexPluginState(deps.codexHome) === 'on' && ownSkillIn(deps.codexHome),
+      })
     default:
       deps.err(DEVICE_USAGE)
       return 1

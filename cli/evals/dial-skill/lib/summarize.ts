@@ -31,6 +31,9 @@ export interface Summary {
   /** Variant → condition: as `paired`, over the val and test cases pooled, where "above the baseline beyond noise" is
    *  read; one split alone holds too few cases for its interval to clear 0. */
   held_out_paired: Record<string, Record<string, Paired>>
+  /** Variant → condition: the paired difference in held-out recall (each case's mean hit) against the best round's
+   *  same condition, where a round's gain or fall beyond noise is read. */
+  held_out_recall: Record<string, Record<string, Paired>>
   best: string | null // _state.json's best round, by variant name
   warnings: string[]
 }
@@ -98,14 +101,22 @@ function conditionOf(id: string): string {
   return base === id ? 'clean' : id.slice(base.length + 1)
 }
 
-function caseMeans(rows: Row[], key: (id: string) => string = id => id): Map<string, number> {
+function caseMeans(rows: Row[], key: (id: string) => string = id => id, field = 'score'): Map<string, number> {
   const by = new Map<string, number[]>()
   for (const r of rows) {
-    if (!ok(r) || typeof r.grade?.score !== 'number') continue
+    if (!ok(r) || typeof r.grade?.[field] !== 'number') continue
     const k = key(r.prompt_id)
-    by.set(k, [...(by.get(k) ?? []), r.grade.score])
+    by.set(k, [...(by.get(k) ?? []), r.grade[field]])
   }
   return new Map([...by].map(([id, xs]) => [id, mean(xs)]))
+}
+
+// The deltas of a over b on the cases both have that keep accepts, with their t interval.
+function pairOf(a: Map<string, number>, b: Map<string, number>, keep: (id: string) => boolean): Paired | undefined {
+  const deltas = [...a].filter(([id]) => keep(id) && b.has(id)).map(([id, m]) => m - b.get(id)!)
+  if (!deltas.length) return undefined
+  const s = interval(deltas)
+  return { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
 }
 
 function readState(flow: string): Record<string, unknown> {
@@ -210,6 +221,8 @@ export function summarize(flow: string): Summary {
   // Case means per variant and condition, keyed by the case's split id, so a row written before conditions pairs
   // with a clean one.
   const means: Record<string, Record<string, Map<string, number>>> = {}
+  // Recall per case, as means, the same way: a need run that did the harm has hit 0, as heldOut counts it.
+  const recalls: Record<string, Record<string, Map<string, number>>> = {}
   const warnings: string[] = []
   for (const v of variantsOf(flow)) {
     const rows = readJsonl<Row>(join(flow, v, 'results.jsonl'), warnings)
@@ -222,9 +235,11 @@ export function summarize(flow: string): Summary {
     const change = changeOf(flow, v)
     variants[v] = {}
     means[v] = {}
+    recalls[v] = {}
     for (const c of conditions) {
       const rs = rows.filter(r => conditionOf(r.prompt_id) === c)
       means[v][c] = caseMeans(rs, splitIdOf)
+      recalls[v][c] = caseMeans(rs, splitIdOf, 'hit')
       variants[v][c] = statsOf(rs, errs.filter(e => conditionOf(e.prompt_id) === c),
         probes.filter(p => probeCondition(p) === c), split, means[v][c], change)
     }
@@ -238,12 +253,7 @@ export function summarize(flow: string): Summary {
       paired[v][c] = {}
       const base = means.baseline[c]
       if (!base) continue
-      const pair = (inSplit: (sp: string | undefined) => boolean): Paired | undefined => {
-        const deltas = [...means[v][c]].filter(([id]) => inSplit(split(id)) && base.has(id)).map(([id, m]) => m - base.get(id)!)
-        if (!deltas.length) return undefined
-        const s = interval(deltas)
-        return { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
-      }
+      const pair = (inSplit: (sp: string | undefined) => boolean) => pairOf(means[v][c], base, id => inSplit(split(id)))
       for (const sp of SPLITS) {
         const p = pair(x => x === sp)
         if (p) paired[v][c][sp] = p
@@ -253,8 +263,19 @@ export function summarize(flow: string): Summary {
     }
   }
   const round = (state.best as { round?: unknown } | undefined)?.round
-  return { variants, paired, held_out_paired: heldOutPaired,
-    best: typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null, warnings }
+  const best = typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null
+  // Against the best round, not the baseline: a round ships by beating the text it would replace.
+  const heldOutRecall: Record<string, Record<string, Paired>> = {}
+  const heldOutCase = (id: string) => split(id) === 'val' || split(id) === 'test'
+  const bestRecalls = best === null ? undefined : recalls[best]
+  if (bestRecalls) for (const v of Object.keys(variants).filter(v => v !== best)) {
+    heldOutRecall[v] = {}
+    for (const c of Object.keys(variants[v])) {
+      const p = bestRecalls[c] && pairOf(recalls[v][c], bestRecalls[c], heldOutCase)
+      if (p) heldOutRecall[v][c] = p
+    }
+  }
+  return { variants, paired, held_out_paired: heldOutPaired, held_out_recall: heldOutRecall, best, warnings }
 }
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
@@ -353,12 +374,14 @@ export function aggregateTable(s: Summary): string {
 // Val and test pooled, as counts: the held-out numbers the spec's targets are read against.
 export function heldOutTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'needless rings', 'line_ok', 'ask_ok', 'harmed', 'went_on',
-    'one_step', 'loaded', 'score vs baseline'])
+    'one_step', 'loaded', 'score vs baseline', 'recall vs best'])
   for (const { v, c, x: { held_out: h } } of each(s)) {
     const p = s.held_out_paired[v]?.[c]
+    const r = s.held_out_recall[v]?.[c]
     out.push(line([v, c, of(h.hit, h.need), of(h.rang, h.no_need), of(h.line_ok, h.line_n), of(h.ask_ok, h.need),
       of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs),
-      of(h.loaded, h.loaded_n), v === 'baseline' ? '' : p ? fmtPaired(p) : 'n/a']))
+      of(h.loaded, h.loaded_n), v === 'baseline' ? '' : p ? fmtPaired(p) : 'n/a',
+      v === s.best ? '' : r ? fmtPaired(r) : 'n/a']))
   }
   return out.join('\n')
 }

@@ -15,6 +15,9 @@
 # Signed test fixtures: a signature holds for these exact bytes, so core.autocrlf must never rewrite a line end.
 desktop/test/fixtures/tauri_signature/** -text
 
-# The device plugin's hook: sh runs it by its path, and a CRLF would break its lines. cli.js carries its bytes from
-# the checkout it is built in, a Windows one too, where core.autocrlf would otherwise decide.
+# The device plugin's hook scripts: sh runs each by its path, and a CRLF would break its lines. cli.js carries their
+# bytes from the checkout it is built in, a Windows one too, where core.autocrlf would otherwise decide.
 plugins/harness-device/hooks/asked text eol=lf
+plugins/harness-device/hooks/codex-asked text eol=lf
+plugins/harness-device/hooks/start text eol=lf
+plugins/harness-device/hooks/codex-start text eol=lf

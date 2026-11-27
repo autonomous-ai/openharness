@@ -1,7 +1,8 @@
 /**
  * Proves, before a pass, what Claude Code's skill listing gave the model in a condition: the dial's line, the crowd's
- * lines, the listing's length, and whether project instructions reached it: the staged CLAUDE.md, and none in clean.
- * Only Claude Code's saved transcript holds the listing; the stream names the skills alone.
+ * lines, the listing's length, whether project instructions reached it (the staged CLAUDE.md, and none in clean), and
+ * whether a variant's SessionStart hook gave it its line. Only Claude Code's saved transcript holds the listing and the
+ * hooks' context; the stream names the skills alone.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,7 +11,7 @@ import { claudeArgs, isDefaultProfile, spawnGroup, type AgentConfig, type Exit }
 import { parseClaudeStream, type RunResult, type Usage } from './parse.js'
 import type { Condition, Scenario } from './scenarios.js'
 import { cutUsd } from './spend.js'
-import { runProfileFolder, stage, unstage, type StagedSkill, type StageOptions, type Staged } from './stage.js'
+import { runProfileFolder, stage, unstage, type HarnessAnswer, type StagedSkill, type StageOptions, type Staged } from './stage.js'
 
 export type DialListing = 'full' | 'name-only' | 'cut' | 'absent'
 export interface Listing { dial: DialListing; skills: number; cut: number; chars: number }
@@ -29,6 +30,9 @@ export interface Probe {
   /** Whether the model was given project instructions: where a CLAUDE.md was staged, whether it quoted its first line;
    *  in clean, where none was, whether it answered anything but NONE. Null when the probe got no answer. */
   instructions: boolean | null
+  /** Whether the saved transcript holds the line a variant's SessionStart hook answers, as context given to the model.
+   *  Null when no answer gives such a line, or when the probe got no transcript. Never the line itself. */
+  start_line: boolean | null
   skills: string[]
   claude_version: string | null
   model: string | null
@@ -61,6 +65,40 @@ export function readListing(transcript: string, staged: StagedSkill[]): Listing 
   return null
 }
 
+/** The `additionalContext` of the first harness answer that prints a SessionStart hook's output, or null when none does. */
+export function startContext(answers: readonly HarnessAnswer[] | undefined): string | null {
+  for (const answer of answers ?? []) {
+    let out: { hookSpecificOutput?: { hookEventName?: unknown; additionalContext?: unknown } }
+    try {
+      out = JSON.parse((answer.stdout ?? '').trim())
+    } catch {
+      // Plain text: the hook's output is not a context Claude Code reads as a SessionStart hook's.
+      continue
+    }
+    const hook = out?.hookSpecificOutput
+    if (hook?.hookEventName === 'SessionStart' && typeof hook.additionalContext === 'string') return hook.additionalContext
+  }
+  return null
+}
+
+/** What SessionStart hooks added to the model's context, as Claude Code saves it in the transcript. */
+export function readStartContexts(transcript: string): string[] {
+  const contexts: string[] = []
+  for (const line of transcript.split('\n')) {
+    let event: { type?: unknown; attachment?: Record<string, unknown> }
+    try {
+      event = JSON.parse(line)
+    } catch {
+      // An empty line, or the last one torn by a probe killed mid-write.
+      continue
+    }
+    const a = event.attachment
+    if (event.type !== 'attachment' || a?.type !== 'hook_additional_context' || a.hookEvent !== 'SessionStart' || !Array.isArray(a.content)) continue
+    contexts.push(...a.content.filter((c): c is string => typeof c === 'string'))
+  }
+  return contexts
+}
+
 /** The probe's session is saved, unlike a run's: the listing is only in the transcript. One turn holds one short answer
  *  in the person's profile for seconds, and unstage removes it. */
 export function probeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin' | 'condition'>): string[] {
@@ -76,6 +114,7 @@ export function probeFailure(p: Omit<Probe, 'failure'>, condition: Condition, sk
   if (condition !== 'clean' && p.listing.chars > CROWD_LISTING_MAX) return 'listing over 20,000 characters'
   if (condition === 'clean' && p.instructions === true) return 'project instructions given'
   if (condition !== 'clean' && p.instructions === false) return 'CLAUDE.md not given'
+  if (p.start_line === false) return 'start line not given'
   return null
 }
 
@@ -91,7 +130,7 @@ export async function probeListing(s: Scenario, condition: Condition, opts: Stag
     const rules = existsSync(claudeMd) ? readFileSync(claudeMd, 'utf8').split('\n')[0] : null
     const timeoutMs = cfg.timeoutMs > 0 ? Math.min(cfg.timeoutMs, PROBE_TIMEOUT_MS) : PROBE_TIMEOUT_MS
     const base: Omit<Probe, 'failure'> = {
-      condition, at: new Date().toISOString(), listing: null, instructions: null, skills: [], claude_version: null, model: null, usage: { input_tokens: 0, output_tokens: 0 },
+      condition, at: new Date().toISOString(), listing: null, instructions: null, start_line: null, skills: [], claude_version: null, model: null, usage: { input_tokens: 0, output_tokens: 0 },
     }
     let exit: Exit
     let run: RunResult
@@ -109,10 +148,14 @@ export async function probeListing(s: Scenario, condition: Condition, opts: Stag
     } catch {
       transcript = null
     }
+    // Runs are not saved, so the probe's transcript is the one proof that the hook's line reached the model, as it is
+    // for the listing: a hook Claude Code never ran, or whose output it dropped, would measure the variant without it.
+    const line = startContext(opts.answers)
     const p: Omit<Probe, 'failure'> = {
       ...base,
       listing: transcript === null ? null : readListing(transcript, st.skills),
       instructions: rules === null ? run.answer.trim() !== 'NONE' : run.answer.includes(rules),
+      start_line: line === null || transcript === null ? null : readStartContexts(transcript).some((c) => c.includes(line)),
       skills: run.init?.skills ?? [],
       claude_version: run.init?.claude_version ?? null,
       model: run.model,
