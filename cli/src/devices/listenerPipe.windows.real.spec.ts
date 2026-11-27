@@ -42,7 +42,16 @@ describe.runIf(process.platform === 'win32')('the devices over a real pipe on Wi
     const listener = await openDevicesListener({
       path: null,
       pipe: { path: pipe, dataDir },
-      handlers: { front: frontHandler((app) => fronts.push(app)), notify: notifyHandler((mode) => ({ mode })), tabs: tabs.handler },
+      handlers: {
+        front: frontHandler((app) => fronts.push(app)),
+        // The answer, then this process's loop held past the ask's 2 s bound, as in run 45948212750: the answer is
+        // still taken.
+        notify: notifyHandler((mode) => {
+          setImmediate(() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2500))
+          return { mode }
+        }),
+        tabs: tabs.handler,
+      },
       log: (line) => lines.push(line),
     })
     expect(lines).toEqual(['[devices] listener open'])

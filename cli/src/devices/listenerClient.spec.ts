@@ -397,6 +397,70 @@ describe('askDevices says why it answers null', () => {
   })
 })
 
+/** This process's event loop held for [ms], as a busy CLI or daemon holds it: not a wait, the repro. */
+const hold = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/** [answer], then the loop held for [ms]: the answer is with the kernel by then, as Node writes it in a nextTick, and
+ *  the loop runs again only past the client's bound. */
+const answerThenHold = (answer: (res: ServerResponse) => void, ms = 400) => (res: ServerResponse) => {
+  answer(res)
+  setImmediate(() => hold(ms))
+}
+
+/** A listener's late answer, [ms] after the request with the loop free; `written` settles once it was sent. */
+function lateAnswer(answer: (res: ServerResponse) => void, ms = 500) {
+  let sent = () => {}
+  const written = new Promise<void>(resolve => { sent = resolve })
+  return { written, answer: (res: ServerResponse) => { setTimeout(() => { answer(res); sent() }, ms) } }
+}
+
+// Run 45948212750: the devices logged `shown` at 06:06:58.843 and the CLI printed `no dial` about 5 s later. Node runs a
+// timer that expired while the loop was held before it reads a socket that became readable meanwhile.
+describe.skipIf(process.platform === 'win32')('an answer that arrived inside the bound is taken, though the loop runs again only after it', () => {
+  it('tellDevices: true', async () => {
+    const dir = dataDir()
+    await listener(dir, answerThenHold(res => { res.writeHead(204).end() }))
+    expect(await tellDevices(dir, FRONT, { timeoutMs: 100 })).toBe(true)
+  })
+
+  it('askDevices: the answer, with no why', async () => {
+    const dir = dataDir()
+    await listener(dir, answerThenHold(json('{"result":"shown"}')))
+    const why = vi.fn()
+    expect(await askDevices(dir, NOTICE, { timeoutMs: 100, why })).toEqual({ result: 'shown' })
+    expect(why).not.toHaveBeenCalled()
+  })
+
+  it('streamDevices, held past its default 2 s for the headers: true, and the chunk handed on', async () => {
+    const dir = dataDir()
+    await listener(dir, answerThenHold(res => { res.writeHead(200, { 'content-type': 'application/x-ndjson' }).end(LINE) }, 2500))
+    const chunks: Buffer[] = []
+    expect(await streamDevices(dir, TABS, data => { chunks.push(data) }, { signal: open() })).toBe(true)
+    expect(Buffer.concat(chunks).toString()).toBe(LINE)
+  })
+
+  // Review Focus 2: the fix gives the loop one turn to read what arrived, never a longer bound.
+  it('askDevices: an answer that comes after the bound, the loop free, is still a timeout', async () => {
+    const dir = dataDir()
+    const late = lateAnswer(json('{"result":"shown"}'))
+    await listener(dir, late.answer)
+    const why = vi.fn<(reason: string) => void>()
+    expect(await askDevices(dir, NOTICE, { timeoutMs: 100, why })).toBeNull()
+    expect(why.mock.calls).toEqual([[expect.stringMatching(/^timeout before headers/)]])
+    await late.written
+  })
+
+  it('streamDevices: the headers are bounded by timeoutMs, and an answer after it, the loop free, is none', async () => {
+    const dir = dataDir()
+    const late = lateAnswer(res => { res.writeHead(200, { 'content-type': 'application/x-ndjson' }).end(LINE) })
+    await listener(dir, late.answer)
+    const chunk = vi.fn()
+    expect(await streamDevices(dir, TABS, chunk, { signal: open(), timeoutMs: 100 })).toBe(false)
+    expect(chunk).not.toHaveBeenCalled()
+    await late.written
+  })
+})
+
 // On Windows the devices listen on the pipe their record names, and each request and answer proves devices-token
 // (listenerPipe.ts). Here the pipe is a socket named harness-<id> in the data folder, which isPipePath takes off Windows.
 describe('over a pipe', () => {
@@ -575,6 +639,14 @@ describe('over a pipe', () => {
         expect(await asked(dir, options)).toEqual({ answer: null, reasons: ['unproven'] })
       }
     })
+  })
+
+  it('an answer that arrived inside the bound is taken, though the loop runs again only after it', async () => {
+    const { dir, pipe, token, options } = piped()
+    await onPipe(pipe, token, answerThenHold(json('{"result":"shown"}')))
+    const why = vi.fn()
+    expect(await askDevices(dir, NOTICE, { ...options, timeoutMs: 100, why })).toEqual({ result: 'shown' })
+    expect(why).not.toHaveBeenCalled()
   })
 
   it("a devices-token other than the listener's: false, null, false, and the listener takes nothing", async () => {
