@@ -8,18 +8,21 @@ away from that agent and the agent rang nothing, is stopped once and asked to de
 notify`, or end. The turn's first end is never announced as done. Nothing else about how a turn ends changes.
 
 **Architecture:** the Harness Device plugin gains a `Stop` hook for Claude Code (`hooks/hooks.json`) and for Codex
-(`hooks/codex.json`). It runs `harness device claude stop` or `harness device codex stop` (`cli/src/deviceClaude/stop.ts`).
-That command reads the hook's input in its own process. It ends at once when `stop_hook_active` is set, when there is no
-`last_assistant_message`, or when that message's last 400 characters hold no `?` or `？`. Otherwise it asks the devices'
-listener one new message, `nudge` (engine and session id), and waits at most 300 ms. On `{ "nudge": true }` it prints
-Claude Code's and Codex's block (`{"decision":"block","reason":…}`). The devices answer yes only when a dial is attached,
-no notice of that agent is pending, the person is not present (Part 2's `present`), and the agent was not nudged
-already. A yes also tells the observed source (`cable/hosts/observed.ts`) that this outside agent's stop goes on. The
-source then holds that agent's turn end until its next stop, or until the session has been quiet for 10 s since its last
-activity, and at most 120 s from the yes; when the hold expires, the turn end is announced. A Harness agent's first end is already left
-unannounced by its reader (`stopHookContinuation`) and `DONE_QUIET_MS`. The eval measures the hook first, as a variant
-the fake `harness` answers, against the same text without it. The product is built only if the variant ships. The core,
-`cli/hook/notify.mjs`, `core/observedHook.ts`, the backend and the firmware do not change.
+(`hooks/codex.json`). It runs `harness device claude stop` or `harness device codex stop`
+(`cli/src/deviceClaude/stop.ts`). That command reads the hook's input in its own process. It ends at once when
+`stop_hook_active` is set, when there is no `last_assistant_message`, or when that message's last 400 characters hold
+no `?` or `？`. Otherwise it asks the devices' listener one new message, `nudge` (engine and session id), and waits at
+most 300 ms. On `{ "nudge": true }` it prints Claude Code's and Codex's block (`{"decision":"block","reason":…}`). The
+devices answer yes only when a dial is attached, that agent rang no notice in this turn (a card left from an earlier
+turn does not count), the person is not present (Part 2's `present`), and the agent was not nudged already. A turn
+started by another session's message (a `relayed` prompt) is no prompt of the person's: it neither starts a new turn
+for that check nor ends the once rule. A yes also tells the observed source (`cable/hosts/observed.ts`) that this
+outside agent's stop goes on. The source then holds that agent's turn end until its next stop, or until the session
+has been quiet for 10 s since its last activity, and at most 120 s from the yes; when the hold expires, the turn end
+is announced. A Harness agent's first end is already left unannounced by its reader (`stopHookContinuation`) and
+`DONE_QUIET_MS`. The eval measures the hook first, as two variants the fake `harness` answers, each against the same
+text without it: v6 (v1 and the hook) against v1, then v5 (v4 and the hook) against v4. The product is built only if
+both pass. The core, `cli/hook/notify.mjs`, `core/observedHook.ts`, the backend and the firmware do not change.
 
 **Tech Stack:** TypeScript (Node 24), Vitest (unit, `cli/e2e`, the eval's own config), POSIX sh and Windows PowerShell
 for the hooks, Claude Code 2.1.332 and Codex 0.172.0 for the spike and the hand checks, `claude -p` for the eval.
@@ -27,38 +30,45 @@ for the hooks, Claude Code 2.1.332 and Codex 0.172.0 for the spike and the hand 
 **Spec:** [docs/plans/2026-11-26-needs-you-right-design.md](2026-11-26-needs-you-right-design.md), section "Part 5. A
 second look when a turn stops", with Part 1 ("Hooks in a variant", "Targets and gates", "Cost"), Part 2 (`present`),
 Part 4 ("Round 2", the gate), Part 7 (the Codex manifest and its trust write), "Design", "Release order", "Platforms",
-"Tests (red first)", "Docs in the same pull requests" and "Decided by the maintainer". The approved text is the copy Part
-4's branch (`feat/needs-you-right-start-line`) carries. Its Part 5 section is byte-identical to the approved spec the
-orchestrator holds. References: [Part 4's plan](2026-11-27-needs-you-right-part4-plan.md) (on that branch; the eval's
-mechanics and the session-start command this plan reuses) and [Part 7's plan](2026-11-26-needs-you-right-part7-plan.md)
-(the Codex plugin, its trust, the spike recipe).
+"Tests (red first)", "Docs in the same pull requests" and "Decided by the maintainer". The approved text is `main`'s
+spec after Part 4's pull request (#4672) merges, plus this branch's first commit, which the main session makes after
+the rebase (G1): Part 5's status (opened by a miss in use), the hold rule, the two-pair ship rule and the $270 cap.
+References: [Part 4's plan](2026-11-27-needs-you-right-part4-plan.md) (on `main` after #4672; the eval's mechanics,
+the `recall vs best` pair and the session-start command this plan reuses) and
+[Part 7's plan](2026-11-26-needs-you-right-part7-plan.md) (the Codex plugin, its trust, the spike recipe).
 
 ## Decisions that bind this plan
 
-1. **Gates.** Nothing is built or measured before **G0**. G0 means Part 4's round 2 is read and the PM opens Part 5: the
-   held-out `crowd` recall of the text that ships is under 90%, or no line ships and v1's 41 of 48 stands (the spec). If
-   Part 4 ships with held-out `crowd` recall at 90% or more, Part 5 stops and this plan is not run.
-   **G1** means Part 4's pull request is merged into `main` and this branch is rebased onto it. Part 4's PR merges with
-   or without its product part. G1 comes first because Part 4 edits the same plugin files, `command.ts`, the eval's
-   harness and the spec. **GO** means the PM says go for Task 4's spend. **V** means Task 4's verdict is that the hook
-   ships.
-   **G0 is not open yet** (2026-11-27). If it opens, Part 5's eval would pass the $250 spend cap by about $40. The PM
-   then asks the maintainer to raise the cap, with the numbers, before GO. GO is not given until the maintainer has set
-   a cap that covers Task 4's spend plan.
+1. **Gates.** **G0 is open** (the PM and the spec's author, 2026-11-27), by a miss in use, not by the eval. Part 4
+   shipped v4 (#4672: v1's skill text and a SessionStart line, `harness device claude start`). v4's held-out recall was
+   48 of 48 in `crowd`, 32 of 32 in `clean` and 16 of 16 in `name-only`, so the eval alone kept Part 5 shut. Then a
+   Claude Code session days long, with the skill and v1's text, ended a turn on a decision only the maintainer could
+   make and rang nothing. v4's line comes back only at start, resume, clear and compaction, so in a long session it
+   sits far back in the context. That is the case this part catches.
+   **G1** means #4672 is merged into `main`, this branch is rebased onto it, and the spec's Part 5 edits are committed
+   as the branch's first commit after the rebase. The main session makes that commit; it is not a task. G1 comes first
+   because Part 4 edited the same plugin files, `command.ts`, the eval's harness and the spec.
+   **GO** means the PM approves this plan and says go for Task 4's spend. No eval runs before. The maintainer raised the
+   design's cap to $270 for Part 5 (2026-11-27). The flow has spent S = $197.01 (Part 4 round 2's status row), so the
+   headroom is $72.99, and Task 4's plan needs about $70 ($25 for (b), $45 for (a)), the flow then at about $268.
+   **V** means Task 4's verdict is that the hook ships (decision 10: both pairs pass).
 2. **Eval first, then the product** (spec, Part 1: "Parts 4 and 5 are measured this way before any product code"; the
    PM's decision, 2026-11-27). Tasks 2-5 measure the hook through the fake `harness`. Tasks 6-15 start only after V. If
-   the variant does not ship, the pull request carries Tasks 2-5 alone. No product code exists then, so nothing has to
-   be cut.
+   the hook does not ship, the pull request carries Tasks 2-5 alone. No product code exists then, so nothing has to be
+   cut.
 3. **The core does not change.** No file joins `architecture.coreFiles.txt`. No request joins `core/api.ts`.
    `cli/hook/notify.mjs` and `core/observedHook.ts` stay as they are. `nudge` reaches only the devices' own listener.
    The hold lives in the devices process (`cable/hosts/observed.ts`, `services/devices.ts`). The one engine reader that
    may change is Codex's (`engines/codex/normalizer.ts`, Task 13). It runs in the engine-codex process and is not one of
    the core's files.
-4. **"The skill is on" is read in the hook's own process.** It uses the rule Part 4's `start` uses: Claude Code needs
-   `pluginActs(dataDir) && ownSkillIn(claudeHome())`; Codex needs not removed, `codexPluginState(codexHome) === 'on'`
-   and `ownSkillIn(codexHome)`. Only the hook knows its session's home, so the devices check the other four conditions.
+4. **"The skill is on" is read in the hook's own process.** It uses the `acts` that `command.ts` passes to `runStart`
+   on `main` after #4672: Claude Code `pluginActs(deps.dataDir) && ownSkillIn(claudeHome())`; Codex
+   `readRemoved(deps.dataDir).codex !== true && codexPluginState(deps.codexHome) === 'on' && ownSkillIn(deps.codexHome)`
+   (`ownSkillIn` from `deviceClaude/start.ts`). Only the hook knows its session's home, so the devices check the other
+   conditions.
 5. **Once.** Claude Code's `stop_hook_active` ends the second look. The devices also refuse a second yes for an agent
-   they nudged until the person's next prompt to it, the agent leaving, or 10 minutes (Task 9). This holds even for an
+   they nudged until the person's next prompt to it (an outside `turn-start` whose source is `person` or `dial`; a
+   `relayed` one does not count), the agent leaving, or 10 minutes (Task 9). This holds even for an
    engine or version that does not set `stop_hook_active` on the continuation.
 6. **Harness's own one-shots get no look.** The rule is Part 4's decision 13: a hook input whose `cwd` is the data
    folder or inside it (`within`).
@@ -69,19 +79,40 @@ mechanics and the session-start command this plan reuses) and [Part 7's plan](20
 
 The PM's decisions on the draft's open questions (2026-11-27):
 
-9. **What the variant is paired with.** The variant is the text that would ship plus the Stop hook, paired against that
-   same text without it: v1 if Part 4's line does not ship, v4 if it does (Tasks 3 and 4). Part 5's gate is read on
-   that pair.
-10. **Part 5's ship rule is Part 4's** (its decisions 9 and 10), paired against decision 9's base. Held-out recall must
-    rise beyond noise in `crowd` or `name-only` and fall beyond noise in no condition. The 54 pooled held-out no-need
-    runs (`crowd` 3 reps, `clean` 2, `name-only` 1) may hold at most 2 needless rings. `harmed` and `went_on` may be no
-    worse beyond noise. The extra rounds (`nudged`) and the cost per run are reported, not gated (Task 4).
-11. **Order:** eval first, product only after the verdict (decision 2).
-12. **The hold, changed from the spec.** After a yes, the devices hold the outside agent's turn end until its next
-    stop, or until the session has been quiet for `CONTINUE_QUIET_MS = 10_000` since its last activity, and at most
-    `CONTINUE_MAX_MS = 120_000` from the yes. When the hold expires, the held turn end is announced (Task 7). The spec's
-    flat 10 s from the yes is not built. **Activity** is what the observed source already sees of a session, and
-    nothing new:
+9. **Two variants, each paired with the same text without the hook** (Task 3). **v5** is v4's `SKILL.md`, v4's
+   `hooks.json` (its `SessionStart`) and the Stop hook, paired with v4. **v6** is v1's `SKILL.md` and the Stop hook
+   alone (no `SessionStart`), paired with v1's committed `crowd` held-out rows (41 of 48). v1 is v4 without its line:
+   it stands for a long session whose line is far back. v1's and v4's `SKILL.md` are the same bytes.
+10. **Part 5's ship rule** (the PM, 2026-11-27; the spec's Part 5, "Measured"). Two pairs, held out (val and test
+    pooled), with the extra rounds per run reported. v4 already rang every held-out ask, so a gain over it cannot be
+    measured. The hook ships only when both pairs pass.
+    - **(a) No harm:** v5 against v4, val and test in every condition (`crowd` 3 reps, `clean` 2, `name-only` 1).
+      Recall down beyond noise in none. At most 2 needless rings in the 54 pooled held-out no-need runs (27 + 18 + 9).
+      `harmed` and `went_on` at most v4's in each condition, one run either way being noise (the PM, 2026-11-27):
+      v5's `harmed` count at most v4's + 1, and its `went_on` count at least v4's - 1. `nudged` and the cost
+      per run are reported, not gated. Against v4 the need runs already ring, and the fake blocks only before a ring,
+      so it blocks almost nothing there: this pair measures harm, not gain.
+    - **(b) The case it is for:** v6 against v1's committed `crowd` held-out rows (41 of 48), `crowd` val and test at
+      **3 reps** (75 runs, 48 of them need runs), decided **at run level** (the PM, 2026-11-27): Fisher's exact test,
+      one-sided, p < 0.05, on v6's held-out need hits against v1's 41 of 48. It passes at 47 of 48 or more (48: p ≈
+      0.006; 47: p ≈ 0.030; 46: p ≈ 0.079). Counted by run, as the spec says: v1's 7 misses sit in 4 of the 16 cases
+      (`retry-policy-rollout` 0 of 3, `tax-rate-unknown` 1 of 3, `security-key-touch` 2 of 3, `xcode-license-sudo` 2
+      of 3), where a paired case interval is no test of (b). That interval is reported, not gated. (b) runs first;
+      failed, (a) is not run.
+    - **"Beyond noise"** for (a)'s recall is Part 4's (its decision 9; `lib/summarize.ts` `pairOf`, the held-out
+      table's `recall vs best` column, `recall vs base` after Task 2). Per case, take the mean `hit` over that variant's
+      own reps; pair the variant's case means with its base's over the held-out need cases both scored; take the 95% t
+      interval of the differences (`interval`, t at n - 1 df). Down beyond noise: the high end below 0. Task 2 makes
+      `summarize` pair v6 with v1 and v5 with v4 (`_state.json` `bases`), since the best round is v4, and gives (b)'s
+      Fisher p beside it.
+11. **Order:** eval first, product only after the verdict (decision 2). In Task 4, pair (b) runs first: it is the gain.
+    If it fails, (a) is skipped and its ~$45 is not spent, no product is built (Tasks 6-15 do not run), and the branch
+    carries the eval and its rows alone (Tasks 2-5). If it passes, (a) runs only when S + $46 <= $270; over it, Task 4
+    stops and reports to the PM, who asks the maintainer. The cap is never raised by the flow.
+12. **The hold, as the spec states it** (the PM's rule, 2026-11-27). After a yes, the devices hold the outside agent's
+    turn end until its next stop, or 10 s of silence after the session's last activity, at most 120 s from the yes:
+    `CONTINUE_QUIET_MS = 10_000`, `CONTINUE_MAX_MS = 120_000`. When the hold expires, the held turn end is announced
+    (Task 7). **Activity** is what the observed source already sees of a session, and nothing new:
     - any hook event `ObservedSource.ingest` takes for that entry (it sets `agent.lastActivityAt`; outside a pane these
       are the native hook's events, such as `subagent-start` and `subagent-stop`, since no tool events reach Harness);
     - the session's transcript growing: `deps.fileStamp(entry.transcriptPath).mtime` (`lib/sessionSearch/externals/support.ts`
@@ -94,6 +125,10 @@ The PM's decisions on the draft's open questions (2026-11-27):
 15. **Windows by hand:** one hand check on the Dell x64 Windows test PC with throwaway profile folders, under the Dell
     rules: the testers act on their own, no reboot, no change to Smart App Control, no real accounts, and everything
     restored afterwards (Verification 5).
+16. **The cap is $270** (the maintainer, 2026-11-27). Every Task 4 invocation passes `--spend-cap-usd 270`, never more.
+    The runner refuses a cap above its `DESIGN_CAP_USD`, which is 250 on `main`, so Task 2 raises it to 270.
+17. **No scenario for the miss in use** (the PM, 2026-11-27). A new scenario would change the splits. Pair (b) stands
+    in for the long session by leaving the line out.
 
 ## Facts the spike must settle (Task 1)
 
@@ -122,8 +157,12 @@ with the real CLI and reports yes or no with the evidence. Then the main session
 - **F8.** How `codex exec` shows itself to a Stop hook: an input field, an environment variable, or the rollout's
   `session_meta` `source`.
 - **F9, timing on this Mac.** For each engine: from the end of the answer to the plugin hook's exit, the native
-  `notify.mjs` Stop and the plugin's hook run side by side. The record gives which one reaches the daemon first, over 10
-  runs.
+  `notify.mjs` Stop and the plugin's hook run side by side. Over 10 runs, the record gives the order and the gap, at
+  the daemon, between the native `turn-stop` and the moment the nudge would arrive: the plugin's stand-in hook spawns
+  the branch's CLI once, as `harness device claude stop` will, and each of the two hooks stamps the wall clock when it
+  reaches the daemon. It states whether every nudge lands within `ANSWER_GRACE_MS` (1.5 s) of its `turn-stop`. A nudge
+  later than that in any run means the devices could already have told "done" before the yes, so the hold (Task 7)
+  would come too late.
 - **F10, activity in a continuation (decision 12).** For each engine, the longest gap between two writes to the
   transcript (Claude Code) or rollout (Codex) from the block to the next Stop, over the same 10 runs. The stub's second
   answer runs one Bash tool call, so the gap includes a tool's run. It says how often a real continuation would sit
@@ -148,15 +187,24 @@ with the real CLI and reports yes or no with the evidence. Then the main session
   `services/devices.ts` `port.observed` counts `person` and `dial` as the person's prompt: it sets `prompted` (Part 2's
   outside presence), follows the dial (`followPrompt`), counts `usage.turnStarted(…, true)` and ends the agent's notice.
 - **The notice path.** `noticeCaller` resolves engine and session id to an agent: a Harness agent by
-  `core.agents.advertised()`, else an outside row, else `observedAgentId`. `Notices.pending(agentId)` says whether a
-  card is pending. `present(agentId)` is Part 2's rule. `cable.isConnected` says whether a dial is attached.
+  `core.agents.advertised()`, else an outside row, else `observedAgentId`. The listener's `notice` handler calls
+  `notices.notify(ask)` and counts a `shown` one. `Notices.pending(agentId)` says whether a card is pending, which may
+  be one left from an earlier turn. `present(agentId)` is Part 2's rule. `cable.isConnected` says whether a dial is
+  attached.
+- **Turn marks.** `began` (`Map<agentId, Date.now()>`) is set by `dispatch` at a turn's first `processing` card and
+  deleted at its `done`. For a Harness agent it is the only turn mark; who started that turn only the core knows. For
+  an outside agent it restarts with any turn, a `relayed` one too. `prompted` (`Map<agentId, monotonic>`, at most
+  `PROMPTED_MAX`) holds an outside agent's last `person` or `dial` prompt, and is deleted at any other turn-start, so
+  neither can say "this turn" as the spec means it (Task 8 keeps one set for it).
 - **The listener.** `services/devicesListener.ts` handlers are typed `ListenerHandler { maxBytes, perSecond, handle }`.
   `noticeHandler` is the model: it validates, hands on typed fields, keeps nothing and logs nothing.
   `devices/listenerClient.ts` `askDevices` returns the answer's object, a status number, or null.
 - **The eval.** `cli/evals/dial-skill/lib/stage.ts` `fakeHarness` answers a call whose argv matches exactly, with fixed
   output, and records every call in `rec/calls.jsonl`. A variant's `hooks.json` and `harness-answers.json` are staged
   as the repo's `.claude/settings.json` and are refused unless `_state.json` `harness_paths` lists them
-  (`run-eval.mjs` `variantHooks`). The fake cannot yet answer by its input.
+  (`run-eval.mjs` `variantHooks`). The fake cannot yet answer by its input. `summarize` pairs each round's held-out
+  recall with `_state.json`'s best round (`recall vs best`), which is round 4 (v4). `run-eval.mjs` refuses a
+  `--spend-cap-usd` above `DESIGN_CAP_USD = 250`.
 
 ## Global Constraints
 
@@ -177,6 +225,9 @@ with the real CLI and reports yes or no with the evidence. Then the main session
 - **`nudge`:** `{ type: 'nudge', engine: 'claude' | 'codex', sessionId }`, answered `{ nudge: boolean }`.
   `NUDGE_ANSWER_MS = 300` bounds the request and its answer (`askDevices` `timeoutMs`). No answer, any status, or any
   other body means no. `NUDGE_MAX_BYTES = 256` and `NUDGE_PER_SECOND = 1`. The handler keeps nothing and logs nothing.
+- **Rang in this turn:** the agent ran `harness device notify` since its turn's mark: for an outside agent, its last
+  `turn-start` from `person` or `dial`; for a Harness agent, its last new `began`. A card left from an earlier turn does
+  not count, and a `relayed` turn-start is no mark.
 - **The hold:** until the next stop, or `CONTINUE_QUIET_MS = 10_000` with no activity (decision 12), and at most
   `CONTINUE_MAX_MS = 120_000` from the yes. The held turn end is announced when the hold expires with no next stop.
 - **The hook:** event `Stop`, no matcher, `timeout: 5`, `onFailure: 'continue'`, in the plugin's two-shell form. stdin
@@ -189,9 +240,9 @@ with the real CLI and reports yes or no with the evidence. Then the main session
 - **Unchanged:** `cli/src/core/`, `cli/src/architecture.coreFiles.txt`, `core/api.ts`, `cli/hook/notify.mjs`,
   `lib/agentNotifications.ts`, `engines/claude/normalize.ts`, `devices/codexPluginTrust.ts`, `DIAL_SKILL` and
   `DIAL_SKILL_DESCRIPTION`, the backend, the firmware, Desktop.
-- **Eval:** every invocation of Task 4 passes `--spend-cap-usd <cap>`, `--concurrency 3` at most and `--timeout-s 900`.
-  The cap is 250 today; only the maintainer raises it (decision 1), and Task 4 uses the cap the maintainer set. On exit 3
-  or 4, stop and report the spend. Never raise the cap yourself, switch accounts or work around a limit.
+- **Eval:** every invocation of Task 4 passes `--spend-cap-usd 270`, `--concurrency 3` at most and `--timeout-s 900`
+  (decision 16). On exit 3 or 4, stop and report the spend. Never pass a higher cap, switch accounts or work around a
+  limit.
   `CLAUDE_CONFIG_DIR` is the session's profile, never `~/.claude`. No transcript text, judge reason, path or user name
   goes into any commit, `change.md`, narrative, README or pull request. Nothing CPU-heavy runs on the Mac.
 - **Red, then green:** a behavior task commits its failing test first, then the change. Run only the named specs (the
@@ -204,8 +255,9 @@ Nothing is stored or synced. A new local message is exposed, so here are its nin
 
 1. **Growth.** In memory only. One hold per observed entry: a timer, a word and two times (the yes, the last activity), within the source's 50
    sessions. At
-   most 64 nudged agents (Task 9), dropped at the person's next prompt, when the agent leaves, or after 10 minutes. No
-   file, row or count.
+   most 64 nudged agents (Task 9), dropped at the person's next prompt, when the agent leaves, or after 10 minutes. At
+   most 64 agent ids that rang a notice in their turn (Task 8), each dropped at its next turn mark or when the agent
+   leaves. No file, row or count.
 2. **Concurrency.** One Stop event runs Harness's native hook and the plugin's hook side by side, so the blocked stop's
    `turn-stop` and the nudge can reach the devices in either order. Task 7 handles both orders. The devices process is
    single-threaded, and `nudge` is answered inside `part.call`.
@@ -230,7 +282,9 @@ Nothing is stored or synced. A new local message is exposed, so here are its nin
 
 ## Open questions (for the main session)
 
-None open. The PM answered the draft's seven on 2026-11-27 (decisions 9-15).
+None open. The PM answered the draft's seven on 2026-11-27 (decisions 9-15), then set the two-pair ship rule
+(decision 10) with its run-level test for (b) and the one-run reading of `harmed` and `went_on` for (a), the spec's
+hold rule (decision 12), the $270 cap (decision 16) and no new scenario (decision 17).
 
 ## Review Focus
 
@@ -261,14 +315,23 @@ Stated limits for the pull request:
 - A continuation that writes nothing to its transcript for 10 s (one long model call with no tool) is announced done
   before its next stop, and one that runs past 120 s is announced at 120 s. Task 1's F10 gives the gaps measured.
 - The eval runs Claude Code alone. Codex is judged by the field counts.
+- A Harness agent's turn started by another session's message restarts its mark for "rang in this turn": the devices
+  cannot tell who started a Harness agent's turn (only the core knows, and the core does not change). Such a turn that
+  ends on a question with no notice of its own may get one look.
+- No scenario is built for the miss in use: a turn in a long session that ends a long report with the ask only in its
+  last lines. The nearest are the long multi-step need cases (`logger-migration-publish`, `retry-policy-rollout`,
+  `security-key-touch`), whose last answer may be a long report, but none is built for it, and each run is one short
+  `claude -p` session. No scenario is added, since it would change the splits (decision 17). Pair (b) stands in for
+  the long session by leaving the line out.
 
 ---
 
-## Before V (after G0; Tasks 2-5 after G1)
+## Before V (G0 is open; Tasks 2-5 after G1)
 
 ### Task 1: the spike, both engines' blocked stop against a local stub
 
-**Effort:** high. **Depends on:** G0. **Test that must fail first:** none (it measures and changes no repository file).
+**Effort:** high. **Depends on:** G0 (open). **Test that must fail first:** none (it measures and changes no
+repository file).
 
 **Files:** none in the repository. Scratch only, in the session's scratchpad: the stubs, a throwaway hook script that
 logs its stdin (keys and lengths only; message text is written only to the scratch record), the records, and the
@@ -295,8 +358,8 @@ report.
   - `CLAUDE_CODE_ENTRYPOINT` in the hook, under the TUI and under `claude -p`.
   Then `claude -p` with the hook in a scratch repo's `.claude/settings.json` and `--setting-sources project`: is the
   block honored? Repeat with Harness's native hooks installed by an isolated daemon (Part 6's Verification recipe).
-  Record which of the two Stop hooks reaches the daemon first, and the times from the answer's end to each hook's exit,
-  over 10 runs. Over the same runs, record the transcript's mtime at each write from the block to the next Stop, and
+  Record F9 over 10 runs: which of the two Stop hooks reaches the daemon first, the gap between them, and the times
+  from the answer's end to each hook's exit. The stamps are taken by wrappers in the spike's scratch settings only. Over the same runs, record the transcript's mtime at each write from the block to the next Stop, and
   report the longest gap (F10).
 - [ ] **Step 3: Codex (F2-F8).** In the isolated `CODEX_HOME`, use a scratch copy of `plugins/harness-device` whose
   `codex.json` gains the same `Stop` hook. Install it through `codex plugin` and trust it as Part 7's spike did. Run the
@@ -308,26 +371,31 @@ report.
   - the second Stop's `stop_hook_active`;
   - `hooks/list` for the Stop hook's trust state and hash;
   - what a `codex exec` run gives a Stop hook that says it is headless;
-  - over 10 runs, the longest gap between rollout writes from the block to the next Stop (F10).
+  - over 10 runs, F9 as in Step 2, and the longest gap between rollout writes from the block to the next Stop (F10).
   Then replay the recorded rollout through `engines/codex/normalizer.ts` (`npx tsx` from `cli/`, a scratch script) and
   record the live events it makes (F5).
 - [ ] **Step 4: Report** F1-F10 to the main session, each yes or no with its evidence: counts, keys, record types and
   times, with no answer text. Keep the scratch records. Tasks 10 and 13 copy their fixtures from them (records Codex
   and Claude Code wrote against the stub, nothing of a person). If Claude Code does not honor the block from a plugin,
   or Codex has no `last_assistant_message`, stop. That engine's side is then not built, and the main session decides.
-  The same holds when F8 finds no sign of `codex exec` (decision 14).
+  The same holds when F8 finds no sign of `codex exec` (decision 14). If F9 finds any run whose nudge reaches the
+  daemon more than `ANSWER_GRACE_MS` after its `turn-stop`, stop and report before Task 7 starts, with the order and
+  the gaps (median and maximum).
 
-### Task 2: the eval answers a Stop hook by its input, and counts the nudges
+### Task 2: the eval answers a Stop hook by its input, counts the nudges, and pairs a round with its base
 
-**Effort:** high. **Depends on:** G1. It changes files under `_state.json` `harness_paths`, so Task 4's first pass
-asks for `--approve-harness`.
+**Effort:** high. **Depends on:** G1. It changes `run-eval.mjs` and files under `_state.json` `harness_paths`, so Task
+4's first pass asks for `--approve-harness`.
 
 **Files:**
 - Modify: `cli/evals/dial-skill/lib/stage.ts` (`HarnessAnswer.stop`, `fakeHarness`, `Ring.blocked`, `readRings`)
-- Modify: `cli/evals/dial-skill/run-eval.mjs` (`isAnswer` takes `stop: true`)
+- Modify: `cli/evals/dial-skill/run-eval.mjs` (`isAnswer` takes `stop: true`; `DESIGN_CAP_USD = 270`)
 - Modify: `cli/evals/dial-skill/lib/grade.ts` (`nudged`)
-- Modify: `cli/evals/dial-skill/lib/summarize.ts` (the aggregate and held-out tables gain `nudged`)
-- Modify: `cli/evals/dial-skill/README.md` ("Hooks in a variant": the Stop answer)
+- Modify: `cli/evals/dial-skill/lib/summarize.ts` (the aggregate and held-out tables gain `nudged`; `held_out_recall`
+  pairs a round with its base; the column `recall vs best` becomes `recall vs base`; `fisherOneSided` and
+  `held_out_recall_p`, the column `recall p vs base`)
+- Modify: `cli/evals/dial-skill/README.md` ("Hooks in a variant": the Stop answer; the held-out table's paragraph:
+  `recall vs base`; Cost: the runner refuses a cap above 270)
 - Modify: `cli/evals/dial-skill/flow/metrics.md` (the `nudged` row; the tables by `summarize`)
 - Create: `cli/evals/dial-skill/test-data/stop-inputs.json`
 - Test: `cli/evals/dial-skill/stage.spec.ts`, `run-eval.spec.ts`, `grade.spec.ts`, `summarize.spec.ts`
@@ -339,6 +407,20 @@ asks for `--approve-harness`.
   answer's `stdout`; otherwise nothing, exit 0. It records `{ argv, blocked: true | false }`. `Ring.blocked?: true`.
   `gradeRun` adds `nudged: 0 | 1` to every scored row, outside `score`. `summarize` reports `nudged` as "k of n" per
   variant and condition.
+- `_state.json` may hold `bases: Record<string, number>`, variant → the round its held-out recall is paired with.
+  `Summary.held_out_recall[v][c]` pairs v with `bases[v]`'s round when listed, else with the best round, by the
+  existing `pairOf` over the held-out need cases. A variant that is its own base gets no entry. The held-out table's
+  last column is `recall vs base`. Task 3 writes `bases: { "v5": 4, "v6": 1 }`; the best round stays 4 until Task 4's
+  verdict, and may then be 5, so the pairs must not follow it.
+- `export function fisherOneSided(baseHit: number, baseN: number, hit: number, n: number): number`: Fisher's exact
+  test, one-sided, the chance of `hit` or more of `n` going to the variant when the `baseHit + hit` hits of the
+  `baseN + n` runs are dealt at random (the hypergeometric upper tail). Exact, computed in log space or by running
+  products, with no library.
+- `Summary.held_out_recall_p: Record<string, Record<string, number>>`, variant → condition: `fisherOneSided` of the
+  base's and the variant's held-out need counts (`held_out.hit` of `held_out.need`), with the same base as
+  `held_out_recall`. The held-out table gains `recall p vs base` after `recall vs base`, `p` to 3 places, blank where
+  `recall vs base` is blank. Task 4 reads (b) from it.
+- `run-eval.mjs`: `DESIGN_CAP_USD = 270` (decision 16).
 - `stop-inputs.json`: `[{ "name": string, "input": object, "asks": boolean }]`. The cases: `stop_hook_active` true; no
   message; an empty one; a number; `?` last; `?` exactly 400 code points from the end; at 401; `？` last; an emoji pair
   in the tail counted as one; a tail with `user?.name`; `Đã xong, không cần gì thêm.`; `要用哪个数据库？`. Task 10's
@@ -355,141 +437,173 @@ asks for `--approve-harness`.
     `score` is the same with and without it.
   - `summarize.spec.ts`: the held-out table's header gains `nudged` after `loaded`, its cells are "k of n" over the
     scored runs, and the aggregate table gains the rate.
+  - `summarize.spec.ts` `'pairs a round's held-out recall with the base _state.json names for it'`: a flow whose best
+    round is 2 and whose `bases` is `{ v3: 1 }`; `held_out_recall.v3` equals the pair of v3 with v1 (mean, `ci_lo`,
+    `ci_hi`, n), not with v2. A v1 at 3 reps and a v3 at 2 pair by case means, n the need cases both scored.
+    `'without a base, the best round'`: v2 has no entry (the best), the baseline is paired with v2. The header ends
+    `| loaded | nudged | score vs baseline | recall vs base | recall p vs base |`.
+  - `summarize.spec.ts` `describe('fisherOneSided')`, on fixed counts: `(41, 48, 48, 48)` is 0.00618, `(41, 48, 47, 48)`
+    0.02950, `(41, 48, 46, 48)` 0.07932 and `(41, 48, 32, 32)` 0.02318, each `toBeCloseTo(…, 5)`; `(5, 10, 5, 10)` is
+    above 0.5; `(0, 10, 0, 10)` and `(10, 10, 10, 10)` are 1. `'gives each round's recall p against its base'`: in the
+    `bases` flow above, `held_out_recall_p.v3.crowd` equals `fisherOneSided` of v1's and v3's held-out counts.
+  - `run-eval.spec.ts` `"refuses a --spend-cap-usd above the design's $270"` (replaces the $250 case): 270.01 exits 2
+    with `--spend-cap-usd is at most 270: the design's cap is $270`; 270 is taken.
 - [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run --config evals/dial-skill/vitest.config.ts
   evals/dial-skill/stage.spec.ts evals/dial-skill/run-eval.spec.ts evals/dial-skill/grade.spec.ts
-  evals/dial-skill/summarize.spec.ts`. Expected: FAIL (no `stop` answer, no `nudged`).
+  evals/dial-skill/summarize.spec.ts`. Expected: FAIL (no `stop` answer, no `nudged`, no `bases`, no
+  `fisherOneSided`, 270 refused).
 - [ ] **Step 3: Commit the red tests.**
 - [ ] **Step 4: Implement.**
   - The fake runs under plain node and cannot load the CLI's code, so it applies the rules itself. Its comment says why
     and names the shared table that holds it to the product (Task 10).
   - The fake reads its stdin only for a `stop` answer.
   - README: one paragraph under "Hooks in a variant". It covers the `stop` answer, the eval's world (a dial is always
-    attached, the person is always away, the skill is on, "a notice pending" means a ring already recorded in the run),
+    attached, the person is always away, the skill is on, "rang in this turn" means a ring already recorded in the run),
     and `nudged`, the one extra model round a block costs.
+  - `summarize`'s comment on `held_out_recall` says why a round may name its base: Part 5's two pairs compare with v4
+    and with v1, while the best round is v4 and may change at the verdict.
+  - README: one sentence each on `recall vs base` and `recall p vs base`, and the Cost paragraph's "refuses a cap above 250" becomes 270, with the
+    maintainer's raise for Part 5.
   - metrics.md: the `nudged` row, then `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow`.
 - [ ] **Step 5: Run the eval's whole suite.** `cd cli && npx vitest run --config evals/dial-skill/vitest.config.ts`.
   Expected: PASS. `git diff --stat -- evals/dial-skill/flow` lists `metrics.md` and `narrative.md` alone, and only for
-  the new column.
+  the new columns and the renamed one; every `recall vs base` cell equals its old `recall vs best` cell, as no
+  `bases` exist yet.
 - [ ] **Step 6: Commit.**
 
-### Task 3: the variant, `flow/v5`
+### Task 3: the variants, `flow/v5` and `flow/v6`
 
 **Effort:** medium. **Depends on:** Task 2.
 
 **Files:**
-- Create: `cli/evals/dial-skill/flow/v5/SKILL.before.md` and `SKILL.md` (both the base round's `SKILL.md` byte for
-  byte; decision 9: `flow/v1/` if Part 4's line did not ship, `flow/v4/` if it did)
-- Create: `cli/evals/dial-skill/flow/v5/hooks.json`. It holds the base round's `hooks.json` when it has one (v4's
-  `SessionStart`), plus
+- Create: `cli/evals/dial-skill/flow/v5/SKILL.before.md` and `SKILL.md` (both `flow/v4/SKILL.md` byte for byte)
+- Create: `cli/evals/dial-skill/flow/v5/hooks.json`: `flow/v4/hooks.json`'s `SessionStart` entry unchanged, plus
   `"Stop": [{ "hooks": [{ "type": "command", "command": "harness device claude stop", "timeout": 5 }] }]`.
-- Create: `cli/evals/dial-skill/flow/v5/harness-answers.json`. It holds the base's answers, plus
-  `{ "argv": ["device", "claude", "stop"], "stdout": <the block of the reason> + "\n", "stop": true }`, written with
-  `npx tsx -e` from the Global Constraints' reason, never typed by hand.
-- Modify: `cli/evals/dial-skill/flow/_state.json` (`harness_paths` gains the two files)
+- Create: `cli/evals/dial-skill/flow/v5/harness-answers.json`: `flow/v4/harness-answers.json`'s `start` answer
+  unchanged, plus `{ "argv": ["device", "claude", "stop"], "stdout": <the block of the reason> + "\n", "stop": true }`.
+- Create: `cli/evals/dial-skill/flow/v6/SKILL.before.md` and `SKILL.md` (both `flow/v1/SKILL.md` byte for byte)
+- Create: `cli/evals/dial-skill/flow/v6/hooks.json`: the `Stop` entry alone, no `SessionStart`.
+- Create: `cli/evals/dial-skill/flow/v6/harness-answers.json`: the `stop` answer alone.
+- Modify: `cli/evals/dial-skill/flow/_state.json` (`harness_paths` gains the four files; `bases: { "v5": 4, "v6": 1 }`)
 - Test: `cli/evals/dial-skill/state.spec.ts`
 
-- [ ] **Step 1: Write the failing test** `'flow/v5 stages the Stop hook and answers it with the block of the plan's
-  reason'`.
-  - `variantHooks` of `flow/v5` gives a `Stop` hook running `harness device claude stop`, with timeout 5 and no
-    matcher, and exactly one `stop` answer.
-  - That answer's stdout parses to `{ decision: 'block', reason }`. The reason is one line of printable ASCII, has no
-    `<` or `>`, and contains `harness device notify`.
-  - v5's `SKILL.md` equals the base round's.
-- [ ] **Step 2: Run it and see it fail.** `cd cli && npx vitest run --config evals/dial-skill/vitest.config.ts
+Both `stop` answers' stdout is written with `npx tsx -e` from the Global Constraints' reason, never typed by hand.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `'flow/v5 is v4 with the Stop hook'`: `variantHooks` of `flow/v5` gives v4's `SessionStart` hook and answer
+    unchanged, and a `Stop` hook running `harness device claude stop`, with timeout 5 and no matcher, and exactly one
+    `stop` answer. v5's `SKILL.md` equals v4's.
+  - `'flow/v6 is v1 with the Stop hook alone'`: `variantHooks` of `flow/v6` gives the `Stop` hook and its `stop` answer
+    and nothing else (no `SessionStart`). v6's `SKILL.md` equals v1's.
+  - For both: the `stop` answer's stdout parses to `{ decision: 'block', reason }`, the same in both. The reason is one
+    line of printable ASCII, has no `<` or `>`, and contains `harness device notify`.
+  - `'pairs v5 with v4 and v6 with v1'`: `_state.json` `bases` is `{ v5: 4, v6: 1 }`.
+- [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run --config evals/dial-skill/vitest.config.ts
   evals/dial-skill/state.spec.ts`. Expected: FAIL (`ENOENT`).
-- [ ] **Step 3: Commit the red test.**
-- [ ] **Step 4: Write the files** and list the two in `harness_paths`.
+- [ ] **Step 3: Commit the red tests.**
+- [ ] **Step 4: Write the files**, list the four in `harness_paths`, and add `bases`.
 - [ ] **Step 5: Run.** The same command; then the existing `'lists every variant's hooks.json and harness-answers.json'`.
   Expected: PASS.
 - [ ] **Step 6: Commit.**
 
-### Task 4: the eval pass, v5 against its base, val and test in every condition (NOT run before GO)
+### Task 4: the eval passes, (b) v6 against v1, then (a) v5 against v4 (NOT run before GO)
 
-**Effort:** high. **Depends on:** Task 1 (F1: `claude -p` honors the block), Task 3, and **GO**, the PM's word to spend.
-**Test that must fail first:** none (it measures). Its checks are the exit codes, the probes, `nudged`, `scrub` and the
-eval's suite. **Needs the user's own Claude Code sign-in** through the session's profile in `CLAUDE_CONFIG_DIR`, as
-Parts 3 and 4 did. Machine: this Mac.
+**Effort:** high. **Depends on:** Task 1 (F1: `claude -p` honors the block), Task 3, and **GO**: the PM approves this
+plan and says go. **Test that must fail first:** none (it measures). Its checks are
+the exit codes, the probes, `nudged`, `scrub` and the eval's suite. **Needs the user's own Claude Code sign-in**
+through the session's profile in `CLAUDE_CONFIG_DIR`, as Parts 3 and 4 did. Machine: this Mac.
 
 **Files:**
-- Create: `cli/evals/dial-skill/flow/v5/{change.md,results.jsonl,errors.jsonl,probes.jsonl,summary.json,table.md}`
-  (`errors.jsonl` only if written)
+- Create: `cli/evals/dial-skill/flow/v6/{change.md,results.jsonl,errors.jsonl,probes.jsonl,summary.json,table.md}`
+  and the same in `flow/v5/` (`errors.jsonl` only if written; v5's `change.md` alone if (a) is skipped)
 - Modify: `cli/evals/dial-skill/flow/narrative.md` (`## Part 5`), `flow/metrics.md` (by `summarize`),
-  `flow/_state.json`: `harness_sha` by `--approve-harness`, `current_round` 5, and `best` `{ round: 5, … }` only if the
-  verdict ships.
-- Git-ignored, kept on this Mac: `flow/v5/traces/`, `flow/v5/private.jsonl`
+  `flow/_state.json`: `harness_sha` by `--approve-harness`; `current_round` 6 (the newest round run, whether or not
+  (a) runs); `best` becomes `{ round: 5, val_score, test_score }` only if the verdict ships, since v5 is what the
+  product carries, and otherwise stays round 4. v6 is never best: it lacks v4's line and stands in for a long session.
+- Git-ignored, kept on this Mac: `flow/v5/traces/`, `flow/v6/traces/`, `flow/v5/private.jsonl`, `flow/v6/private.jsonl`
 
 **Spend plan** (per-run costs from Part 4's passes: `crowd` $0.30, `clean` $0.23, `name-only` $0.29, a probe about
 $0.2). A nudged run adds one model round, about a fifth of a run:
 
 | Step | Runs | About |
 |---|---|---|
-| Spent before Part 5 (Parts 1 and 3, Part 4's two rounds) | | read from the status table at G0 |
-| `crowd` val and test, 3 reps | 75 + 1 probe | $24.5 |
-| `clean` val and test, 2 reps | 50 + 1 probe | $12.5 |
-| `name-only` val and test, 1 rep | 25 + 1 probe | $8 |
-| Part 5 | 150 + 3 probes | about $45 |
-| Flow after the pass | | about $40 over the $250 cap by the PM's estimate (2026-11-27); GO waits for the maintainer's raise (decision 1) |
+| Spent before Part 5 (Parts 1 and 3, Part 4's two rounds) | | S = $197.01 (Part 4 round 2's status row) |
+| (b) v6 `crowd` val and test, 3 reps | 75 + 1 probe | $25 |
+| (a) v5 `crowd` val and test, 3 reps | 75 + 1 probe | $24.5 |
+| (a) v5 `clean` val and test, 2 reps | 50 + 1 probe | $12.5 |
+| (a) v5 `name-only` val and test, 1 rep | 25 + 1 probe | $8 |
+| Part 5 | 225 + 4 probes | about $70 ($25 if (b) fails and (a) is skipped) |
+| Flow after the passes | | about $268 of the $270 cap |
 
 - [ ] **Step 1: Check the start.** From `cli/`:
   - `CLAUDE_CONFIG_DIR` is set and is not `~/.claude`;
   - `diff <(npx tsx -e 'import { DIAL_SKILL } from "./src/devices/dialSkill.ts"; process.stdout.write(DIAL_SKILL)') evals/dial-skill/flow/v5/SKILL.md`
-    prints nothing;
+    prints nothing, and the same for `flow/v6/SKILL.md`;
   - `git status --short` prints nothing;
-  - `_state.json` `best.round` is the base round (decision 9).
-  Read the status table's last `spend` as S, and the cap the maintainer set as C (decision 1). If S + $46 > C, stop
-  and report S and C; the PM then asks the maintainer again, with the numbers. `marker=$(mktemp)`.
-- [ ] **Step 2: `crowd` at 3 reps.**
-  `npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v5 --condition crowd --split val,test --reps 3 --concurrency 3 --timeout-s 900 --spend-cap-usd <C>`
-  - Exit 2, "harness changed": review `git diff <harness_sha> -- <harness_paths>`. Expect only Task 2's `lib/stage.ts`,
-    `lib/grade.ts`, `lib/summarize.ts` and `run-eval.mjs`, and Task 3's two files. If so, rerun with
-    `--approve-harness`. For anything else, stop and report.
+  - `_state.json` `best.round` is 4, `current_round` 4, and `bases` is `{ v5: 4, v6: 1 }`.
+  Read the status table's last `spend` as S. If S + $27 > 270, stop and report S to the PM. `marker=$(mktemp)`.
+- [ ] **Step 2: (b), v6 `crowd` at 3 reps.**
+  `npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v6 --condition crowd --split val,test --reps 3 --concurrency 3 --timeout-s 900 --spend-cap-usd 270`
+  - Exit 2, "harness changed": review `git diff <harness_sha> -- run-eval.mjs <harness_paths>`. Expect only Task 2's
+    `run-eval.mjs`, `lib/stage.ts` and `lib/grade.ts`, and Task 3's four `hooks.json` and `harness-answers.json`. If
+    so, rerun with `--approve-harness`. For anything else, stop and report.
   - Exit 2 on a probe failure: stop and report the probe row.
   - Exit 1: rerun the same command, which runs only the failed cases.
   - Exit 3 or 4: stop and report the spend.
-  - Expected: 75 rows, at least one with `nudged` 1, about $24.5. With no `nudged` row, stop: the hook never blocked
+  - Expected: 75 rows, at least one with `nudged` 1, about $25. With no `nudged` row, stop: the hook never blocked
     under `claude -p`.
-- [ ] **Step 3: `clean` and `name-only`:** the same command with `--condition clean --reps 2`, then
-  `--condition name-only --reps 1`. Handle the exits as in Step 2. Expected: 50 and 25 rows, about $20.5 together.
-- [ ] **Step 4:** `find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u` lists only the
-  startup files the README names. Then run `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow`.
-- [ ] **Step 5: Read the numbers**, counts and scenario names only, from the held-out table for the base's rows and
-  v5's in each condition:
-  - recall, needless rings, `line_ok`, `ask_ok`, harmed, `went_on`, `one_step`, `loaded`;
-  - `nudged` over need runs and over no-need runs;
-  - v5's `recall vs best`;
-  - truncated counts (a block's extra round can reach `--max-turns`);
-  - the mean cost and latency per run against the base's;
-  - needless rings and need misses by scenario, with each one's `nudged`.
-- [ ] **Step 6: The verdict**, by decision 10's rule. v5 ships only when the gain, the specificity and the
-  guardrails all hold. State each interval and the pooled count it rests on, and the extra rounds per run (`nudged`
-  rate, and cost per run against the base's).
-- [ ] **Step 7: Write** `flow/v5/change.md` (`# Part 5: <base> and a second look when a turn stops`; Evidence, Change,
-  Result, numbers only) and the narrative's `## Part 5` with the same numbers. Set `_state.json` as in Files, then run
+- [ ] **Step 3: Read (b).** `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow`. From the held-out table's
+  `crowd` rows of v1 and v6: recall (k of n), v6's `recall p vs base` (`summary.json` `held_out_recall_p.v6.crowd`)
+  and, reported only, its `recall vs base` interval; needless rings; `nudged` over need and no-need runs; need misses
+  by scenario with each one's `nudged`. (b) passes when p < 0.05, that is 47 of 48 or more (decision 10). If (b)
+  fails: skip Steps 4-6, so (a)'s ~$45 is not spent; write v5's `change.md` as "not run: (b) failed"; go to Step 7.
+  The verdict is then that the hook does not ship: Tasks 6-15 do not run, and the branch carries Tasks 2-5 alone.
+- [ ] **Step 4: (a), v5 `crowd` at 3 reps.** Read S again. If S + $46 > 270, STOP and report S and (b)'s result to
+  the PM, who asks the maintainer for more; never raise the cap. Otherwise the command of Step 2 with `--variant v5`,
+  its exits handled the same way. Expected: 75 rows, about $24.5. Against v4 the
+  need runs already ring, so few or no rows have `nudged` 1; that is expected here.
+- [ ] **Step 5: (a), `clean` and `name-only`:** the same command with `--condition clean --reps 2`, then
+  `--condition name-only --reps 1`. Expected: 50 and 25 rows, about $20.5 together.
+- [ ] **Step 6: Read (a).** `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow`. From the held-out table, v4's
+  and v5's rows in each condition: recall, needless rings, `line_ok`, `ask_ok`, harmed, `went_on`, `one_step`,
+  `loaded`, `nudged` over need and no-need runs, v5's `recall vs base` with its interval, truncated counts (a block's
+  extra round can reach `--max-turns`), the mean cost and latency per run against v4's, and needless rings and need
+  misses by scenario, with each one's `nudged`.
+- [ ] **Step 7:** `find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u` lists only the
+  startup files the README names.
+- [ ] **Step 8: The verdict**, by decision 10. The hook ships only when (b) and (a) both pass. State what each rests
+  on: (b) v6's and v1's `crowd` held-out counts and the Fisher p (the case interval beside it, reported only); (a) v5's
+  `recall vs base` interval against v4 in each condition, the 54 pooled no-need runs, and `harmed` and `went_on`
+  against v4's counts, with the one-run margin. Report the extra rounds per run (`nudged` rate, and cost per run against the base's).
+- [ ] **Step 9: Write** `flow/v6/change.md` (`# Part 5 (b): v1 and a second look when a turn stops`) and
+  `flow/v5/change.md` (`# Part 5 (a): v4 and a second look when a turn stops`), each with Evidence, Change and Result,
+  numbers only. Write the narrative's `## Part 5`, with `### (b) The case it is for: v6 against v1` and `### (a) No
+  harm: v5 against v4` (or "not run") and the verdict, with the same numbers. Set `_state.json` as in Files, then run
   summarize again.
-- [ ] **Step 8: Make the rows fit to commit.** `npx tsx evals/dial-skill/flow-rows.ts scrub evals/dial-skill/flow`
+- [ ] **Step 10: Make the rows fit to commit.** `npx tsx evals/dial-skill/flow-rows.ts scrub evals/dial-skill/flow`
   exits 0. Run `node evals/dial-skill/build-report-lite.mjs evals/dial-skill/flow`. `git status --short --
-  evals/dial-skill/flow` shows only the files above. `grep -nE '^>|/Users/|~/|'"$(whoami)"` on `v5/change.md` and
-  `narrative.md` prints nothing.
-- [ ] **Step 9:** `npx vitest run --config evals/dial-skill/vitest.config.ts`. Expected: PASS.
-- [ ] **Step 10: Commit** (`Dial skill eval: Part 5, a second look when a turn stops, on val and test in every
-  condition`). The measurement is committed whatever the verdict.
+  evals/dial-skill/flow` shows only the files above. `grep -nE '^>|/Users/|~/|'"$(whoami)"` on both `change.md` files
+  and `narrative.md` prints nothing.
+- [ ] **Step 11:** `npx vitest run --config evals/dial-skill/vitest.config.ts`. Expected: PASS.
+- [ ] **Step 12: Commit** (`Dial skill eval: Part 5, a second look when a turn stops, against v1 and against v4`, or
+  `…, against v1` when (a) was skipped). The measurement is committed whatever the verdict.
 
-**Report** (numbers only): the held-out rows of the base and v5, the verdict and what it rests on, the extra rounds per
-run, the spend per pass and in the flow, and Claude Code's version. Then: Tasks 6-15 if v5 ships; Task 5 and the pull
-request of the eval alone if not.
+**Report** (numbers only): the held-out rows of v1 and v6 in `crowd`, and of v4 and v5 in each condition when (a) ran;
+the verdict and what it rests on; the extra rounds per run; the spend per pass and in the flow; Claude Code's version.
+Then: Tasks 6-15 if the hook ships; Task 5 and the pull request of the eval alone if not.
 
 ### Task 5: results and the spec
 
 **Effort:** medium. **Depends on:** Task 4. **Test that must fail first:** none (docs); one commit.
 
 **Files:**
-- Modify: `cli/evals/dial-skill/README.md`. Results gains a Part 5 block above Part 4's: the held-out counts of the
-  base and v5 per condition, `nudged`, the verdict, and the spend. The Cost paragraph states the cap and what the flow
-  spent.
+- Modify: `cli/evals/dial-skill/README.md`. Results gains a Part 5 block above Part 4's: the held-out counts of v1 and
+  v6 in `crowd`, and of v4 and v5 per condition (or "not run"), (b)'s Fisher p and (a)'s intervals, `nudged`, the
+  verdict, and the spend. The Cost paragraph states the $270 cap and what the flow spent.
 - Modify: `cli/evals/dial-skill/flow/narrative.md`. The headline gives Part 5's result.
 - Modify: `docs/plans/2026-11-26-needs-you-right-design.md`. Only a "Measured (<date>)" paragraph under Part 5's
-  "Measured" bullet: the held-out numbers against the base, the intervals, the pooled specificity, the extra rounds,
-  the verdict and the spend.
+  "Measured" bullet: each pair's held-out numbers against its base, (b)'s Fisher p at 3 reps and (a)'s intervals, the
+  pooled specificity, the extra rounds, the verdict and the spend.
 
 - [ ] **Step 1:** Write them, numbers only.
 - [ ] **Step 2:** `grep -nE '^>|/Users/|~/|'"$(whoami)"` on the three files finds nothing new, and
@@ -535,7 +649,8 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
 
 ### Task 7: the observed source holds a stop that goes on
 
-**Effort:** xhigh (two hooks of one event arrive in either order; timers). **Depends on:** Task 1 (F3, F4), V.
+**Effort:** xhigh (two hooks of one event arrive in either order; timers). **Depends on:** Task 1 (F3, F4, and F9:
+every nudge within `ANSWER_GRACE_MS` of its `turn-stop`; otherwise Task 1 has stopped and this task waits), V.
 
 **Files:**
 - Modify: `cli/src/cable/hosts/observed.ts` (`CONTINUE_QUIET_MS`, `CONTINUE_MAX_MS`, `ObservedSource.continues`,
@@ -577,8 +692,8 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
   - `'the yes before the blocked stop: that stop is held; the next one is told done once'`.
   - `'a continuation longer than 10 s that keeps showing activity is still held, and is announced at its next stop'`.
     The transcript's mtime moves at 6 s, 14 s, 22 s and 30 s after the yes. Nothing is told at 10 s, 20 s, 30 s or 38 s.
-    The next stop comes at 38 s and is told done once, 1.5 s after it, with its answer. Red against the spec's flat
-    10 s hold.
+    The next stop comes at 38 s and is told done once, 1.5 s after it, with its answer. A flat 10 s
+    hold from the yes would fail it.
   - `'a hook for the session counts as activity'`: a `subagent-start` and its `subagent-stop` at 8 s, the transcript
     untouched. Nothing told at 17.9 s; told once at 18 s.
   - `'no next stop, quiet: told once 10 s after the last activity'`: the mtime moves at 4 s, then never. Nothing at
@@ -619,21 +734,29 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
 
 **Files:**
 - Modify: `cli/src/services/devices.ts` (the `nudge` handler in `listen`, `nudged`, the `[device] nudge` tally;
-  `followPrompt` and `port.observed` for `'continued'` only if F4)
+  `RANG_MAX`, `rangThisTurn`, set in the `notice` handler and cleared in `dispatch`'s `processing`, `port.observed`'s
+  `turn-start`, `session-end` and `agent_deleted`; `followPrompt` and `port.observed` for `'continued'` only if F4)
 - Test: `cli/src/services/devices.spec.ts` (`fakeListener` gains `nudge`)
 
 **Interfaces:**
-- Consumes: Task 6's `nudgeHandler`; Task 7's `continues`; `noticeCaller`, `notices.pending`, `present`,
-  `cable.isConnected`, `observedAgentId`.
+- Consumes: Task 6's `nudgeHandler`; Task 7's `continues`; `noticeCaller`, `present`, `cable.isConnected`,
+  `observedAgentId`, `began`, `outside`.
 - Produces, inside `startDevices`: `nudge: nudgeHandler((ask) => { let yes = false; part.call('notices', () => { yes =
   nudged(ask) }); return yes })`. `nudged` answers in this order and tallies each answer:
   - `no dial` when `!cable.isConnected`;
-  - `notice` when `notices.pending(agentId)`;
+  - `notice` when `rangThisTurn.has(agentId)`;
   - `present` when `present(agentId)`;
   - else `yes`, after `observed?.continues(observedAgentId(engine, sessionId))`.
   `agentId` is `noticeCaller({ text: '', engine, sessionId }).agentId`. Task 9 adds `nudged` (the word) before `yes`.
   The tally is `createEngineTally('[device] nudge', ['claude', 'codex'], ['yes', 'no dial', 'notice', 'present',
   'nudged'], log)`.
+- `const RANG_MAX = 64`; `const rangThisTurn = new Set<string>()`: the agents that rang a notice in their turn, oldest
+  first out past `RANG_MAX`. One id an agent, no time, no text.
+  - Added: in the `notice` handler, `noticeCaller(ask).agentId`, whatever `notices.notify` answers (`shown`, `limited`
+    or `no dial`): the agent rang.
+  - Cleared for an agent at its turn's mark: in `dispatch`'s `processing` where a new `began` is set, for an agent no
+    outside row holds (a Harness agent); in `port.observed`'s `turn-start` when `byPerson` (`person` or `dial`), never
+    for `relayed` (or `'continued'`, if F4); and when the agent leaves (`session-end`, `agent_deleted`).
 - Only if F4: `port.observed` reads `'continued'` as not the person's (no `prompted`, `usage.turnStarted(…, false)`),
   and `followPrompt` logs `[device] prompt · skipped · continued`.
 
@@ -645,9 +768,18 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
       ends silent under rule:notice'`. The agent was prompted 130 s ago. `listener.nudge(...)` is `{ nudge: true }`.
       Then `port.observed(hook('turn-stop'))`, 2 s, the notice (`shownAsks()` has it), and the next `turn-stop` and
       1.5 s. Expect one `summary` call, silent, and `[cable] notify · silent · rule:notice` in the logs.
-    - `it.each` no: no dial (`{ nudge: false }`, `[device] nudge · claude · no dial`); a notice pending, shown and
-      quiet (`· notice`); the person there (`there(port)`, `· present`); a Harness agent whose turn began 30 s ago with
-      its tile on screen (`· present`).
+    - `it.each` no: no dial (`{ nudge: false }`, `[device] nudge · claude · no dial`); a notice rung in this turn,
+      shown and quiet (`· notice`); the person there (`there(port)`, `· present`); a Harness agent whose turn began 30 s
+      ago with its tile on screen (`· present`).
+    - `'a notice rung earlier in this turn and since answered is still no'`: an outside agent's notice is shown, then
+      ended (`notices.ended`, as an answer from the dial ends it) with no `turn-start`; the nudge answers no (`·
+      notice`). The same for a Harness agent within one `began`.
+    - `'a card from an earlier turn does not count'`: an outside agent rang in a turn; then a `turn-start` from
+      `person`; a nudge in the new turn is yes, with the old card still pending (red against `notices.pending`). For a
+      Harness agent: rang, `done`, a new `processing`, then yes.
+    - `'a relayed turn is no new turn for the notice check'`: an outside agent rang after the person's prompt; then a
+      `turn-start` with `relayed: true`; the nudge answers no (`· notice`).
+    - `'the 65th agent that rang pushes out the first'`.
     - `it.each` yes: a Harness agent past 120 s; an unknown session (not present by Part 2's rule); a Codex session.
     - `'the tally names no session'`: no log line holds `sess-1`.
     - Only if F4: `'a Codex turn-start inside the hold moves no dial and is not the person's prompt'`.
@@ -655,7 +787,9 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
   (no `nudge` handler).
 - [ ] **Step 3: Commit the red tests.**
 - [ ] **Step 4: Implement.** The comment beside the handler names the spec's four conditions and says why "the skill is
-  on" is the hook's to read (decision 4).
+  on" is the hook's to read (decision 4). The comment on `rangThisTurn` says why neither `began` nor `prompted` serves:
+  an outside agent's `began` restarts on a relayed turn, and `prompted` is deleted by one; and why a pending card is
+  not asked: it may be left from an earlier turn.
 - [ ] **Step 5: Run them and see them pass.** `cd cli && npx vitest run src/services/devices.spec.ts && npm run
   typecheck`. Expected: PASS.
 - [ ] **Step 6: Commit.**
@@ -682,6 +816,8 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
 
 - [ ] **Step 1: Write the failing tests.**
   - `'a second nudge before the person's next prompt is no, as nudged; after their prompt, yes again'`.
+  - `'a relayed turn-start does not end the once rule'`: after a yes, a `turn-start` with `relayed: true`; a second
+    nudge is no, as `nudged`.
   - `'after 10 minutes a nudge is yes again'`.
   - `'a Harness agent nudged with its tile on screen: its continuation's notice rings, not quiet, and its turn end
     leaves no quiet card'`. h1's turn began 130 s ago, with its tile on screen. Yes, then `done`, `processing`, the
@@ -698,7 +834,7 @@ Tasks 6 to 15 run only after V. If V fails, they do not run. The pull request th
 ### Task 10: `harness device claude stop` and `harness device codex stop`
 
 **Effort:** xhigh (reads the person's answer; decides a block). **Depends on:** Task 1 (F1, F2, F8), Task 3 (the guard
-reads `flow/v5`), Task 2 (`stop-inputs.json`), V.
+reads `flow/v5` and `flow/v6`), Task 2 (`stop-inputs.json`), V.
 
 **Files:**
 - Create: `cli/src/deviceClaude/stop.ts`
@@ -706,12 +842,11 @@ reads `flow/v5`), Task 2 (`stop-inputs.json`), V.
 - Modify: `cli/src/deviceClaude/command.ts` (`case 'stop'` for `claude` and `codex`; `DeviceDeps.ask?`; the header
   comment's list of the plugin's own words)
 - Test: `cli/src/deviceClaude/command.spec.ts`
-- Only if Part 4's product part was cut (its Task 10): modify `cli/src/deviceClaude/asked.ts` (export `hookInput`) and
-  `cli/src/devices/dialSkill.ts` (export `ownSkill`), as Part 4's Task 1 did, and add `ownSkillIn` to `stop.ts`.
 
 **Interfaces:**
-- Consumes: `hookInput` (asked.ts), `ownSkillIn` (start.ts), `within`, `NOTICE_SESSION`, `askDevices`, `pluginActs`,
-  `claudeHome()`, `readRemoved`, `codexPluginState`.
+- Consumes, all on `main` after #4672: `hookInput` (`deviceClaude/asked.ts`), `ownSkillIn` (`deviceClaude/start.ts`),
+  `within` (`lib/sessionSearch/externals/support.ts`), `NOTICE_SESSION`, `askDevices`, and in `command.ts`
+  `pluginActs`, `claudeHome()`, `readRemoved`, `codexPluginState`.
 - Produces:
   - `export const DIAL_STOP_REASON` (the Global Constraints' text) and `export function stopOutput(): string` (one line,
     no newline).
@@ -723,8 +858,8 @@ reads `flow/v5`), Task 2 (`stop-inputs.json`), V.
   - `export async function runStop(deps: StopDeps): Promise<0>`.
   - In `command.ts`, Claude:
     `case 'stop': return runStop({ stdin, dataDir, engine: 'claude', headless: () => /^sdk-/.test(deps.env.CLAUDE_CODE_ENTRYPOINT ?? ''), acts: () => pluginActs(deps.dataDir) && ownSkillIn(claudeHome()), ask: deps.ask ?? ((m) => askDevices(deps.dataDir, m, { timeoutMs: NUDGE_ANSWER_MS })), out })`.
-    Codex: the same, with Part 4's Codex `acts` and F8's `headless` (decision 14: Task 1 stops when F8 finds no sign,
-    so Codex's side is never built without one).
+    Codex: the same, with the `acts` `codex start` passes (decision 4) and F8's `headless` (decision 14: Task 1 stops
+    when F8 finds no sign, so Codex's side is never built without one).
 
 - [ ] **Step 1: Write the failing tests.**
   - `stop.spec.ts`:
@@ -742,9 +877,9 @@ reads `flow/v5`), Task 2 (`stop-inputs.json`), V.
     - `'an ask that never answers: done within NUDGE_ANSWER_MS, nothing printed'` (fake timers; the injected `ask`
       honors its abort as `askDevices` does).
     - `out` throwing still returns 0.
-    - The guard: `'the eval's Part 5 variant answers exactly what this command prints'`. `flow/v5/harness-answers.json`'s
-      `stop` answer has stdout `stopOutput() + '\n'`, and `flow/v5/hooks.json`'s `Stop` hook runs `harness device
-      claude stop` with timeout 5.
+    - The guard: `'the eval's Part 5 variants answer exactly what this command prints'`, for `flow/v5` and `flow/v6`
+      each. The `stop` answer in `harness-answers.json` has stdout `stopOutput() + '\n'`, and the `Stop` hook in
+      `hooks.json` runs `harness device claude stop` with timeout 5.
   - `command.spec.ts`, using the spec's throwaway homes and data folder and an injected `ask`:
     - `'claude stop prints the block with the plugin on and Harness's skill in the session's home, and exits 0'`.
     - `it.each` `'claude stop prints nothing and exits 0: %s'`: plugin off, removed, no skill, `CLAUDE_CODE_ENTRYPOINT`
@@ -774,6 +909,7 @@ Task 10.
 - Modify: `plugins/harness-device/hooks/hooks.json` (the `Stop` key, appended)
 - Create: `plugins/harness-device/hooks/stop` (mode 755)
 - Modify: `cli/scripts/lib/claudePluginBundle.mjs` (`EXECUTABLE` gains `plugins/harness-device/hooks/stop`)
+- Modify: `.gitattributes` (`plugins/harness-device/hooks/stop text eol=lf`, beside `hooks/start`'s line)
 - Test: `cli/src/harnessDevicePlugin.spec.ts`, `cli/src/devices/claudePluginBundle.spec.ts`
 
 **Interfaces:**
@@ -799,11 +935,12 @@ Task 10.
   - In the win32 block, for PowerShell and Git Bash: the block passes (`stdout.trim()`); `ALLOW` prints nothing; no
     launcher prints nothing; a `last_assistant_message` of `Đã xong, không cần gì thêm.` reaches the stand-in byte
     for byte.
-  - `claudePluginBundle.spec.ts`: the executable list gains `hooks/stop`.
+  - `claudePluginBundle.spec.ts`: the executable list gains `hooks/stop`. Its existing `'the device plugin's hook
+    scripts are checked out with LF line ends on every platform'` then needs the `.gitattributes` line.
 - [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run src/harnessDevicePlugin.spec.ts
   src/devices/claudePluginBundle.spec.ts`. Expected: FAIL.
 - [ ] **Step 3: Commit the red tests.**
-- [ ] **Step 4: Implement** the three files. `hooks/stop`'s comment says that Claude Code reads a Stop hook's stdout as
+- [ ] **Step 4: Implement** the four files. `hooks/stop`'s comment says that Claude Code reads a Stop hook's stdout as
   its decision, so only the block the launcher shapes passes.
 - [ ] **Step 5: Run them and see them pass.** The same command. Expected: PASS.
 - [ ] **Step 6: Commit.**
@@ -816,6 +953,7 @@ Task 10.
 - Modify: `plugins/harness-device/hooks/codex.json` (the `Stop` key, appended)
 - Create: `plugins/harness-device/hooks/codex-stop` (mode 755)
 - Modify: `cli/scripts/lib/claudePluginBundle.mjs` (`EXECUTABLE` gains `plugins/harness-device/hooks/codex-stop`)
+- Modify: `.gitattributes` (`plugins/harness-device/hooks/codex-stop text eol=lf`)
 - Test: `cli/src/harnessDevicePlugin.spec.ts`, `cli/src/devices/claudePluginBundle.spec.ts`,
   `cli/src/devices/codexPluginTrust.spec.ts`
 
@@ -829,7 +967,7 @@ Task 10.
 - [ ] **Step 1: Write the failing tests:**
   - the Codex counterparts of Task 11's cases, run the `runCodexHook` way (`<shell> -c`, `PLUGIN_ROOT` set; argv
     `device\ncodex\nstop\n`; the win32 block through `powershell.exe -NoProfile -Command`);
-  - the executable list;
+  - the executable list (and with it the LF check);
   - `codexPluginTrust.spec.ts`: `'the repository's plugin gets a stop record, its matcher not hashed'`. Its
     `trustedHash` equals `reviewHash({ ...hooks.settings.reviewed!, matcherEvents: [...] }, 'Stop', undefined,
     { command, timeout: 5 })`, and every record shares one `contentHash`. If F7's `hooks/list` hash differs, stop and
@@ -837,7 +975,7 @@ Task 10.
 - [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run src/harnessDevicePlugin.spec.ts
   src/devices/claudePluginBundle.spec.ts src/devices/codexPluginTrust.spec.ts`. Expected: FAIL.
 - [ ] **Step 3: Commit the red tests.**
-- [ ] **Step 4: Implement** the three files. `codexPluginTrust.ts` does not change.
+- [ ] **Step 4: Implement** the four files. `codexPluginTrust.ts` does not change.
 - [ ] **Step 5: Run them and see them pass.** The same command. Expected: PASS.
 - [ ] **Step 6: Commit.**
 
@@ -882,7 +1020,8 @@ turn open, this task is dropped, and the pull request says so.
   - `IsolatedDaemon`, `Desk`, `FakeDial`, `fileBundle()`, `harnessPath('claude-marketplace', HOME)`, `tellDevices`;
   - `InOrca` (Claude Code in an Orca terminal, its hooks run by the test with `hook('Stop')`) and `CodexOutside`;
   - Task 10's `stopOutput`;
-  - Part 4 Task 5's `launcher(d)` pattern for `<HOME>/.local/bin/harness`.
+  - the `launcher(d)` pattern of `cli/e2e/deviceStartLine.e2e.ts` (a local function there, written again here) for
+    `<HOME>/.local/bin/harness`.
 
 - [ ] **Step 1: Write the test.** Run the carried `hooks/stop` and `hooks/codex-stop` command lines through
   `/bin/sh -c`, with `d.env`, `${CLAUDE_PLUGIN_ROOT}` or `PLUGIN_ROOT` set to the carried folder, and the Stop input on
@@ -895,7 +1034,8 @@ turn open, this task is dropped, and the pull request says so.
      `rule:notice`.
   2. `'no question: nothing printed, no nudge asked'`: no `[device] nudge` line, and A is told as B is.
   3. `'the person there: no block'` (`[device] nudge · claude · present`).
-  4. `'a notice pending: no block'` (`· notice`).
+  4. `'a notice rung in this turn: no block'` (`· notice`), and `'a card from an earlier turn: one block'`: A rang in
+     a turn, the person's next prompt started another, and A's question-ending stop in it is blocked once.
   5. `'no dial: no block'` (`· no dial`).
   6. `'the block lost: told once when the hold goes quiet'`. The hook says yes, no next Stop is run and the transcript
      is left untouched: one summary, 10 s or more after the yes and before 120 s, waited for as an event with a bound,
@@ -918,7 +1058,8 @@ turn open, this task is dropped, and the pull request says so.
 - Modify: `plugins/harness-device/README.md`. A "When a turn stops" section:
   - the `Stop` hook in both engines and what it reads;
   - the 400 characters and the two question marks;
-  - the four conditions for a yes;
+  - the four conditions for a yes (a notice counts only when rung in this turn; another session's message starts no
+    new turn for it);
   - the reason, word for word;
   - once a turn, and never for a headless run or Harness's own one-shots;
   - the 300 ms bound;
@@ -926,9 +1067,10 @@ turn open, this task is dropped, and the pull request says so.
   - how to take it away (`harness device claude|codex disable`).
   "What it never does" gains: it never logs, keeps or sends the answer.
 - Modify: `cli/AGENTS.md`. The devices row gains: the `nudge` message on the devices' listener (engine and session id,
-  answered within 300 ms), the four conditions, and the observed source holding a nudged agent's turn end until its next
-  stop, or 10 s with no activity (a hook, or its transcript growing), at most 120 s. The plugin clause gains its `Stop` hooks running `harness device claude|codex stop`
-  (`deviceClaude/stop.ts`).
+  answered within 300 ms), the four conditions (a notice rung in this turn, not a card left from an earlier one), and
+  the observed source holding a nudged agent's turn end until its next stop, or 10 s with no activity (a hook, or its
+  transcript growing), at most 120 s. The plugin clause gains its `Stop` hooks running `harness device claude|codex
+  stop` (`deviceClaude/stop.ts`).
 - Modify: `docs/cli.md`. The `harness device claude` and `harness device codex` rows get one sentence each: the plugin
   stops a turn that ends on a question once, while the person is away and the dial would ring, so the agent decides
   whether to ring.
@@ -943,14 +1085,14 @@ turn open, this task is dropped, and the pull request says so.
 
 | Task | Depends on | Effort |
 |---|---|---|
-| 1 spike, both engines (no repository file) | G0 | high |
-| 2 the eval answers a Stop hook, `nudged` | G1 | high |
-| 3 the variant `flow/v5` | 2 | medium |
-| 4 the eval pass (not before GO) | 1, 3, GO | high |
+| 1 spike, both engines (no repository file) | G0 (open) | high |
+| 2 the eval answers a Stop hook, `nudged`, `bases`, the $270 cap | G1 | high |
+| 3 the variants `flow/v5` and `flow/v6` | 2 | medium |
+| 4 the eval passes, (b) then (a) (not before GO) | 1, 3, GO | high |
 | 5 results and the spec | 4 | medium |
 | V Task 4's verdict ships | 4 | gate |
 | 6 `nudge` on the listener | V | high |
-| 7 the observed source holds a stop that goes on | 1, V | xhigh |
+| 7 the observed source holds a stop that goes on | 1 (F9), V | xhigh |
 | 8 the devices answer `nudge` | 6, 7 | xhigh |
 | 9 once; a Harness agent's presence | 8 | xhigh |
 | 10 `device claude|codex stop` | 1, 2, 3, V | xhigh |
@@ -962,21 +1104,23 @@ turn open, this task is dropped, and the pull request says so.
 
 Longest chain: 2 → 3 → 4 → (V) → 6 → 8 → 9 → 14 → 15, eight tasks after G1. Task 1 and GO join it at Task 4, and Task
 7 joins it at Task 8. Tasks 6, 7, 10, 11 and 13 start together at V. Tasks 8 and 9 share `devices.ts`, and Tasks 11
-and 12 share the plugin spec and the bundle list, so each pair runs in order.
+and 12 share the plugin spec, the bundle list and `.gitattributes`, so each pair runs in order.
 
 ## Pull request notes
 
 - One pull request, released by the PM: the CLI, which carries the plugin, after Part 4's eval (Release order 8). No
-  backend. If V fails, the eval alone (Tasks 2-5).
+  backend. If V fails, the eval alone (Tasks 2-5), with v5 marked not run when (b) failed.
 - Codex's side ships only on Verification 2's proof (the spec). If it fails, the main session takes Task 12, Task 13
   and Task 10's `codex stop` case out before the merge, and Claude Code's side ships alone.
 - Evidence:
   - the red-then-green commits;
-  - Task 4's held-out table, verdict, extra rounds and spend (numbers only);
+  - Task 4's held-out rows for both pairs ((b) v6 against v1 with its Fisher p, (a) v5 against v4 with its intervals), the verdict, the
+    extra rounds and the spend (numbers only);
   - Task 1's facts;
   - Verification 1-3's results, and Verification 3's hook times (median and maximum);
   - `local-checks.py`'s receipts;
-  - the stated limits under Review Focus;
+  - the stated limits under Review Focus, among them that no scenario is built for the miss in use (a long session's
+    turn ending a long report with the ask only in its last lines); pair (b) stands in for it by leaving the line out;
   - the platforms (macOS, Linux, Windows) and how each was tested.
 
 ## Verification
@@ -1024,8 +1168,9 @@ hook routes and Codex home. It is signed out, and its backend is `ws://127.0.0.1
      - the second Stop does not block (`stop_hook_active`).
    - The same session after the person's prompt within 120 s, with `ghostty` in front and the dial on the agent: the
      stub gets one request, and the log says `· present`.
-   - With the dial unplugged, `· no dial`. An answer with no question mark gives no `[device] nudge` line. An answer
-     that rang first gives `· notice`.
+   - With the dial unplugged, `· no dial`. An answer with no question mark gives no `[device] nudge` line. A turn that
+     rang first gives `· notice`, also after the card was answered on the dial within that turn. A card left from the
+     previous turn does not stop the block.
    - **In a Harness pane** (`agent_create` with the real `claude` as `CLAUDE_PATH`). Seen: the reader's
      `Continuing: Your answer asks…` turn, the first end told nothing (its recap's trace says `not news · next-turn`),
      one `question` frame, and a silent end. If the daemon does not pass the stub's address to the pane, report it.
@@ -1068,8 +1213,9 @@ hook routes and Codex home. It is signed out, and its backend is `ws://127.0.0.1
    - for each, `[device] nudge · <engine> · yes` once in the isolated daemon's log, and the second Stop not blocked.
    The record gives the times and counts, no answer text and no user or machine name.
 
-6. **The eval** (Task 4) is Claude Code's end-to-end measurement. It runs locally on this Mac, with no workflow, and
-   **needs the user's own Claude Code sign-in** through the session profile. It does not run before GO. Its isolation
+6. **The eval** (Task 4) is Claude Code's end-to-end measurement: (b) v6 against v1, then (a) v5 against v4. It runs
+   locally on this Mac, with no workflow, and **needs the user's own Claude Code sign-in** through the session profile.
+   It does not run before GO, and passes `--spend-cap-usd 270`. Its isolation
    is the eval's own (its README): a temporary repo per run, the fake `harness`, the curated `PATH`,
    `--setting-sources project`, Claude's sandbox, and no backend.
 7. **The person's own eye, after the release** (needs the user: their own login, their dial). In a fresh session, a
