@@ -413,7 +413,7 @@ async function runCase(input, ctx, timeoutMs) {
     // graded, so its turn 2 would only spend.
     if (kind && run.status === 'ok' && !checkError && !readAnswerKey(run) && !otherModels(agent, [run.model]).length) {
       // After the checks, which measure what turn 1 left: the calls after the mark are turn 2's.
-      markTurn(st);
+      markTurn(st, kind);
       const left = until - Date.now();
       if (left < TURN2_MIN_MS)
         throw Object.assign(new Error('no time left for turn 2'), { failure_class: 'timeout', model: run.model, usage: run.usage, cut: run.cut });

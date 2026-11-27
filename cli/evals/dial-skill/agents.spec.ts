@@ -377,7 +377,7 @@ describe('runFollowUp stand-ins', () => {
     // answer-one's seeded card is the other ask, which stays open.
     const st = stage(s, agent, { skill: false, base: root, seed: kind === 'answer-one' })
     await runAgent(agent, s, st, config(''))
-    markTurn(st)
+    markTurn(st, kind)
 
     const run = await runFollowUp(agent, s, st, config(''), randomUUID(), rungOf(readRings(st)))
 

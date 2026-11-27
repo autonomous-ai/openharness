@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
 import { composeNotice, NOTICE_LINE_MAX_BYTES, NOTICE_MAX_CHARS, NOTICE_SUGGEST_MAX, parseNotice } from '../../../src/lib/dialNotice.js'
 import { deniedReads, spawnGroup } from './agents.js'
-import type { AgentKind, Condition, Scenario } from './scenarios.js'
+import type { AgentKind, Condition, FollowUpKind, Scenario } from './scenarios.js'
 
 /** One `harness` call the agent made; `line` is what the dial would show, null for anything but a `device notify` the
  *  CLI would send (`--list` and `--done` send none). */
@@ -299,9 +299,9 @@ interface Recorded {
   blocked?: boolean
 }
 
-/** Marks the record: the calls after it are turn 2's. */
-export function markTurn(st: Staged): void {
-  appendFileSync(st.recFile, `${JSON.stringify({ turn: 2 })}\n`)
+/** Marks the record: the calls after it are turn 2's, sent as the follow-up `kind`, which the fake's Stop answer reads. */
+export function markTurn(st: Staged, kind: FollowUpKind): void {
+  appendFileSync(st.recFile, `${JSON.stringify({ turn: 2, kind })}\n`)
 }
 
 /** One recorded call, its line composed as the CLI composes it, so the grader reads the flags and the line the dial
@@ -442,8 +442,9 @@ interface FakeCard {
  *  always attached, the person is always away, the skill is on and the run counts as a person's session, not a headless
  *  one (the product never looks under `claude -p`). Plain node cannot load the CLI's stop rules either,
  *  so the fake applies them itself, and test-data/stop-inputs.json, which the CLI's own spec reads too, holds the two
- *  to the same cases. "Rang in this turn" is a ring the run already recorded: a notify that sends a card, never a
- *  `--list` or a `--done`. */
+ *  to the same cases. "Rang in this turn" is a ring the run already recorded since the turn began: a notify that sends a
+ *  card, never a `--list` or a `--done`. Turn 2's mark clears it, as the product does at the person's own prompt or the
+ *  dial's, except a `relay`'s: a message from another session is no prompt of theirs. */
 function fakeHarness(recFile: string, answers: HarnessAnswer[], noDial: boolean): string {
   return `#!${process.execPath}
 const { appendFileSync, readFileSync, renameSync, writeFileSync } = require('node:fs')
@@ -532,8 +533,15 @@ function blocks() {
   } catch {
     // No call recorded yet.
   }
-  // A turn's mark is no call.
-  return !calls.split('\\n').some((line) => line !== '' && rings(JSON.parse(line).argv ?? []))
+  let rang = false
+  for (const line of calls.split('\\n')) {
+    if (line === '') continue
+    const recorded = JSON.parse(line)
+    // A turn's mark is no call.
+    if (recorded.turn === 2) { if (recorded.kind !== 'relay') rang = false }
+    else if (rings(recorded.argv)) rang = true
+  }
+  return !rang
 }
 const blocked = answer?.stop ? blocks() : undefined
 const call = blocked === undefined ? { argv, code: 0 } : { argv, code: 0, blocked }

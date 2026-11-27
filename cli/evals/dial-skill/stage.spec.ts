@@ -854,7 +854,7 @@ describe('the fake harness keeps cards as the product does', () => {
     const id = ring(st, 'VPN please', '--waiting')
     harness(st, 'device', 'notify', '--waiting')
 
-    markTurn(st)
+    markTurn(st, 'answer')
     harness(st, 'device', 'notify', '--list')
     harness(st, 'device', 'notify', '--done', id)
     harness(st, 'device', 'notify', '--done', 'all')
