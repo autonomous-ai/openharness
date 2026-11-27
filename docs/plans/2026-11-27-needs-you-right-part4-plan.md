@@ -561,7 +561,7 @@ asks for `--approve-harness`.
 **Done** (c49e7f141c). Round 1's verdict: the gain holds and specificity fails (9 needless rings of 54), so v3 does not ship. Its sentence that Part 5 does not open is corrected by Task 17 (decision 14).
 
 **Effort:** high. **Depends on:** Tasks 7, 8 and 12, and, by the orchestrator's order, Tasks 1-6 landed first.
-**Runs in this worktree** (`/Users/nqhieu84/orca/workspaces/openharness/needs-you-right-start-line`), whose git-ignored
+**Runs in this worktree** (the branch's own checkout), whose git-ignored
 traces must outlive the task. **Test that must fail first:** none (it measures). Its checks are the exit codes, the
 probes, `scrub` and the eval's suite.
 
