@@ -351,6 +351,26 @@ describe('the plugin\'s folder', () => {
     holdsOnly(folder, EARLIER)
   })
 
+  it('a swap whose second rename fails answers its code when its staging folder cannot be removed, and the folder is the earlier one', () => {
+    const folder = aFolder()
+    ensurePluginFolder(folder, EARLIER, [])
+    const real = watched.renameSync
+    vi.spyOn(watched, 'renameSync').mockImplementation((from, to) => {
+      if (String(from).startsWith(`${folder}.new`)) throw Object.assign(new Error('rename failed'), { code: 'EIO' })
+      return real(from, to)
+    })
+    // A file Windows still holds: the removal's EBUSY must not replace the error that failed the swap.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(watched, 'rmSync').mockImplementation(busy)
+    vi.spyOn(watched, 'unlinkSync').mockImplementation(busy)
+
+    expect(ensurePluginFolder(folder, FILES, [])).toEqual({ failed: 'EIO' })
+
+    vi.restoreAllMocks()
+    expect(contents(folder)).toEqual(EARLIER)
+    expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', `orca-plugin.new.${process.pid}`])
+  })
+
   it('a parent that cannot be written answers EACCES and leaves the folder as it was', () => {
     const folder = aFolder()
     ensurePluginFolder(folder, EARLIER, [])

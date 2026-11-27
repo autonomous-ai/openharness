@@ -17,8 +17,8 @@ const MARKER = '# Written by Harness. Remove it with harness device claude disab
 const OLD_MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 const uid = process.getuid!()
 
-/** A step run just before the named file call, given its arguments: another remover taking the file first, a write that
- *  fails, a count of the folders a check looks at, or a record of what was opened. */
+/** A step run just before the named file call, given its arguments: another remover taking the file first, a write or a
+ *  removal that fails, a count of the folders a check looks at, or a record of what was opened. */
 const before = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>())
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>()
@@ -28,7 +28,7 @@ vi.mock('node:fs', async (importOriginal) => {
       return call(...args)
     }) as T
   return { ...fs, lstatSync: hooked('lstatSync', fs.lstatSync), renameSync: hooked('renameSync', fs.renameSync),
-    unlinkSync: hooked('unlinkSync', fs.unlinkSync), openSync: hooked('openSync', fs.openSync) }
+    unlinkSync: hooked('unlinkSync', fs.unlinkSync), openSync: hooked('openSync', fs.openSync), rmSync: hooked('rmSync', fs.rmSync) }
 })
 
 const cleanup: string[] = []
@@ -503,6 +503,24 @@ When the task stops on a step only the person can take, ring their dial before y
     cleanup.push(join(held, 'dial'))
     expect(removeSkill(held)).toBe('failed')
     expect(readFileSync(join(held, 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
+  })
+
+  it('a write whose temporary cannot be removed still says failed, and the temporary left is no skill', () => {
+    const skills = skillsAt()
+    // A file Windows still holds: the removal's EBUSY must not replace the failure of the write.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    before.set('renameSync', () => { throw Object.assign(new Error('EIO'), { code: 'EIO' }) })
+    before.set('rmSync', busy)
+    before.set('unlinkSync', busy)
+    expect(writeSkill(skills)).toBe('failed')
+    before.clear()
+
+    const left = readdirSync(join(skills, 'dial'))
+    expect(left).toHaveLength(1)
+    expect(left[0]).toMatch(/^\.SKILL\.md\..*\.tmp$/)
+    expect(refreshSkill(skills)).toBe('gone')
+    expect(writeSkill(skills)).toBe('written')
+    expect(readFileSync(join(skills, 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
   })
 
   it('claudePluginState: on, off once disabled or uninstalled, unknown when the file says nothing', () => {
