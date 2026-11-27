@@ -401,6 +401,14 @@ export interface PaneName {
   renamed: boolean
 }
 
+/** A Codex TUI still runs while the table holds its pid with the start it had then: Windows gives a freed pid to a later
+ *  process soon. A start the table could not read this time tells nothing, as the session's own does not (tick). */
+function running({ pid, generation }: ServedClient, table: ReadonlyMap<number, string | undefined>): boolean {
+  if (!table.has(pid)) return false
+  const now = table.get(pid)
+  return generation === undefined || now === undefined || now === generation
+}
+
 export class ObservedSource implements HostSource {
   readonly id = 'observed'
   private readonly entries = new Map<string, Entry>()
@@ -2205,7 +2213,7 @@ export class ObservedSource implements HostSource {
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.remove(e); changed = true }
-      else if (outer && e.outer === outer && this.servedBy(e) && table.size && clients.some(({ pid: client }) => !table.has(client))) {
+      else if (outer && e.outer === outer && this.servedBy(e) && table.size && clients.some((client) => !running(client, table))) {
         this.placeServed(e, {})
         changed = true
       }
