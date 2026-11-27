@@ -47,6 +47,17 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_instance_lets_go_while_a_child_still_holds_a_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let first = acquire(folder.path()).unwrap().expect("the first launch takes the lock");
+        // A child another thread forks holds a copy of the lock's descriptor until it execs: a clone stands in for it.
+        let copy = first.0.try_clone().unwrap();
+        drop(first);
+        assert!(acquire(folder.path()).unwrap().is_some());
+        drop(copy);
+    }
+
+    #[test]
     fn the_folder_is_made() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("Harness Device").join("ai.autonomous.harness.device");
