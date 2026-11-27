@@ -15,7 +15,9 @@
  *
  * And Codex's managed app server detaches itself: a real `codex app-server --managed-daemon` from the tester of #4660 and
  * #4668 outlived `close()`, launchd's, named by no command line or working folder the sweep reads. Codex records it in
- * `<CODEX_HOME>/app-server-daemon/daemon.pid` (engines/codex/launch.ts sharedServer.pidFile). So a process such a file
+ * `<CODEX_HOME>/app-server-daemon/daemon.pid` (engines/codex/launch.ts sharedServer.pidFile), and since 0.172 its updater,
+ * `codex app-server daemon pid-update-loop`, in `daemon-updater.pid` beside it: launchd's too, the server's parent once it
+ * starts it again, and one outlived the real-Codex dial skill case's `close()` (2026-11-27). So a process such a file
  * inside the root names is ended too, only while it is this account's, a Codex app server, started after the root was
  * made, and started when the file says (its `processStartTime`): never every app server on the machine (the person's own),
  * nor the worker e2e/harness/sharedCodex.ts names in one, nor a process given a recorded pid since.
@@ -177,6 +179,8 @@ export function stillRunning(seen: ReadonlyMap<number, string>): number[] {
 
 /** How far below a root a Codex home's `app-server-daemon` folder is looked for, and how much of the root is read for it. */
 const APP_SERVER_DEPTH = 4, FOLDERS_READ = 2_000, PID_FILES_READ = 16
+/** The pid files in that folder: the app server's, and its updater's. */
+const PID_FILES = ['daemon.pid', 'daemon-updater.pid']
 
 /** Whether [path] is a pid file of the root's own: a file, not a link to one, nor the second name of one elsewhere (a hard
  *  link), and no larger than the product reads one (lib/harnessResources.ts). */
@@ -201,9 +205,9 @@ function recorded(file: string): PidFile | null {
 }
 
 /**
- * What the Codex homes inside [root] record of their app servers: each `app-server-daemon/daemon.pid`, that folder at
- * most 4 below the root, read breadth first and through no link, soft or hard (one could lead out of the root). At most
- * 2,000 folders and 16 pid files are read; a bound reached is said once.
+ * What the Codex homes inside [root] record of their app servers and updaters: each `app-server-daemon/daemon.pid` and
+ * `daemon-updater.pid`, that folder at most 4 below the root, read breadth first and through no link, soft or hard (one
+ * could lead out of the root). At most 2,000 folders and 16 pid files are read; a bound reached is said once.
  */
 export function codexPidFiles(root: string): PidFile[] {
   const pids: PidFile[] = []
@@ -220,8 +224,9 @@ export function codexPidFiles(root: string): PidFile[] {
     for (const entry of entries) {
       // readdir's own type: a link is never a folder here.
       if (!entry.isDirectory()) continue
-      const path = join(folder, entry.name), file = join(path, 'daemon.pid')
-      if (entry.name === 'app-server-daemon' && ownPidFile(file)) {
+      const path = join(folder, entry.name)
+      const own = entry.name === 'app-server-daemon' ? PID_FILES.map((name) => join(path, name)).filter(ownPidFile) : []
+      for (const file of own) {
         if (files++ === PID_FILES_READ) {
           console.error(`[e2e sweep] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
           return pids
@@ -235,7 +240,8 @@ export function codexPidFiles(root: string): PidFile[] {
   return pids
 }
 
-/** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
+/** A Codex app server's command line, or its updater's (`app-server daemon pid-update-loop`): `codex`, `codex.js` or
+ *  `codex.exe` run with `app-server` among its arguments. */
 const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
 
 /** A process a Codex pid file names, as one `ps -p` read gives it (spawnedRuns.ts identities), and the start the file

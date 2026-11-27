@@ -265,6 +265,8 @@ function treeMatches(root, seen) {
 
 /** How far below a root a Codex home's `app-server-daemon` folder is looked for, and how much of the root is read for it. */
 const APP_SERVER_DEPTH = 4, FOLDERS_READ = 2_000, PID_FILES_READ = 16
+/** The pid files in that folder: the app server's, and its updater's. */
+const PID_FILES = ['daemon.pid', 'daemon-updater.pid']
 
 /** Whether [path] is a pid file of the root's own: a file, not a link to one, nor the second name of one elsewhere (a hard
  *  link), and no larger than the product reads one (src/lib/harnessResources.ts). */
@@ -286,9 +288,10 @@ function recorded(file) {
 }
 
 /**
- * What the Codex homes inside [root] record of their app servers: each `app-server-daemon/daemon.pid`, that folder at
- * most 4 below the root, read breadth first and through no link, soft or hard (one could lead out of the root). At most
- * 2,000 folders and 16 pid files are read; a bound reached is said once (src/testing/rootProcesses.ts codexPidFiles).
+ * What the Codex homes inside [root] record of their app servers and updaters: each `app-server-daemon/daemon.pid` and
+ * `daemon-updater.pid`, that folder at most 4 below the root, read breadth first and through no link, soft or hard (one
+ * could lead out of the root). At most 2,000 folders and 16 pid files are read; a bound reached is said once
+ * (src/testing/rootProcesses.ts codexPidFiles).
  */
 function codexPidFiles(root) {
   const pids = []
@@ -305,8 +308,9 @@ function codexPidFiles(root) {
     for (const entry of entries) {
       // readdir's own type: a link is never a folder here.
       if (!entry.isDirectory()) continue
-      const path = join(folder, entry.name), file = join(path, 'daemon.pid')
-      if (entry.name === 'app-server-daemon' && ownPidFile(file)) {
+      const path = join(folder, entry.name)
+      const own = entry.name === 'app-server-daemon' ? PID_FILES.map((name) => join(path, name)).filter(ownPidFile) : []
+      for (const file of own) {
         if (files++ === PID_FILES_READ) {
           console.error(`[e2e reaper] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
           return pids
@@ -320,7 +324,8 @@ function codexPidFiles(root) {
   return pids
 }
 
-/** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
+/** A Codex app server's command line, or its updater's (`app-server daemon pid-update-loop`): `codex`, `codex.js` or
+ *  `codex.exe` run with `app-server` among its arguments. */
 const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
 
 /** Whether two starts `ps -o lstart=` printed are one, however spaced (src/core/engines/nativeControls.ts reads them so). */
@@ -375,8 +380,9 @@ const runGroups = (() => {
  * inside [root] names that is the test's (rootCodexDaemons), with the group it leads unless that is the test run's own
  * (runGroups), [root] being a test's (isTestRoot), and wait, at most 5 s, until none is left. Codex's managed app server
  * detaches itself, names no root and need not work in it, so no tree leads to it: a real one from the tester of #4660 and
- * #4668 outlived its test, launchd's. Codex records it in `<CODEX_HOME>/app-server-daemon/daemon.pid`, so those are read
- * even when nothing the worker saw still runs.
+ * #4668 outlived its test, launchd's. Codex records it in `<CODEX_HOME>/app-server-daemon/daemon.pid`, and since 0.172
+ * its updater (`codex app-server daemon pid-update-loop`, launchd's too, which outlived the real-Codex dial skill case,
+ * 2026-11-27) in `daemon-updater.pid` beside it, so those are read even when nothing the worker saw still runs.
  */
 async function endRootProcesses(root, seen) {
   const { groups, pids, all } = treeMatches(root, seen)
