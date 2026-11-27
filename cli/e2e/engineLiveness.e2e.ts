@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { fakeOpenclawScript } from './harness/fakeOpenclaw.mjs'
 
 it.runIf(['darwin', 'linux'].includes(process.platform))('reports an exited engine before discovery retires its shell pane (#4493)', async () => {
@@ -18,7 +18,7 @@ it.runIf(['darwin', 'linux'].includes(process.platform))('reports an exited engi
     writeFileSync(daemon.env.OPENCLAW_PATH, fakeOpenclawScript({ steps, events: join(daemon.root, 'events.jsonl') }), { mode: 0o755 })
     await daemon.start()
     const name = 'x'
-    const entry = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : SOURCES_CLI
+    const entry = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : sourcesCli()
     const run = (...args: string[]) => new Promise<{ code: number; out: string; err: string }>((resolve, reject) => {
       execFile(process.execPath, [...entry, ...args], { cwd: CLI_ROOT, env: { ...daemon.env, TMUX_PANE: '' } },
         (error, out, err) => {
