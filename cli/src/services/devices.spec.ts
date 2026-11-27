@@ -17362,8 +17362,6 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
 
 describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)', () => {
   type Run = [string, string[], number]
-  const { listClients } = RECORDED_WEZTERM
-  const { focusedMatch } = RECORDED_KITTY
   /** The callers of the hooks below (4240 + n), each on a terminal of its own made by the n-th of [makers], the last for
    *  the rest: whose pane is the agent's own (scannedApp.ts ptyMaker). */
   const callers = (...makers: string[]): ProcessRow[] => Array.from({ length: 16 }, (_, at) => [
