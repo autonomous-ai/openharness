@@ -9,7 +9,7 @@
  * users, or a clone) is theirs: Codex installs its plugins from there and refreshes them by itself, so Harness writes
  * nothing there and runs nothing after `--version`.
  */
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { basename, delimiter, dirname, join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { parseVersion, versionAtLeast } from '../engines/kit/runtime.js'
@@ -32,7 +32,9 @@ export type CodexFailure = { ok: false; step: CodexStep; error: string; reason?:
 export type CodexSetup = { ok: true; outcome: 'installed' | 'updated' | 'absent'; trusted: boolean } | { ok: true; outcome: 'own'; trusted: false } | CodexFailure
 export type CodexResult = { ok: true } | CodexFailure
 
-export interface CodexPluginDeps { run: ClaudeRun | null; home: string; platform: NodeJS.Platform }
+/** A Codex run; [bin]: the `codex` it runs, by which its `--version` is kept (supportedRun). */
+export type CodexRun = ClaudeRun & { readonly bin?: string }
+export interface CodexPluginDeps { run: CodexRun | null; home: string; platform: NodeJS.Platform }
 /** [folder]: Harness's marketplace folder, by its absolute path; [files]: what cli.js carries for it. */
 export interface CodexInstallDeps extends CodexPluginDeps { folder: string; files: ClaudePluginFiles }
 
@@ -121,7 +123,7 @@ export function codexHomeState(home: string, folder: string): { marketplace: 'ha
 
 /** The Codex the daemon would run, pointed at [home]; its folder first on PATH, so an npm install's
  *  `#!/usr/bin/env node` finds the node beside it. [shell]: claudeFound's. */
-export async function codexFound(home: string, shell: boolean): Promise<ClaudeRun | null> {
+export async function codexFound(home: string, shell: boolean): Promise<CodexRun | null> {
   let bin: string | null
   try {
     bin = shell && process.platform !== 'win32' ? installedEngineBin('codex', await agentCommandOwnershipSnapshotAsync()) : engineNearby('codex')
@@ -129,20 +131,54 @@ export async function codexFound(home: string, shell: boolean): Promise<ClaudeRu
     return null
   }
   if (!bin) return null
-  return claudeRunner(bin, { ...process.env, CODEX_HOME: home, PATH: [dirname(bin), process.env.PATH].filter(Boolean).join(delimiter) })
+  return codexRunner(bin, { ...process.env, CODEX_HOME: home, PATH: [dirname(bin), process.env.PATH].filter(Boolean).join(delimiter) })
 }
 
 /** Codex as claudeRunIn finds Claude Code, pointed at [home] on this child alone; null: no `codex`. */
-export function codexRunIn(home: string): ClaudeRun | null {
+export function codexRunIn(home: string): CodexRun | null {
   const bin = process.platform === 'win32' ? engineNearby('codex') : installedEngineBin('codex')
-  return bin ? claudeRunner(bin, { ...process.env, CODEX_HOME: home }) : null
+  return bin ? codexRunner(bin, { ...process.env, CODEX_HOME: home }) : null
+}
+
+const codexRunner = (bin: string, env: NodeJS.ProcessEnv): CodexRun => Object.assign(claudeRunner(bin, env), { bin })
+
+/** `--version`'s answer by the binary's real path, for its modification time then. Asked for each home, one pass over
+ *  64 homes on a hanging Codex took 16 minutes, 15 s each. A failed or hung answer is kept too, and the promise is kept,
+ *  so two asks at once share one. A few binaries at most, the oldest out first. */
+const versions = new Map<string, { mtimeMs: number; answer: Promise<ClaudeAnswer> }>()
+const MAX_VERSIONS = 8
+
+/** [bin]'s real path and modification time; null for none, or one that cannot be read. */
+function binaryNow(bin: string | undefined): { path: string; mtimeMs: number } | null {
+  if (bin === undefined) return null
+  try {
+    const path = realpathSync(bin)
+    return { path, mtimeMs: statSync(path).mtimeMs }
+  } catch {
+    return null
+  }
+}
+
+/** [run]'s `--version`, asked once for its binary as it is now; a run with no binary, or one that cannot be read, asks
+ *  each time. */
+function askVersion(run: CodexRun): Promise<ClaudeAnswer> {
+  const binary = binaryNow(run.bin)
+  if (!binary) return run(['--version'], LOCAL_MS)
+  const { path, mtimeMs } = binary
+  const kept = versions.get(path)
+  if (kept?.mtimeMs === mtimeMs) return kept.answer
+  const answer = run(['--version'], LOCAL_MS)
+  versions.delete(path)
+  versions.set(path, { mtimeMs, answer })
+  if (versions.size > MAX_VERSIONS) versions.delete(versions.keys().next().value!)
+  return answer
 }
 
 /** [run] when its Codex is at least MIN_CODEX, asked with one `--version`: an older one is asked nothing more. A
  *  `--version` that fails or hangs is a broken install, not an older one, so it fails as the launcher, with why. */
-async function supportedRun(run: ClaudeRun | null): Promise<ClaudeRun | CodexFailure> {
+async function supportedRun(run: CodexRun | null): Promise<ClaudeRun | CodexFailure> {
   if (!run) return UNSUPPORTED
-  const answer = await run(['--version'], LOCAL_MS)
+  const answer = await askVersion(run)
   if (answer.refused) return LAUNCHER
   if (answer.code !== 0) return failure(answer, 'launcher')
   return versionAtLeast(answer.stdout, MIN) ? run : UNSUPPORTED
