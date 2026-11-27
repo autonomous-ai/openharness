@@ -155,8 +155,8 @@ and 13 have.
   - "is a file of its own, under 200 KB, with the release banner and none of the whole CLI": size `< 200_000`; first line
     starts with `/*! harness v9.8.7-inbox.1 `; no byte above `0x7f`; for each marker
     `'Updating would replace it with a published release'` (`cli.ts`), `'[runtime-profile] connect reconcile failed'`
-    (`core/main.ts`), `'WebSocket was closed before the connection was established'` (`ws`): `cli.js` holds it and
-    `inbox.mjs` does not.
+    (`core/main.ts`): `cli.js` holds it and `inbox.mjs` does not. (`ws` stays: the follower's pipe client,
+    `lib/windows/pipeClient.ts`, imports it; the measured 57 MB bundle carried it. Decided 2026-11-27.)
   - "follows on its own: a refused id prints {"off":true}, exits 0, and leaves its home as it was": `spawnSync(node,
     [inbox.mjs, 'device', 'claude', 'inbox', 'not-a-session-id'])` with only `PATH`, `HOME`/`USERPROFILE` = a temp home,
     `ADAPTER_DATA_DIR=<home>/data`, `CLAUDE_CONFIG_DIR=<home>/claude` and `entry.spec.ts`'s `WINDOWS_ENV` →

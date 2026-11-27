@@ -96,7 +96,7 @@ On macOS and Linux the plugin's mod reaches the daemon's socket itself (`plugins
 ## Tests (each red first where it is behavior)
 
 - `inbox.mjs` stays small: a spec builds the bundle (as `leanEntry.spec.ts` does) and holds `inbox.mjs` under 200 KB,
-  with none of the code only the whole CLI carries (a marker of `cli.ts`, of `core/`, and of `ws`). Red: no
+  with none of the code only the whole CLI carries (a marker of `cli.ts` and of `core/`; `ws` stays, as the follower's pipe client imports it). Red: no
   `inbox.mjs` is built.
 - `inbox.mjs` follows: run on its own with an isolated home and a refused id, it prints `{"off":true}` and exits 0.
 - `harness.exe`: `pty/tests/harness_command.rs` with an install whose fake `inbox.mjs` and `cli.js` each print their
