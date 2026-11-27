@@ -49,6 +49,8 @@ export interface NoticesDeps {
   hold(agentId: string, id: string, questions: unknown): void
   /** A timer: [run] in [ms], and its cancel. */
   after(ms: number, run: () => void): () => void
+  /** Each card that went, once, with why: its wait on the person ends by it (services/devices.ts). */
+  closed(agentId: string, card: { id: string; kind: NoticeKind }, end: NoticeEnd): void
 }
 
 export const NOTICES_PENDING_MAX = 20
@@ -272,9 +274,9 @@ export class Notices {
   }
 
   /** That agent's turn ended and the person is no longer with it (services/devices.ts): its card shown, when quiet, is
-   *  asked once, under a new question id, while a dial is attached and the hour has one left. The kind of the card asked;
-   *  undefined when none was. */
-  rouse(agentId: string): NoticeKind | undefined {
+   *  asked once, under a new question id, while a dial is attached and the hour has one left. The card asked, by the id
+   *  its agent closes it by; undefined when none was. */
+  rouse(agentId: string): { id: string; kind: NoticeKind } | undefined {
     const card = this.faces().get(agentId)?.card
     if (!card?.quiet || !this.deps.connected() || !this.limits.takeHour()) return undefined
     // A dial mutes a question under an id it holds, so the held one closes and the card rings under a new one, in the
@@ -284,7 +286,7 @@ export class Notices {
     delete card.quiet
     this.deps.changed()
     this.send(agentId)
-    return card.kind
+    return { id: cardId(card.id), kind: card.kind }
   }
 
   /** The last dial went. A Harness agent's next turn is told to the devices only while a dial listens
@@ -365,6 +367,7 @@ export class Notices {
     this.deps.close(card.agentId, card.id)
     const said = LOGGED[end]
     if (said) this.deps.log(`[device] notice · ${said}`)
+    this.deps.closed(card.agentId, { id: cardId(card.id), kind: card.kind }, end)
   }
 
   /** A change to the cards, then each agent's card shown settled, and one drawer replace for every one held by it. */
