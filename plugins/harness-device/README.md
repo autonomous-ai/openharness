@@ -60,7 +60,7 @@ Missed on purpose:
 - A command the automatic review hands to the person, and a question in Default mode with Codex's
   `default_mode_request_user_input` on: both ring nothing, as before; a ring at every command the review approves would
   be worse.
-- A hook input over 256 KiB, such as a large `apply_patch`: the command reads no further and tells nothing.
+- A hook input over 256 KiB, such as a large `apply_patch`: the command reads it to its end and tells nothing.
 - Codex's own app tools (`mcp__codex_apps__…`): Codex takes their reviewer from `[apps]` in `config.toml`, over the
   turn's, so the rollout cannot say who reviews them, and they ring nothing.
 - An organization's managed requirements for automatic review (`requirements.toml`): the command does not read them and

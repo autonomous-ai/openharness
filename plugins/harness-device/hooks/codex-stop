@@ -8,17 +8,16 @@
 # codex.json's command is read by two shells, as for hooks/codex-asked: off Windows the first line execs this script;
 # on Windows PowerShell runs the second line, the same lookup and the same check on what the launcher prints.
 #
-# With no launcher the input is read whole all the same, as hooks/codex-start does, so Codex's write of it never meets
-# a closed pipe.
+# The input is read to its end after the launcher, as hooks/codex-start does: one that stops reading early (an older
+# launcher printing its usage, or one past its bound), or none, would leave Codex's write of it to meet a closed pipe.
 prefix='{"decision":"block","reason":'
 out=
 if [ -x "$HOME/.local/bin/harness" ]; then
   out=$("$HOME/.local/bin/harness" device codex stop 2>/dev/null)
 elif command -v harness >/dev/null 2>&1; then
   out=$(harness device codex stop 2>/dev/null)
-else
-  cat >/dev/null
 fi
+cat >/dev/null
 case "$out" in
   "$prefix"*) printf '%s\n' "$out" ;;
 esac

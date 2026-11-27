@@ -13,10 +13,13 @@
 # onFailure "continue" keeps a hook that fails or times out there from denying the tool call.
 #
 # On Windows the mod (device.js) tells of the prompt itself and sets HARNESS_DEVICE_MOD_ASKS for the hooks Claude Code
-# starts after: nothing to tell. The input is read whole all the same: Claude Code's write of one longer than the pipe
-# holds would fail, and that hook with it.
+# starts after: nothing to tell.
+#
+# The input is read to its end after the launcher: one that stops reading early (an older launcher printing its usage,
+# or one past its bound), or none, leaves the rest in the pipe, and Claude Code's write of one longer than the pipe holds
+# would fail, and that hook with it.
 if [ -n "$HARNESS_DEVICE_MOD_ASKS" ]; then
-  cat >/dev/null
+  :
 elif [ -x "$HOME/.local/bin/harness" ]; then
   "$HOME/.local/bin/harness" device claude asked >/dev/null 2>&1
 elif [ -n "$USERPROFILE" ] && [ -x "$USERPROFILE/.harness/bin/harness.exe" ]; then
@@ -24,4 +27,5 @@ elif [ -n "$USERPROFILE" ] && [ -x "$USERPROFILE/.harness/bin/harness.exe" ]; th
 elif command -v harness >/dev/null 2>&1; then
   harness device claude asked >/dev/null 2>&1
 fi
+cat >/dev/null
 exit 0

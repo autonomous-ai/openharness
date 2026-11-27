@@ -9,8 +9,9 @@
 # hooks.json's command is read by two shells, as for hooks/asked: a POSIX shell (and Git Bash on Windows) execs this
 # script; Windows PowerShell runs the second line, the same lookup and the same check on what the launcher prints.
 #
-# With no launcher the input is read whole all the same: Claude Code's write of one longer than the pipe holds would
-# fail, and that hook with it.
+# The input is read to its end after the launcher: one that stops reading early (an older launcher printing its usage,
+# or one past its bound), or none, leaves the rest in the pipe, and Claude Code's write of one longer than the pipe holds
+# would fail, and that hook with it.
 prefix='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":'
 out=
 if [ -x "$HOME/.local/bin/harness" ]; then
@@ -19,9 +20,8 @@ elif [ -n "$USERPROFILE" ] && [ -x "$USERPROFILE/.harness/bin/harness.exe" ]; th
   out=$("$USERPROFILE/.harness/bin/harness.exe" device claude start 2>/dev/null)
 elif command -v harness >/dev/null 2>&1; then
   out=$(harness device claude start 2>/dev/null)
-else
-  cat >/dev/null
 fi
+cat >/dev/null
 case "$out" in
   "$prefix"*) printf '%s\n' "$out" ;;
 esac
