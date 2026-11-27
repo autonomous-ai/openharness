@@ -100,4 +100,43 @@ describe.skipIf(process.platform === 'win32')('publish-cli-staging.sh', () => {
     expect(result.stderr).toContain('is missing')
     expect(existsSync(join(root, 'out'))).toBe(false)
   })
+
+  // upload-cli.sh runs check-inbox-bundle.mjs on inbox.mjs before it uploads (Ken's review of #4681); staging repeats
+  // upload-cli.sh's bundle checks, so it runs that one too. The two cli.js checks need a real bundle: a node on PATH
+  // passes them, and runs everything else, the inbox check among it, on this Node.
+  function bundle(root: string, inbox: string) {
+    const dist = join(root, 'dist')
+    mkdirSync(dist)
+    writeFileSync(join(dist, 'cli.js'), "#!/usr/bin/env node\nconsole.log(process.argv[2] === 'version' ? '0.4.18-dev.win1' : '')\n")
+    writeFileSync(join(dist, 'notify.mjs'), '')
+    writeFileSync(join(dist, 'inbox.mjs'), inbox)
+    const node = join(root, 'node')
+    mkdirSync(node)
+    writeFileSync(join(node, 'node'), [
+      '#!/bin/sh',
+      'case "$1" in */scripts/test-core-harness-upgrade.mjs|*/scripts/check-lean-bundle.mjs) exit 0;; esac',
+      `exec '${process.execPath}' "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 })
+    return { dist, path: `${node}:${shim(root, 'echo "One or more URLs matched no objects" >&2; exit 1')}:${process.env.PATH}` }
+  }
+
+  it('runs the inbox follower\'s check on inbox.mjs and uploads nothing when it fails', () => {
+    const root = scratch()
+    const { dist, path } = bundle(root, "console.log('private words')\n")
+    const result = run(['0.4.18-dev.win1', '--no-build'], { PATH: path, CLI_DIST_DIR: dist })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("the inbox follower's check (device claude inbox not-a-session-id) did not answer {\"off\":true}")
+    expect(result.stderr + result.stdout).not.toContain('private words')
+    expect(readFileSync(join(root, 'gcloud.log'), 'utf8')).not.toMatch(/ cp /)
+  })
+
+  it('passes a bundle whose inbox.mjs answers a refused id {"off":true}, in a dry run', () => {
+    const root = scratch()
+    const { dist, path } = bundle(root, "console.log('{\"off\":true}')\n")
+    const result = run(['0.4.18-dev.win1', '--no-build'], { PATH: path, CLI_DIST_DIR: dist, DRY_RUN: '1', DRY_RUN_OUT: join(root, 'out') })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('>> inbox.mjs: a refused id answers {"off":true} and exits 0')
+    expect(existsSync(join(root, 'out', 'inbox.mjs'))).toBe(true)
+  })
 })
