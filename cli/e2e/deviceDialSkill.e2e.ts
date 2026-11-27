@@ -393,11 +393,11 @@ trust_level = "trusted"
       // Codex's app server outlives the pane: IsolatedDaemon.close() ends it through <home>/app-server-daemon/daemon.pid
       // (rootProcesses.ts), so the sweep is the one cleanup and this case proves it. Its start, read before, tells it
       // from a process given its pid since; the close in afterEach is then a second one, which ends nothing more.
-      const pidFile = join(home, 'app-server-daemon', 'daemon.pid')
-      if (existsSync(pidFile)) {
-        const { pid } = JSON.parse(readFileSync(pidFile, 'utf8')) as { pid: number }
+      // A pid file missing or cut short fails the case below, never this cleanup, which would hide the case's own error.
+      try {
+        const { pid } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid: number }
         server = { pid, started: startTimes([pid]).get(pid) }
-      }
+      } catch { /* no server read: the expect below says so */ }
       await d.close()
     }
     expect(server?.started, 'the Codex app server its pid file names, running before the close').toBeDefined()
