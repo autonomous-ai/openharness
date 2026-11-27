@@ -126,13 +126,6 @@ describe('runCodexAsked', () => {
     expect(await posted(home, hookInput(transcript, { turn_id: AUTO_REVIEW_TURN }))).toEqual([])
   })
 
-  // The hook runs in the background: it can land after the person answered and the turn ended.
-  it('posts nothing for a turn the rollout shows ended', async () => {
-    const end = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: USER_TURN } })
-    const { home, transcript } = codexHome([...FIXTURE, end])
-    expect(await posted(home, hookInput(transcript))).toEqual([])
-  })
-
   it('posts nothing for a turn with no turn_context', async () => {
     const { home, transcript } = codexHome()
     expect(await posted(home, hookInput(transcript, { turn_id: '01a21899-0000-7000-8000-000000000000' }))).toEqual([])

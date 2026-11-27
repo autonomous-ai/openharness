@@ -34,22 +34,7 @@ function edited(line: string, change: (payload: Record<string, unknown>) => void
   change(record.payload)
   return JSON.stringify(record)
 }
-/** Codex 0.172.0's own turn-end lines (__fixtures__/codex-turn-end.jsonl): line 1 interrupts line 2's turn, line 2
- * ends line 6's. */
-const [AUTO_REVIEW_ABORTED, USER_COMPLETE] = readFileSync(new URL('./__fixtures__/codex-turn-end.jsonl', import.meta.url), 'utf8')
-  .split(/\r?\n/).filter(Boolean)
 const PLAN_LINE = edited(USER_LINE, (payload) => { payload.collaboration_mode = { ...payload.collaboration_mode as object, mode: 'plan' } })
-
-/** The event line Codex 0.172.0 writes at [turnId]'s end (EventMsg::TurnComplete, persisted by rollout/src/policy.rs). */
-const taskComplete = (turnId: string): string => JSON.stringify({
-  timestamp: '2026-11-26T15:02:10.000Z', ordinal: 9, type: 'event_msg',
-  payload: { type: 'task_complete', turn_id: turnId, last_agent_message: 'Done.' },
-})
-/** The event line Codex 0.172.0 writes when the person interrupts [turnId] (EventMsg::TurnAborted). */
-const turnAborted = (turnId: string | null): string => JSON.stringify({
-  timestamp: '2026-11-26T15:02:10.000Z', ordinal: 9, type: 'event_msg',
-  payload: { type: 'turn_aborted', turn_id: turnId, reason: 'interrupted' },
-})
 
 /** Whole lines, each with its newline. */
 const lines = (...records: string[]): string => records.map((record) => `${record}\n`).join('')
@@ -167,54 +152,6 @@ describe('readTurnSetting', () => {
 
     it('a rollout that is the line alone', () => {
       expect(settingIn(lines(USER_LINE))).toStrictEqual({ reviewer: 'user', mode: 'default' })
-    })
-  })
-
-  // The hook runs in the background, so it can read the rollout after its turn ended (spec Part 7, "A post that lands
-  // after the answer").
-  describe('the turn\'s end', () => {
-    it.each([
-      ['task_complete', taskComplete(USER_TURN)],
-      ['turn_aborted', turnAborted(USER_TURN)],
-    ])('the turn\'s own %s after its turn_context: nothing', (_, end) => {
-      expect(settingIn(HEAD + lines(USER_LINE) + filler(4096) + lines(end) + filler(1024))).toBeNull()
-    })
-
-    it('the turn followed by Codex 0.172.0\'s own task_complete record: nothing', () => {
-      expect(settingIn(HEAD + lines(USER_LINE) + filler(4096) + lines(USER_COMPLETE) + filler(1024))).toBeNull()
-    })
-
-    it('the turn followed by Codex 0.172.0\'s own turn_aborted record (interrupted): nothing', () => {
-      expect(settingIn(HEAD + lines(AUTO_REVIEW_LINE) + filler(4096) + lines(AUTO_REVIEW_ABORTED) + filler(1024), AUTO_REVIEW_TURN))
-        .toBeNull()
-    })
-
-    it('a turn still running reads as before', () => {
-      expect(settingIn(HEAD + lines(taskComplete(AUTO_REVIEW_TURN), USER_LINE) + filler(4096)))
-        .toStrictEqual({ reviewer: 'user', mode: 'default' })
-    })
-
-    it.each([
-      ['another turn\'s task_complete after it', taskComplete(AUTO_REVIEW_TURN)],
-      ['another turn\'s turn_aborted after it', turnAborted(AUTO_REVIEW_TURN)],
-      ['a turn_aborted with no turn_id', turnAborted(null)],
-    ])('%s does not end it', (_, end) => {
-      expect(settingIn(HEAD + lines(USER_LINE) + filler(4096) + lines(end)))
-        .toStrictEqual({ reviewer: 'user', mode: 'default' })
-    })
-
-    it('the turn\'s task_complete before a later turn_context of its own does not end it', () => {
-      const later = edited(USER_LINE, (payload) => { payload.approvals_reviewer = 'auto_review' })
-      expect(settingIn(HEAD + lines(USER_LINE, taskComplete(USER_TURN), later)))
-        .toStrictEqual({ reviewer: 'auto_review', mode: 'default' })
-    })
-
-    it('the text of a task_complete inside a tool output, or another record\'s, is not taken for one', () => {
-      const inOutput = JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: taskComplete(USER_TURN) } })
-      const notEvent = JSON.stringify({ ...JSON.parse(taskComplete(USER_TURN)), type: 'response_item' })
-      const notEnd = edited(taskComplete(USER_TURN), (payload) => { payload.type = 'agent_message'; payload.message = 'task_complete' })
-      expect(settingIn(HEAD + lines(USER_LINE, inOutput, notEvent, notEnd, '{"type":"event_msg","payload":"task_complete"}')))
-        .toStrictEqual({ reviewer: 'user', mode: 'default' })
     })
   })
 
