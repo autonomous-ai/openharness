@@ -1,0 +1,13 @@
+{
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "harness device claude stop",
+          "timeout": 5
+        }
+      ]
+    }
+  ]
+}
