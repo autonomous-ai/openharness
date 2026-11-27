@@ -7990,6 +7990,30 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(apps).not.toContain('iterm')
   })
 
+  it('its host is its client\'s app once placed, and stays so through its next hooks', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: CLIENT }])
+    expect(t.agent().host).toBe('terminal-app')
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(1)
+    expect(t.agent().host).toBe('terminal-app')
+    t.src.ingest(t.codex('session-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+    expect(t.agent().host).toBe('terminal-app')
+    await t.asks[1].answer([{ client: CLIENT }])
+    expect(t.agent().host).toBe('terminal-app')
+  })
+
+  it('with no client known its host is terminal', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{}])
+    expect(t.agent().host).toBe('terminal')
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.agent().host).toBe('terminal')
+  })
+
   it('no pane of its hints or its caller takes its words: a place learnt by its folder only shows it', async () => {
     const t = served({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
     // The first TUI ran in tmux, and the session's own TUI runs in VS Code's terminal.
@@ -8249,7 +8273,7 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     await t.asks[0].answer([{ client: CLIENT }])
     await scanned
     const agent = t.src.list()[0]
-    expect(agent).toMatchObject({ app: 'terminal-app' })
+    expect(agent).toMatchObject({ app: 'terminal-app', host: 'terminal-app' })
     expect(agent.appPending).toBeUndefined()
     expect(t.src.tabTty(agent.id)).toBe('/dev/ttys005')
     expect(t.src.paneOf(agent.id, 'tabs')).toBe('terminal-app:/dev/ttys005')
