@@ -250,7 +250,7 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
     case 'stop':
       return runStop({
         stdin: deps.stdin, dataDir: deps.dataDir, engine: 'codex', out: deps.out, ask: nudge(deps),
-        headless: (input) => codexHeadless(input.transcript_path), acts: () => codexSkillOn(deps),
+        headless: (input) => codexHeadless(input.transcript_path, deps.codexHome), acts: () => codexSkillOn(deps),
       })
     default:
       deps.err(DEVICE_USAGE)

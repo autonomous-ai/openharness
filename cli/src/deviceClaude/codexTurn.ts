@@ -47,7 +47,7 @@ function settingOf(line: Buffer, turnId: string): TurnSetting | null {
 }
 
 /** The rollout opened read-only with its size, when [path] names a regular file inside [home]; else null. */
-function openRollout(path: string, home: string): { fd: number; size: number } | null {
+export function openRollout(path: string, home: string): { fd: number; size: number } | null {
   // Codex names the rollout by its absolute path; a relative one would be read from wherever the hook happens to run.
   if (!isAbsolute(path)) return null
   let named: Stats, real: string

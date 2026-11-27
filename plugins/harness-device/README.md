@@ -96,7 +96,7 @@ take the line away.
 Each engine's `Stop` hook runs `harness device claude stop` (`hooks/stop`, in `hooks/hooks.json`) or
 `harness device codex stop` (`hooks/codex-stop`, in `hooks/codex.json`). It reads the session's id, its folder, the
 turn's last answer and whether the stop already continues one. For Codex it also reads the first line of the session's
-rollout, to know a headless run.
+rollout, only a regular file inside the session's Codex home, to know a headless run.
 
 It tells the devices nothing, and the turn ends as it would without Harness, for a headless run (`claude -p`,
 `codex exec`, Codex run as another agent's MCP tool), a session in Harness's data folder (Harness's own one-shots), or

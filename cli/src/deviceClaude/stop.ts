@@ -19,10 +19,11 @@
  * Both engines read what this prints as the stop's decision, so it prints the block or nothing: any failure prints
  * nothing, and it always exits 0.
  */
-import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { closeSync, readSync } from 'node:fs'
 import { NOTICE_SESSION } from '../lib/dialNotice.js'
 import { within } from '../lib/sessionSearch/externals/support.js'
 import { hookInput } from './asked.js'
+import { openRollout } from './codexTurn.js'
 
 export const DIAL_STOP_REASON = 'Your answer asks the person something, and they are not at this session. If the task cannot go on without them, run harness device notify now, as the dial skill says, and end your turn. If nothing is needed from them, end your turn.'
 
@@ -49,8 +50,11 @@ export function asksOf(input: Record<string, unknown>): boolean {
 /** The devices' answer is waited for this long, its request included: past it the stop goes on. */
 export const NUDGE_ANSWER_MS = 300
 
-/** Codex's first rollout line is about 22 KB (Codex 0.172.0), most of it its instructions. */
-export const ROLLOUT_HEAD_MAX_BYTES = 65_536
+/**
+ * Codex's first rollout line is about 22 KB (Codex 0.172.0), most of it its instructions: it is read within the bound
+ * the session store reads that record in (engines/codex/sessionStore.ts).
+ */
+const ROLLOUT_HEAD_MAX_BYTES = 128 * 1024
 const HEAD_CHUNK_BYTES = 16_384
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -60,28 +64,25 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const HEADLESS_SOURCES = new Set(['exec', 'mcp'])
 
 /**
- * Whether the Codex rollout at [transcriptPath] is a headless run's: its first line is the session's `session_meta`,
- * whose `source` is one of HEADLESS_SOURCES. Only a regular file is opened, as a FIFO would wait for a writer. False for
+ * Whether the Codex rollout at [transcriptPath], a file of [codexHome]'s, is a headless run's: its first line is the
+ * session's `session_meta`, whose `source` is one of HEADLESS_SOURCES. The path is the hook's input, so it is opened as
+ * `codex asked` opens one (codexTurn.ts): a regular file inside the Codex home, never a link or a FIFO. False for
  * anything that cannot be read or does not say so, so a session is never taken for headless by mistake.
  */
-export function codexHeadless(transcriptPath: unknown): boolean {
-  if (typeof transcriptPath !== 'string' || !transcriptPath) return false
+export function codexHeadless(transcriptPath: unknown, codexHome: string): boolean {
+  if (typeof transcriptPath !== 'string') return false
+  const rollout = openRollout(transcriptPath, codexHome)
+  if (!rollout) return false
   try {
-    if (!statSync(transcriptPath).isFile()) return false
     const head = Buffer.alloc(ROLLOUT_HEAD_MAX_BYTES)
     let length = 0
     let newline = -1
-    const fd = openSync(transcriptPath, 'r')
-    try {
-      while (newline < 0 && length < ROLLOUT_HEAD_MAX_BYTES) {
-        const read = readSync(fd, head, length, Math.min(HEAD_CHUNK_BYTES, ROLLOUT_HEAD_MAX_BYTES - length), length)
-        if (read === 0) break
-        const found = head.subarray(length, length + read).indexOf(0x0a)
-        if (found >= 0) newline = length + found
-        length += read
-      }
-    } finally {
-      closeSync(fd)
+    while (newline < 0 && length < ROLLOUT_HEAD_MAX_BYTES) {
+      const read = readSync(rollout.fd, head, length, Math.min(HEAD_CHUNK_BYTES, ROLLOUT_HEAD_MAX_BYTES - length), length)
+      if (read === 0) break
+      const found = head.subarray(length, length + read).indexOf(0x0a)
+      if (found >= 0) newline = length + found
+      length += read
     }
     if (newline < 0) return false
     const line: unknown = JSON.parse(head.subarray(0, newline).toString('utf8'))
@@ -89,6 +90,8 @@ export function codexHeadless(transcriptPath: unknown): boolean {
     return typeof source === 'string' && HEADLESS_SOURCES.has(source)
   } catch {
     return false
+  } finally {
+    closeSync(rollout.fd)
   }
 }
 
