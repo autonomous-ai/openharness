@@ -555,24 +555,16 @@ The change:
    - Not `notify.mjs`. It is not one of the core process's files, but every session of every engine runs it, the core
      installs it, and its rule is "the event and the tool's name only, never a tool's input or what is asked". The
      spike found the plugin can carry trusted hooks, so no fallback there is needed.
-   - **In the background** (the PM, 2026-11-27, after release). Both hooks carry `"async": true`, which Codex 0.172
-     takes for `PermissionRequest` and `PreToolUse`: it starts the hook and does not wait for it. The hook decides
-     nothing, so what Codex does is unchanged; only its dialog no longer waits. As first released (CLI 0.6.95, no
-     `async`), each ask waited for the hook: about 250 ms on macOS and 1.5 s on Windows, where Codex runs it through
-     Windows PowerShell 5.1. The pull request shows Codex's own hook log for an async run and the time to the dialog.
-   - `async` is part of each hook's declaration hash, so the trust records change with it: the setup's update after
-     the CLI update installs the new copy and writes its records, as for any change of the plugin. Its end-to-end
-     case: the 0.6.95 copy trusted, the update, the new copy trusted, no review asked of the person.
-   - **A post that lands after the answer.** Running in the background, the post can reach the devices after the
-     person has answered in Codex, likelier on Windows. The dial may then show, and ring, an ask already answered. It
-     must never stay: the card closes once the session's record grows past the post (`checkWorking`,
-     `ASK_SETTLE_MS`). A turn that has ended posts nothing: the command reads the record's end of that turn
-     (`event_msg` `task_complete` or `turn_aborted` with the hook's `turn_id`, after the turn's last `turn_context`)
-     and posts nothing (#4668). Two gaps are left, both needing the person to answer within the hook's own run time
-     (about 0.25 s on macOS, 1.5 s on Windows): Codex runs its Stop hook before it writes `task_complete`, so a read in
-     that window posts and the card stays until the session's next turn writes; and a command that runs long writes
-     nothing until its output, so the card stays for that long. Its end-to-end case: answered before the post, the
-     card gone within one `checkWorking` round after the record grows; a turn ended before the post shows nothing.
+   - **Not in the background** (the PM, 2026-11-27, after release, from #4668's measurements). Codex 0.172 takes
+     `"async": true` for `PermissionRequest` and `PreToolUse`: it starts the hook and does not wait for it. Both hooks
+     stay without it, so Codex waits for the hook before it shows its dialog. In the background, the post reached the
+     devices after the person had answered, and the dial rang an ask already answered. On Windows that happened in
+     4 of 5 turns that ended right after the command: the ring came 0.43 to 0.55 s after the answer and the card
+     closed 1.8 to 2.0 s later. Codex runs its Stop hook, about 0.4 s there, before it writes the turn's end, so a check
+     of the record for that end could not stop the post. A ring after the answer breaks the rule that the dial never
+     rings wrong; the wait it saved was about 0.45 s on Windows (928 to 454 ms) and 0.19 s on macOS (259 to 71 ms),
+     with the model answering 2 s after Enter. Run in the foreground, the hook's post always lands before the dialog
+     shows, so the answer always comes after it.
 2. **Who reviews it, read where the ask is heard** (the PM, 2026-11-26, from Codex 0.172.0's source). A
    `PermissionRequest`'s input says nothing of whether a dialog follows; the hook runs before Codex's automatic review,
    which is a model session of its own with hooks off; and the next event of a command it approves is `PostToolUse`,
@@ -611,8 +603,6 @@ What it gives up, on purpose: with automatic review on, a command the review pas
 today; so does a Default-mode question form where Codex's experimental setting turns it on. A ring at every command the review approves would be the anti-goal; a missed escalation is today's behavior.
 So, by item 3, does a second ask for a command the person allowed with plain "Yes": a ring at every command the
 person already allowed for the session would be the same anti-goal.
-With the hooks in the background, an ask the person answers before the post lands can still ring once, then close:
-rare, and the price of a dialog that no longer waits for Harness.
 And if Codex renames the field or the line, every Codex ask outside a pane goes quiet again, as today: the command's
 spec pins a record written by Codex 0.172, and the Codex release checks read it again.
 
@@ -640,8 +630,8 @@ Answered by the spike (2026-11-26), and used by Part 4 too:
   each reviewer and mode.
 - **Its time** (the PM, 2026-11-27). The hook runs at every Codex permission ask, so the pull request gives its
   time from start to exit, in a short turn and with the record's line at the 16 MiB bound. Measured at release
-  (median of 5): macOS 238 to 269 ms, Windows 1.49 to 1.54 s, all of it added to the wait for Codex's dialog until
-  the hooks ran in the background.
+  (median of 5): macOS 238 to 269 ms, Windows 1.49 to 1.54 s, all of it added to the wait for Codex's dialog, which
+  stays (item 1, "Not in the background").
 - **Docs:** `plugins/harness-device/README.md`, the devices row of `cli/AGENTS.md`, and the hook-driven status plan's
   limit 4, which this narrows.
 
