@@ -417,10 +417,14 @@ async function runCase(input, ctx, timeoutMs) {
       const second = await runFollowUp(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: left === Infinity ? 0 : left }, session.id, rungOf(rings))
         .finally(() => endSession(st))
         .catch(e => { throw Object.assign(e, { model: e?.model ?? first.model, usage: addUsage(first.usage, e?.usage), cut: first.cut || e?.cut }); });
-      run = { ...first, usage: sumUsage([first.usage, second.usage]), cut: first.cut || second.cut,
+      // As turn 1's: Claude Code may update between the turns too.
+      if (agent === 'claude' && !matchesProbe(second.init, ctx.probes.get(condition))) second.status = 'unlisted';
+      // turn2_model: gradeCase checks the model that served turn 2 as it does turn 1's.
+      run = { ...first, usage: sumUsage([first.usage, second.usage]), cut: first.cut || second.cut, turn2_model: second.model,
         transcript: [...first.transcript, { role: 'system', content: 'turn 2' }, ...second.transcript] };
-      // Turn 1's calls as read before the checks, for the same reason as its rings.
-      close = { kind, calls: [...rings, ...readRings(st).filter(r => r.turn === 2)], seed: st.seed };
+      // A turn 2 cut at --max-turns or unlisted may have stopped before its close, or run with what its probe never saw:
+      // counted apart, never graded. Turn 1's calls as read before the checks, for the same reason as its rings.
+      close = second.status === 'ok' ? { kind, calls: [...rings, ...readRings(st).filter(r => r.turn === 2)], seed: st.seed } : { cut: true };
     }
     // The skill the agent had leads the trace, so a trace reads on its own.
     const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
@@ -451,8 +455,9 @@ function endSession(st) {
 async function gradeCase(input, run, ref, ctx) {
   // Checked here rather than in runCase, so the error row keeps the billed run's model and usage; the harness's own
   // check compares with --model, which this runner does not take.
-  if (input.meta.agent === 'claude' && !String(run.model).startsWith(AGENT_CONFIG.claudeModel)) {
-    const e = new Error(`served model ${run.model} != requested ${AGENT_CONFIG.claudeModel}`);
+  const other = [run.model, ...('turn2_model' in run ? [run.turn2_model] : [])].filter(model => !String(model).startsWith(AGENT_CONFIG.claudeModel));
+  if (input.meta.agent === 'claude' && other.length > 0) {
+    const e = new Error(`served model ${other[0]} != requested ${AGENT_CONFIG.claudeModel}`);
     e.failure_class = 'serving_substitution';
     throw e;
   }

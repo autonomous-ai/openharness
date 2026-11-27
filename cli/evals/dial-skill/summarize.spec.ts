@@ -583,7 +583,7 @@ describe('the close gates', () => {
     ])
     const s = summarize(flow)
     expect(s.close.v7.crowd).toEqual({
-      right: 2, right_n: 3, wrong: 2, errors: 3, unrung: 1,
+      right: 2, right_n: 3, wrong: 2, errors: 3, unrung: 1, cut: 0,
       by_kind: {
         answer: { runs: 2, right: 1, wrong: 0 }, 'answer-one': { runs: 2, right: 1, wrong: 1 },
         relay: { runs: 1, wrong: 1 }, 'new-request': { runs: 1, wrong: 0 }, unrung: { runs: 1, wrong: 0 },
