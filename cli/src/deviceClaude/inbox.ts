@@ -90,7 +90,7 @@ export interface InboxDeps {
   dataDir: string
   port: number
   platform: NodeJS.Platform
-  /** Whether the plugin's mod acts: on in Claude Code's settings, and not removed (command.ts `pluginActs`). */
+  /** Whether the plugin's mod acts: on in Claude Code's settings, and not removed (inboxCommand.ts `pluginActs`). */
   acts(): boolean
   proof: DaemonProof
   /** Plain fetch, for a daemon reached over its port where it has no socket (lib/localTransport.ts `daemonFetch`). */

@@ -3,10 +3,11 @@
  * daemon port and stdout. A module of its own, importing only what the follower needs, so the bundle's entry (entry.ts)
  * starts it without the whole CLI: the follower runs as long as its Claude Code session, and on Windows it held about
  * 103 MB of working set evaluating all of cli.ts to poll one route. Measured from the release bundle on macOS, Node
- * 22.23.5, held in its retry wait 8 s after start (2026-11-27): 159 MB resident and a 48 MB heap through cli.ts, 144 MB
+ * 22.23.5, held in its retry wait 8 s after start (2026-11-27): 158 MB resident and a 48 MB heap through cli.ts, 143 MB
  * and 40 MB from here. What is left is the parse of the whole cli.js: the bundle's lightest branch, the retired shell
- * guard, holds 136 MB, and bare Node 39 MB. runDeviceCommand (command.ts) runs it from here too, for a run from the
- * sources, which starts at cli.ts.
+ * guard, holds 136 MB, and bare Node 39 MB, so a release also carries the follower as a file of its own, inbox.mjs
+ * (inboxEntry.ts: 57 MB; docs/plans/2026-11-27-windows-follower-ram-design.md). runDeviceCommand (command.ts) runs it
+ * from here too, for a run from the sources, which starts at cli.ts.
  */
 import { setTimeout as sleep } from 'node:timers/promises'
 import { env } from '../config/env.js'

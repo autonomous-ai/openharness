@@ -13,7 +13,8 @@
  *   { "adapter": { "version": "0.0.2",
  *                  "cli":    { "url": "…/cli.js",    "sha256": "…", "size": N },
  *                  "notify": { "url": "…/notify.mjs","sha256": "…", "size": M },
- *                  "inbox":  { "url": "…/inbox.mjs", "sha256": "…", "size": K } } }   (inbox: optional, Windows only)
+ *                  "inbox":  { "url": "…/inbox.mjs", "sha256": "…", "size": K } } }
+ *   `inbox` is optional, and only Windows downloads it: one manifest serves every OS.
  */
 
 import { createHash } from 'crypto'
@@ -380,10 +381,10 @@ function runWithin(node: string, args: string[], timeoutMs: number): Promise<{ f
  *  manifest again and installed it again: a restart a minute on every machine until it was fixed.
  *
  *  Given [inboxBuf] (Windows: the build's inbox.mjs), once cli.js passed it runs that too, as harness.exe starts the
- *  follower, with `canary` for a session id it refuses: it must answer `{"off":true}` and exit 0, on the same Node and
- *  deadline. The dial's mod has no fallback of its own: a follower that fails is not started again (device.js
- *  `restartAfter`), so a build whose follower does not run is refused as one whose cli.js does not
- *  (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
+ *  follower, with `canary` for a session id it refuses: it must answer `{"off":true}` and exit 0, on the same Node,
+ *  within a time limit of its own as long as cli.js's, with the same kill. The dial's mod has no fallback of its own:
+ *  a follower that fails is not started again (device.js `restartAfter`), so a build whose follower does not run is
+ *  refused as one whose cli.js does not (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
  *
  *  Asynchronous. It ran with `spawnSync` inside the daemon's own updater, on the core's event loop: for
  *  as long as the new build took to load and answer, up to its 15 s timeout, no terminal byte, hook,
