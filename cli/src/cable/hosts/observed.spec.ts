@@ -1018,6 +1018,8 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       ...s, told, hook, report, rang, advance,
       agent: () => s.src.list()[0],
       missed: () => s.logs.filter((line) => line === '[observed] stop report missed').length,
+      /** Each hold that ended with no next stop, by the log line that says why. */
+      heldEnds: () => s.logs.filter((line) => line.startsWith('[observed] held stop')),
       /** The transcript grows now. */
       grow: () => { s.stamps.set(TRANSCRIPT, Date.now()) },
       /** An earlier turn whose stop its hook reported: the session's stops wait for their report from here. */
@@ -1058,6 +1060,7 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
     expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
     await r.advance(130_000)
     expect(r.told).toHaveLength(1)
+    expect(r.heldEnds()).toEqual([])
   }
 
   /** A marked session's turn whose stop the devices said yes to 1.3 s after it, the order Task 1 saw: when the yes came. */
@@ -1312,6 +1315,7 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
       await r.advance(16_000)
       expect(r.told).toHaveLength(1)
+      expect(r.heldEnds()).toEqual(['[observed] held stop · quiet'])
     })
 
     it('the 120 s cap', async () => {
@@ -1331,6 +1335,7 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       }
       await r.advance(20_000)
       expect(r.told).toHaveLength(1)
+      expect(r.heldEnds()).toEqual(['[observed] held stop · cap'])
     })
 
     it('an unreadable transcript shows no activity', async () => {
@@ -1378,6 +1383,7 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.told).toEqual([yes + 120_000])
       await r.advance(0)
       expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+      expect(r.heldEnds()).toEqual(['[observed] held stop · cap'])
     })
 
     it('the yes before its stop, and no stop at all, quiet for 10 s: nothing told, and the turn still works', async () => {
@@ -1388,6 +1394,7 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       await r.advance(30_000)
       expect(r.told).toEqual([])
       expect(r.agent().state).toBe('working')
+      expect(r.heldEnds()).toEqual(['[observed] held stop · unheard'])
     })
 
     it('the yes before its stop, and no stop at all, the transcript growing: nothing told at 120 s either', async () => {
@@ -1401,6 +1408,7 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       }
       expect(r.told).toEqual([])
       expect(r.agent().state).toBe('working')
+      expect(r.heldEnds()).toEqual(['[observed] held stop · unheard'])
     })
 
     it.each([
