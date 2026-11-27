@@ -86,6 +86,20 @@ describe('install.ps1, as written', () => {
     expect(source).toContain(`Write-Host "  Harness did not start again on terminal host \${PtyAfter}. Run 'harness start'."`)
   })
 
+  // Ken's review of #4681: a reinstall over a version folder removed it, then moved the staged one in. A lock partway
+  // (an antivirus scan) left a half-removed folder that a running daemon uses. It is moved aside whole first, as
+  // writeVersionFolder does (lib/windows/cliVersions.ts), and put back when the staged one does not go in.
+  it('moves a version folder it replaces aside before the staged one goes in, and never removes it in place', () => {
+    const cli = (source.match(/^function Install-HarnessCli[\s\S]*?^}\r?$/m)?.[0] ?? '')
+      .split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#')).join('\n')
+    const at = (text: string) => { expect(cli).toContain(text); return cli.indexOf(text) }
+    expect(cli).not.toContain('Remove-Item -LiteralPath $target')
+    expect(at('Move-Item -LiteralPath $target -Destination $aside')).toBeLessThan(at('Move-Item -LiteralPath $staging -Destination $target'))
+    const putBack = at('Move-Item -LiteralPath $aside -Destination $target')
+    expect(putBack).toBeGreaterThan(cli.indexOf('Move-Item -LiteralPath $staging -Destination $target'))
+    expect(putBack).toBeLessThan(at('Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue'))
+  })
+
   // #4018: a terminal host is put in use only once its signatures are checked. Every case below that installs one
   // allows its unsigned build (HARNESS_ALLOW_UNSIGNED=1), and PR CI runs none of them, so only this holds
   // Install-HarnessPty to the check: on the unpacked download, and on a version folder already there.
@@ -690,6 +704,26 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     expect(replaced.status, replaced.stderr).toBe(0)
     expect(replaced.stdout).toContain('Downloading Harness 9.8.7')
     expect(readFileSync(file, 'utf8')).toBe(another)
+  })
+
+  it('keeps a version folder whole when a file in it is held, and installs over it once it is not', async () => {
+    const root = scratchRoot()
+    const key = await platform()
+    const folder = join(root, 'cli', '9.8.7')
+    expect((await installCli(root, build(key))).status).toBe(0)
+    const before = readdirSync(folder).sort()
+    const cli = readFileSync(join(folder, 'cli.js'))
+    const manifest = build(key, { inbox: inboxMjs })
+    // A file opened with no sharing, as an antivirus scan holds one: it cannot be removed, nor its folder renamed.
+    const held = await ps(`$s = Get-HarnessManifests -Manifest '${manifest}' -Platform '${key}'; $h = [IO.File]::Open('${join(folder, 'package.json')}', 'Open', 'Read', 'None'); try { Install-HarnessCli -Root '${root}' -Entry $s.cli.entry -Source $s.cli.source | Out-Null; 'installed' } catch { 'refused' } finally { $h.Dispose() }`)
+    expect(held.stdout, held.stderr).toBe('refused')
+    expect(readdirSync(folder).sort()).toEqual(before)
+    expect(readFileSync(join(folder, 'cli.js')).equals(cli)).toBe(true)
+    expect(readdirSync(join(root, 'cli')).filter((name) => name.startsWith('.'))).toEqual([])
+    const again = await installCli(root, manifest)
+    expect(again.status, again.stderr).toBe(0)
+    expect(readFileSync(join(folder, 'inbox.mjs'), 'utf8')).toBe(inboxMjs)
+    expect(readdirSync(join(root, 'cli')).filter((name) => name.startsWith('.'))).toEqual([])
   })
 
   it('downloads nothing again over an install that holds the same inbox.mjs', async () => {
