@@ -39,6 +39,13 @@ const ANSWER_CHARS = 300
  *  once it passed with no word of the turn going on: a Stop another Stop hook keeps going is followed at once by a
  *  prompt or a next turn, and the dial would sound for a turn that never ended. */
 const ANSWER_GRACE_MS = 1_500
+/** How long a stop of a session whose Stop hook reports waits for its report: the plugin's hook times out at 5 s, and
+ *  a report not here a second later is not coming (Part 5, decision 18). */
+export const REPORT_WAIT_MS = 6_000
+/** A turn a yes keeps going is told done once it was quiet this long, or this long after the yes at most (Part 5,
+ *  decision 12). */
+export const CONTINUE_QUIET_MS = 10_000
+export const CONTINUE_MAX_MS = 120_000
 /** A lead's subagents counted at most, as the core counts a pane's (SUBAGENTS_MAX, core/turns/turnHooks.ts). */
 const SUBAGENTS_MAX = 64
 /** A lead heard nothing of for this long lost a SubagentStop: none is counted, as the core does (SUBAGENT_TIMEOUT_MS). */
@@ -259,6 +266,26 @@ const rest = (adapter: HostAdapter, pane: Pane): boolean => !pane.held && !!adap
  *  raised once the app came. */
 const tapped = (adapter: HostAdapter, pane: Pane): boolean => adapter.tap !== 'after' && adapter.canFocus(pane)
 
+/** A turn a yes keeps going (Part 5, decision 12): `awaited` while the stop the yes blocks is still to come, `heard`
+ *  once it came; since the yes, and the latest activity seen. */
+interface Continuing {
+  phase: 'heard' | 'awaited'
+  since: number
+  lastActive: number
+}
+
+/** Part 5's second look at a stop, on its entry: what the plugin's Stop hook reported (devices.ts `nudge`), and the stop
+ *  held for it. Only stopReported and the methods beside it (stopHeard to dropStop) change it. */
+interface SecondLook {
+  /** Its hook reported a stop: each next stop waits for its own report. */
+  reported?: true
+  /** A turn-stop heard at `at`, waiting for its report. */
+  stopWait?: { at: number }
+  /** When a no came before its turn-stop: that stop's report, if the stop comes within REPORT_WAIT_MS. */
+  earlyReport?: number
+  continuing?: Continuing
+}
+
 interface Entry {
   agent: HostAgent
   /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
@@ -345,8 +372,11 @@ interface Entry {
   title?: string
   generation?: string
   endAt?: number
-  /** Its Stop, waiting out the grace before it is told as done and its answer is read. */
+  /** Its Stop, waiting out the grace before it is told as done and its answer is read, or waiting for its report, or
+   *  held for the turn a yes keeps going (secondLook). */
   heldStop?: ReturnType<typeof setTimeout>
+  /** What the plugin's Stop hook reported of its stops (stopReported), in memory only: it goes with the entry. */
+  secondLook: SecondLook
   /** How many of Claude Code's subagents run for it, the lead: its Stop while one runs does not end its turn. */
   subagents: number
   /** It sent a Stop in this run: its Finished comes from that, so its owner reading idle with none is a turn stopped. */
@@ -1464,12 +1494,7 @@ export class ObservedSource implements HostSource {
         break
       case 'turn-stop':
         entry.sentStop = true
-        this.dropStop(entry)
-        // A lead whose subagents run has not finished, though they stop within the grace: its wrap-up after the last one
-        // is still to come, and its own Stop ends the turn, as a pane's does (engines/kit/stopHook.ts).
-        if (entry.subagents) break
-        entry.heldStop = setTimeout(() => { this.finish(entry) }, ANSWER_GRACE_MS)
-        entry.heldStop.unref()
+        this.stopHeard(entry, now)
         break
       case 'subagent-start':
         if (entry.subagents < SUBAGENTS_MAX) entry.subagents++
@@ -1485,9 +1510,116 @@ export class ObservedSource implements HostSource {
     return source
   }
 
+  /**
+   * The plugin's Stop hook reported a stop of this session (Part 5, devices.ts `nudge`); `goesOn` when the devices said
+   * yes, so the engine goes on with the turn. False, and nothing changed, for no listed live Claude Code or Codex session;
+   * false too for a yes that holds nothing: the turn's end was told, or the lead's subagents run.
+   *
+   * Every report marks the session, and a marked session's turn-stop waits for its report (stopHeard): the engine runs
+   * Harness's native hook and the plugin's side by side, so their requests race, and on Windows the plugin's PowerShell
+   * hook takes seconds, past the grace (decision 18). A no releases the stop no sooner than the grace's end, which still
+   * guards the transcript's lag behind the Stop. A session's first stop cannot wait, as nothing says yet that its hook
+   * reports: it rests on the grace. Both holds keep heldStop set, since checkWorking and every turn event already read a
+   * held stop as the turn going on.
+   */
+  stopReported(agentId: string, goesOn: boolean): boolean {
+    const entry = this.entries.get(agentId)
+    if (!entry || !this.live(entry) || (entry.agent.engine !== 'claude' && entry.agent.engine !== 'codex')) return false
+    const look = entry.secondLook
+    const now = this.deps.now()
+    look.reported = true
+    // A stop in its grace or waiting for its report.
+    const held = entry.heldStop !== undefined && !look.continuing
+    if (goesOn) {
+      // A second yes moves neither the hold's start nor its last activity.
+      if (look.continuing) return true
+      if (!held && (entry.agent.state !== 'working' || entry.subagents)) return false
+      this.dropStop(entry)
+      this.holdOn(entry, { phase: held ? 'heard' : 'awaited', since: now, lastActive: now })
+      return true
+    }
+    if (look.stopWait) {
+      const left = look.stopWait.at + ANSWER_GRACE_MS - now
+      this.dropStop(entry)
+      if (left > 0) this.holdStop(entry, left, () => { this.finish(entry) })
+      else this.finish(entry)
+    } else if (!held && !entry.subagents) look.earlyReport = now
+    return true
+  }
+
+  /** Its turn-stop: told done once the grace passed with no word of the turn going on, and a marked session's once its
+   *  report came too (stopReported). */
+  private stopHeard(entry: Entry, now: number): void {
+    const look = entry.secondLook
+    // The stop a yes came before: the hold waited for it, and goes on.
+    if (look.continuing?.phase === 'awaited') {
+      look.continuing.phase = 'heard'
+      return
+    }
+    // A no that came before this stop is its report. A hold `heard` ends here: this is the continuation's own stop.
+    const early = look.earlyReport
+    this.dropStop(entry)
+    // A lead whose subagents run has not finished, though they stop within the grace: its wrap-up after the last one
+    // is still to come, and its own Stop ends the turn, as a pane's does (engines/kit/stopHook.ts).
+    if (entry.subagents) return
+    if (look.reported && (early === undefined || now - early >= REPORT_WAIT_MS)) {
+      look.stopWait = { at: now }
+      this.holdStop(entry, REPORT_WAIT_MS, () => { this.reportMissed(entry) })
+    } else this.holdStop(entry, ANSWER_GRACE_MS, () => { this.finish(entry) })
+  }
+
+  /** No report came: the plugin was turned off or its hook timed out, so the session's stops wait no longer. */
+  private reportMissed(entry: Entry): void {
+    entry.secondLook.reported = undefined
+    // Fixed words: never the session.
+    this.deps.log('[observed] stop report missed')
+    this.finish(entry)
+  }
+
+  /**
+   * Holds the turn a yes keeps going (decision 12) until its next stop, or until it was quiet for CONTINUE_QUIET_MS, at
+   * most CONTINUE_MAX_MS from the yes. Its activity is its hooks and its transcript growing: outside a pane Harness hears
+   * no tool events, and the transcript grows with every step of a continuation (Part 5's spike saw it quiet 2 s at most).
+   * The cap tells the turn's end even when the transcript keeps growing and no stop comes.
+   */
+  private holdOn(entry: Entry, hold: Continuing): void {
+    entry.secondLook.continuing = hold
+    const due = Math.min(hold.lastActive + CONTINUE_QUIET_MS, hold.since + CONTINUE_MAX_MS)
+    this.holdStop(entry, due - this.deps.now(), () => { void this.holdDue(entry, hold) })
+  }
+
+  /** The hold's timer: held again when the turn showed activity since, else over, and the blocked stop told done. */
+  private async holdDue(entry: Entry, hold: Continuing): Promise<void> {
+    if (this.deps.now() < hold.since + CONTINUE_MAX_MS) {
+      // heldStop stays set while the stamp is read, so checkWorking and the turn events still see the turn held.
+      const stamp = entry.transcriptPath ? await this.deps.fileStamp(entry.transcriptPath) : null
+      // A stop, a turn event or a removal ended it meanwhile.
+      if (entry.secondLook.continuing !== hold) return
+      hold.lastActive = Math.max(hold.lastActive, entry.agent.lastActivityAt, stamp?.mtime ?? 0)
+      if (this.deps.now() - hold.lastActive < CONTINUE_QUIET_MS) {
+        this.holdOn(entry, hold)
+        return
+      }
+    }
+    if (hold.phase === 'heard') {
+      this.finish(entry)
+      return
+    }
+    // The stop it waited for never came: nothing to tell, and the turn is its hooks' and checkWorking's again.
+    entry.heldStop = undefined
+    entry.secondLook.continuing = undefined
+  }
+
+  private holdStop(entry: Entry, ms: number, then: () => void): void {
+    entry.heldStop = setTimeout(then, ms)
+    entry.heldStop.unref()
+  }
+
   /** Its Stop passed the grace with no word of the turn going on: done, unless its subagents still run. */
   private finish(entry: Entry): void {
     entry.heldStop = undefined
+    entry.secondLook.stopWait = undefined
+    entry.secondLook.continuing = undefined
     if (entry.subagents) return
     this.setState(entry, 'done', this.deps.now())
     entry.agent.unseenDone = true
@@ -1495,10 +1627,15 @@ export class ObservedSource implements HostSource {
     void this.readAnswer(entry)
   }
 
-  /** Its turn goes on, or is over without a Finished: the Stop it held is not told. */
+  /** Its turn goes on, or is over without a Finished: the Stop it held is not told, and a report that came before its
+   *  Stop goes with it. The session stays marked. */
   private dropStop(entry: Entry): void {
     clearTimeout(entry.heldStop)
     entry.heldStop = undefined
+    const look = entry.secondLook
+    look.stopWait = undefined
+    look.earlyReport = undefined
+    look.continuing = undefined
   }
 
   /** No longer listed: a Stop it held is told of nothing. */
@@ -1598,6 +1735,7 @@ export class ObservedSource implements HostSource {
       panes: [],
       dialPrompts: [],
       subagents: 0,
+      secondLook: {},
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
       ...(init.cwd ? { startedIn: init.cwd } : {}),
     }
@@ -2020,8 +2158,8 @@ export class ObservedSource implements HostSource {
   /**
    * The turns no hook moves, every 3 s. A person who answers a prompt in their own terminal sends no hook: the transcript
    * growing past the moment the agent began waiting says the turn goes on. An older Codex sends no end-of-turn hook, and a
-   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over. A Stop waiting out its grace,
-   * and a lead's subagents, are the hooks' word that the turn goes on, whatever the record reads.
+   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over. A Stop held (its grace, its
+   * report, a yes's hold), and a lead's subagents, are the hooks' word that the turn goes on, whatever the record reads.
    */
   async checkWorking(): Promise<void> {
     const all = [...this.entries.values()]
