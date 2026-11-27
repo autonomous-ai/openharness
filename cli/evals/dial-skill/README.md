@@ -62,8 +62,9 @@ skill listing the model got. It reads the dial's line (`full`, `name-only`, `cut
 skills cut, measures the listing, and asks the model for the first line of its `CLAUDE.md`. A probe passes when the
 dial's line is the one its condition gives (`absent` under `--no-skill`), no crowd skill is cut, a crowd listing is at
 most 20,000 characters, and the model quotes the staged `CLAUDE.md`; in `clean`, it must have been given no project
-instructions at all. Otherwise the pass stops with exit 2 before any case runs. Each probe leaves a row in
-`<variant>/probes.jsonl`: counts and fixed words only, priced into spend.
+instructions at all. When a variant's harness answers give a SessionStart hook's line, that line must be among the
+context the hooks gave the model in the transcript (`start_line`, else `start line not given`). Otherwise the pass stops
+with exit 2 before any case runs. Each probe leaves a row in `<variant>/probes.jsonl`: counts and fixed words only, priced into spend.
 
 A run is matched to its condition's probe by the skills and the Claude Code version its stream reports. When either
 differs (Claude Code updated itself mid-pass, say), the run is `unlisted`: counted, kept out of the means and the harm
@@ -74,7 +75,8 @@ same command; the probes run again first.
 
 A variant folder may hold `hooks.json`, a Claude Code `hooks` object staged as the repo's `.claude/settings.json`,
 and `harness-answers.json`, `[{ "argv": [...], "stdout"?, "stderr"?, "code"? }]`: the fake `harness` answers a call
-whose argv equals one exactly, and an answer for `device notify` is refused, so every ring is still recorded. The probe stages them too. Hooks run
+whose argv equals one exactly, and an answer for `device notify` is refused, so every ring is still recorded. The probe stages them too, and
+proves a SessionStart hook's line reached the model, since runs are not saved to show it (see The listing probe). Hooks run
 outside Claude's sandbox, so the runner refuses either file until `_state.json` `harness_paths` lists it and a person
 approves the harness: one changed or planted after approval stops the pass.
 
