@@ -3,6 +3,7 @@ import { once } from 'node:events'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { endRootProcesses, seenNow, underRoot } from './rootProcesses.js'
 import { writeExecutable } from './executableFixture.js'
@@ -221,6 +222,23 @@ const NOTED = new Map([[SERVER, LSTART], [HERDR, LSTART], [STALE, LSTART]])
 /** What descends from the noted processes that still run as themselves. */
 const NOTED_TREE = [SERVER, HELPER, CAT, HERDR, HERDR_PANE]
 
+const PERSONS = P(80), OTHERS = P(81), TESTS = P(82)
+/**
+ * Codex app servers, launchd's, each named by a pid file in [root], which this writes: the person's, started an hour
+ * before the root; another account's and the test's, after it.
+ */
+function codexServers(root: string): Made[] {
+  const born = statSync(root).birthtimeMs
+  const server = 'codex app-server --managed-daemon'
+  for (const [home, pid] of [['person', PERSONS], ['other', OTHERS], ['test', TESTS]] as const) {
+    mkdirSync(join(root, 'home', home, 'app-server-daemon'), { recursive: true })
+    writeFileSync(join(root, 'home', home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: LSTART }))
+  }
+  return [made(PERSONS, 1, PERSONS, server, '/Users/person', lstart(new Date(born - 3_600_000))),
+    made(OTHERS, 1, OTHERS, server, '/', lstart(new Date(born + 2_000)), UID + 1),
+    made(TESTS, 1, TESTS, server, '/', lstart(new Date(born + 2_000)))]
+}
+
 describe("the process table the harness reads of every process", () => {
   it('is each one\'s pid, parent and group, and nothing else', () => {
     machine.rows = daemonUnder('/tmp/htmux-x')
@@ -282,18 +300,7 @@ describe("the daemon's close sweep", () => {
 
   it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, never the person's or another account's", async () => {
     const root = testRoot()
-    const born = statSync(root).birthtimeMs
-    const PERSONS = P(80), OTHERS = P(81), TESTS = P(82)
-    const server = 'codex app-server --managed-daemon'
-    // launchd's, each: the person's started an hour before the root, another account's and the test's after it.
-    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'),
-      made(PERSONS, 1, PERSONS, server, '/Users/person', lstart(new Date(born - 3_600_000))),
-      made(OTHERS, 1, OTHERS, server, '/', lstart(new Date(born + 2_000)), UID + 1),
-      made(TESTS, 1, TESTS, server, '/', lstart(new Date(born + 2_000)))]
-    for (const [home, pid] of [['person', PERSONS], ['other', OTHERS], ['test', TESTS]] as const) {
-      mkdirSync(join(root, 'home', home, 'app-server-daemon'), { recursive: true })
-      writeFileSync(join(root, 'home', home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: LSTART }))
-    }
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
     expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
     expect(machine.signals).toEqual([[TESTS, 'SIGKILL']])
     expect(beyond([WORKER], [], [PERSONS, OTHERS, TESTS])).toEqual([])
@@ -420,12 +427,24 @@ describe("the worker's reaper", () => {
   /**
    * `ps`, `lsof` and `tmux` first on the reaper's PATH, answering from the made-up machine as this worker's mock does
    * and noting each run: the tmux server's `kill-server` ends it and its pane, and leaves launchd what the pane left.
+   * And [preload], for the reaper to import first: a `process.kill` that notes each signal in [signals] and sends none,
+   * as this worker's mock does, so no process of this computer is signalled; signal 0 finds a made-up pid gone.
    */
-  function fakeBin(server: number[]): { bin: string; runs: string } {
+  function fakeBin(server: number[]): { bin: string; runs: string; preload: string; signals: string } {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'made-up-machine-')))
     folders.push(dir)
     const file = join(dir, 'machine.json'), runs = join(dir, 'runs.jsonl'), script = join(dir, 'fake.mjs'), bin = join(dir, 'bin')
+    const preload = join(dir, 'signals.mjs'), signals = join(dir, 'signals.jsonl')
     writeFileSync(file, JSON.stringify({ rows: machine.rows, server }))
+    writeFileSync(signals, '')
+    writeFileSync(preload, `import { appendFileSync } from 'node:fs'
+const kill = process.kill.bind(process)
+process.kill = (pid, signal) => {
+  if (signal === 0 && Math.abs(pid) < ${P(0)}) return kill(pid, 0)
+  if (signal !== 0) appendFileSync(${JSON.stringify(signals)}, JSON.stringify([pid, signal ?? 'SIGTERM']) + '\\n')
+  throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
+}
+`)
     writeFileSync(script, `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 const [name, ...args] = process.argv.slice(2)
 const made = JSON.parse(readFileSync(${JSON.stringify(file)}, 'utf8'))
@@ -448,7 +467,7 @@ process.exit(status)
 `)
     mkdirSync(bin)
     for (const name of ['ps', 'lsof', 'tmux']) writeExecutable(join(bin, name), `#!/bin/sh\nexec '${process.execPath}' '${script}' ${name} "$@"\n`)
-    return { bin, runs }
+    return { bin, runs, preload, signals }
   }
 
   it.runIf(FOLDERS)("asks nothing of a process outside the test's tree, ends none, and ends what its tmux server's tree left", async () => {
@@ -484,6 +503,23 @@ process.exit(status)
     expect(said).toContain(`[e2e reaper] the test worker ended with ${NOTED_TREE.length} processes it started, or theirs, still running: SIGKILL`)
     machine.runs = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { file: string; args: string[] })
     expect(beyond([LEFT, ...NOTED_TREE], [TMUX, PANE, LEFT, ...NOTED.keys()])).toEqual([])
+  })
+
+  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, never the person's or another account's", async () => {
+    const root = testRoot()
+    // The worker is gone, and nothing it saw still runs.
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), ...codexServers(root)]
+    const { bin, runs, preload, signals } = fakeBin([])
+    const reaper = spawn(process.execPath, ['--import', pathToFileURL(preload).href, REAPER],
+      { stdio: ['pipe', 'ignore', 'pipe'], env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
+    let said = ''
+    reaper.stderr!.on('data', (chunk: Buffer) => { said += chunk.toString() })
+    reaper.stdin!.end(`${JSON.stringify({ tmux: join(root, 'tmux-501', 'default'), root })}\n`)
+    const [code] = await once(reaper, 'exit')
+    expect(code, said).toBe(0)
+    expect(readFileSync(signals, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as unknown)).toEqual([[TESTS, 'SIGKILL']])
+    machine.runs = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { file: string; args: string[] })
+    expect(beyond([], [], [PERSONS, OTHERS, TESTS])).toEqual([])
   })
 })
 

@@ -1,11 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it } from 'vitest'
-import { alive } from './spawnedRuns.js'
+import { alive, commandLines } from './spawnedRuns.js'
 import { writeExecutable } from './executableFixture.js'
 
 const REAPER = resolve(import.meta.dirname, '..', '..', 'e2e', 'harness', 'reaperProcess.mjs')
@@ -35,11 +35,12 @@ it('the worker\'s reaper sweeps and removes nothing but a test root', () => {
 describe.skipIf(process.platform === 'win32')('the worker\'s reaper and a process left in a root\'s folder', () => {
   const folders: string[] = []
   const started: ChildProcess[] = []
-  /** The sleeps the groups below started: this spec's own, ended by their pids. */
-  const sleeps: number[] = []
+  /** What this spec's own children left running (the groups' sleeps, a Codex app server stand-in): ended by their pids,
+   *  never any other process (the person's own Codex app servers run on this machine). */
+  const detached: number[] = []
   afterEach(() => {
     for (const child of started.splice(0)) child.kill('SIGKILL')
-    for (const pid of sleeps.splice(0)) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    for (const pid of detached.splice(0)) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
     for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
   })
   /**
@@ -56,7 +57,7 @@ setInterval(() => {}, 1 << 30)`
     started.push(leader)
     const [said] = await once(createInterface({ input: leader.stdout! }), 'line') as [string]
     const pids = JSON.parse(said) as number[]
-    sleeps.push(...pids)
+    detached.push(...pids)
     return { line: { group: leader.pid }, pids }
   }
   /** The reaper, told [lines], its worker then gone: what it wrote, once it has exited. Not spawnSync: this worker
@@ -82,6 +83,31 @@ setInterval(() => {}, 1 << 30)`
     expect(alive(beside!)).toBe(true)
     expect(existsSync(dir)).toBe(false)
     expect(said).toContain(`[e2e reaper] ended 1 processes that still named ${dir} or ran in it`)
+  })
+
+  // Codex's managed app server detaches itself, names no root and need not work in it: a real one from the tester of
+  // #4660 and #4668 outlived its test, launchd's. Codex records it in <CODEX_HOME>/app-server-daemon/daemon.pid.
+  it('ends a Codex app server a pid file in a root it was told names, though nothing of the worker still runs', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'htmux-')))
+    folders.push(dir)
+    const file = join(dir, 'home', 'codex', 'app-server-daemon', 'daemon.pid')
+    // As `codex app-server --managed-daemon` starts: detached by a launcher that writes its pid file and exits.
+    const launch = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs')
+const server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)', 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore', cwd: ${JSON.stringify(tmpdir())} })
+mkdirSync(${JSON.stringify(dirname(file))}, { recursive: true })
+const processStartTime = execFileSync('ps', ['-o', 'lstart=', '-p', String(server.pid)], { encoding: 'utf8' }).trim()
+writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: server.pid, processStartTime }))
+server.unref()`
+    const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })
+    expect((await once(launcher, 'exit'))[0]).toBe(0)
+    const pid = (JSON.parse(readFileSync(file, 'utf8')) as { pid: number }).pid
+    detached.push(pid)
+    // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
+    await expect.poll(() => commandLines([pid]).get(pid) ?? '', { timeout: 10_000 }).toContain('app-server --managed-daemon')
+    const said = await reaped([{ tmux: join(dir, 'no-server'), root: dir }])
+    await expect.poll(() => alive(pid), { timeout: 10_000 }).toBe(false)
+    expect(existsSync(dir)).toBe(false)
+    expect(said).toContain(`[e2e reaper] ended 1 Codex app servers that pid files in ${dir} named`)
   })
 
   it('sweeps and removes nothing in a folder named like a root that is not directly in the temporary folder, or is a link', async () => {
