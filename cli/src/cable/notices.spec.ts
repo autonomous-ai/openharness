@@ -20,6 +20,8 @@ function desk(opts: {
   const state = {
     connected: opts.connected ?? true, at: 0, clock: opts.clock ?? 0, ids: 0, resolved: 0, changes: 0, redraws: [] as string[][], held: new Set<string>(),
     present: new Set<string>(), presentReads: 0,
+    /** The timers' own time, apart from the wall clock: a sleep moves the clock alone. */
+    ticks: 0, timers: [] as Array<{ due: number; ms: number; run: () => void; live: boolean }>,
   }
   const calls: Call[] = []
   const counted: string[][] = []
@@ -50,6 +52,11 @@ function desk(opts: {
     log: (line) => logs.push(line),
     redraw: (agentIds) => { state.redraws.push([...agentIds]) },
     hold: (agentId, id, questions) => calls.push(['hold', agentId, id, questions]),
+    after: (ms, run) => {
+      const timer = { due: state.ticks + ms, ms, run, live: true }
+      state.timers.push(timer)
+      return () => { timer.live = false }
+    },
   })
   return { notices, state, calls, counted, logs, asks: () => calls.filter((c) => c[0] === 'ask') }
 }
@@ -602,8 +609,8 @@ describe('Notices after a restart', () => {
     expect(state.redraws).toEqual([])
   })
 
-  it('a card older than 24 hours is dropped, one of exactly 24 hours is kept, and one ahead of the clock too', () => {
-    const cards = [kept({ at: NOW - DAY - 1 }), kept({ agentId: 'a2', id: 'shown:k2', at: NOW - DAY }),
+  it('a card 24 hours old is dropped, one a millisecond younger is kept, and one ahead of the clock too', () => {
+    const cards = [kept({ at: NOW - DAY }), kept({ agentId: 'a2', id: 'shown:k2', at: NOW - DAY + 1 }),
       kept({ agentId: 'a3', id: 'shown:k3', at: NOW + 60_000 })]
     const { notices, calls } = back(cards)
     expect(notices.stored()).toEqual(cards.slice(1))
@@ -1066,5 +1073,130 @@ describe('several cards an agent', () => {
     expect(lines(plain, 'new')).toEqual([P(2)])
     expect(plain.calls).toEqual([['close', 'new', 'shown:k1']])
     expect(plain.state.redraws).toEqual([])
+  })
+})
+
+// A turn start no longer closes a card (2026-11-27), so a card nobody closes goes when it is 24 hours old, by one timer
+// at the oldest card's due time.
+describe('a card goes at 24 hours', () => {
+  type Rig = ReturnType<typeof desk>
+  const DAY = 24 * 3_600_000
+  const HOUR = 3_600_000
+  const card = (q: string) => [{ key: 'notice', q, options: ['In Orca'] }]
+  const lines = ({ notices }: Rig, agentId = 'a') => notices.list(agentId).map(({ line }) => line)
+  const live = ({ state }: Rig) => state.timers.filter((timer) => timer.live)
+  /** Time passes by [ms], the wall clock and the timers alike; each timer due by then fires, the soonest first. */
+  const pass = (rig: Rig, ms: number) => {
+    rig.state.clock += ms
+    rig.state.at += ms
+    rig.state.ticks += ms
+    for (;;) {
+      const next = live(rig).filter(({ due }) => due <= rig.state.ticks).sort((a, b) => a.due - b.due)[0]
+      if (!next) return
+      next.live = false
+      next.run()
+    }
+  }
+  const clear = ({ calls, state, logs }: Rig) => {
+    calls.length = 0
+    state.redraws.length = 0
+    logs.length = 0
+  }
+
+  it('a live card goes at 24 hours', () => {
+    const rig = desk()
+    rig.notices.notify(notice(W(1), 'a'))
+    clear(rig)
+    pass(rig, DAY - 1)
+    expect(lines(rig)).toEqual([W(1)])
+    expect(rig.calls).toEqual([])
+    const changes = rig.state.changes
+    pass(rig, 1)
+    expect(lines(rig)).toEqual([])
+    expect(rig.calls).toEqual([['close', 'a', qid(1)]])
+    expect(rig.state.changes).toBeGreaterThan(changes)
+    expect(rig.logs).toEqual(['[device] notice · expired'])
+  })
+
+  it('two cards an hour apart go an hour apart', () => {
+    const rig = desk()
+    rig.notices.notify(notice(W(1), 'a'))
+    pass(rig, HOUR)
+    rig.notices.notify(notice(W(2), 'b'))
+    pass(rig, DAY - HOUR)
+    expect(lines(rig, 'a')).toEqual([])
+    expect(lines(rig, 'b')).toEqual([W(2)])
+    pass(rig, HOUR - 1)
+    expect(lines(rig, 'b')).toEqual([W(2)])
+    pass(rig, 1)
+    expect(lines(rig, 'b')).toEqual([])
+    expect(live(rig)).toEqual([])
+  })
+
+  it('a card done before its time leaves no timer that ends another', () => {
+    const rig = desk()
+    rig.notices.notify(notice(W(1), 'a'))
+    pass(rig, HOUR)
+    rig.notices.notify(notice(W(2), 'b'))
+    expect(live(rig).map(({ due }) => due)).toEqual([DAY])
+    rig.notices.done('a', cid(1))
+    // One timer at a time, now at b's card's due time.
+    expect(live(rig).map(({ due }) => due)).toEqual([DAY + HOUR])
+    pass(rig, DAY - 1)
+    expect(lines(rig, 'b')).toEqual([W(2)])
+    pass(rig, 1)
+    expect(lines(rig, 'b')).toEqual([])
+  })
+
+  it('a clock moved on by a sleep ends every aged card at the next fire', () => {
+    const rig = desk()
+    rig.notices.notify(notice(W(1), 'a'))
+    pass(rig, HOUR)
+    rig.notices.notify(notice(W(2), 'b'))
+    // Asleep two days: the wall clock moved on, the timers did not.
+    rig.state.clock += 2 * DAY
+    clear(rig)
+    pass(rig, DAY - HOUR)
+    expect(lines(rig, 'a')).toEqual([])
+    expect(lines(rig, 'b')).toEqual([])
+    expect(rig.logs).toEqual(['[device] notice · expired', '[device] notice · expired'])
+    expect(live(rig)).toEqual([])
+  })
+
+  it('no card, no timer', () => {
+    expect(live(desk())).toEqual([])
+    const rig = desk()
+    rig.notices.notify(notice(W(1), 'a'))
+    expect(live(rig)).toHaveLength(1)
+    rig.notices.done('a', 'all')
+    expect(live(rig)).toEqual([])
+    const away = desk({ connected: false })
+    away.notices.notify(notice(W(1), 'a'))
+    expect(away.state.timers).toEqual([])
+  })
+
+  // A clock set back leaves a card ahead of it: the timer waits a day at most, then looks again, never one past what a
+  // timer holds, which would fire at once and again.
+  it('a card ahead of the clock waits a day at most for the next look', () => {
+    const NOW = 1_800_000_000_000
+    const rig = desk({ clock: NOW, restored: [{ agentId: 'a', keys: [], id: qid(1), line: W(1), host: 'orca', at: NOW + 30 * DAY }] })
+    expect(live(rig).map(({ ms }) => ms)).toEqual([DAY])
+    pass(rig, DAY)
+    expect(lines(rig)).toEqual([W(1)])
+    expect(live(rig).map(({ ms }) => ms)).toEqual([DAY])
+  })
+
+  it('the next card comes up without a ring when the one shown expires', () => {
+    const rig = desk()
+    rig.notices.notify(notice(W(1), 'a'))
+    pass(rig, 61_000)
+    rig.notices.notify(notice(W(2), 'a'))
+    clear(rig)
+    pass(rig, DAY - 61_000)
+    expect(rig.calls).toEqual([['close', 'a', qid(1)], ['hold', 'a', qid(2), card(W(2))]])
+    expect(rig.state.redraws).toEqual([['a']])
+    expect(rig.notices.rows('m')).toEqual([{ agentId: 'a', machineId: 'm', question: true, text: W(2) }])
+    pass(rig, 61_000)
+    expect(lines(rig)).toEqual([])
   })
 })
