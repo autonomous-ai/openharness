@@ -494,14 +494,17 @@ Its eval needs about $70 (Measured, below), past the $250 cap, which the maintai
 (2026-11-27).
 
 A Stop hook, in the plugin for Claude Code. Codex's side goes in the same plugin's `hooks/codex.json`, proven with a
-real Codex CLI against the local stub, as Part 7's spike was: a blocked stop behaves differently there (below). On a
-stop it:
+real Codex CLI against the local stub, as Part 7's spike was. On a stop it:
 
-1. Reads its input. `stop_hook_active` set, or no `last_assistant_message`: it ends, and the turn stops.
-2. Looks at the last 400 characters of that message for a question mark (`?` or `？`). None: it ends. The text is
-   read in the hook's own process and nowhere else: never logged, stored or sent.
-3. Asks the devices' listener one thing, a new message `nudge` with the engine and session id, answered yes or no
-   within 300 ms (no answer is no). Yes only when a dial is attached, the skill is on, that agent rang no notice in
+1. Reads its input. A headless run (`claude -p`; for Codex, `codex exec`, whose rollout's first line says `source`
+   `exec`), a session in Harness's data folder, or the skill not on: it ends, and tells the devices nothing.
+2. Looks at the last 400 characters of `last_assistant_message` for a question mark (`?` or `？`). The text is read in
+   the hook's own process and nowhere else: never logged, stored or sent. `stop_hook_active` set, or no message: no
+   question.
+3. Tells the devices' listener at every such stop, with a new message `nudge`: the engine, the session id and one bit,
+   `ask`, whether it found a question (the one bit the nudge already gave away). With `ask` false the devices only
+   take the report (below) and the stop goes on. With `ask` true they answer yes or no within 300 ms (no answer is
+   no). Yes only when a dial is attached, the skill is on, that agent rang no notice in
    this turn (a card left from an earlier turn does not count: it may be stale), and the person is not present (Part
    2's rule). A turn started by another session's message (a relayed prompt) is no prompt of the person's, for this
    and for the once rule.
@@ -515,13 +518,19 @@ The agent still judges and still writes the line. Harness only makes it look aga
   no notice rung.
 - **Turn ends:** in Claude Code a blocked stop continues the same turn. Harness's reader knows such continuations
   (`stopHookContinuation` in `engines/claude/normalize.ts`, built for `/goal`), and a Harness agent's turn end is
-  announced only after `DONE_QUIET_MS`. In Codex a blocked stop arrives as a new prompt made from the reason, so it
-  reads as a next turn: the builder checks what Harness's Codex reader and the prompt hook make of it. An outside
-  agent's `done` heard at the blocked stop must not be announced: a yes to `nudge` tells the devices that this agent's
-  stop continues, and they hold its turn end until its next stop, or 10 s of silence after the session's last
-  activity (a hook for it, or its transcript growing), at most 120 s from the yes; when the hold expires, the turn end
-  is announced (the PM, 2026-11-27). This must be proven end to end with the real CLI of an engine before that
-  engine's side ships.
+  announced only after `DONE_QUIET_MS`. In Codex 0.172 a blocked stop also goes on in the same turn, with no new turn
+  (Part 5's spike, 2026-11-27). An outside agent's `done` heard at the blocked stop must not be announced.
+  - **Its report comes late:** the spike measured the `nudge` reaching the devices up to about 1.36 s after the
+    native hook's turn-stop on macOS, against a grace of 1.5 s, and Windows' PowerShell is slower. So the devices
+    remember each session whose Stop hook has reported (in memory, at most 64, never in a file), and hold that
+    session's native turn-stop until its report arrives, or 6 s (the hook's 5 s timeout and 1 s): then the turn end is
+    announced and the session is no longer remembered. A session's first stop, before any report, still rests on the
+    grace: a limit, stated (the PM, 2026-11-27). The cost: a turn end of such a session is announced up to the hook's
+    run time later, which on Windows can be a few seconds.
+  - After a yes, the devices know that this agent's stop continues, and they hold its turn end until its next stop,
+    or 10 s of silence after the session's last activity (a hook for it, or its transcript growing), at most 120 s
+    from the yes; when the hold expires, the turn end is announced (the PM, 2026-11-27).
+  - This must be proven end to end with the real CLI of an engine before that engine's side ships.
 - **Measured** by two pairs, held out, with the extra rounds per run reported (the PM, 2026-11-27). v4 already rang
   every held-out ask, so a gain over it cannot be measured; the hook ships when both pairs pass:
   - **(a) No harm:** v4 with the hook against v4, val and test in every condition. Recall down beyond noise in none;
