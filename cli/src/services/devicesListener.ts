@@ -546,9 +546,10 @@ export function noticeDoneHandler(done: (who: NoticeWho, id: string) => number):
   }
 }
 
-/** An agent's notice, from `harness device notify`: handed on as four typed fields, answered `{ result }`. It keeps
- *  nothing and logs nothing: the line is the agent's words. */
-export function noticeHandler(notify: (ask: NoticeAsk) => NoticeResult): ListenerHandler {
+/** An agent's notice, from `harness device notify`: handed on as four typed fields, answered `{ result }`, with the id
+ *  of the card it made so its agent can close that card without a list. It keeps nothing and logs nothing: the line is
+ *  the agent's words. */
+export function noticeHandler(notify: (ask: NoticeAsk) => { result: NoticeResult; id?: string }): ListenerHandler {
   return {
     maxBytes: NOTICE_MAX_BYTES,
     perSecond: NOTICE_PER_SECOND,
@@ -557,7 +558,9 @@ export function noticeHandler(notify: (ask: NoticeAsk) => NoticeResult): Listene
       // The command cleans the line before it sends: one that differs did not come from it.
       if (typeof text !== 'string' || text === '' || text !== noticeLine(text)) return REFUSED
       const caller = callerOf(message)
-      return caller === REFUSED ? REFUSED : { result: notify({ text, ...caller }) }
+      if (caller === REFUSED) return REFUSED
+      const { result, id } = notify({ text, ...caller })
+      return id !== undefined && NOTICE_CARD_ID.test(id) ? { result, id } : { result }
     },
   }
 }

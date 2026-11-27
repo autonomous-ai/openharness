@@ -3389,15 +3389,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     noticeList: noticeListHandler(noticeList),
     noticeDone: noticeDoneHandler(noticeDone),
     notice: noticeHandler((ask) => {
-      let result: NoticeResult = 'no dial'
+      let answer: { result: NoticeResult; id?: string } = { result: 'no dial' }
       part.call('notices', () => {
         // Only a session's notice: none other is ever nudged.
         if (ask.engine && ask.sessionId) noteRang(noticeCaller(ask).agentId)
-        const outcome = notices.notify(ask)
-        result = outcome.result
-        if (outcome.card) noticeShown(ask, outcome.card)
+        const { result, card } = notices.notify(ask)
+        answer = card ? { result, id: card.id } : { result }
+        if (card) noticeShown(ask, card)
       })
-      return result
+      return answer
     }),
     nudge: nudgeHandler((ask) => {
       let yes = false
