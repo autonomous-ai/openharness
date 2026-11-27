@@ -3355,7 +3355,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     notice: noticeHandler((ask) => {
       let result: NoticeResult = 'no dial'
       part.call('notices', () => {
-        noteRang(noticeCaller(ask).agentId)
+        // Only a session's notice: none other is ever nudged.
+        if (ask.engine && ask.sessionId) noteRang(noticeCaller(ask).agentId)
         result = notices.notify(ask)
         if (result === 'shown') noticeShown(ask)
       })
