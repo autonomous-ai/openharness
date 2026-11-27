@@ -61,12 +61,17 @@ struct Shared {
     tabs: Arc<Tabs>,
 }
 
+/// What dates a typing or a select, and tells how long it has waited.
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 /// The tab rules, and the word that they changed. Their lock is taken last, and never held across a script call, a
 /// write or `send`.
-#[derive(Default)]
 struct Tabs {
     state: Mutex<TabState>,
     changed: Condvar,
+    /// The ages the rules bound by (LATE_WRITE, CALL_TIMEOUT) are read on it; the poll's ticks and waits on the real
+    /// clock, which a clock that stands still would stop.
+    clock: Clock,
 }
 
 #[derive(Default)]
@@ -89,6 +94,14 @@ enum Call {
 }
 
 impl Tabs {
+    fn new(clock: Clock) -> Tabs {
+        Tabs { state: Mutex::default(), changed: Condvar::new(), clock }
+    }
+
+    fn now(&self) -> Instant {
+        (self.clock)()
+    }
+
     /// A change to the rules, and a word to the tab thread: it may have something to do now.
     fn tell(&self, change: impl FnOnce(&mut TabFollow)) {
         change(&mut self.state.lock().unwrap().follow);
@@ -100,7 +113,7 @@ impl Tabs {
     fn typed(&self, number: u64, typing: Typing) -> Out {
         let mut state = self.state.lock().unwrap();
         state.typings_of = number;
-        let out = state.follow.typed(typing, Instant::now());
+        let out = state.follow.typed(typing, self.now());
         drop(state);
         self.changed.notify_one();
         out
@@ -124,10 +137,10 @@ impl Tabs {
             if state.ended {
                 return None;
             }
-            if let Some(next) = state.follow.next_typing(Instant::now()) {
+            if let Some(next) = state.follow.next_typing(self.now()) {
                 return Some(Call::Typing(next, state.typings_of));
             }
-            if let Some(select) = state.follow.next_select(Instant::now()) {
+            if let Some(select) = state.follow.next_select(self.now()) {
                 return Some(Call::Select(select));
             }
             let Some(app) = state.follow.polls() else {
@@ -153,7 +166,7 @@ impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
-        Runner::polling_every(doors, send, POLL_EVERY, watch::STOP_GRACE)
+        Runner::polling_every(doors, send, POLL_EVERY, watch::STOP_GRACE, Arc::new(Instant::now))
     }
 
     fn polling_every(
@@ -161,6 +174,7 @@ impl Runner {
         send: Arc<dyn Fn(Event) + Send + Sync>,
         every: Duration,
         stop_grace: Duration,
+        clock: Clock,
     ) -> Runner {
         let shared = Arc::new(Shared {
             doors,
@@ -171,7 +185,7 @@ impl Runner {
             watching: Arc::default(),
             login: Mutex::new(None),
             front: Mutex::default(),
-            tabs: Arc::default(),
+            tabs: Arc::new(Tabs::new(clock)),
         });
         shared.refresh_login_item();
         // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
@@ -392,7 +406,8 @@ impl Shared {
                 // one's select run after it.
                 let current = selecting.lock().unwrap();
                 if *current == number {
-                    selects.tell(|follow| follow.select(app, tty, raise, Instant::now()));
+                    let at = selects.now();
+                    selects.tell(|follow| follow.select(app, tty, raise, at));
                 }
             },
             move |typing| {
