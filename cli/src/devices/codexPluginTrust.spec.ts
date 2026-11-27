@@ -8,6 +8,7 @@ import * as fs from 'node:fs'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { filesContentHash, pluginContentHash, pluginTrustRecords, readConfigText, replaceConfigText, writePluginTrust } from './codexPluginTrust.js'
@@ -153,6 +154,19 @@ describe("the plugin's trust records", () => {
       ['stop:0:0', 'sha256:f0a5037f5c103124b923a3908564612f2f006fb26f54e3102e304fbe57d3d4d1'],
       ['post_tool_use:0:0', 'sha256:b938a9471c973339ca748a29f112df3a8fa6ccc1c7d2155b6823164c52c46bdd'],
     ])
+  })
+
+  // Codex hashes `async` into a hook's identity: a record missing it would leave the carried hooks asking for trust.
+  it('of the carried hooks file hash each hook as async, as Codex does', () => {
+    const carried = readFileSync(fileURLToPath(new URL('../../../plugins/harness-device/hooks/codex.json', import.meta.url)), 'utf8')
+    const withAsync = (value: boolean): string => {
+      const file = JSON.parse(carried) as { hooks: Record<string, { hooks: Record<string, unknown>[] }[]> }
+      for (const groups of Object.values(file.hooks)) for (const group of groups) for (const hook of group.hooks) hook.async = value
+      return JSON.stringify(file)
+    }
+    const hashes = (hooksFile: string): string[] => pluginTrustRecords(handEdited(hooksFile)).map((record) => record.trustedHash)
+    expect(hashes(carried)).toStrictEqual(hashes(withAsync(true)))
+    expect(hashes(carried)).not.toStrictEqual(hashes(withAsync(false)))
   })
 })
 

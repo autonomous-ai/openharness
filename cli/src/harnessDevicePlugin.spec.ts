@@ -25,7 +25,7 @@ const posix = it.skipIf(process.platform === 'win32')
 // The shells Claude Code runs a hook's command in off Windows: the person's $SHELL (bash, zsh or sh).
 const SHELLS = ['/bin/sh', '/bin/bash', '/bin/zsh', '/bin/dash'].filter((shell) => existsSync(shell))
 
-type Hook = { type: string; command: string; args?: string[]; onFailure?: string; timeout?: number }
+type Hook = { type: string; command: string; args?: string[]; onFailure?: string; timeout?: number; async?: boolean }
 const permissionHook = (root = pluginRoot): Hook =>
   (json(root, 'hooks', 'hooks.json') as { hooks: { PermissionRequest: { hooks: Hook[] }[] } }).hooks.PermissionRequest[0].hooks[0]
 // Codex's PermissionRequest input, as Codex 0.172.0 writes it.
@@ -244,7 +244,7 @@ describe('the harness-device plugin', () => {
     expect(manifest.description).not.toMatch(/allow|deny|approv|answers/i)
   })
 
-  it('hooks/codex.json holds one PermissionRequest hook for every tool and one PreToolUse hook for request_user_input, the same command, 5 s, onFailure continue, and no mod', () => {
+  it('hooks/codex.json holds one PermissionRequest hook for every tool and one PreToolUse hook for request_user_input, the same command, 5 s, onFailure continue, async, and no mod', () => {
     expect(json(pluginRoot, 'hooks', 'codex.json')).not.toHaveProperty('modules')
     const hooks = codexHooks()
     expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'PreToolUse'])
@@ -252,7 +252,7 @@ describe('the harness-device plugin', () => {
     expect(hooks.PreToolUse.map((block) => block.matcher)).toEqual(['request_user_input'])
     const command = codexHook().command
     for (const event of ['PermissionRequest', 'PreToolUse']) {
-      expect(hooks[event][0].hooks, event).toEqual([{ type: 'command', command, onFailure: 'continue', timeout: 5 }])
+      expect(hooks[event][0].hooks, event).toEqual([{ type: 'command', command, onFailure: 'continue', timeout: 5, async: true }])
     }
   })
 
