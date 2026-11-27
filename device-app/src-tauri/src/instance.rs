@@ -4,8 +4,17 @@ use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::Path;
 
-/// The running app's hold on the lock. Only held, never read: dropping it lets go.
-pub struct Instance(#[allow(dead_code)] File);
+/// The running app's hold on the lock: dropping it lets go.
+pub struct Instance(File);
+
+impl Drop for Instance {
+    /// Unlocks before the close: a child another thread forks holds a copy of the descriptor until it execs, and
+    /// flock's lock lives until its last copy closes; Windows lets go of a closed handle's lock only eventually. An
+    /// error is ignored: the lock still ends with the file, and with the process.
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
 
 /// Takes `instance.lock` in `folder`, made if missing, without waiting: `Ok(None)` while another process holds it.
 /// The lock is std's: `flock(LOCK_EX | LOCK_NB)` on unix, `LockFileEx` failing at once on Windows. Either ends with
@@ -36,9 +45,6 @@ mod tests {
     #[test]
     fn a_second_acquire_is_refused_until_the_first_is_dropped() {
         let folder = tempfile::tempdir().unwrap();
-        // A child another test spawns holds a copy of the lock's descriptor until it execs, and with it the lock
-        // after `drop(first)`: no spawn runs while this test holds the lock.
-        let _spawning = crate::cli::spawn_lock();
         let first = acquire(folder.path()).unwrap().expect("the first launch takes the lock");
         assert!(acquire(folder.path()).unwrap().is_none());
         // A relaunch lets go first: the new process then takes the lock while the old one is still exiting.

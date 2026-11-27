@@ -226,8 +226,7 @@ fn child_env_for(
 /// Held around every spawn. macOS has no pipe2: a child's pipes are made, then marked close-on-exec, and a child
 /// another thread starts between the two keeps them, holding the first child's output open after it has ended. Linux
 /// (pipe2) and Windows (std's own lock around a child's inheritable pipes and CreateProcess) do not need it for that,
-/// and take it so every OS spawns one way. On unix a child also holds a copy of every descriptor until it execs: the
-/// instance test holds this lock too, so the file lock it lets go of is free at once, Linux's included.
+/// and take it so every OS spawns one way.
 pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
     static SPAWNING: Mutex<()> = Mutex::new(());
     SPAWNING.lock().unwrap_or_else(PoisonError::into_inner)
