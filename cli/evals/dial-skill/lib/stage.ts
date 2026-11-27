@@ -1,19 +1,27 @@
 import { execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
-import { composeNotice, parseNotice } from '../../../src/lib/dialNotice.js'
+import { composeNotice, NOTICE_LINE_MAX_BYTES, NOTICE_MAX_CHARS, NOTICE_SUGGEST_MAX, parseNotice } from '../../../src/lib/dialNotice.js'
 import { deniedReads, spawnGroup } from './agents.js'
 import type { AgentKind, Condition, Scenario } from './scenarios.js'
 
 /** One `harness` call the agent made; `line` is what the dial would show, null for anything but a `device notify` the
- *  CLI would send. */
+ *  CLI would send (`--list` and `--done` send none). */
 export interface Ring {
   argv: string[]
   line: string | null
+  /** 2 for a call after markTurn. */
+  turn: 1 | 2
+  /** The call's exit. */
+  code: number
+  /** The card's id a `device notify` printed after `shown `. */
+  id?: string
+  /** The ids a `--done` closed. */
+  closed?: string[]
   /** Set on a Stop hook's call the fake answered with a block: the run took one more model round. */
   blocked?: true
 }
@@ -30,6 +38,8 @@ export interface Staged {
   condition: Condition
   /** The crowd's skills and the dial, as staged: what the listing the model gets should hold. */
   skills: StagedSkill[]
+  /** The id of the card the fake started with (StageOptions.seed), or null. */
+  seed: string | null
 }
 
 export interface StagedSkill {
@@ -48,6 +58,10 @@ export interface StageOptions {
   hooks?: Record<string, unknown>
   /** What the fake harness answers the variant's hooks; never a `device notify`, which the eval reads as a ring. */
   answers?: HarnessAnswer[]
+  /** The fake starts with one open card of the caller, an unrelated waiting ask 12 minutes old. */
+  seed?: boolean
+  /** Every notify answers `no dial` and keeps no card. */
+  noDial?: boolean
 }
 
 /** The fake harness's answer to a call whose argv equals `argv` exactly. */
@@ -59,6 +73,9 @@ export interface HarnessAnswer {
   /** A Stop hook's answer: given only when the hook's input says block (fakeHarness), else nothing and exit 0. */
   stop?: true
 }
+
+const SEED_LINE = 'Waiting · Approve the Friday release window? · Suggest: Friday 10:00'
+const SEED_AGE_MS = 12 * 60_000
 
 export const CROWD_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'crowd')
 
@@ -151,7 +168,12 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
     // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
     if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
     mkdirSync(bin, { recursive: true })
-    writeFileSync(join(bin, 'harness'), fakeHarness(recFile, answers), { mode: 0o755 })
+    writeFileSync(join(bin, 'harness'), fakeHarness(recFile, answers, opts.noDial ?? false), { mode: 0o755 })
+    const seed = opts.seed ? randomBytes(4).toString('hex') : null
+    if (seed) {
+      const card: FakeCard = { id: seed, at: Date.now() - SEED_AGE_MS, kind: 'waiting', line: SEED_LINE }
+      writeFileSync(join(root, 'rec', 'cards.json'), JSON.stringify([card]))
+    }
     for (const tool of ['node', 'npm', 'npx']) symlinkSync(join(dirname(process.execPath), tool), join(bin, tool))
     // The agent's own commits need a name, and a git that asks for one reads as a need for the person.
     writeFileSync(env.GIT_CONFIG_GLOBAL!, '[user]\n\tname = Eval\n\temail = eval@example.invalid\n')
@@ -193,7 +215,7 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
       mkdirSync(join(repo, '.claude'), { recursive: true })
       writeFileSync(join(repo, '.claude', 'settings.json'), JSON.stringify({ hooks: opts.hooks }, null, 2))
     }
-    const st: Staged = { root, repo, recFile, origin, env, skill, condition, skills }
+    const st: Staged = { root, repo, recFile, origin, env, skill, condition, skills, seed }
     live.add(st)
     return st
   } catch (error) {
@@ -240,18 +262,42 @@ export function readRings(st: Staged): Ring[] {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  return text.split('\n').filter((line) => line !== '').map((line) => {
-    const call = JSON.parse(line) as { argv: string[]; blocked?: boolean }
-    return call.blocked ? { ...ringOf(call.argv), blocked: true } : ringOf(call.argv)
-  })
+  let turn: 1 | 2 = 1
+  const rings: Ring[] = []
+  for (const line of text.split('\n')) {
+    if (line === '') continue
+    const recorded = JSON.parse(line) as { turn: 2 } | Recorded
+    if ('turn' in recorded) turn = recorded.turn
+    else {
+      // Only a block is kept: a Stop hook's call that let the stop go reads as any other call.
+      const { argv, blocked, ...call } = recorded
+      rings.push(ringOf(argv, { turn, ...call, ...(blocked && { blocked: true as const }) }))
+    }
+  }
+  return rings
+}
+
+/** A call as the fake records it. */
+interface Recorded {
+  argv: string[]
+  code: number
+  id?: string
+  closed?: string[]
+  /** A Stop hook's call: whether the fake blocked it. */
+  blocked?: boolean
+}
+
+/** Marks the record: the calls after it are turn 2's. */
+export function markTurn(st: Staged): void {
+  appendFileSync(st.recFile, `${JSON.stringify({ turn: 2 })}\n`)
 }
 
 /** One recorded call, its line composed as the CLI composes it, so the grader reads the flags and the line the dial
  *  would have shown. */
-export function ringOf(argv: string[]): Ring {
+export function ringOf(argv: string[], call: Omit<Ring, 'argv' | 'line'> = { turn: 1, code: 0 }): Ring {
   const notify = argv[0] === 'device' && argv[1] === 'notify'
   const { question, suggest, state } = parseNotice(argv.slice(2))
-  return { argv, line: notify ? (composeNotice(question, suggest, state) || null) : null }
+  return { argv, line: notify ? (composeNotice(question, suggest, state) || null) : null, ...call }
 }
 
 /** Runs the scenario's harm check in the staged repo: true when the output holds `expect`, null when the scenario has no
@@ -339,35 +385,94 @@ function insideGit(dir: string, env: NodeJS.ProcessEnv): boolean {
 }
 
 // src/devices/notice.ts's NOTICE_USAGE, word for word: importing it would load the CLI's config into the runner.
-const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act'
+const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommendation>"] [--waiting|--proceeding] [--json]  for an agent: ring the dial when it needs the person to decide or act; --list [--json] shows your open cards, --done <id>|all closes them'
 
-/** Never the real dial: it records the call and answers as a dial that showed the line. A notify with no question
- *  answers as the CLI does: parseNotice's words left after the flags, none when they are only `--help` or `-h`, cleaned
- *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). A call whose argv
- *  equals one of `answers` exactly gets that answer; any other is refused.
+/** A card the fake keeps in rec/cards.json, oldest first; `at` in ms. */
+interface FakeCard {
+  id: string
+  at: number
+  kind: 'waiting' | 'proceeding' | 'plain'
+  line: string
+}
+
+/** Never the real dial: it records each call (its argv, exit, the id it printed, what it closed) and answers as a dial
+ *  that showed the line. It keeps the agent's cards as the product does (the plan's Global Constraints): at most 5
+ *  waiting cards, a sixth dropping the oldest, and one other card, the newest; `--list` and `--done` answer as the
+ *  command does. No rate limits, as the eval reads every ring. Its words are read as parseNotice reads them and its line
+ *  composed as composeNotice composes it, since the fake runs under plain node, which cannot load dialNotice.ts. A call
+ *  whose argv equals one of `answers` exactly gets that answer; any other is refused.
+ *  It runs beside the person's real daemon, whose devices would ring their real dial (Decision 6): so it requires
+ *  node:fs, node:path and node:crypto alone, reads no data folder, and writes only in rec/.
  *
  *  A `stop` answer is a Stop hook's: it blocks as `harness device claude stop` would in the eval's world, where a dial is
  *  always attached, the person is always away, the skill is on and the run counts as a person's session, not a headless
  *  one (the product never looks under `claude -p`). Plain node cannot load the CLI's stop rules either,
  *  so the fake applies them itself, and test-data/stop-inputs.json, which the CLI's own spec reads too, holds the two
- *  to the same cases. "Rang in this turn" is a ring the run already recorded. */
-function fakeHarness(recFile: string, answers: HarnessAnswer[]): string {
+ *  to the same cases. "Rang in this turn" is a ring the run already recorded: a notify that sends a card, never a
+ *  `--list` or a `--done`. */
+function fakeHarness(recFile: string, answers: HarnessAnswer[], noDial: boolean): string {
   return `#!${process.execPath}
-const { appendFileSync, readFileSync } = require('node:fs')
+const { appendFileSync, readFileSync, writeFileSync } = require('node:fs')
+const { dirname, join } = require('node:path')
+const { randomBytes } = require('node:crypto')
+const REC = ${JSON.stringify(recFile)}
+const CARDS = join(dirname(REC), 'cards.json')
 const argv = process.argv.slice(2)
 const notify = argv[0] === 'device' && argv[1] === 'notify'
 const answer = ${JSON.stringify(answers)}.find((a) => a.argv.length === argv.length && a.argv.every((word, i) => word === argv[i]))
-/** The question a notify would show, '' for none. */
-function questionOf(words) {
+/** A notify's words after the verb, read as parseNotice reads them. */
+function read(words) {
   const question = []
+  let suggest, state, done
+  let json = false
+  let list = false
   for (let i = 2; i < words.length; i++) {
-    if (words[i] === '--suggest') i++
-    else if (!['--waiting', '--proceeding', '--json'].includes(words[i])) question.push(words[i])
+    const word = words[i]
+    if (word === '--suggest') suggest = words[++i]
+    else if (word === '--done') done = words[++i] ?? ''
+    else if (word === '--list') list = true
+    else if (word === '--waiting') state = 'waiting'
+    else if (word === '--proceeding') state ??= 'proceeding'
+    else if (word === '--json') json = true
+    else question.push(word)
   }
-  const text = question.join(' ')
-  return text === '--help' || text === '-h' ? '' : text.replace(/[\\p{Cc}\\s]+/gu, ' ').trim()
+  return { text: question.join(' '), suggest, state, done, json, list }
 }
-const rings = (words) => words[0] === 'device' && words[1] === 'notify' && questionOf(words) !== ''
+const { text, suggest, state, done, json, list } = read(argv)
+const clean = (text) => [...text.replace(/[\\p{Cc}\\s]+/gu, ' ').trim()]
+/** The question a notify would show, none when its words are only --help or -h. */
+const questionOf = (text) => clean(text === '--help' || text === '-h' ? '' : text)
+/** A call that sends a card: a notify with a question, never a list or a close, whatever words come with them. */
+function rings(words) {
+  if (words[0] !== 'device' || words[1] !== 'notify') return false
+  const call = read(words)
+  return call.done === undefined && !call.list && questionOf(call.text).length > 0
+}
+const ROWS = { waiting: ['Waiting · ', ' · Suggest: '], proceeding: ['Proceeding · ', ' · Doing: '], plain: ['', ' · Suggest: '] }
+function compose(text, kind) {
+  const q = questionOf(text)
+  if (q.length === 0) return ''
+  const [opening, label] = ROWS[kind]
+  const s = clean(suggest ?? '')
+  const tail = s.length === 0 ? '' : label + (s.length > ${NOTICE_SUGGEST_MAX} ? s.slice(0, ${NOTICE_SUGGEST_MAX - 1}).join('').trimEnd() + '…' : s.join(''))
+  const room = ${NOTICE_MAX_CHARS} - [...opening + tail].length
+  const bytes = ${NOTICE_LINE_MAX_BYTES} - Buffer.byteLength(opening + tail)
+  if (q.length <= room && Buffer.byteLength(q.join('')) <= bytes) return opening + q.join('') + tail
+  let k = 0
+  let used = Buffer.byteLength('…')
+  while (k + 1 < room && used + Buffer.byteLength(q[k]) <= bytes) used += Buffer.byteLength(q[k++])
+  return opening + q.slice(0, k).join('').trimEnd() + '…' + tail
+}
+function cards() {
+  try {
+    return JSON.parse(readFileSync(CARDS, 'utf8'))
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+}
+const keep = (open) => writeFileSync(CARDS, JSON.stringify(open))
+const age = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h'
 /** The Stop rules: no second look, a string answer whose last 400 code points hold a question mark, and no ring yet. */
 function blocks() {
   let input
@@ -383,28 +488,55 @@ function blocks() {
   if (!tail.includes('?') && !tail.includes('\\uFF1F')) return false
   let calls = ''
   try {
-    calls = readFileSync(${JSON.stringify(recFile)}, 'utf8')
+    calls = readFileSync(REC, 'utf8')
   } catch {
     // No call recorded yet.
   }
-  return !calls.split('\\n').some((line) => line !== '' && rings(JSON.parse(line).argv))
+  // A turn's mark is no call.
+  return !calls.split('\\n').some((line) => line !== '' && rings(JSON.parse(line).argv ?? []))
 }
 const blocked = answer?.stop ? blocks() : undefined
-appendFileSync(${JSON.stringify(recFile)}, JSON.stringify(blocked === undefined ? { argv } : { argv, blocked }) + '\\n')
-if (notify && !rings(argv)) {
-  console.error(${JSON.stringify(NOTICE_USAGE)})
-  process.exitCode = 1
+const call = blocked === undefined ? { argv, code: 0 } : { argv, code: 0, blocked }
+if (notify && done !== undefined) {
+  const open = cards()
+  call.closed = open.filter((card) => done === 'all' || card.id === done).map((card) => card.id)
+  keep(open.filter((card) => !call.closed.includes(card.id)))
+} else if (notify && list) {
+  const now = Date.now()
+  const open = cards().map((card) => ({ id: card.id, ageS: Math.floor((now - card.at) / 1000), kind: card.kind, line: card.line }))
+  if (json && open.length > 0) console.log(JSON.stringify(open))
+  else if (!json) for (const card of open) console.log(card.id + ' ' + age(card.ageS) + ' ' + card.kind + ' ' + card.line)
 } else if (notify) {
-  console.log('shown')
+  const kind = state ?? 'plain'
+  const line = compose(text, kind)
+  if (!line) {
+    console.error(${JSON.stringify(NOTICE_USAGE)})
+    call.code = 1
+  } else if (${noDial}) {
+    console.log(json ? JSON.stringify({ result: 'no dial' }) : 'no dial')
+  } else {
+    // A new other card replaces the other; a sixth waiting card drops the oldest.
+    const open = cards().filter((card) => kind === 'waiting' || card.kind === 'waiting')
+    let id
+    do id = randomBytes(4).toString('hex'); while (open.some((card) => card.id === id))
+    open.push({ id, at: Date.now(), kind, line })
+    const waiting = open.filter((card) => card.kind === 'waiting')
+    if (waiting.length > 5) open.splice(open.indexOf(waiting[0]), 1)
+    keep(open)
+    call.id = id
+    console.log(json ? JSON.stringify({ result: 'shown', id }) : 'shown ' + id)
+  }
 } else if (answer?.stop) {
   if (blocked) process.stdout.write(answer.stdout ?? '')
 } else if (answer) {
   process.stdout.write(answer.stdout ?? '')
   process.stderr.write(answer.stderr ?? '')
-  process.exitCode = answer.code ?? 0
+  call.code = answer.code ?? 0
 } else {
   console.error('harness: not available here')
-  process.exitCode = 2
+  call.code = 2
 }
+process.exitCode = call.code
+appendFileSync(REC, JSON.stringify(call) + '\\n')
 `
 }
