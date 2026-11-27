@@ -10198,6 +10198,14 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(logs).toContain('[device] nudge · claude · notice')
     })
 
+    // No session is ever nudged: a notice under its folder takes no place among the 64.
+    it('a notice with no engine or session id pushes out none', () => {
+      const { listener } = devices({ now: () => Date.now() })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-r0' })
+      for (let i = 0; i < 64; i++) listener.notice({ text: LINE, ...(i % 2 ? { engine: 'claude' } : {}), folder: `f${i}` })
+      expect(nudge(listener, 'sess-r0', true)).toEqual({ nudge: false })
+    })
+
     it('the 65th agent that rang pushes out the first', () => {
       const { listener } = devices({ now: () => Date.now() })
       for (let i = 0; i < 65; i++) listener.notice({ text: LINE, engine: 'claude', sessionId: `sess-r${i}` })
