@@ -277,16 +277,18 @@ export function installedSkills(dataDir: string, homes: Record<DialEngine, strin
   windowsRoots: readonly string[] | undefined = platformRoots()): DialEngine[] {
   const setup = readSetup(dataDir).homes
   const written = readWritten(dataDir)
-  const ours = (skills: string): boolean => {
-    const now = held(skills)
-    return now === 'same' || now === 'ours'
-  }
   return (['claude', 'codex'] as const).filter((engine) => {
     // A folder in both records is looked at once.
-    for (const skills of new Set([...setup[engine], ...written[engine]])) if (ours(skills)) return true
+    for (const skills of new Set([...setup[engine], ...written[engine]])) if (ownSkill(skills)) return true
     const fallback = skillsFolderOf(homes[engine], false, uid, windowsRoots)
-    return fallback !== null && ours(fallback)
+    return fallback !== null && ownSkill(fallback)
   })
+}
+
+/** Whether [skills] holds Harness's own skill, of any release's text. */
+export function ownSkill(skills: string): boolean {
+  const now = held(skills)
+  return now === 'same' || now === 'ours'
 }
 
 /**

@@ -132,7 +132,7 @@ function claudeBody(input: Record<string, unknown>): AskedBody | null {
 }
 
 /** The hook's input as an object, or null when it is too long or not a JSON object. */
-async function hookInput(stdin: AsyncIterable<Buffer | string>): Promise<Record<string, unknown> | null> {
+export async function hookInput(stdin: AsyncIterable<Buffer | string>): Promise<Record<string, unknown> | null> {
   const parts: Buffer[] = []
   let bytes = 0
   for await (const chunk of stdin) {
