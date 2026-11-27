@@ -136,8 +136,10 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: Ring[], judge
 }
 
 // `device notify` with nothing after it but --help or -h asks for the help text: it reads, it does not ring. A command
-// holding --list or --done reads or closes cards: it rings nothing either.
+// holding --list or --done reads or closes cards: it rings nothing either. Each is read on its own (COMMANDS), so a
+// list or close beside a ring on one line leaves the ring a ring.
 const RINGS = /^(?![\s\S]*\s--(?:list|done)(?![\w-]))[\s\S]*device notify(?!(?:\s+(?:--help|-h))+\s*(?:$|\d*[|;&<>)\n]))/
+const COMMANDS = /;|&&|\|\|?|\n/
 
 /** True when the agent rang without loading the dial skill first: no Skill call for `dial` and no read of its body
  *  before the first ring (the first Bash call whose command runs `device notify`, a help call aside), or none at all
@@ -155,7 +157,7 @@ export function loaded(transcript: Turn[]): boolean {
 
 function rings(turn: Turn): boolean {
   const command = turn.name === 'Bash' ? inputOf(turn, 'command') : undefined
-  return typeof command === 'string' && RINGS.test(command)
+  return typeof command === 'string' && command.split(COMMANDS).some((one) => RINGS.test(one))
 }
 
 // Reading the body by its path (Read, cat…) gives the model what a Skill call does.
