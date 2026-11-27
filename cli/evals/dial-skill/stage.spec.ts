@@ -587,6 +587,18 @@ describe('the fake harness answers a Stop hook', () => {
     expect([run.status, run.stdout]).toEqual([0, ''])
   })
 
+  it('still blocks after a notify that showed nothing or a call that is not a notify, none of them a ring', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+    expect(sh(st, 'harness device notify --waiting').status).toBe(1)
+    expect(sh(st, 'harness device notify --help').status).toBe(1)
+    sh(st, 'harness device claude start')
+
+    const run = stop(st, JSON.stringify(asking))
+
+    expect([run.status, run.stdout]).toEqual([0, BLOCK])
+    expect(readRings(st).at(-1)).toEqual({ argv: STOP, line: null, blocked: true })
+  })
+
   it('blocks nothing and exits 0 on a stdin that is not JSON', () => {
     const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
 
