@@ -592,6 +592,22 @@ describe('the close gates', () => {
     expect(s.close.v4).toBeUndefined()
   })
 
+  it('counts a run whose turn 2 was cut apart, in no right, wrong or rang-no-card count', () => {
+    crowd('v7')
+    append('v7', [
+      followUp('d.claude.crowd', 10, 'answer', { close_right: 1, close_wrong: 0, close_errors: 0 }),
+      followUp('d.claude.crowd', 11, 'answer', { close_cut: 1 }),
+      followUp('e.claude.crowd', 10, 'relay', { close_cut: 1 }),
+    ])
+    expect(summarize(flow).close.v7.crowd).toEqual({
+      right: 1, right_n: 1, wrong: 0, errors: 0, unrung: 0, cut: 2,
+      by_kind: {
+        answer: { runs: 1, right: 1, wrong: 0 }, 'answer-one': { runs: 0, right: 0, wrong: 0 },
+        relay: { runs: 0, wrong: 0 }, 'new-request': { runs: 0, wrong: 0 }, unrung: { runs: 0, wrong: 0 },
+      },
+    })
+  })
+
   it('passes a right close on 13 of 14 answer and answer-one runs', () => {
     crowd('v7')
     rights(13, 14)
@@ -651,10 +667,10 @@ describe('the close gates', () => {
       writeSummaries(flow)
       const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
       expect(narrative).toContain('<!-- close -->\n'
-        + '| variant | condition | right | wrong | errors | rang no card | by kind | right ≥ 90% | wrong ≤ 1 | ring |\n'
-        + '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
-        + '| v7 | clean | 1 of 1 | 0 | 1 | 0 | answer 1 runs, 1 right, 0 wrong |  |  |  |\n'
-        + '| v7 | crowd | 13 of 14 | 1 | 0 | 0 | answer 7 runs, 7 right, 0 wrong; answer-one 7 runs, 6 right, 0 wrong; '
+        + '| variant | condition | right | wrong | errors | rang no card | turn 2 cut | by kind | right ≥ 90% | wrong ≤ 1 | ring |\n'
+        + '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
+        + '| v7 | clean | 1 of 1 | 0 | 1 | 0 | 0 | answer 1 runs, 1 right, 0 wrong |  |  |  |\n'
+        + '| v7 | crowd | 13 of 14 | 1 | 0 | 0 | 0 | answer 7 runs, 7 right, 0 wrong; answer-one 7 runs, 6 right, 0 wrong; '
         + 'relay 1 runs, 1 wrong | pass | pass | pass |\n'
         + '<!-- /close -->\n\nThe story so far.\n')
       expect(closeTable(summarize(flow))).toBe(narrative.slice(narrative.indexOf('<!-- close -->\n') + 15, narrative.indexOf('\n<!-- /close -->')))

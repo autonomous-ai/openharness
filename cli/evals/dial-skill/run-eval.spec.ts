@@ -129,6 +129,8 @@ interface Fake {
   extraSkill?: string
   /** A resumed run's body: turn 2 of a two-turn run. */
   resume?: string
+  /** The version a resumed run's init reports, when Claude Code updated between the turns. */
+  resumeVersion?: string
 }
 
 /** The `claude` the runner finds on its PATH, for the probe, the agent and the judge alike; it logs each call to
@@ -175,7 +177,7 @@ ${judgeBody}
 ${fake.probe ?? PROBE}
   } else {
     emit({ type: 'system', subtype: 'init', session_id: id, skills: [...names, ...${JSON.stringify(fake.extraSkill ? [fake.extraSkill] : [])}],
-      claude_code_version: ${JSON.stringify(fake.version ?? VERSION)} })
+      claude_code_version: resumed && ${JSON.stringify(fake.resumeVersion ?? null)} || ${JSON.stringify(fake.version ?? VERSION)} })
     if (resumed) {
 ${fake.resume ?? REPLY}
     } else {
@@ -777,6 +779,31 @@ ${REPLY}` })
     const turn2 = trace.findIndex((t: { role: string; content: string }) => t.role === 'system' && t.content === 'turn 2')
     expect(turn2).toBeGreaterThan(1)
     expect(trace.slice(turn2 + 1)).toEqual([{ role: 'assistant', content: 'Noted' }])
+  })
+
+  it.each([
+    ['cut off at --max-turns', { resume: TRUNCATED }],
+    ['run under another Claude Code than its probe saw', { resumeVersion: '2.1.399' }],
+  ])("grades no close of a turn 2 %s: close_cut, and turn 1's grade as it was", (_, fake) => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, fake)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(callsMade()).toEqual(['probe', 'agent', 'resume', 'judge', 'judge'])
+    const [row] = jsonl('baseline', 'results.jsonl')
+    expect(row).toMatchObject({ status: 'ok', rings: 1, grade: { score: 2, rang: 1, close_cut: 1 } })
+    for (const key of ['close_right', 'close_wrong', 'close_errors']) expect(row.grade, key).not.toHaveProperty(key)
+  })
+
+  it('fails the case as serving_substitution when another model served turn 2', () => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, { resume: REPLY.replace("model: 'claude-opus-5-5'", "model: 'claude-sonnet-4-5'") })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    expect(jsonl('baseline', 'results.jsonl')).toEqual([])
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ prompt_id: 'rate-limit-unknown.claude.clean', failure_class: 'serving_substitution' }])
   })
 
   it("fails the case as timeout, starting no turn 2, when turn 1 and the checks leave none of the agent's share", () => {
