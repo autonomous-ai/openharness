@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import { fetchOverSocket } from '../lib/localTransport.js'
 import { ensureDaemonToken, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeProofValue } from '../lib/windows/pipeAuth.js'
 import { LISTENER_MAX_CONNECTIONS } from '../services/devicesListener.js'
 import { devicesListenerPath } from './listenerPath.js'
@@ -466,6 +467,45 @@ describe.skipIf(process.platform === 'win32')('an answer that arrived inside the
     expect(await streamDevices(dir, TABS, chunk, { signal: open(), timeoutMs: 100 })).toBe(false)
     expect(chunk).not.toHaveBeenCalled()
     await late.written
+  })
+})
+
+/** `fetch` to the devices' socket at [dir] with the loop held for [ms] once a send starts: connecting and writing the
+ *  request take a loop turn, so the request is on the wire only after the client's bound. */
+function heldBeforeTheWire(dir: string, ms = 400): typeof fetch {
+  const send = fetchOverSocket(devicesListenerPath(dir)!)
+  return (input, init) => {
+    const answer = send(input, init)
+    hold(ms)
+    return answer
+  }
+}
+
+// Final review: a loop held between the bound's start and the request being written still let the abort win, the
+// listener logging `shown` and the CLI printing `no dial`.
+describe.skipIf(process.platform === 'win32')('the loop held past the bound before the request is on the wire: the answer is taken', () => {
+  it('tellDevices: true', async () => {
+    const dir = dataDir()
+    const { heard } = await listener(dir)
+    expect(await tellDevices(dir, FRONT, { fetch: heldBeforeTheWire(dir), timeoutMs: 100 })).toBe(true)
+    expect(heard).toHaveLength(1)
+  })
+
+  it('askDevices: the answer, with no why', async () => {
+    const dir = dataDir()
+    await listener(dir, json('{"result":"shown"}'))
+    const why = vi.fn()
+    expect(await askDevices(dir, NOTICE, { fetch: heldBeforeTheWire(dir), timeoutMs: 100, why })).toEqual({ result: 'shown' })
+    expect(why).not.toHaveBeenCalled()
+  })
+
+  it('streamDevices: true, and the chunk handed on', async () => {
+    const dir = dataDir()
+    await listener(dir, res => { res.writeHead(200, { 'content-type': 'application/x-ndjson' }).end(LINE) })
+    const chunks: Buffer[] = []
+    const fetch = heldBeforeTheWire(dir)
+    expect(await streamDevices(dir, TABS, data => { chunks.push(data) }, { fetch, signal: open(), timeoutMs: 100 })).toBe(true)
+    expect(Buffer.concat(chunks).toString()).toBe(LINE)
   })
 })
 
