@@ -26,9 +26,10 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { errorKind } from '../lib/log.js'
+import { removeQuietly } from './leanBundle.js'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 import { signedExitCode, type ExitReason, type ReexecOutcome, type ResumeState } from './supervisor.js'
 
@@ -121,7 +122,7 @@ export function writeMarker(file: string, marker: ReexecMarker): void {
   } catch (error) {
     // A write cut short (a full disk) is the caller's to handle (`createReexec` keeps its master); what
     // it left in the data folder is this function's to clear.
-    try { rmSync(temp, { force: true }) } catch { /* not a file this call wrote */ }
+    removeQuietly(temp)
     throw error
   }
 }
@@ -140,7 +141,7 @@ export function readMarker(file: string): ReexecMarker | null {
 }
 
 export function removeMarker(file: string): void {
-  try { rmSync(file, { force: true }) } catch { /* nothing more to do */ }
+  removeQuietly(file)
 }
 
 /**

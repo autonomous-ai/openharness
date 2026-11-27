@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { errorKind, ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
-import { folderFingerprint } from './leanBundle.js'
+import { folderFingerprint, removeQuietly } from './leanBundle.js'
 import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import { baseNode, namedNode } from './processName.js'
@@ -199,7 +199,7 @@ export function writeStatusFile(file: string, status: MasterStatusFile): void {
     renameSync(temp, file)
   } catch {
     // Best effort: a full disk must not stop the master from supervising.
-    try { rmSync(temp, { force: true }) } catch { /* nothing more to do */ }
+    removeQuietly(temp)
   }
 }
 
