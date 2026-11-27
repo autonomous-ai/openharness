@@ -34,7 +34,7 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
   for (const dir of dirs.splice(0)) {
-    for (const locked of ['auth', join('data', 'e2e')]) if (existsSync(join(dir, locked))) chmodSync(join(dir, locked), 0o700)
+    for (const locked of ['auth', join('data', 'e2e'), 'cli']) if (existsSync(join(dir, locked))) chmodSync(join(dir, locked), 0o700)
     rmSync(dir, { recursive: true, force: true })
   }
 })
@@ -231,5 +231,23 @@ describe.skipIf(process.platform === 'win32')('a secret file the command cannot 
     expect(backend.paths).toContain('/api/auth/revoke')
     expect(existsSync(signIn)).toBe(false)
     expect(existsSync(password)).toBe(true)
+  })
+
+  it.skipIf(!modesHold)('reset: a socket record it cannot delete is said in a word, never skipped', async () => {
+    const root = tempRoot()
+    seedSignIn(root)
+    const record = join(root, 'cli', 'daemon-1.json')
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    writeFileSync(record, JSON.stringify({ port: 1 }))
+    const backend = await fakeBackend()
+    lock(join(root, 'cli'))
+
+    const out = await run(root, ['reset', '--from-sign-out-button'], backend.base)
+
+    expect(out.status).toBe(1)
+    expect(out.stderr).toContain('STATE_NOT_DELETED (EACCES)')
+    expect(out.stderr).not.toContain(root)
+    expect(out.stdout).not.toContain('Cleared local machine CLI state')
+    expect(existsSync(record)).toBe(true)
   })
 })
