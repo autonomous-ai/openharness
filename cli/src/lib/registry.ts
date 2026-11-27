@@ -33,7 +33,7 @@ import { machineNames } from './machineNames.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
 import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from './engineHomes.js'
-import { transcriptRoot as TRANSCRIPT_ROOT, needsHomeCatalog, savedTranscriptEvidence, transcriptEvidence, transcriptRootEvidence } from '../engines/transcriptBindings.js'
+import { transcriptRoot as TRANSCRIPT_ROOT, namedForSession, needsHomeCatalog, savedTranscriptEvidence, SESSION_UUID, transcriptEvidence, transcriptRootEvidence } from '../engines/transcriptBindings.js'
 export { engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
@@ -516,7 +516,6 @@ const NAME_OVERRIDES = new Map<string, string>()
 const PANE_RE = /^%\d+$/
 /** A pty host instance (`PtyRuntimeRef.instance`): `p<protocol>`, or `p<protocol>-<build>` (ptyHost/instance.ts). */
 const PTY_INSTANCE_RE = PTY_HOST_INSTANCE
-const GROK_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const AGENT_ENGINES: ReadonlySet<string> = new Set(ENGINES)
 
 /**
@@ -2236,11 +2235,11 @@ class Registry {
         !sessionId
         || !agentId
         || !inputRuntimes.length
-        || (engine === 'grok' && !GROK_SESSION_RE.test(sessionId))
+        || (engine === 'grok' && !SESSION_UUID.test(sessionId))
         // agy's session id IS its conversation id, and it names the directory the transcript lives in.
-        || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
+        || (engine === 'agy' && !SESSION_UUID.test(sessionId))
         // Copilot's session id is a uuid and names the directory its event stream lives in.
-        || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
+        || (engine === 'copilot' && !SESSION_UUID.test(sessionId))
         // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
         || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
         || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
@@ -2280,6 +2279,11 @@ class Registry {
       // "the agent did not accept this message" and produced no recap. Its layout is deterministic, so derive
       // the path rather than wait to be told. A file that does not exist yet is fine — the watcher starts at
       // offset 0 and chokidar fires when it appears.
+      // Claude reports its path at SessionStart and writes the file at the first prompt (and after `/clear`), so a new
+      // pane was held until then. Its folder is Claude's encoding of a cwd, which no exact match survives, so the path
+      // is taken before its file only when it is named for this session and has the shape the core derives under its
+      // own Claude roots (transcriptEvidence). Any other reported path not on disk stays held: a hook never binds a
+      // path it chose outside the engine's roots (#1137).
       // WHOSE cwd this bind takes. A re-register of the session the row already holds (every
       // UserPromptSubmit; the SessionStart a resume gets for the row it was opened into) keeps the row's:
       // Claude reports its tracked SHELL directory, which follows every Bash `cd`, and a row that took
@@ -2288,23 +2292,25 @@ class Registry {
       // rotation takes the hook's — that is what gives a terminal-turned-claude row its folder at all.
       const sameSession = !!existing && existing.sessionId === sessionId
       const baseCwd = sameSession ? existing.cwd ?? input.cwd ?? null : input.cwd ?? existing?.cwd ?? null
-      const derived = !transcriptPath && engine === 'commandcode'
-        ? commandcodeTranscriptPath(baseCwd ?? undefined, sessionId)
-        : !transcriptPath && engine === 'grok' && baseCwd
-          ? join(env.GROK_HOME, 'sessions', encodeURIComponent(baseCwd), sessionId, 'updates.jsonl')
-          // agy's layout is deterministic from the conversation id alone, and its `PreInvocation` hook can
-          // land before the first line is flushed — derive rather than wait a turn for the path.
-          : !transcriptPath && engine === 'agy'
-            ? agyTranscriptPath(env.AGY_HOME, sessionId)
-            // Copilot announces its session before the first event is flushed; its layout is
-            // deterministic, so derive rather than wait a turn for the path.
-            : !transcriptPath && engine === 'copilot'
-              ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
-              : null
+      const derived = engine === 'claude' && transcriptPath && namedForSession(transcriptPath, sessionId)
+        ? transcriptPath
+        : !transcriptPath && engine === 'commandcode'
+          ? commandcodeTranscriptPath(baseCwd ?? undefined, sessionId)
+          : !transcriptPath && engine === 'grok' && baseCwd
+            ? join(env.GROK_HOME, 'sessions', encodeURIComponent(baseCwd), sessionId, 'updates.jsonl')
+            // agy's layout is deterministic from the conversation id alone, and its `PreInvocation` hook can
+            // land before the first line is flushed — derive rather than wait a turn for the path.
+            : !transcriptPath && engine === 'agy'
+              ? agyTranscriptPath(env.AGY_HOME, sessionId)
+              // Copilot announces its session before the first event is flushed; its layout is
+              // deterministic, so derive rather than wait a turn for the path.
+              : !transcriptPath && engine === 'copilot'
+                ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
+                : null
       const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
       // Native evidence is staged before terminal adoption, displacement or any live publication.
       const evidenceUnder = (profile: string | undefined) => effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
-        profile, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
+        profile, derived === effectiveTranscriptPath ? 'derived' : false) : undefined
       // A home the hook says of its own environment fills a row that has none, and only once this session's transcript
       // is found under it. A home that does not hold it, or cannot be read, is no evidence: the transcript is taken as
       // it would be without it, and the registration goes on.
