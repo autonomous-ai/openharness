@@ -345,7 +345,7 @@ describe('daemonPost on Windows', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
-  // The pipe's answer waits on the daemon's proof (`harness-pty ps --json`), which a busy or cold machine takes over 1 s to give.
+  // The pipe is dialled only after the daemon's process check (`harness-pty ps --json`), which a busy or cold machine takes over 1 s to give.
   it('a daemon that answers after 2.5 s still hears the prompt', async () => {
     vi.useFakeTimers()
     let signal: AbortSignal | undefined
