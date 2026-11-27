@@ -237,11 +237,15 @@ describe('the dial\'s usage counts', () => {
     outsides.push(look)
     await dial.next((m) => m.t === 'agent' && m.id === look.id, 45_000, 'the fourth outside session listed')
     // The hook sends each report from a process of its own; the test's share one kept-alive connection, which the listener
-    // allows a nudge a second: one refused so is sent again.
-    const report = (ask: boolean) => until('the report taken', async () => {
-      const answer = await askDevices(d.dataDir, { type: 'nudge', engine: 'claude', sessionId: look.sessionId, ask })
-      return answer === 429 ? null : answer
-    }, 10_000, 200)
+    // allows a nudge a second: one refused so is sent again. No answer at all is a failure, never retried.
+    const report = async (ask: boolean) => {
+      const { answer } = await until('the report taken', async () => {
+        const answer = await askDevices(d.dataDir, { type: 'nudge', engine: 'claude', sessionId: look.sessionId, ask })
+        return answer !== 429 && { answer }
+      }, 10_000, 200)
+      if (answer === null) throw new Error('the devices listener gave no answer to the nudge report')
+      return answer
+    }
     /** The person types [text] to it, and its Stop hook runs a [stops]th time: its stop, which waits for its report. */
     const stopped = async (text: string, stops: number): Promise<void> => {
       look.type(text)
