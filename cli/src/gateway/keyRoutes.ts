@@ -9,6 +9,7 @@
  */
 import type { HttpAnswer } from '../core/api.js'
 import { errorKind } from '../lib/log.js'
+import { SecretNotDeleted } from '../lib/deleteSecretFile.js'
 
 /** What the routes do, as the gateway does it (gateway/start.ts). */
 export interface KeyOps {
@@ -46,7 +47,7 @@ const MACHINE_ID = /^[a-f0-9]{32}$/
 /** What a route does with its body, read as JSON. */
 type WithBody = (body: Record<string, unknown>) => Promise<HttpAnswer> | HttpAnswer
 
-/** The command's own failure, said as `harness pair` and `remote-password set|clear` read it: its message. */
+/** The command's own failure, said as `harness pair` and `remote-password set` read it: its message. */
 const said = async (run: () => Promise<HttpAnswer>): Promise<HttpAnswer> => {
   try { return await run() } catch (error) { return answer(500, { error: error instanceof Error ? error.message : 'INTERNAL' }) }
 }
@@ -60,7 +61,7 @@ function routes(ops: KeyOps): Record<string, { body?: WithBody; run?: () => Prom
     'POST /api/revoke': { body: (body) => (body.id ? ops.revoke(body.id as string) : answer(400, { error: 'MISSING_ID' })) },
     'POST /api/revoke-all': { run: () => ops.revokeAll() },
     'POST /api/remote-password/set': { body: (body) => (body.password ? said(() => ops.setRemotePassword(body.password as string)) : answer(400, { error: 'MISSING_PASSWORD' })) },
-    'POST /api/remote-password/clear': { run: () => said(() => ops.clearRemotePassword()) },
+    'POST /api/remote-password/clear': { run: () => ops.clearRemotePassword() },
     'GET /api/remote-password/status': { run: () => ops.remotePasswordStatus() },
     'POST /api/link/trust-peer': { body: (body) => {
       if (typeof body.pub !== 'string' || !KEY.test(body.pub) || typeof body.machineId !== 'string' || !MACHINE_ID.test(body.machineId)) return answer(400, { error: 'BAD_PEER' })
@@ -120,6 +121,12 @@ export function keyRoutes(ops: KeyOps, log: (line: string) => void = (line) => c
         try { body = JSON.parse(text ?? '') as Record<string, unknown> } catch { return BAD_JSON }
         return await route.body!(body)
       } catch (error) {
+        // A secret file left on disk: its word and errno code alone, so it is logged and answered as it is; `harness
+        // remote-password clear` reads it, and does not delete the file behind the daemon's back.
+        if (error instanceof SecretNotDeleted) {
+          log(`[gateway] ${method} ${path} ${error.message}`)
+          return answer(500, { error: error.message })
+        }
         log(`[gateway] ${method} KEY_ROUTE_FAILED · ${errorKind(error)}`)
         return answer(500, { error: 'INTERNAL' })
       }
