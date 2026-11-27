@@ -13,15 +13,15 @@ import { listenLocalSocket } from '../lib/localSocket.js'
 import { newPipeNonce, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeAuthValue, pipeProofValue, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
-  frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
-  NUDGE_MAX_BYTES, NUDGE_PER_SECOND, nudgeHandler, type NudgeAsk,
+  frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_CARDS_MAX_BYTES, NOTICE_CARDS_PER_SECOND, NOTICE_MAX_BYTES,
+  NOTICE_PER_SECOND, noticeDoneHandler, noticeHandler, noticeListHandler, NOTIFY_MAX_BYTES, NUDGE_MAX_BYTES, NUDGE_PER_SECOND, nudgeHandler, type NudgeAsk,
   NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS, ORCA_FRONT_MAX_WORKSPACE, ORCA_FRONT_PER_SECOND, orcaFrontHandler,
   REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, THREAD_MAX_BYTES, THREAD_PER_SECOND, threadHandler,
   TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, WRITES_PENDING, WROTE_MAX_BYTES, WROTE_PER_SECOND,
-  type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
+  type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type NoticeWho, type StreamEnd,
 } from './devicesListener.js'
 import type { TabsWrite } from '../cable/hosts/tabsLines.js'
-import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
+import type { NoticeAsk, NoticeCard, NoticeResult } from '../lib/dialNotice.js'
 import { noticeCaller } from '../devices/notice.js'
 import { askDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
@@ -2766,6 +2766,90 @@ describe('nudge', () => {
       const dir = shortDir()
       await open({ nudge: nudgeHandler(() => true) }, { path: devicesListenerPath(dir)! })
       expect(await askDevices(dir, { type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true })).toStrictEqual({ nudge: true })
+    })
+  })
+})
+
+describe('noticeList and noticeDone', () => {
+  const gone = new AbortController().signal
+  const CARD: NoticeCard = { id: '3f9a1c2e', ageS: 90, kind: 'waiting', line: 'Waiting · Use Redis?' }
+  const who = { engine: 'claude', sessionId: 's-1', folder: 'api' }
+
+  it('noticeList hands on the caller alone and answers its cards', () => {
+    const asked: NoticeWho[] = []
+    const handler = noticeListHandler((caller) => { asked.push(caller); return [CARD] })
+    expect(handler.handle({ type: 'noticeList', ...who, text: 'x', id: 'all' }, gone)).toStrictEqual({ cards: [CARD] })
+    expect(handler.handle({ type: 'noticeList', engine: 'codex', sessionId: 't-2' }, gone)).toStrictEqual({ cards: [CARD] })
+    expect(asked).toStrictEqual([who, { engine: 'codex', sessionId: 't-2' }])
+  })
+
+  it('noticeDone hands on the caller and the id alone and answers how many closed', () => {
+    const asked: [NoticeWho, string][] = []
+    const handler = noticeDoneHandler((caller, id) => { asked.push([caller, id]); return id === 'all' ? 3 : 1 })
+    expect(handler.handle({ type: 'noticeDone', ...who, id: '3f9a1c2e', text: 'x' }, gone)).toStrictEqual({ closed: 1 })
+    expect(handler.handle({ type: 'noticeDone', engine: 'codex', sessionId: 't-2', id: 'all' }, gone)).toStrictEqual({ closed: 3 })
+    expect(asked).toStrictEqual([[who, '3f9a1c2e'], [{ engine: 'codex', sessionId: 't-2' }, 'all']])
+  })
+
+  it('both refuse a caller that names no agent or one they cannot read', () => {
+    const list = vi.fn((): NoticeCard[] => [])
+    const done = vi.fn(() => 0)
+    const listing = noticeListHandler(list)
+    const closing = noticeDoneHandler(done)
+    // A command typed by hand outside an agent's session sends no engine and no session id: it names no agent's cards.
+    const bad: Record<string, unknown>[] = [
+      {}, { folder: 'api' }, { engine: 'claude' }, { sessionId: 's-1' }, { engine: 'gemini', sessionId: 's-1' },
+      { engine: 'claude', sessionId: 'a b' }, { engine: 'claude', sessionId: 'a'.repeat(129) }, { engine: 'claude', sessionId: 7 },
+      { engine: 'claude', sessionId: 's-1', folder: '' }, { engine: 'claude', sessionId: 's-1', folder: 'a\u0007' },
+      { engine: 'claude', sessionId: 's-1', folder: 'x'.repeat(65) }, { engine: 'claude', sessionId: 's-1', folder: 7 },
+    ]
+    for (const fields of bad) {
+      expect(listing.handle({ type: 'noticeList', ...fields }, gone), JSON.stringify(fields)).toBe(REFUSED)
+      expect(closing.handle({ type: 'noticeDone', ...fields, id: 'all' }, gone), JSON.stringify(fields)).toBe(REFUSED)
+    }
+    expect(list).not.toHaveBeenCalled()
+    expect(done).not.toHaveBeenCalled()
+  })
+
+  it('noticeDone refuses an id that is neither a card\'s nor all', () => {
+    const done = vi.fn(() => 0)
+    const handler = noticeDoneHandler(done)
+    for (const id of [undefined, '', '3f9a1c2', '3f9a1c2e0', '3F9A1C2E', '3f9a1c2g', 'ALL', 7]) {
+      expect(handler.handle({ type: 'noticeDone', ...who, id }, gone), String(id)).toBe(REFUSED)
+    }
+    expect(done).not.toHaveBeenCalled()
+  })
+
+  it('both take what harness device notify sends, from a folder whose name is cut before a space', () => {
+    const asked: NoticeWho[] = []
+    const caller = noticeCaller({ CODEX_THREAD_ID: 't-2' }, `/p/${'a'.repeat(63)} b`)
+    noticeListHandler((each) => { asked.push(each); return [] }).handle({ type: 'noticeList', ...caller }, gone)
+    noticeDoneHandler((each) => { asked.push(each); return 0 }).handle({ type: 'noticeDone', ...caller, id: 'all' }, gone)
+    const expected = { engine: 'codex', sessionId: 't-2', folder: 'a'.repeat(63) }
+    expect(asked).toStrictEqual([expected, expected])
+  })
+
+  it('the handlers are their two limits and handle; the longest message fits', () => {
+    const listing = noticeListHandler(() => [])
+    const closing = noticeDoneHandler(() => 0)
+    for (const handler of [listing, closing]) {
+      expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+      expect(handler).toMatchObject({ maxBytes: NOTICE_CARDS_MAX_BYTES, perSecond: NOTICE_CARDS_PER_SECOND })
+    }
+    expect([NOTICE_CARDS_MAX_BYTES, NOTICE_CARDS_PER_SECOND]).toEqual([1024, 1])
+    const longest = { type: 'noticeDone', engine: 'claude', sessionId: 'a'.repeat(128), folder: '🙏'.repeat(64), id: '3f9a1c2e' }
+    expect(closing.handle(longest, gone)).toStrictEqual({ closed: 0 })
+    expect(Buffer.byteLength(JSON.stringify(longest))).toBeLessThanOrEqual(NOTICE_CARDS_MAX_BYTES)
+  })
+
+  describe.skipIf(process.platform === 'win32')('on a real listener', () => {
+    it('askDevices gets the cards of noticeList and the count of noticeDone', async () => {
+      const dir = shortDir()
+      const handlers = { noticeList: noticeListHandler(() => []), noticeDone: noticeDoneHandler(() => 0) }
+      const { lines } = await open(handlers, { path: devicesListenerPath(dir)! })
+      expect(await askDevices(dir, { type: 'noticeList', ...who })).toStrictEqual({ cards: [] })
+      expect(await askDevices(dir, { type: 'noticeDone', ...who, id: 'all' })).toStrictEqual({ closed: 0 })
+      expect(lines).toEqual(['[devices] listener open'])
     })
   })
 })
