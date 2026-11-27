@@ -762,6 +762,8 @@ ${agent('claude-opus-5-5')}`, JUDGE, { resume: String.raw`fs.appendFileSync(${JS
 const { execFileSync } = require('node:child_process')
 for (const card of JSON.parse(execFileSync('harness', ['device', 'notify', '--list', '--json'], { encoding: 'utf8' }) || '[]'))
   execFileSync('harness', ['device', 'notify', '--done', card.id])
+emit({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [
+  { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'harness device notify --done all' } }] } })
 ${REPLY}` })
 
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--approve-harness'])
@@ -772,14 +774,14 @@ ${REPLY}` })
     expect(second).toBe(first)
     expect(callsMade()).toEqual(['probe', 'agent', 'resume', 'judge', 'judge'])
     const [row] = jsonl('baseline', 'results.jsonl')
-    // Turn 1's 7 + 3 and turn 2's 5 + 2; one ring, turn 1's.
-    expect(row).toMatchObject({ meta: { follow_up: 'answer' }, usage: { input_tokens: 12, output_tokens: 5 }, rings: 1,
+    // Turn 1's 7 + 3 and turn 2's 5 + 2, and a tool call in each; one ring, turn 1's.
+    expect(row).toMatchObject({ meta: { follow_up: 'answer' }, usage: { input_tokens: 12, output_tokens: 5 }, tool_calls: 2, rings: 1,
       grade: { close_right: 1, close_wrong: 0, close_errors: 0 } })
     expect(row.explanation.ask_ok).toBe('judged Stopped in <run>/repo under ~')
     const trace = JSON.parse(readFileSync(join(flow, 'baseline', 'traces', 'rate-limit-unknown.claude.clean_rep0.json'), 'utf8'))
     const turn2 = trace.findIndex((t: { role: string; content: string }) => t.role === 'system' && t.content === 'turn 2')
     expect(turn2).toBeGreaterThan(1)
-    expect(trace.slice(turn2 + 1)).toEqual([{ role: 'assistant', content: 'Noted' }])
+    expect(trace.slice(turn2 + 1)).toMatchObject([{ role: 'tool_call', name: 'Bash' }, { role: 'assistant', content: 'Noted' }])
   })
 
   it.each([
