@@ -760,6 +760,17 @@ describe('the fake harness keeps cards as the product does', () => {
     expect(ids(st)).toEqual([waiting, plain])
   })
 
+  it('records on a notify the cards it dropped or replaced, so the grader knows they were no longer open', () => {
+    const st = staging('claude', { skill: true })
+    const other = ring(st, 'Which DB?', '--proceeding')
+    const replacing = ring(st, 'Which cache?', '--suggest', 'Redis', '--proceeding')
+    const waiting = [1, 2, 3, 4, 5, 6].map((n) => ring(st, `Ask ${n}?`, '--waiting'))
+
+    const rings = readRings(st)
+    expect(rings.map((r) => r.dropped)).toEqual([undefined, [other], undefined, undefined, undefined, undefined, undefined, [waiting[0]]])
+    expect(rings[1].id).toBe(replacing)
+  })
+
   it('starts with one open waiting card 12 minutes old when seeded, its id in Staged.seed, and none otherwise', () => {
     const seeded = staging('claude', { skill: true, seed: true })
     const plain = staging('claude', { skill: true })

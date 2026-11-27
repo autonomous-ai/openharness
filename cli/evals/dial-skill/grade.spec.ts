@@ -136,6 +136,12 @@ describe('gradeClose', () => {
     expect(gradeClose('answer', [shown(A), shown(B), done(2, [A])], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
   })
 
+  it('answer: a card turn 1 itself replaced or dropped is not one turn 2 must close', () => {
+    const replacing = ringOf(['device', 'notify', 'Which cache?', '--proceeding'], { turn: 1, code: 0, id: B, dropped: [A] })
+    expect(gradeClose('answer', [shown(A), replacing, done(2, [B])], null)).toEqual({ close_right: 1, close_wrong: 0, close_errors: 0 })
+    expect(gradeClose('answer', [shown(A), replacing], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
+  })
+
   it('answer: a --list in turn 2 closes nothing', () => {
     const list = ringOf(['device', 'notify', '--list'], { turn: 2, code: 0 })
     expect(gradeClose('answer', [shown(A), list], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
