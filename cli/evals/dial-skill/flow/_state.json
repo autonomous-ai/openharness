@@ -532,7 +532,9 @@
     "evals/dial-skill/flow/v5/hooks.json",
     "evals/dial-skill/flow/v5/harness-answers.json",
     "evals/dial-skill/flow/v6/hooks.json",
-    "evals/dial-skill/flow/v6/harness-answers.json"
+    "evals/dial-skill/flow/v6/harness-answers.json",
+    "evals/dial-skill/flow/v7/hooks.json",
+    "evals/dial-skill/flow/v7/harness-answers.json"
   ],
   "bases": {
     "v5": 4,

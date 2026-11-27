@@ -1,0 +1,10 @@
+[
+  {
+    "argv": [
+      "device",
+      "claude",
+      "start"
+    ],
+    "stdout": "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the dial skill and follow it. Not for finished work or progress.\"}}\n"
+  }
+]
