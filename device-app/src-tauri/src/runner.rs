@@ -69,8 +69,8 @@ type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 struct Tabs {
     state: Mutex<TabState>,
     changed: Condvar,
-    /// The ages the rules bound by (LATE_WRITE, CALL_TIMEOUT) are read on it; the poll's ticks and waits on the real
-    /// clock, which a clock that stands still would stop.
+    /// A typing's and a select's ages (LATE_WRITE, CALL_TIMEOUT) are read on it. The poll's ticks and waits stay on
+    /// the real clock, which a clock that stands still would stop, and so do the failed polls' seconds (FAILED_EVERY).
     clock: Clock,
 }
 

@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 /// How long a test waits on a child process or a thread before it calls it stuck, not slow. A wait that passes returns
 /// as soon as its event comes, so only a broken test waits it out; on a loaded machine the fake (a shell script that
-/// starts processes and appends to files) lags for seconds. Above the product's longest deadline on these paths (a
-/// watch's first line, 20 s), so a test is never stricter than the app.
+/// starts processes and appends to files) lags for seconds. Past a watch's first-line deadline (20 s) and a status
+/// run's (10 s): a fake slower than those fails in the app too.
 pub const WAIT: Duration = Duration::from_secs(30);
 
 /// The fake `harness` script.
