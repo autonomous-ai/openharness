@@ -102,6 +102,15 @@ describe('oneStep', () => {
       expect(oneStep([call('Bash', { command }), skill('dial'), notify])).toBe(false)
     },
   )
+
+  it.each([
+    'harness device notify --list; harness device notify "Set WEATHER_API_KEY" --waiting',
+    'harness device notify --done all && harness device notify "Set WEATHER_API_KEY" --waiting',
+    'harness device notify "Set WEATHER_API_KEY" --waiting | tee out.txt; harness device notify --list',
+    'harness device notify --list\nharness device notify "Set WEATHER_API_KEY" --waiting',
+  ])('takes each command of a line on its own, so a list or close beside a ring keeps the ring (%#)', (command) => {
+    expect(oneStep([call('Bash', { command }), skill('dial'), notify])).toBe(true)
+  })
 })
 
 describe('loaded', () => {
