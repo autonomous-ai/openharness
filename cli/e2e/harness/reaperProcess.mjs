@@ -266,8 +266,14 @@ function treeMatches(root, seen) {
 /** How far below a root a Codex home's `app-server-daemon` folder is looked for, and how much of the root is read for it. */
 const APP_SERVER_DEPTH = 4, FOLDERS_READ = 2_000, PID_FILES_READ = 16
 
-/** Whether [path] is a file, not a link to one. */
-const isFile = (path) => { try { return lstatSync(path).isFile() } catch { return false } }
+/** Whether [path] is a pid file of the root's own: a file, not a link to one, nor the second name of one elsewhere (a hard
+ *  link), and no larger than the product reads one (src/lib/harnessResources.ts). */
+const ownPidFile = (path) => {
+  try {
+    const stat = lstatSync(path)
+    return stat.isFile() && stat.nlink === 1 && stat.size <= 16_384
+  } catch { return false }
+}
 
 /** The `pid` the JSON in [file] holds, while a safe integer over 1; null for anything else. */
 function recordedPid(file) {
@@ -279,8 +285,8 @@ function recordedPid(file) {
 
 /**
  * The pids the Codex homes inside [root] record their app servers by: each `app-server-daemon/daemon.pid`, that folder at
- * most 4 below the root, read breadth first and through no link (one could lead out of the root). At most 2,000 folders
- * and 16 pid files are read; a bound reached is said once (src/testing/rootProcesses.ts codexPidFiles).
+ * most 4 below the root, read breadth first and through no link, soft or hard (one could lead out of the root). At most
+ * 2,000 folders and 16 pid files are read; a bound reached is said once (src/testing/rootProcesses.ts codexPidFiles).
  */
 function codexPidFiles(root) {
   const pids = new Set()
@@ -298,7 +304,7 @@ function codexPidFiles(root) {
       // readdir's own type: a link is never a folder here.
       if (!entry.isDirectory()) continue
       const path = join(folder, entry.name), file = join(path, 'daemon.pid')
-      if (entry.name === 'app-server-daemon' && isFile(file)) {
+      if (entry.name === 'app-server-daemon' && ownPidFile(file)) {
         if (files++ === PID_FILES_READ) {
           console.error(`[e2e reaper] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
           return [...pids]
