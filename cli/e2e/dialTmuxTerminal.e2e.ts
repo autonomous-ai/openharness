@@ -31,6 +31,7 @@ import { FRONT_SETTLE_MS } from '../src/cable/hosts/appFilter.js'
 import { FOCUS_POLL_MS } from '../src/cable/hosts/focusPoll.js'
 import { UNKNOWN_APP } from '../src/cable/hosts/hostDetect.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
+import { ringOn } from '../src/testing/dialRing.js'
 import { psTime } from './harness/appEvalCost.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -172,16 +173,11 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
       meanwhile()
       return undefined
     }, 45_000, 100)
-  /** The list of [app]'s ring, as the dial was last sent it after a frame showing that page, once it holds [agent];
+  /** The list of [app]'s ring, as the dial holds it on that page (src/testing/dialRing.ts), once it holds [agent];
    *  [meanwhile] runs at each look. */
-  const ringOn = (dial: FakeDial, app: string, agent: InOwnTmux, meanwhile = (): void => {}): Promise<DialMessage[]> =>
+  const ringWith = (dial: FakeDial, app: string, agent: InOwnTmux, meanwhile = (): void => {}): Promise<DialMessage[]> =>
     until(`${app}'s ring with the agent`, () => {
-      const kinds = dial.messages.map((m) => m.t)
-      const shown = kinds.lastIndexOf('apps')
-      const begin = kinds.lastIndexOf('agents.begin')
-      const end = kinds.lastIndexOf('agents.end')
-      const rows = shown >= 0 && dial.messages[shown].shown === app && begin > shown && end > begin
-        ? dial.messages.slice(begin, end).filter((m) => m.t === 'agent') : []
+      const rows = ringOn(dial.messages, app) ?? []
       if (rows.some((m) => m.id === agent.id)) return rows
       meanwhile()
       return undefined
@@ -215,13 +211,13 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     const frame = await pageOf(dial, "Terminal's page holding B and the agent", 'terminal-app', 2)
     expect(appsOf(frame)).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
     // Terminal is in front: its ring, where the agent's row names Terminal (spec §2).
-    const terminal = await ringOn(dial, 'terminal-app', agent)
+    const terminal = await ringWith(dial, 'terminal-app', agent)
     expect(terminal.map((m) => m.id).sort()).toEqual([agent.id, b.id].sort())
     expect(terminal.find((m) => m.id === agent.id)?.host).toBe('terminal-app')
     // Terminal settling in front ends a pick made before it (another app settled), so the pick is made again every 2 s
     // until tmux's ring is listed, as a person picks again.
     let picked = 0
-    const tmux = await ringOn(dial, 'tmux', agent, () => {
+    const tmux = await ringWith(dial, 'tmux', agent, () => {
       if (Date.now() - picked < 2_000) return
       dial.pick('tmux')
       picked = Date.now()
