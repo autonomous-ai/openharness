@@ -20,7 +20,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
-import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, CONTINUE_QUIET_MS, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, CONTINUE_MAX_MS, CONTINUE_QUIET_MS, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
@@ -17842,6 +17842,45 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       card('processing')
       notice(listener, 'h1', LINE)
       expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
+
+    // A block the engine never took (its hook killed at its timeout) starts no continuation: the person's next turn is
+    // theirs, as the outside hold lapses (observed.ts CONTINUE_QUIET_MS, CONTINUE_MAX_MS).
+    describe('a Harness agent\'s continuation, bounded', () => {
+      const card = (port: DevicesPort, kind: 'processing' | 'done') => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind, text: kind } })
+
+      it('no card within 10 s of its done: the person\'s next turn at the tile holds its notice quiet, and counts no rang', async () => {
+        const { port, listener } = withNotices()
+        expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+        card(port, 'done')
+        await vi.advanceTimersByTimeAsync(CONTINUE_QUIET_MS)
+        port.desk(['h1'], true)
+        card(port, 'processing')
+        notice(listener, 'h1', LINE)
+        await vi.waitFor(() => expect(calls('hold')).toHaveLength(1))
+        expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+      })
+
+      // As Codex's turn ends after its Stop hook: a done after the yes is the stop's own, and the 10 s run from it.
+      it('a card within 10 s of a done after the yes is its continuation\'s', async () => {
+        const { port, listener } = withNotices()
+        expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+        await vi.advanceTimersByTimeAsync(5_000)
+        card(port, 'done')
+        await vi.advanceTimersByTimeAsync(CONTINUE_QUIET_MS - 1)
+        card(port, 'processing')
+        notice(listener, 'h1', LINE)
+        expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_claude_rang: 1 })
+      })
+
+      it('120 s from its yes, its continuation counts no rang', async () => {
+        const { port, listener } = withNotices()
+        expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+        card(port, 'processing')
+        await vi.advanceTimersByTimeAsync(CONTINUE_MAX_MS)
+        notice(listener, 'h1', LINE)
+        expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+      })
     })
   })
 })
