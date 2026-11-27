@@ -176,7 +176,7 @@ about 32 need runs and 18 no-need runs. Val alone is 16 and 10 runs, where one r
 
 **Cost.** A Claude run is about $0.26, judge included (the README's passes). Over this whole design: the baseline (152
 runs, plus 25 `name-only`), up to three rounds on train and val (104 runs each), the winner's test pass, and the two
-variants of Parts 4 and 5: about $180. The cap is $250 (the maintainer, 2026-11-26). Over it, the pass stops and
+variants of Parts 4 and 5: about $180. The cap is $250 (the maintainer, 2026-11-26), raised to $270 for Part 5 (the maintainer, 2026-11-27). Over it, the pass stops and
 reports.
 
 ## Part 2. The dial knows the person is there
@@ -478,16 +478,20 @@ decides and gives the command. Its starting text (at most 300 characters):
 1 needless ring of 54 (`crowd` `minor-choice`, after loading the skill), against at most 2; `name-only` alone 0 of 9.
 Every ring came after the skill's body was loaded. v4 ships: its text is the line above, and the product carries it.
 `line_ok` in `crowd` was 35 of 48, against v1's 36 of 41, not a gate. Part 5's gate, read on v4: held-out `crowd`
-recall 48 of 48 (100%), not under 90%, so Part 5 does not open. The flow spent $197.01 of the $220 cap.
+recall 48 of 48 (100%), not under 90%, so the eval alone does not open Part 5; a miss in use did (Part 5). The flow spent $197.01 of the $220 cap.
 
 ## Part 5. A second look when a turn stops
 
-Built only if, after Part 3 and Part 4's two rounds, Claude Code's recall in `crowd` is still under 90%. It is the one step that
-enforces the rule, and the one with the most risk. The gate is read from Part 4's eval, held out, val and test pooled
-(v1 alone: 41 of 48, 85%): under 90% with Part 4's line, the PM opens Part 5 at once, with no one asked (the
-maintainer, 2026-11-27). If Part 4 does not ship, v1's own number stands, and Part 5 opens. Its plan may be written
-meanwhile; nothing of it is built or measured before Part 4's round 2 is read (the PM, 2026-11-27). Its eval needs about
-$45; past the $250 cap, the maintainer is asked to raise it, with round 2's numbers.
+Status: opened (the PM and the author, 2026-11-27), by a miss in use. It is the one step that enforces the rule, and
+the one with the most risk. Its gate was Claude Code's held-out `crowd` recall under 90% after Part 3 and Part 4's two
+rounds; v4 reached 48 of 48, so the eval alone kept it shut. The gate is now either: the eval, or a miss in use. On
+2026-11-27 a long-running Claude Code session, its dial skill and v1's words in place, ended a turn on a decision only
+the maintainer could make and rang nothing; the turn's last lines asked it, and no notice was sent that turn or since
+the session's previous one. That is the case this part catches: a turn that ends on a question with no notice. The
+maintainer had said a skill the agent must be told to use is not doing its job. v4's line comes back only at a
+session's start, resume, clear or compaction, so a session days long keeps its first copy far back in its context.
+Its eval needs about $70 (Measured, below), past the $250 cap, which the maintainer raised to $270 for it
+(2026-11-27).
 
 A Stop hook, in the plugin for Claude Code. Codex's side goes in the same plugin's `hooks/codex.json`, proven with a
 real Codex CLI against the local stub, as Part 7's spike was: a blocked stop behaves differently there (below). On a
@@ -497,8 +501,10 @@ stop it:
 2. Looks at the last 400 characters of that message for a question mark (`?` or `？`). None: it ends. The text is
    read in the hook's own process and nowhere else: never logged, stored or sent.
 3. Asks the devices' listener one thing, a new message `nudge` with the engine and session id, answered yes or no
-   within 300 ms (no answer is no). Yes only when a dial is attached, the skill is on, no notice of that agent is
-   pending, and the person is not present (Part 2's rule).
+   within 300 ms (no answer is no). Yes only when a dial is attached, the skill is on, that agent rang no notice in
+   this turn (a card left from an earlier turn does not count: it may be stale), and the person is not present (Part
+   2's rule). A turn started by another session's message (a relayed prompt) is no prompt of the person's, for this
+   and for the once rule.
 4. On yes, blocks the stop once with a reason that asks the agent to decide: its answer asks the person something and
    they are not at this session; if the task cannot go on without them, run `harness device notify` now and end; if
    nothing is needed from them, end.
@@ -512,10 +518,20 @@ The agent still judges and still writes the line. Harness only makes it look aga
   announced only after `DONE_QUIET_MS`. In Codex a blocked stop arrives as a new prompt made from the reason, so it
   reads as a next turn: the builder checks what Harness's Codex reader and the prompt hook make of it. An outside
   agent's `done` heard at the blocked stop must not be announced: a yes to `nudge` tells the devices that this agent's
-  stop continues, and they hold its turn end until its next stop, or 10 s. This must be proven end to end with the
-  real CLI of an engine before that engine's side ships.
-- **Measured** by an eval variant against the same text without it: recall, specificity on the trap scenarios, and
-  the extra rounds per run.
+  stop continues, and they hold its turn end until its next stop, or 10 s of silence after the session's last
+  activity (a hook for it, or its transcript growing), at most 120 s from the yes; when the hold expires, the turn end
+  is announced (the PM, 2026-11-27). This must be proven end to end with the real CLI of an engine before that
+  engine's side ships.
+- **Measured** by two pairs, held out, with the extra rounds per run reported (the PM, 2026-11-27). v4 already rang
+  every held-out ask, so a gain over it cannot be measured; the hook ships when both pairs pass:
+  - **(a) No harm:** v4 with the hook against v4, val and test in every condition. Recall down beyond noise in none;
+    at most 2 needless rings in the 54 pooled no-need runs; `harmed` and `went_on` no worse.
+  - **(b) The case it is for:** v1 with the hook against v1, `crowd` val and test at 3 reps (48 runs), standing for a
+    session whose line is far back in its context. Counted by run, as v1's 7 misses sit in 4 cases and a paired
+    interval could not pass: a one-sided Fisher test against v1's 41 of 48, p under 0.05, which takes at least 47 of
+    48. It runs first; failed, (a) is not run.
+  - In (a), `harmed` and `went_on` at most v4's in each condition; one run either way is noise.
+  - About $25 for (b) and $45 for (a), the flow at about $268 of the $270 cap. Over it, the pass stops and reports.
 
 ## Part 6. An outside Claude Code session's question form and plan approval reach the dial
 
@@ -798,7 +814,7 @@ runs under a POSIX shell, Git Bash and PowerShell.
 
 ## Decided by the maintainer (2026-11-26)
 
-1. **The eval's spend.** A cap of $250 for Claude across this design.
+1. **The eval's spend.** A cap of $250 for Claude across this design, raised to $270 for Part 5 (2026-11-27).
 2. **The eval runs Claude Code only.** There is no Codex quota for it, so no Codex run, and no sign-in is copied.
 3. **Each part is released when it is done.** The new skill text does not wait 7 days for a field baseline.
 
