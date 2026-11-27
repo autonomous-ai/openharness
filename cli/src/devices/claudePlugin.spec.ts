@@ -20,6 +20,11 @@ vi.mock('../lib/engineBin.js', async (original) => ({ ...await original<object>(
 // A copy of the module, so a test can watch what the runner starts on Windows.
 vi.mock('node:child_process', async (original) => ({ ...await original<object>() }))
 
+// @ts-expect-error — plain ESM with no declaration file
+const { readClaudePluginBundle } = await import('../../scripts/lib/claudePluginBundle.mjs') as {
+  readClaudePluginBundle: (version: string) => string
+}
+
 type Answer = { code: number | null; stdout?: string; stderr?: string }
 
 const USER_ON = { id: 'harness-device@openharness', scope: 'user', enabled: true, version: '0.1.0' }
@@ -279,6 +284,37 @@ describe('claudeSetUp', () => {
     expect(await claudeSetUp(installing(claude.run, 'darwin')))
       .toEqual({ ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' })
     expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
+  })
+})
+
+// The engine waits for a Stop hook at every turn end, and on Windows its PowerShell and Node start added 0.7-1.5 s to
+// each (the needs-you-right design, Part 5): there the folder's two hooks files, Claude Code's and Codex's, hold none.
+describe("the device plugin's Stop hook in the folder", () => {
+  const BUILT = JSON.parse(readClaudePluginBundle('1.2.3')) as ClaudePluginFiles
+  const HOOKS_FILES = ['plugins/harness-device/hooks/hooks.json', 'plugins/harness-device/hooks/codex.json']
+  const parsed = (text: string) => JSON.parse(text) as { hooks: Record<string, unknown> }
+
+  it('is left out of both hooks files on Windows, and every other file is written as carried', async () => {
+    const deps = { ...installing(fakeClaude({}).run, 'win32'), files: BUILT }
+    expect(await claudeSetUp(deps)).toEqual({ ok: true, outcome: 'installed' })
+    for (const [key, text] of Object.entries(BUILT.files)) {
+      const written = readFileSync(join(deps.folder, key), 'utf8')
+      if (!HOOKS_FILES.includes(key)) {
+        expect(written, key).toBe(text)
+        continue
+      }
+      const { Stop, ...rest } = parsed(text).hooks
+      expect(Stop, key).toBeDefined()
+      expect(parsed(written), key).toEqual({ ...parsed(text), hooks: rest })
+    }
+  })
+
+  it('is written as carried on macOS and Linux', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const deps = { ...installing(fakeClaude({}).run, platform), files: BUILT }
+      expect(await claudeSetUp(deps)).toEqual({ ok: true, outcome: 'installed' })
+      for (const [key, text] of Object.entries(BUILT.files)) expect(readFileSync(join(deps.folder, key), 'utf8'), `${platform} ${key}`).toBe(text)
+    }
   })
 })
 
