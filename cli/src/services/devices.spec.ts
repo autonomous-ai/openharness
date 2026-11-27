@@ -412,6 +412,8 @@ const runOn = (clientTty: string) => async (file: string, args: string[], timeou
 }
 /** Lets the read of a hook's caller's terminal's maker land, on real timers. */
 const landed = () => new Promise((done) => setImmediate(done))
+/** A notice that made a card: answered with the id its agent closes it by (`harness device notify` prints `shown <id>`). */
+const SHOWN = { result: 'shown', id: expect.stringMatching(/^[0-9a-f]{8}$/) }
 /** herdr's client lookup on macOS for the caller madeBy('herdr') gives (herdrOuter.ts): its one run asks the server's
  *  tty, which the spec's runs answer with nothing, so no client is found. */
 const HERDR_SERVER_TTY: [string, string[], number] = ['/bin/ps', ['-o', 'pid=,tty=', '-p', '3900'], 10_000]
@@ -9290,16 +9292,16 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
   it('an outside session\'s notice is a question on its own agent, answered in its app', () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
-    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
     expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:[0-9a-f-]{36}$/), card('Orca')]])
     expect(logs).toContain('[device] notify · claude · shown · plain')
   })
 
   it('a Harness agent\'s notice is tied to the agent, by the session the core bound to it', () => {
     const { listener } = devices({ core: bound() })
-    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
     // Another engine's session of the same id is not that agent.
-    expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 's-h1' })).toEqual(SHOWN)
     expect(calls('question')).toEqual([
       ['h1', expect.stringMatching(/^shown:/), card('Harness')],
       [observedAgentId('codex', 's-h1'), expect.stringMatching(/^shown:/), card('Terminal')],
@@ -9325,7 +9327,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     subs[0].started()
     await list
     const [{ id }] = (await host().listAgentSnapshot()).agents
-    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual(SHOWN)
     expect(calls('question')).toEqual([[id, expect.stringMatching(/^shown:/), card('herdr')]])
     const status = (agentStatus: string) =>
       subs[0].event('pane.agent_status_changed', { agent: 'claude', agent_status: agentStatus, pane_id: 'w1:p1', workspace_id: 'w1' })
@@ -9340,7 +9342,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const { listener } = devices()
     const machine = 'This machine'
     const from = (agentId: string) => [seen.host.noticeFrom!(agentId), host().describe(agentId)]
-    expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual(SHOWN)
     const caller = observedAgentId('codex', 't-9')
     expect(calls('question')).toEqual([[caller, expect.stringMatching(/^shown:/), card('Terminal')]])
     // The dial names the card's sender by what the notice said.
@@ -9363,7 +9365,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     port.observed(hook('turn-start'))
     // The window's tab holds what the dial is told of an outside agent's turn.
     expect(calls('turnStarted')).toEqual([])
-    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
     expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:/), card('Orca')]])
   })
 
@@ -9390,14 +9392,14 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       port.observed(hook('session-start'))
       seen.host.watching!(true)
       port.swarms(null)
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       await turnStart(port)
       kept(ID)
     })
 
     it('a Harness agent\'s turn_started frame and the cards of its running turn', () => {
       const { port, listener } = devices({ core: bound() })
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
       kept('h1')
@@ -9438,6 +9440,16 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const cardId = (questionId: string) => questionId.slice('shown:'.length, 'shown:'.length + 8)
     const listed = (listener: ReturnType<typeof fakeListener>, who: Record<string, unknown>) =>
       (listener.noticeList(who) as { cards: Array<{ id: string }> }).cards.map(({ id }) => id)
+
+    it('answers a notice that made a card with that card\'s id, the one its list names and its close takes', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.observed(hook('turn-start'))
+      const { id } = listener.notice({ text: LINE, ...OUTSIDE }) as { id: string }
+      expect(id).toBe(cardId(ids()[0]))
+      expect(listed(listener, OUTSIDE)).toEqual([id])
+      expect(listener.noticeDone(OUTSIDE, id)).toEqual({ closed: 1 })
+      expect(listed(listener, OUTSIDE)).toEqual([])
+    })
 
     it('lists the caller\'s cards, oldest first, with their age in whole seconds; a Harness agent and an outside session in one folder apart', async () => {
       vi.useFakeTimers()
@@ -9538,7 +9550,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
     const { port, listener } = devices()
-    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
     seen.host.watching!(true)
     expect(calls('question')).toEqual([[ID, ids()[0], card('Terminal')], [ID, ids()[0], card('Terminal')]])
     port.observed(hook('turn-start'))
@@ -9566,7 +9578,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     type Listener = ReturnType<typeof fakeListener>
     const shownAsks = () => calls('question').filter(([, id]) => String(id).startsWith('shown:'))
     const notify = (listener: Listener, { sessionId }: Caller) =>
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual(SHOWN)
     /** Shown all the same, as a drawer row held on the dial and never asked. */
     const quiet = async (listener: Listener, caller: Caller) => {
       notify(listener, caller)
@@ -9762,11 +9774,11 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       vi.useFakeTimers()
       const { port, listener } = devices({ core: bound() })
       port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
       port.observed(hook('turn-start'))
       port.observed(asked('sess-1'))
       const wait = ids()[1]
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       expect(asks()).toEqual([['h1', 'r1'], [ID, wait]])
       // A drawer replaced whole keeps the question the dial shows, not the notice behind it.
       port.unread([])
@@ -9921,7 +9933,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('a pending notice keeps rule:notice', async () => {
       const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
       there(port)
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       await stop(port)
       await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
       expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
@@ -9956,7 +9968,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     /** The notice of [sessionId]'s agent, shown and held quiet on the dial: the id it is held under. No wait: a wait on
      *  fake timers moves the clock that presence reads. */
     const quietly = (listener: Listener, sessionId: string): string => {
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual(SHOWN)
       const holds = calls('hold') as Array<[string, string]>
       expect(holds).toHaveLength(1)
       return holds[0][1]
@@ -10133,7 +10145,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       // Past the 6 s a stop waits for its report: held by the yes, not by the wait.
       await vi.advanceTimersByTimeAsync(5_000)
       expect(calls('turnDone')).toEqual([[ID]])
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       expect(shownAsks().map(([agentId]) => agentId)).toEqual([ID])
       port.observed(hook('turn-stop'))
       await vi.advanceTimersByTimeAsync(300)
@@ -10159,7 +10171,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(logs).toContain('[device] nudge · claude · no ask')
       expect(logs.filter((line) => line.endsWith('· present'))).toEqual([])
       // The same turn: the notice it rang is still this turn's after a report, and the ask that follows is no.
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
       expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
       expect(logs).toContain('[device] nudge · claude · notice')
@@ -10186,12 +10198,12 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it.each<[string, string, (port: DevicesPort, listener: Listener) => void]>([
       ['no dial', 'no dial', () => noDial()],
       ['a notice rung in this turn', 'notice', (_, listener) => {
-        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
         expect(shownAsks()).toHaveLength(1)
       }],
       ['a notice rung in this turn and held quiet', 'notice', (port, listener) => {
         there(port)
-        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
         expect(calls('hold')).toHaveLength(1)
       }],
       ['a notice rung in this turn with no dial attached', 'notice', (_, listener) => {
@@ -10393,7 +10405,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
       done()
       processing(port)
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
       await vi.waitFor(() => expect(shownAsks().map(([agentId]) => agentId)).toEqual(['h1']))
       done()
       await vi.advanceTimersByTimeAsync(0)
@@ -10412,7 +10424,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       processing(port)
       done()
       processing(port)
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
       await vi.waitFor(() => expect(calls('hold')).toEqual([['h1', expect.stringMatching(/^shown:/), card('Harness')]]))
       expect(shownAsks()).toEqual([])
     })
@@ -10536,7 +10548,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
   it('the limits hold across callers of one agent', () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
-    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1', folder: 'api' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1', folder: 'api' })).toEqual(SHOWN)
     expect(listener.notice({ text: 'Sign in to the registry', engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'limited' })
     expect(calls('question')).toHaveLength(1)
     expect(calls('questionClose')).toEqual([])
@@ -10568,7 +10580,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
   it('a notice is counted with its kind, and no log line holds its suggestion', () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
-    expect(listener.notice({ text: 'Proceeding · Which DB? · Doing: Postgres', engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text: 'Proceeding · Which DB? · Doing: Postgres', engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
     expect(logs).toContain('[device] notify · claude · shown · proceeding')
     expect(logs.filter((line) => line.includes('Postgres'))).toEqual([])
   })
@@ -10593,7 +10605,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('a notice shown is in the file a second later, with its agent\'s keys', () => {
       const { port, listener } = devices()
       port.observed(hook('session-start'))
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       expect(existsSync(FILE())).toBe(false)
       vi.advanceTimersByTime(1_000)
       expect(saved()).toEqual({ v: 1, cards: [{ agentId: ID, keys: ['claude:sess-1'], id: ids()[0], line: LINE, host: 'orca', at: T }] })
@@ -10642,7 +10654,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       await list
       const [{ id }] = (await host().listAgentSnapshot()).agents.filter((entry) => entry.id !== 'h1')
       listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual(SHOWN)
       const [own, outside] = ids()
       await port.stop()
       expect(saved().cards.map((card: { agentId: string }) => card.agentId)).toEqual(['h1', id])
@@ -10658,7 +10670,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       // After the start's read, which would set a folder there aside.
       mkdirSync(FILE())
       port.observed(hook('session-start'))
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       vi.advanceTimersByTime(1_000)
       expect(logs).toContain('[device] notices · not saved · EISDIR')
       expect(logs.filter((line) => ['dial-notices', 'VPN', 'sess-1'].some((secret) => line.includes(secret)))).toEqual([])
@@ -10674,7 +10686,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     /** A caller no list holds rings, and the devices restart with its card pending. */
     const restartWithCaller = async () => {
       const first = devices()
-      expect(first.listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+      expect(first.listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual(SHOWN)
       const [restored] = ids()
       return { ...await again(first), restored }
     }
@@ -10711,7 +10723,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
         '[state] dial-notices.json could not be read (not valid JSON); kept as dial-notices.json.unreadable, starting empty.')
       expect(readFileSync(`${FILE()}.unreadable`, 'utf8')).toBe('{not json')
       port.observed(hook('session-start'))
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       vi.advanceTimersByTime(1_000)
       expect(saved().cards).toHaveLength(1)
     })
@@ -10719,7 +10731,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('only a new notice of that agent rings again, at once, and takes the restored card\'s place', async () => {
       const { listener, restored } = await restartWithCaller()
       // The limits start fresh: the same line again is not limited.
-      expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual(SHOWN)
       expect(calls('questionClose')).toEqual([[CALLER, restored]])
       expect(calls('question')).toEqual([[CALLER, expect.stringMatching(/^shown:/), card('Terminal')]])
       expect(ids()[0]).not.toBe(restored)
@@ -10728,7 +10740,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('a restored row comes back by a drawer replace as the wait that covered it closes', async () => {
       // No hook of sess-1 before its notice: a caller no list holds, under its session's id.
       const first = devices()
-      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       const [restored] = ids()
       const { port } = await again(first)
       port.observed(hook('needs-input'))
@@ -10745,7 +10757,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const restartWithObserved = async (between: () => void = () => {}) => {
       const first = devices()
       first.port.observed(hook('session-start'))
-      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       const [restored] = ids()
       between()
       return { ...await again(first), restored }
@@ -10784,7 +10796,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
      *  the dial attached: as a devices process that just started and has not read the core's agents yet. */
     const restartWithHarness = async (over: Parameters<typeof devices>[0] = {}, before: (port: DevicesPort) => void = () => {}) => {
       const first = devices({ core: bound() })
-      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
       const [restored] = ids()
       let view: RegisteredSession[] = []
       const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
@@ -10808,7 +10820,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     // list built for the dial still finds the agent a restored card waits for.
     it('a Harness agent\'s restored row comes back inside the core\'s process too, where no refresh is given', async () => {
       const first = devices({ core: bound() })
-      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
       const [restored] = ids()
       const second = await again(first, { core: bound() })
       seen.host.watching!(true)
@@ -10898,7 +10910,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       }
       const first = devices(withHerdr)
       const firstId = await listedId(first.port)
-      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual(SHOWN)
       const { port } = await again(first, withHerdr)
       const second = await listedId(port)
       expect(second).not.toBe(firstId)
@@ -17071,7 +17083,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     return { ...start({ core, faults: ['fleet'], listen: listener.listen, now: () => Date.now() }), listener }
   }
   const notice = (listener: ReturnType<typeof fakeListener>, agentId: string, text: string) =>
-    expect(listener.notice({ text, engine: 'claude', sessionId: `s-${agentId}` })).toEqual({ result: 'shown' })
+    expect(listener.notice({ text, engine: 'claude', sessionId: `s-${agentId}` })).toEqual(SHOWN)
   /** The session's card ids, oldest first, as its `harness device notify --list` reads them. */
   const listed = (listener: ReturnType<typeof fakeListener>, sessionId: string) =>
     (listener.noticeList({ engine: 'claude', sessionId }) as { cards: Array<{ id: string }> }).cards.map(({ id }) => id)
@@ -17688,7 +17700,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     const answered = async (port: DevicesPort): Promise<number> => (await counted(port)).dial_notice_answered_10m ?? 0
     /** The outside agent sess-1's notice, as its session's `harness device notify` sends it. */
     const outsideNotice = (listener: ReturnType<typeof fakeListener>, text: string) =>
-      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
 
     it('counts each notice the devices answer, by engine, answer and kind, beside the [device] notify line', async () => {
       const { port, listener } = withNotices()
@@ -17820,7 +17832,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     const LATER = 'Waiting · Sign in to the registry'
     const nudge = (listener: Listener, sessionId: string, ask: boolean, engine = 'claude') => listener.nudge({ engine, sessionId, ask })
     const outsideNotice = (listener: Listener, text = LINE) =>
-      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
     /** What the second look counted, once the stop wrote it. */
     const nudges = async (port: DevicesPort): Promise<Record<string, number>> =>
       Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_nudge_')))

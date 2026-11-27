@@ -2658,20 +2658,27 @@ describe('notice', () => {
   const gone = new AbortController().signal
   const notice = (fields: Record<string, unknown>): Record<string, unknown> => ({ type: 'notice', ...fields })
 
-  it('notice hands on the four fields and answers the result', () => {
+  it('notice hands on the four fields and answers the result with the card\'s id', () => {
     const asks: NoticeAsk[] = []
-    const handler = noticeHandler((ask) => { asks.push(ask); return 'shown' })
+    const handler = noticeHandler((ask) => { asks.push(ask); return { result: 'shown', id: '3f9a1c2e' } })
     const message = notice({ text: 'Connect the VPN', engine: 'claude', sessionId: 's-1', folder: 'api', extra: 1 })
-    expect(handler.handle(message, gone)).toStrictEqual({ result: 'shown' })
-    expect(handler.handle(notice({ text: 'Connect the VPN' }), gone)).toStrictEqual({ result: 'shown' })
+    expect(handler.handle(message, gone)).toStrictEqual({ result: 'shown', id: '3f9a1c2e' })
+    expect(handler.handle(notice({ text: 'Connect the VPN' }), gone)).toStrictEqual({ result: 'shown', id: '3f9a1c2e' })
     expect(asks).toStrictEqual([
       { text: 'Connect the VPN', engine: 'claude', sessionId: 's-1', folder: 'api' },
       { text: 'Connect the VPN' },
     ])
   })
 
+  it('notice answers a card\'s id only as the 8 lowercase hex the agent closes it by', () => {
+    for (const id of ['3F9A1C2E', '3f9a1c2', '3f9a1c2e0', 'shown:3f9a1c2e']) {
+      expect(noticeHandler(() => ({ result: 'shown', id })).handle(notice({ text: 'Connect the VPN' }), gone), id).toStrictEqual({ result: 'shown' })
+    }
+    expect(noticeHandler(() => ({ result: 'limited' })).handle(notice({ text: 'Connect the VPN' }), gone)).toStrictEqual({ result: 'limited' })
+  })
+
   it('notice refuses a line the command did not clean', () => {
-    const notify = vi.fn((): NoticeResult => 'shown')
+    const notify = vi.fn((): { result: NoticeResult } => ({ result: 'shown' }))
     const handler = noticeHandler(notify)
     for (const text of ['', '  x', 'a\nb', 'a'.repeat(121), 7]) {
       expect(handler.handle(notice({ text, engine: 'codex' }), gone), String(text)).toBe(REFUSED)
@@ -2681,7 +2688,7 @@ describe('notice', () => {
   })
 
   it('notice refuses a caller it cannot read', () => {
-    const notify = vi.fn((): NoticeResult => 'shown')
+    const notify = vi.fn((): { result: NoticeResult } => ({ result: 'shown' }))
     const handler = noticeHandler(notify)
     const bad: Record<string, unknown>[] = [
       { engine: 'gemini' }, { sessionId: 's-1' }, { engine: 'claude', sessionId: 'a b' },
@@ -2693,14 +2700,14 @@ describe('notice', () => {
 
   it('notice takes what harness device notify sends, from a folder whose name is cut before a space', () => {
     const asks: NoticeAsk[] = []
-    const handler = noticeHandler((ask) => { asks.push(ask); return 'shown' })
+    const handler = noticeHandler((ask) => { asks.push(ask); return { result: 'shown' } })
     const caller = noticeCaller({}, `/p/${'a'.repeat(63)} b`)
     expect(handler.handle(notice({ text: 'Connect the VPN', ...caller }), gone)).toStrictEqual({ result: 'shown' })
     expect(asks).toStrictEqual([{ text: 'Connect the VPN', folder: 'a'.repeat(63) }])
   })
 
   it('the notice handler is its two limits and handle; the longest notice fits', () => {
-    const handler = noticeHandler(() => 'shown')
+    const handler = noticeHandler(() => ({ result: 'shown' }))
     expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
     expect(handler).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect([NOTICE_MAX_BYTES, NOTICE_PER_SECOND]).toEqual([2048, 1])
@@ -2711,7 +2718,7 @@ describe('notice', () => {
 
   describe.skipIf(process.platform === 'win32')('on a real listener', () => {
     it('a notice is answered with its result, and a second in the same second on that connection is 429', async () => {
-      const { path } = await open({ notice: noticeHandler(() => 'limited') }, { now: () => 0 })
+      const { path } = await open({ notice: noticeHandler(() => ({ result: 'limited' })) }, { now: () => 0 })
       const sender = connection(path)
       const body = JSON.stringify({ type: 'notice', text: 'Connect the VPN' })
       expect(await sender.send(body)).toMatchObject({ status: 200, body: '{"result":"limited"}' })
