@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
+import { MIN_CODEX } from '../src/devices/codexPlugin.js'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { readSetup, writeSetup } from '../src/devices/dialSkillFiles.js'
 import { copyNode } from '../src/testing/placeNode.js'
@@ -250,8 +251,9 @@ describe('the dial set up from its first attach', () => {
     expect(existsSync(skillOf(codexHome))).toBe(false)
     expect(existsSync(skillOf(other))).toBe(false)
 
-    // Enabled, and an attach runs a scan: the same daemon, never restarted.
-    expect(await device(d, ['codex', 'enable'])).toMatchObject({ code: 0, err: '' })
+    // Enabled, and an attach runs a scan: the same daemon, never restarted. The daemon's fake Codex is 0.160.0
+    // (harness/fakeEngine.mjs), older than the plugin `enable` also sets up: the skill comes back, and the person is told.
+    expect(await device(d, ['codex', 'enable'])).toMatchObject({ code: 1, err: `Codex ${MIN_CODEX} or later is needed.\n` })
     expect(read(skillOf(codexHome))).toBe(DIAL_SKILL)
     await desk.unplug('E2E-A')
     await plugged(desk)
