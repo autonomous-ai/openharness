@@ -89,6 +89,9 @@ export const DIAL_DEVICE_METRICS = [
   ...DIAL_NOTICE_RESULTS.map(r => `dial_notice_${r}` as const),
   ...DIAL_NOTICE_KINDS.map(k => `dial_notice_${k}` as const),
   'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m', 'dial_notice_present_roused',
+  // The second look (docs/plans/2026-11-26-needs-you-right-design.md, Part 5): `dial_nudge_<e>` a stop the devices said
+  // yes to, `dial_nudge_<e>_rang` a notice of that agent rung while that stop was held after the yes, at most once a yes.
+  ...DIAL_SKILL_ENGINES.flatMap(e => [`dial_nudge_${e}`, `dial_nudge_${e}_rang`] as const),
 ] as const
 
 /** In the file only, never sent: the gateway turns them into the used-day and unused-day waits as a day closes. */

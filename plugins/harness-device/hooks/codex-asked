@@ -13,9 +13,13 @@
 # second line: the same launcher lookup in the user's folder and on PATH, its output dropped and exit 0. So this script
 # never runs on Windows. With no session shell there Codex falls back to cmd.exe, where the command fails and tells
 # nothing.
+#
+# The input is read to its end after the launcher: one that stops reading early (that older launcher, or one past its
+# bound), or none, would leave Codex's write of it to meet a closed pipe.
 if [ -x "$HOME/.local/bin/harness" ]; then
   "$HOME/.local/bin/harness" device codex asked >/dev/null 2>&1
 elif command -v harness >/dev/null 2>&1; then
   harness device codex asked >/dev/null 2>&1
 fi
+cat >/dev/null
 exit 0

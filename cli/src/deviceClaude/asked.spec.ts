@@ -191,6 +191,19 @@ describe('runAsked', () => {
     expect(whole.bodies).toEqual([BODY])
   })
 
+  // An input left unread past the bound would fail the engine's write of it, and the hook with it.
+  it('reads stdin over 256 KB to its end, and sends nothing', async () => {
+    const text = Buffer.from(hookInput({ pad: 'x'.repeat(300 * 1024) }))
+    let ended = false
+    async function* stdin(): AsyncIterable<Buffer> {
+      for (let at = 0; at < text.length; at += 64 * 1024) yield text.subarray(at, at + 64 * 1024)
+      ended = true
+    }
+    const daemon = recording()
+    expect(await runAsked({ stdin: stdin(), post: daemon.post })).toBe(0)
+    expect({ ended, bodies: daemon.bodies }).toEqual({ ended: true, bodies: [] })
+  })
+
   it.each([
     ['stdin that is not JSON', 'not json'],
     ['empty stdin', ''],

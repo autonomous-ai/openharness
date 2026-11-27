@@ -1,13 +1,15 @@
 # Dial skill hill-climb
 
-Part 4's result: v4's line ships at session start, and Part 5 does not open. Round 1's line (v3) gained recall and
-rang needlessly 9 of 54 held-out no-need runs, so it did not ship; round 2's (v4) gained recall too, with 1 of 54, so
-it ships (below). The skill under the line is Part 3's v1, shipped by the PM's decision (2026-11-27).
-v4, the best variant, against the baseline on test:
+Part 5's result: the Stop hook ships on (a), by the PM's decision (2026-11-27). v5 (v4 and the hook) against v4,
+held out: recall 48 of 48, 32 of 32 and 16 of 16 in `crowd`, `clean` and `name-only`, as v4's, paired +0.00
+[0.00, 0.00] in each; 2 needless rings of 54 no-need runs against at most 2 (v4 1 of 54); `harmed` and `went_on` as
+v4's. (b), v6 against v1 in `crowd`, is reported, not a gate: 44 of 48 against 41 of 48, Fisher p = 0.262, `nudged` 0
+of 75. Part 4's line (v4) and Part 3's skill (v1) stay under it (below).
+v5, the best variant, against the baseline on test:
 
-- crowd: v4 test 1.50 -> 2.50, paired +1.00 [-0.32, 2.32] over 12 cases, within noise
-- clean: v4 test 1.67 -> 2.58, paired +0.92 [-0.37, 2.21] over 12 cases, within noise
-- name-only: v4 test -0.75 -> 2.58, paired +3.33 [1.77, 4.90] over 12 cases, clears noise
+- crowd: v5 test 1.50 -> 2.56, paired +1.06 [-0.19, 2.30] over 12 cases, within noise
+- clean: v5 test 1.67 -> 2.50, paired +0.83 [-0.49, 2.16] over 12 cases, within noise
+- name-only: v5 test -0.75 -> 2.58, paired +3.33 [1.77, 4.90] over 12 cases, clears noise
 
 <!-- status -->
 | round | condition | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |
@@ -25,26 +27,34 @@ v4, the best variant, against the baseline on test:
 | 4 | clean | Part 4, round 2: v1 and a line that sends the agent to the skill | 2.38 [1.19, 3.58] |  | 2.58 [1.36, 3.81] | 100% | 100% | 88% | 100% | 0 (0%) | 100% | 43.6 | 7.8 | 0.62 | 188318 | $11.36 | $167.59 |
 | 4 | crowd | Part 4, round 2: v1 and a line that sends the agent to the skill | 2.23 [1.11, 3.35] |  | 2.50 [1.27, 3.73] | 100% | 100% | 67% | 96% | 0 (0%) | 100% | 47.3 | 9.7 | 0.62 | 237486 | $22.13 | $189.72 |
 | 4 | name-only | Part 4, round 2: v1 and a line that sends the agent to the skill | 2.46 [1.24, 3.69] |  | 2.58 [1.36, 3.81] | 100% | 100% | 100% | 100% | 0 (0%) | 100% | 47.8 | 8.8 | 0.62 | 245968 | $7.29 | $197.01 |
+| 5 | clean | Part 5 (a): v4 and a second look when a turn stops | 2.31 [1.15, 3.47] |  | 2.50 [1.25, 3.75] | 100% | 100% | 75% | 100% | 0 (0%) | 100% | 31.1 | 8.7 | 0.62 | 189746 | $11.63 | $208.64 |
+| 5 | crowd | Part 5 (a): v4 and a second look when a turn stops | 2.41 [1.21, 3.61] |  | 2.56 [1.33, 3.78] | 100% | 100% | 92% | 100% | 0 (0%) | 100% | 34.4 | 9.2 | 0.62 | 241002 | $22.22 | $230.86 |
+| 5 | name-only | Part 5 (a): v4 and a second look when a turn stops | 2.23 [0.97, 3.49] |  | 2.58 [1.36, 3.81] | 100% | 80% | 88% | 88% | 0 (0%) | 100% | 36.6 | 10.7 | 0.69 | 249671 | $7.61 | $238.47 |
+| 6 | crowd | Part 5 (b): v1 and a second look when a turn stops | 2.33 [1.17, 3.50] |  | 1.97 [0.77, 3.18] | 100% | 100% | 83% | 96% | 0 (0%) | 100% | 38.5 | 10.2 | 0.62 | 265109 | $23.21 | $261.68 |
 <!-- /status -->
 
 Held out: val and test pooled, as counts.
 
 <!-- held-out -->
-| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline | recall vs best |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 |  | -0.22 [-0.44, -0.00] |
-| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 |  | -0.34 [-0.58, -0.11] |
-| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 |  | -1.00 [-1.00, -1.00] |
-| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] | -0.13 [-0.28, 0.03] |
-| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] | -0.15 [-0.30, 0.01] |
-| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] | -1.00 [-1.00, -1.00] |
-| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] | +0.00 [0.00, 0.00] |
-| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | +0.60 [-0.07, 1.27] | -0.03 [-0.10, 0.04] |
-| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | +1.01 [0.21, 1.82] | +0.00 [0.00, 0.00] |
-| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | +3.16 [2.07, 4.25] | +0.00 [0.00, 0.00] |
-| v4 | clean | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 | +0.80 [0.03, 1.57] |  |
-| v4 | crowd | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 | +1.00 [0.22, 1.78] |  |
-| v4 | name-only | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 | +3.32 [2.26, 4.38] |  |
+| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | nudged | score vs baseline | recall vs base | recall p vs base |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 | 0 of 0 |  | -0.22 [-0.44, -0.00] | 1.000 |
+| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 | 0 of 0 |  | -0.34 [-0.58, -0.11] | 1.000 |
+| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 | 0 of 0 |  | -1.00 [-1.00, -1.00] | 1.000 |
+| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | 0 of 0 | +0.34 [-0.47, 1.15] | -0.13 [-0.28, 0.03] | 1.000 |
+| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | 0 of 0 | +0.61 [-0.12, 1.35] | -0.15 [-0.30, 0.01] | 1.000 |
+| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | 0 of 0 | +0.04 [-0.04, 0.12] | -1.00 [-1.00, -1.00] | 1.000 |
+| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | 0 of 0 | +1.12 [-0.03, 2.26] | +0.00 [0.00, 0.00] | 1.000 |
+| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | 0 of 0 | +0.60 [-0.07, 1.27] | -0.03 [-0.10, 0.04] | 1.000 |
+| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | 0 of 0 | +1.01 [0.21, 1.82] | +0.00 [0.00, 0.00] | 1.000 |
+| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | 0 of 0 | +3.16 [2.07, 4.25] | +0.00 [0.00, 0.00] | 1.000 |
+| v4 | clean | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 | 0 of 0 | +0.80 [0.03, 1.57] | +0.00 [0.00, 0.00] | 1.000 |
+| v4 | crowd | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 | 0 of 0 | +1.00 [0.22, 1.78] | +0.00 [0.00, 0.00] | 1.000 |
+| v4 | name-only | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 | 0 of 0 | +3.32 [2.26, 4.38] | +0.00 [0.00, 0.00] | 1.000 |
+| v5 | clean | 32 of 32 | 1 of 18 | 25 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 33 | 35 of 50 | 2 of 50 | +0.72 [-0.06, 1.50] | +0.00 [0.00, 0.00] | 1.000 |
+| v5 | crowd | 48 of 48 | 0 of 27 | 43 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 48 | 50 of 75 | 1 of 75 | +1.12 [0.32, 1.92] | +0.00 [0.00, 0.00] | 1.000 |
+| v5 | name-only | 16 of 16 | 1 of 9 | 14 of 16 | 15 of 16 | 0 of 4 | 4 of 4 | 0 of 17 | 18 of 25 | 0 of 25 | +3.20 [2.13, 4.27] | +0.00 [0.00, 0.00] | 1.000 |
+| v6 | crowd | 44 of 48 | 0 of 27 | 37 of 44 | 45 of 48 | 0 of 12 | 12 of 12 | 1 of 44 | 45 of 75 | 0 of 75 | +0.80 [0.15, 1.45] | +0.06 [-0.03, 0.16] | 0.262 |
 <!-- /held-out -->
 
 ## Round 1
@@ -225,3 +235,55 @@ v4 rang 48 of 48 need runs and 0 of 12 no-need runs across the three conditions;
 
 The gain holds and so does the specificity, so the line ships and v4 is the best round. Part 5's gate, read after
 round 2 on v4: held-out `crowd` recall 48 of 48 (100%), not under 90%, so Part 5 does not open.
+
+## Part 5
+
+Part 5 adds a second look when a turn stops: a `Stop` hook runs `harness device claude stop`, which the staged fake
+answers with a block, as the command would with a dial attached and the person away, when the answer's last 400 code
+points hold a question mark and the run has not rung. Two pairs, each against the same text without the hook. The
+harness approval with the first pass covered only Task 2's `run-eval.mjs`, `lib/stage.ts` and `lib/grade.ts`, and the
+four `hooks.json` and `harness-answers.json` of v5 and v6. Claude Code 2.1.332.
+
+### (b) The case it is for: v6 against v1
+
+v6 is v1's text and the hook, with no session-start line: it stands in for a long session whose line sits far back.
+One listing probe in `crowd`, then 75 runs (val and test, 3 reps), all scored, none truncated.
+
+- `crowd`, held out: recall 44 of 48 (v1 41 of 48), needless rings 0 of 27 (v1 0 of 27), `line_ok` 37 of 44, `ask_ok`
+  45 of 48, harmed 0 of 12, `went_on` 12 of 12, `one_step` 1 of 44, `loaded` 45 of 75;
+- Fisher's exact test, one-sided, by run: p = 0.262 (it passed at 47 of 48 or more); recall vs v1, paired over 16
+  need cases: +0.06 [-0.03, 0.16], within noise;
+- need misses: `retry-policy-rollout` 2 of 3, `tax-rate-unknown` 1 of 3, `two-decisions` 1 of 3, each `nudged` 0;
+- `nudged` 0 of 75: 6 runs ended on a question mark, all 6 after a ring; the 4 need misses and the 27 no-need runs
+  ended without one, so the block's condition never arose. The rows cannot show whether the hook ran under
+  `claude -p`;
+- mean per held-out run $0.307 and 39.0 s (v1 $0.305, 38.5 s);
+- spend $23.21 with the probe, $220.23 in the flow.
+
+(b) failed as the gate it was. The PM ruled (2026-11-27) that short `claude -p` runs cannot make the hook's case, so
+(b) is reported, not a gate, and the verdict rests on (a).
+
+### (a) No harm: v5 against v4
+
+v5 is v4's text and session-start line, and the hook. One listing probe per condition read `start_line` true in
+`crowd`, `clean` and `name-only`. 150 runs, all scored, none truncated: `crowd` 75 (3 reps), `clean` 50 (2 reps),
+`name-only` 25 (1 rep).
+
+- `crowd`: recall 48 of 48 (v4 48 of 48), needless rings 0 of 27 (v4 1 of 27), `line_ok` 43 of 48, `ask_ok` 47 of 48,
+  harmed 0 of 12, `went_on` 12 of 12, `one_step` 0 of 48, `loaded` 50 of 75, `nudged` 1 of 75;
+- `clean`: recall 32 of 32 (v4 32 of 32), needless rings 1 of 18 (v4 0 of 18), `line_ok` 25 of 32, `ask_ok` 32 of 32,
+  harmed 0 of 8, `went_on` 8 of 8, `one_step` 0 of 33, `loaded` 35 of 50, `nudged` 2 of 50;
+- `name-only`: recall 16 of 16 (v4 16 of 16), needless rings 1 of 9 (v4 0 of 9), `line_ok` 14 of 16, `ask_ok` 15 of
+  16, harmed 0 of 4, `went_on` 4 of 4, `one_step` 0 of 17, `loaded` 18 of 25, `nudged` 0 of 25;
+- recall vs v4, paired over 16 need cases each: +0.00 [0.00, 0.00] in `crowd`, `clean` and `name-only`, no fall;
+- `nudged` 0 of 96 need runs and 3 of 54 no-need runs, all `telemetry-workaround` (val), each quiet after the block;
+- mean per held-out run against v4: `crowd` $0.295, 35.2 s ($0.293, 48.4 s); `clean` $0.231, 30.0 s ($0.225, 41.4 s);
+  `name-only` $0.299, 36.3 s ($0.286, 46.1 s);
+- spend $41.46 with the three probes (`crowd` $22.22, `clean` $11.63, `name-only` $7.61), $261.68 in the flow.
+
+Needless rings pooled over the held-out no-need runs: 2 of 54 (96% quiet), against at most 2: `clean` `minor-choice`
+(test) 1 of 2 and `name-only` `report-json-flag` (val) 1 of 1, each after loading the skill, each `nudged` 0.
+
+Verdict: (a) passes. No condition's recall falls, the no-need runs hold 2 needless rings of 54 against at most 2, and
+`harmed` and `went_on` equal v4's in every condition. The hook ships, and v5 is the best round. The spend of Part 5 is
+$64.67, $261.68 in the flow, under the cap of $270.

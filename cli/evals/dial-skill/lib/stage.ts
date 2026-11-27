@@ -14,6 +14,8 @@ import type { AgentKind, Condition, Scenario } from './scenarios.js'
 export interface Ring {
   argv: string[]
   line: string | null
+  /** Set on a Stop hook's call the fake answered with a block: the run took one more model round. */
+  blocked?: true
 }
 
 export interface Staged {
@@ -54,6 +56,8 @@ export interface HarnessAnswer {
   stdout?: string
   stderr?: string
   code?: number
+  /** A Stop hook's answer: given only when the hook's input says block (fakeHarness), else nothing and exit 0. */
+  stop?: true
 }
 
 export const CROWD_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'crowd')
@@ -236,7 +240,10 @@ export function readRings(st: Staged): Ring[] {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  return text.split('\n').filter((line) => line !== '').map((line) => ringOf((JSON.parse(line) as { argv: string[] }).argv))
+  return text.split('\n').filter((line) => line !== '').map((line) => {
+    const call = JSON.parse(line) as { argv: string[]; blocked?: boolean }
+    return call.blocked ? { ...ringOf(call.argv), blocked: true } : ringOf(call.argv)
+  })
 }
 
 /** One recorded call, its line composed as the CLI composes it, so the grader reads the flags and the line the dial
@@ -337,25 +344,60 @@ const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommenda
 /** Never the real dial: it records the call and answers as a dial that showed the line. A notify with no question
  *  answers as the CLI does: parseNotice's words left after the flags, none when they are only `--help` or `-h`, cleaned
  *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). A call whose argv
- *  equals one of `answers` exactly gets that answer; any other is refused. */
+ *  equals one of `answers` exactly gets that answer; any other is refused.
+ *
+ *  A `stop` answer is a Stop hook's: it blocks as `harness device claude stop` would in the eval's world, where a dial is
+ *  always attached, the person is always away, the skill is on and the run counts as a person's session, not a headless
+ *  one (the product never looks under `claude -p`). Plain node cannot load the CLI's stop rules either,
+ *  so the fake applies them itself, and test-data/stop-inputs.json, which the CLI's own spec reads too, holds the two
+ *  to the same cases. "Rang in this turn" is a ring the run already recorded. */
 function fakeHarness(recFile: string, answers: HarnessAnswer[]): string {
   return `#!${process.execPath}
-const { appendFileSync } = require('node:fs')
+const { appendFileSync, readFileSync } = require('node:fs')
 const argv = process.argv.slice(2)
 const notify = argv[0] === 'device' && argv[1] === 'notify'
-appendFileSync(${JSON.stringify(recFile)}, JSON.stringify({ argv }) + '\\n')
 const answer = ${JSON.stringify(answers)}.find((a) => a.argv.length === argv.length && a.argv.every((word, i) => word === argv[i]))
-const question = []
-for (let i = 2; i < argv.length; i++) {
-  if (argv[i] === '--suggest') i++
-  else if (!['--waiting', '--proceeding', '--json'].includes(argv[i])) question.push(argv[i])
+/** The question a notify would show, '' for none. */
+function questionOf(words) {
+  const question = []
+  for (let i = 2; i < words.length; i++) {
+    if (words[i] === '--suggest') i++
+    else if (!['--waiting', '--proceeding', '--json'].includes(words[i])) question.push(words[i])
+  }
+  const text = question.join(' ')
+  return text === '--help' || text === '-h' ? '' : text.replace(/[\\p{Cc}\\s]+/gu, ' ').trim()
 }
-const text = question.join(' ')
-if (notify && (text === '--help' || text === '-h' || text.replace(/[\\p{Cc}\\s]+/gu, ' ').trim() === '')) {
+const rings = (words) => words[0] === 'device' && words[1] === 'notify' && questionOf(words) !== ''
+/** The Stop rules: no second look, a string answer whose last 400 code points hold a question mark, and no ring yet. */
+function blocks() {
+  let input
+  try {
+    input = JSON.parse(readFileSync(0, 'utf8'))
+  } catch {
+    return false
+  }
+  if (input === null || typeof input !== 'object' || input.stop_hook_active === true) return false
+  const message = input.last_assistant_message
+  if (typeof message !== 'string') return false
+  const tail = [...message].slice(-400).join('')
+  if (!tail.includes('?') && !tail.includes('\\uFF1F')) return false
+  let calls = ''
+  try {
+    calls = readFileSync(${JSON.stringify(recFile)}, 'utf8')
+  } catch {
+    // No call recorded yet.
+  }
+  return !calls.split('\\n').some((line) => line !== '' && rings(JSON.parse(line).argv))
+}
+const blocked = answer?.stop ? blocks() : undefined
+appendFileSync(${JSON.stringify(recFile)}, JSON.stringify(blocked === undefined ? { argv } : { argv, blocked }) + '\\n')
+if (notify && !rings(argv)) {
   console.error(${JSON.stringify(NOTICE_USAGE)})
   process.exitCode = 1
 } else if (notify) {
   console.log('shown')
+} else if (answer?.stop) {
+  if (blocked) process.stdout.write(answer.stdout ?? '')
 } else if (answer) {
   process.stdout.write(answer.stdout ?? '')
   process.stderr.write(answer.stderr ?? '')

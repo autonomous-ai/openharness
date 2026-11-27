@@ -20,7 +20,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
-import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, CONTINUE_MAX_MS, CONTINUE_QUIET_MS, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
@@ -71,7 +71,7 @@ import { RECORDED_WEZTERM } from '../testing/recordedWezterm.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, NUDGE_MAX_BYTES, NUDGE_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
   WROTE_MAX_BYTES, WROTE_PER_SECOND, type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
@@ -849,7 +849,8 @@ const turnTo = (agentId: string): void => {
 
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
  *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
- *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, the tabs stream a
+ *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, a Stop hook's report
+ *  as `harness device claude stop` sends one, the tabs stream a
  *  watch holds open, the dial stream Orca's Harness Device plugin holds open, the terminals and the workspace id of the
  *  worktree on Orca's screen as that plugin sends them (no workspace from an older plugin), and a VS Code window's stream
  *  and state as Harness's own extension sends them. */
@@ -865,6 +866,7 @@ function fakeListener() {
   const attach = (sessionId: unknown): unknown => (given[0].handlers.attach as ListenerHandler).handle({ type: 'attach', sessionId }, new AbortController().signal)
   const notify = (mode: unknown): unknown => (given[0].handlers.notify as ListenerHandler).handle({ type: 'notify', mode }, new AbortController().signal)
   const notice = (ask: Record<string, unknown>): unknown => (given[0].handlers.notice as ListenerHandler).handle({ type: 'notice', ...ask }, new AbortController().signal)
+  const nudge = (ask: Record<string, unknown>): unknown => (given[0].handlers.nudge as ListenerHandler).handle({ type: 'nudge', ...ask }, new AbortController().signal)
   const orcaFront = (terminals: unknown, workspace?: unknown): unknown => (given[0].handlers.orcaFront as ListenerHandler).handle({ type: 'orcaFront', terminals, workspace }, new AbortController().signal)
   /** The lines the devices write on the stream, its end, and whether it takes a line: one not drained yet does not. */
   const tabs = () => {
@@ -923,7 +925,7 @@ function fakeListener() {
    *  otherwise. */
   const vscodeState = (window: string, terminals: number[], active = terminals[0] ?? null, focused = true): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
     .handle({ type: 'vscode-state', window, terminals, active, focused }, new AbortController().signal)
-  return { given, close, listen, front, attach, notify, notice, orcaFront, tabs, dial, vscode, vscodeState }
+  return { given, close, listen, front, attach, notify, notice, nudge, orcaFront, tabs, dial, vscode, vscodeState }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -983,14 +985,15 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream and what was written on it, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream and what was written on it, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice, the Stop hook\'s report and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'wrote', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'wrote', 'dial', 'orcaFront', 'notify', 'notice', 'nudge', 'vscode', 'vscode-state'])
     expect(handlers.orcaFront).toMatchObject({ maxBytes: 8192, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
+    expect(handlers.nudge).toMatchObject({ maxBytes: NUDGE_MAX_BYTES, perSecond: NUDGE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
@@ -10016,6 +10019,401 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
   })
 
+  // A turn that ends on a question, with a dial attached, the person away and no notice rung in it, is stopped once and
+  // the agent looks again (docs/plans/2026-11-26-needs-you-right-design.md, Part 5). The plugin's Stop hook reports
+  // every stop (`nudge`), and the devices hold the turn's end while a stop they said yes to goes on.
+  describe('a second look when a turn stops (Part 5)', () => {
+    const PRESENT_MS = 120_000
+    type Listener = ReturnType<typeof fakeListener>
+    const tiers = () => calls('summary').map(([agentId, , , tier]) => [agentId, tier])
+    const shownAsks = () => calls('question').filter(([, id]) => String(id).startsWith('shown:'))
+    const nudge = (listener: Listener, sessionId: string, ask: boolean, engine = 'claude') => listener.nudge({ engine, sessionId, ask })
+    const processing = (port: DevicesPort) =>
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+    /** sess-1's earlier turn, whose Stop hook reported (`ask: false`) inside the grace: each next stop of it waits for its
+     *  own report. Its end is the one turnDone before the turn a case is about. */
+    const reported = async (port: DevicesPort, listener: Listener) => {
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(calls('turnDone')).toEqual([[ID]])
+    }
+    const noDial = () => { (seen.cable as unknown as { connected: boolean }).connected = false }
+    beforeEach(() => { vi.useFakeTimers() })
+
+    it('yes for an outside agent the person left: its blocked stop is told nothing, its notice rings, and its next stop ends silent under rule:notice', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      await reported(port, listener)
+      readers.answer.mockResolvedValue('Built.')
+      there(port)
+      await vi.advanceTimersByTimeAsync(130_000)
+      port.observed(hook('turn-stop'))
+      // Past the grace, as a PowerShell hook on Windows reports.
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      expect(logs).toContain('[device] nudge · claude · yes')
+      // Past the 6 s a stop waits for its report: held by the yes, not by the wait.
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(calls('turnDone')).toEqual([[ID]])
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(shownAsks().map(([agentId]) => agentId)).toEqual([ID])
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS - 300)
+      expect(calls('turnDone')).toEqual([[ID], [ID]])
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+    })
+
+    // The PM's case 4: the report every stop sends is no ask, and only lets the stop be told.
+    it('ask false changes nothing but the release', async () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      await reported(port, listener)
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(2_999)
+      expect(calls('turnDone')).toEqual([[ID]])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('turnDone')).toEqual([[ID], [ID]])
+      expect(logs).toContain('[device] nudge · claude · no ask')
+      expect(logs.filter((line) => line.endsWith('· present'))).toEqual([])
+      // The same turn: the notice it rang is still this turn's after a report, and the ask that follows is no.
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · notice')
+    })
+
+    it('ask false sets nothing that turns the next ask to no', () => {
+      const { listener } = devices({ now: () => Date.now() })
+      expect(nudge(listener, 'sess-9', false)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+    })
+
+    it('a stop with no report is told at 6 s', async () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      await reported(port, listener)
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(5_999)
+      expect(calls('turnDone')).toEqual([[ID]])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls('turnDone')).toEqual([[ID], [ID]])
+      expect(logs.filter((line) => line === '[observed] stop report missed')).toHaveLength(1)
+    })
+
+    it.each<[string, string, (port: DevicesPort, listener: Listener) => void]>([
+      ['no dial', 'no dial', () => noDial()],
+      ['a notice rung in this turn', 'notice', (_, listener) => {
+        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+        expect(shownAsks()).toHaveLength(1)
+      }],
+      ['a notice rung in this turn and held quiet', 'notice', (port, listener) => {
+        there(port)
+        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+        expect(calls('hold')).toHaveLength(1)
+      }],
+      ['a notice rung in this turn with no dial attached', 'notice', (_, listener) => {
+        noDial()
+        expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'no dial' })
+        ;(seen.cable as unknown as { connected: boolean }).connected = true
+      }],
+      ['the person there', 'present', (port) => there(port)],
+    ])('no for an outside agent, %s: its stop is told at the grace\'s end', async (_, word, setup) => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      await reported(port, listener)
+      port.observed(hook('turn-start'))
+      setup(port, listener)
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain(`[device] nudge · claude · ${word}`)
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS - 301)
+      expect(calls('turnDone')).toEqual([[ID]])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls('turnDone')).toEqual([[ID], [ID]])
+    })
+
+    // Claude Code's reader ends the turn at end_turn, before its Stop hook runs: the report comes after the done.
+    it('no for a Harness agent whose turn began 30 s ago, its tile on screen, its done just before the report', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      processing(port)
+      port.desk(['h1'], true)
+      await vi.advanceTimersByTimeAsync(30_000)
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      await vi.advanceTimersByTimeAsync(1_400)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · present')
+    })
+
+    // lastBegan holds at most 64: past them, the oldest ended turn is not read, and its agent reads as away.
+    it('the 65th Harness agent\'s ended turn pushes out the first\'s', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      const turn = (agentId: string) => {
+        port.card({ type: 'commander_event', agentId, payload: { kind: 'processing', text: 'Working' } })
+        port.card({ type: 'commander_event', agentId, payload: { kind: 'done', text: 'done' } })
+      }
+      turn('h1')
+      port.desk(['h1'], true)
+      for (let i = 0; i < 63; i++) turn(`x${i}`)
+      await vi.advanceTimersByTimeAsync(1_400)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · present')
+      turn('x63')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+    })
+
+    it('a notice rung earlier in this turn and since answered is still no', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      // A caller no list holds: the person's tap on its card ends it, with no turn started.
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-9' })
+      await host().openAgent(observedAgentId('claude', 'sess-9'))
+      expect(calls('questionClose')).toHaveLength(1)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      // A Harness agent's, ended by a turn_started with no done since its turn's first card, as its continuation sends.
+      processing(port)
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('questionClose')).toHaveLength(2)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
+      expect(logs.filter((line) => line === '[device] nudge · claude · notice')).toHaveLength(2)
+    })
+
+    // A card may outlast its turn: a Harness agent's stays until its next turn_started, which a done and the next turn's
+    // first card do not send.
+    it('a card from an earlier turn does not count', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      processing(port)
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      processing(port)
+      expect(calls('questionClose').filter(([agentId]) => agentId === 'h1')).toEqual([])
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+    })
+
+    // Its first card after the person's turn ended is no mark either: an outside agent's is its prompt.
+    it('a relayed turn is no new turn for the notice check', async () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(calls('turnDone')).toEqual([[ID]])
+      port.observed(hook('turn-start', { relayed: true }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('turnStarted').filter(([agentId]) => agentId === ID)).toHaveLength(2)
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · notice')
+    })
+
+    // No session is ever nudged: a notice under its folder takes no place among the 64.
+    it('a notice with no engine or session id pushes out none', () => {
+      const { listener } = devices({ now: () => Date.now() })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-r0' })
+      for (let i = 0; i < 64; i++) listener.notice({ text: LINE, ...(i % 2 ? { engine: 'claude' } : {}), folder: `f${i}` })
+      expect(nudge(listener, 'sess-r0', true)).toEqual({ nudge: false })
+    })
+
+    it('the 65th agent that rang pushes out the first', () => {
+      const { listener } = devices({ now: () => Date.now() })
+      for (let i = 0; i < 65; i++) listener.notice({ text: LINE, engine: 'claude', sessionId: `sess-r${i}` })
+      expect(nudge(listener, 'sess-r0', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-r1', true)).toEqual({ nudge: false })
+    })
+
+    it('an agent that left frees its place', () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      for (let i = 0; i < 62; i++) listener.notice({ text: LINE, engine: 'claude', sessionId: `sess-r${i}` })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-r62' })
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      port.observed(hook('session-end', { sessionId: 'sess-r62', transcriptPath: '/t/sess-r62.jsonl' }))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-r63' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-r64' })
+      expect(nudge(listener, 'sess-r0', true)).toEqual({ nudge: false })
+    })
+
+    it.each<[string, string, string, (port: DevicesPort) => void | Promise<void>]>([
+      ['a Harness agent past 120 s, its tile on screen', 'claude', 's-h1', async (port) => {
+        processing(port)
+        port.desk(['h1'], true)
+        await vi.advanceTimersByTimeAsync(PRESENT_MS + 1)
+      }],
+      ['a session no list holds', 'claude', 'sess-9', () => {}],
+      ['a Codex session', 'codex', 'thr-1', (port) => {
+        port.observed(hook('turn-start', { engine: 'codex', sessionId: 'thr-1', transcriptPath: '/t/thr-1.jsonl' }))
+      }],
+    ])('yes: %s', async (_, engine, sessionId, setup) => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      await setup(port)
+      expect(nudge(listener, sessionId, true, engine)).toEqual({ nudge: true })
+      expect(logs).toContain(`[device] nudge · ${engine} · yes`)
+    })
+
+    // Once an agent (decision 5): a yes holds its next one back until the person's next prompt to it, it leaves, or 10
+    // minutes pass, even for an engine that does not set `stop_hook_active` on the continuation.
+    it('a second nudge before the person\'s next prompt is no, as nudged; after their prompt, yes again', () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · nudged')
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+    })
+
+    it('a relayed turn-start does not end the once rule', () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      port.observed(hook('turn-start', { relayed: true }))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · nudged')
+    })
+
+    it('after 10 minutes a nudge is yes again', async () => {
+      const { listener } = devices({ now: () => Date.now() })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+      await vi.advanceTimersByTimeAsync(599_999)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+    })
+
+    it('the continuation\'s ask false is no ask, not nudged', async () => {
+      const { listener } = devices({ now: () => Date.now() })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+      await vi.advanceTimersByTimeAsync(599_000)
+      expect(nudge(listener, 'sess-9', false)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · no ask')
+      expect(logs).not.toContain('[device] nudge · claude · nudged')
+      // Neither gone nor renewed by the report: the yes's own 10 minutes still run.
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+    })
+
+    // A Harness agent's continuation is its reader's: its first card starts a new `began`, which alone would read the
+    // person as there again (decision 13).
+    it('a Harness agent nudged with its tile on screen: its continuation\'s notice rings, not quiet, and its turn end leaves no quiet card', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      const done = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      processing(port)
+      port.desk(['h1'], true)
+      await vi.advanceTimersByTimeAsync(130_000)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      done()
+      processing(port)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      await vi.waitFor(() => expect(shownAsks().map(([agentId]) => agentId)).toEqual(['h1']))
+      done()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('hold')).toEqual([])
+      expect(logs.filter((line) => line.endsWith('· present'))).toEqual([])
+    })
+
+    it('the continuation over, the person there again: a notice in the next live exchange is quiet', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      const done = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      processing(port)
+      port.desk(['h1'], true)
+      await vi.advanceTimersByTimeAsync(130_000)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      done()
+      processing(port)
+      done()
+      processing(port)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      await vi.waitFor(() => expect(calls('hold')).toEqual([['h1', expect.stringMatching(/^shown:/), card('Harness')]]))
+      expect(shownAsks()).toEqual([])
+    })
+
+    it('the 65th nudged agent pushes out the first', () => {
+      const { listener } = devices({ now: () => Date.now() })
+      for (let i = 0; i < 65; i++) expect(nudge(listener, `sess-n${i}`, true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-n1', true)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-n0', true)).toEqual({ nudge: true })
+    })
+
+    // One agent known by two ids: a session a Harness agent holds is that agent's, whatever an outside hook says of it, so
+    // its marks go under the id its notice and its nudge were kept by.
+    it.each<[string, ObservedHookEvent['event']]>([
+      ['the person\'s prompt', 'turn-start'],
+      ['its end', 'session-end'],
+    ])('a session a Harness agent holds: %s ends its notice\'s turn and its once rule', (_, event) => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
+      port.observed(hook(event, { sessionId: 's-h1' }))
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+    })
+
+    // A session herdr lists too is the hook's copy while that is live, and herdr's row once it ends: its marks, kept under
+    // the hook's id, go as it ends and hold no place among the 64.
+    it('a session herdr lists too frees its places as it ends', async () => {
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'working', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const { port, listener } = devices({ herdr: client, orca: onMac, tty: async () => undefined, now: () => Date.now() })
+      seen.host.watching!(true)
+      port.swarms(null)
+      subs[0].started()
+      await list
+      const inHerdr = { sessionId: 'sess-h', hostHints: { HERDR_PANE_ID: 'w1:p1' } }
+      const rang = (i: number) => listener.notice({ text: LINE, engine: 'claude', sessionId: `sess-r${i}` })
+      rang(0)
+      expect(nudge(listener, 'sess-n0', true)).toEqual({ nudge: true })
+      port.observed(hook('turn-start', inHerdr))
+      expect(nudge(listener, 'sess-h', true)).toEqual({ nudge: true })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })
+      for (let i = 1; i < 63; i++) {
+        rang(i)
+        expect(nudge(listener, `sess-n${i}`, true)).toEqual({ nudge: true })
+      }
+      port.observed(hook('session-end', inHerdr))
+      rang(63)
+      expect(nudge(listener, 'sess-n63', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-r0', true)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-n0', true)).toEqual({ nudge: false })
+      expect(logs.slice(-4).filter((line) => !line.includes(' · day '))).toEqual(['[device] nudge · claude · notice', '[device] nudge · claude · nudged'])
+    })
+
+    it('the tally names no session', () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      nudge(listener, 'sess-1', false)
+      nudge(listener, 'sess-1', true)
+      noDial()
+      nudge(listener, 'sess-1', true)
+      ;(seen.cable as unknown as { connected: boolean }).connected = true
+      nudge(listener, 'sess-1', true)
+      expect(logs.filter((line) => line.startsWith('[device] nudge') && !line.includes(' · day '))).toEqual([
+        '[device] nudge · claude · no ask', '[device] nudge · claude · yes', '[device] nudge · claude · no dial',
+        '[device] nudge · claude · nudged',
+      ])
+      expect(logs.filter((line) => line.includes('sess-1'))).toEqual([])
+    })
+  })
+
   // A Harness agent's turn_started is sent only while a dial is attached (services/recaps.ts): a turn during the unplug
   // would leave its card to ring again on the next plug-in.
   it('a Harness agent\'s card goes with the last dial, an outside agent\'s stays', () => {
@@ -17357,6 +17755,159 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
           .toBe(waits)
         expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/sess-1/)
       })
+  })
+
+  // A yes to a stop, and a notice rung in the continuation it holds, once a yes (docs/plans/2026-11-26-needs-you-right-
+  // design.md, "Part 5's counts").
+  describe('the second look\'s counts', () => {
+    type Listener = ReturnType<typeof fakeListener>
+    const LINE = 'Waiting · Connect the VPN'
+    const LATER = 'Waiting · Sign in to the registry'
+    const nudge = (listener: Listener, sessionId: string, ask: boolean, engine = 'claude') => listener.nudge({ engine, sessionId, ask })
+    const outsideNotice = (listener: Listener, text = LINE) =>
+      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    /** What the second look counted, once the stop wrote it. */
+    const nudges = async (port: DevicesPort): Promise<Record<string, number>> =>
+      Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_nudge_')))
+    /** sess-1, the person away: an earlier turn whose Stop hook reported (`ask: false`), so each next stop of it waits for
+     *  its own report; then its stop in the person's next turn, and the devices' yes to it 0.3 s later. */
+    const heldYes = async (port: DevicesPort, listener: Listener): Promise<void> => {
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+    }
+    const secrets = (file: string): string[] => ['sess-1', 's-h1', ID, 'VPN', 'registry'].filter((secret) => file.includes(secret))
+    beforeEach(() => { vi.useFakeTimers() })
+
+    it('a yes counts dial_nudge_claude; a no of every word counts nothing', async () => {
+      const { port, listener } = withNotices()
+      expect(nudge(listener, 'sess-9', false)).toEqual({ nudge: false })
+      ;(seen.cable as unknown as { connected: boolean }).connected = false
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      ;(seen.cable as unknown as { connected: boolean }).connected = true
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-2' })
+      expect(nudge(listener, 'sess-2', true)).toEqual({ nudge: false })
+      // The person with sess-1: their prompt to it in Orca, Orca in front, and the dial on it.
+      host().front('orca')
+      host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      for (const word of ['no ask', 'no dial', 'notice', 'present', 'yes', 'nudged']) expect(logs).toContain(`[device] nudge · claude · ${word}`)
+      expect(nudge(listener, 'thr-1', true, 'codex')).toEqual({ nudge: true })
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_codex: 1 })
+    })
+
+    it('an outside agent\'s notice in its held continuation counts rang, once a yes', async () => {
+      const { port, listener } = withNotices()
+      await heldYes(port, listener)
+      outsideNotice(listener)
+      // Its next notice, past the agent's minute, its hooks keeping the hold on.
+      for (let at = 0; at < NOTICE_AGENT_MS; at += 8_000) {
+        await vi.advanceTimersByTimeAsync(8_000)
+        port.observed(hook('subagent-start'))
+        port.observed(hook('subagent-stop'))
+      }
+      outsideNotice(listener, LATER)
+      expect(calls('turnDone')).toEqual([[ID]])
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_claude_rang: 1 })
+      expect(secrets(readFileSync(usageFile(), 'utf8'))).toEqual([])
+    })
+
+    it.each<[string, (port: DevicesPort, listener: Listener) => Promise<void>]>([
+      ['its next stop and its report', async (port, listener) => {
+        port.observed(hook('turn-stop'))
+        await vi.advanceTimersByTimeAsync(300)
+        expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      }],
+      ['10 s quiet', async () => { await vi.advanceTimersByTimeAsync(CONTINUE_QUIET_MS) }],
+    ])('a notice after the hold ended at %s counts no rang', async (_, end) => {
+      const { port, listener } = withNotices()
+      await heldYes(port, listener)
+      await end(port, listener)
+      expect(calls('turnDone')).toEqual([[ID], [ID]])
+      outsideNotice(listener)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
+
+    it('a yes no hold took counts the yes and never rang', async () => {
+      const { port, listener } = withNotices()
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(calls('turnDone')).toEqual([[ID]])
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      outsideNotice(listener)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
+
+    it('a Harness agent\'s notice in its continuation counts rang, once a yes', async () => {
+      const { port, listener } = withNotices()
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+      notice(listener, 'h1', LINE)
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      notice(listener, 'h1', LATER)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_claude_rang: 1 })
+      expect(secrets(readFileSync(usageFile(), 'utf8'))).toEqual([])
+    })
+
+    it('a Harness agent\'s notice after its continuation\'s done counts no rang', async () => {
+      const { port, listener } = withNotices()
+      const card = (kind: 'processing' | 'done') => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind, text: kind } })
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      card('processing')
+      card('done')
+      card('processing')
+      notice(listener, 'h1', LINE)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
+
+    // A block the engine never took (its hook killed at its timeout) starts no continuation: the person's next turn is
+    // theirs, as the outside hold lapses (observed.ts CONTINUE_QUIET_MS, CONTINUE_MAX_MS).
+    describe('a Harness agent\'s continuation, bounded', () => {
+      const card = (port: DevicesPort, kind: 'processing' | 'done') => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind, text: kind } })
+
+      it('no card within 10 s of its done: the person\'s next turn at the tile holds its notice quiet, and counts no rang', async () => {
+        const { port, listener } = withNotices()
+        expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+        card(port, 'done')
+        await vi.advanceTimersByTimeAsync(CONTINUE_QUIET_MS)
+        port.desk(['h1'], true)
+        card(port, 'processing')
+        notice(listener, 'h1', LINE)
+        await vi.waitFor(() => expect(calls('hold')).toHaveLength(1))
+        expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+      })
+
+      // As Codex's turn ends after its Stop hook: a done after the yes is the stop's own, and the 10 s run from it.
+      it('a card within 10 s of a done after the yes is its continuation\'s', async () => {
+        const { port, listener } = withNotices()
+        expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+        await vi.advanceTimersByTimeAsync(5_000)
+        card(port, 'done')
+        await vi.advanceTimersByTimeAsync(CONTINUE_QUIET_MS - 1)
+        card(port, 'processing')
+        notice(listener, 'h1', LINE)
+        expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_claude_rang: 1 })
+      })
+
+      it('120 s from its yes, its continuation counts no rang', async () => {
+        const { port, listener } = withNotices()
+        expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+        card(port, 'processing')
+        await vi.advanceTimersByTimeAsync(CONTINUE_MAX_MS)
+        notice(listener, 'h1', LINE)
+        expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+      })
+    })
   })
 })
 

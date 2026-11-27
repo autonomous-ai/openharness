@@ -14,6 +14,7 @@ import { newPipeNonce, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeAuthValue, pipeP
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
   frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
+  NUDGE_MAX_BYTES, NUDGE_PER_SECOND, nudgeHandler, type NudgeAsk,
   NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, ORCA_FRONT_MAX_BYTES, ORCA_FRONT_MAX_TERMINALS, ORCA_FRONT_MAX_WORKSPACE, ORCA_FRONT_PER_SECOND, orcaFrontHandler,
   REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, THREAD_MAX_BYTES, THREAD_PER_SECOND, threadHandler,
   TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, WRITES_PENDING, WROTE_MAX_BYTES, WROTE_PER_SECOND,
@@ -22,6 +23,8 @@ import {
 import type { TabsWrite } from '../cable/hosts/tabsLines.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
 import { noticeCaller } from '../devices/notice.js'
+import { askDevices } from '../devices/listenerClient.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
 import type { NotifyMode } from '../cable/notifyMode.js'
 
 const dirs: string[] = []
@@ -2713,6 +2716,56 @@ describe('notice', () => {
       const body = JSON.stringify({ type: 'notice', text: 'Connect the VPN' })
       expect(await sender.send(body)).toMatchObject({ status: 200, body: '{"result":"limited"}' })
       expect((await sender.send(body)).status).toBe(429)
+    })
+  })
+})
+
+describe('nudge', () => {
+  const gone = new AbortController().signal
+  const nudge = (fields: Record<string, unknown>): Record<string, unknown> => ({ type: 'nudge', ...fields })
+
+  it('nudge refuses a message the hook did not send', () => {
+    const decide = vi.fn(() => true)
+    const handler = nudgeHandler(decide)
+    const bad: Record<string, unknown>[] = [
+      { sessionId: 's-1', ask: true }, { engine: 'cursor', sessionId: 's-1', ask: true }, { engine: 7, sessionId: 's-1', ask: true },
+      { engine: 'claude', ask: true }, { engine: 'claude', sessionId: 'a/b', ask: true },
+      { engine: 'claude', sessionId: 'a'.repeat(129), ask: true }, { engine: 'claude', sessionId: '', ask: true },
+      { engine: 'claude', sessionId: 's-1' }, { engine: 'claude', sessionId: 's-1', ask: 'true' },
+      { engine: 'claude', sessionId: 's-1', ask: 1 }, { engine: 'claude', sessionId: 's-1', ask: null },
+    ]
+    for (const fields of bad) expect(handler.handle(nudge(fields), gone), JSON.stringify(fields)).toBe(REFUSED)
+    expect(decide).not.toHaveBeenCalled()
+  })
+
+  it('nudge hands on the three fields and answers what the devices say', () => {
+    const asks: NudgeAsk[] = []
+    let answer = true
+    const handler = nudgeHandler((ask) => { asks.push(ask); return answer })
+    expect(handler.handle(nudge({ engine: 'codex', sessionId: 's-1', ask: true, extra: 1 }), gone)).toStrictEqual({ nudge: true })
+    answer = false
+    expect(handler.handle(nudge({ engine: 'codex', sessionId: 's-1', ask: false }), gone)).toStrictEqual({ nudge: false })
+    expect(asks).toStrictEqual([
+      { engine: 'codex', sessionId: 's-1', ask: true },
+      { engine: 'codex', sessionId: 's-1', ask: false },
+    ])
+  })
+
+  it('the nudge handler is its two limits and handle; the longest nudge fits', () => {
+    const handler = nudgeHandler(() => false)
+    expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: NUDGE_MAX_BYTES, perSecond: NUDGE_PER_SECOND })
+    expect([NUDGE_MAX_BYTES, NUDGE_PER_SECOND]).toEqual([256, 1])
+    const longest = nudge({ engine: 'claude', sessionId: 'a'.repeat(128), ask: false })
+    expect(handler.handle(longest, gone)).toStrictEqual({ nudge: false })
+    expect(Buffer.byteLength(JSON.stringify(longest))).toBeLessThanOrEqual(NUDGE_MAX_BYTES)
+  })
+
+  describe.skipIf(process.platform === 'win32')('on a real listener', () => {
+    it('askDevices with a nudge gets the answer', async () => {
+      const dir = shortDir()
+      await open({ nudge: nudgeHandler(() => true) }, { path: devicesListenerPath(dir)! })
+      expect(await askDevices(dir, { type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true })).toStrictEqual({ nudge: true })
     })
   })
 })

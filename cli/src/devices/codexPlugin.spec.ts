@@ -4,13 +4,15 @@
  * throwaway Codex home. One real script on a throwaway PATH and HOME stands in for the binary `codexFound` and
  * `codexRunIn` find. The real `codex` and ~/.codex are never touched.
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, join, relative, sep } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { hooks } from '../engines/codex/hookContract.js'
+import { reviewHash } from '../engines/kit/hookReview.js'
 import type { ClaudeAnswer, ClaudePluginFiles, ClaudeRun } from './claudePlugin.js'
-import { pluginContentHash } from './codexPluginTrust.js'
+import { filesContentHash, pluginContentHash, pluginTrustRecords } from './codexPluginTrust.js'
 import * as pluginFolder from './pluginFolder.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 import {
@@ -20,6 +22,11 @@ import {
 
 // A copy of the module, so a test can watch whether the marketplace folder was written.
 vi.mock('./pluginFolder.js', async (original) => ({ ...await original<object>() }))
+
+// @ts-expect-error — plain ESM with no declaration file
+const { readClaudePluginBundle } = await import('../../scripts/lib/claudePluginBundle.mjs') as {
+  readClaudePluginBundle: (version: string) => string
+}
 
 const onWindows = process.platform === 'win32'
 const PLUGIN = 'harness-device@openharness'
@@ -258,6 +265,52 @@ describe('codexSetUp', () => {
     })
     expect(await codexSetUp(deps(codex.run, home, folder))).toEqual({ ok: true, outcome: 'installed', trusted: false })
     expect(trusted(home)).toEqual({})
+  })
+})
+
+// On Windows the folder is written without the Stop hook (claudePlugin.spec.ts): the copy Codex installs from it, its
+// fingerprint and its trust records are that copy's.
+describe("the device plugin's Stop hook in Codex", () => {
+  const BUILT = JSON.parse(readClaudePluginBundle('1.2.3')) as ClaudePluginFiles
+  const REVIEWED = { ...hooks.settings.reviewed!, matcherEvents: ['PreToolUse', 'PermissionRequest', 'PostToolUse', 'SessionStart'] }
+  const key = (label: string): string => `${PLUGIN}:hooks/codex.json:${label}:0:0`
+  type Declared = Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout?: number }> }>>
+
+  /** Each file under [root], by its `/` path from it. */
+  const filesUnder = (root: string): Record<string, string> => Object.fromEntries(
+    readdirSync(root, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile())
+      .map((entry) => [relative(root, join(entry.parentPath, entry.name)).split(sep).join('/'), readFileSync(join(entry.parentPath, entry.name), 'utf8')]))
+
+  // This host walks the copy with its own separator, Windows' Codex with `\`: the fingerprint is the one Windows computes.
+  it("is left out of the copy installed on Windows, whose Windows fingerprint is the carried one, and no record names it", async () => {
+    const home = codexHome()
+    const folder = marketplaceFolder()
+    expect(await codexSetUp({ ...deps(fakeCodex(home, folder).run, home, folder, BUILT), platform: 'win32' })).toMatchObject({ ok: true, outcome: 'installed' })
+    const root = installedRoot(home)
+    const declared = (JSON.parse(readFileSync(join(root, 'hooks', 'codex.json'), 'utf8')) as { hooks: Declared }).hooks
+    expect(Object.keys(declared)).toEqual(['PermissionRequest', 'PreToolUse', 'SessionStart'])
+    expect(filesContentHash(filesUnder(root), 'win32')).toBe(carriedCodexHash(BUILT, 'win32'))
+    // What Codex's `hooks/list` holds each record to: the hash of the hook it declares.
+    const hash = (event: string): string => {
+      const [group] = declared[event]
+      return reviewHash(REVIEWED, event, group.matcher, { command: group.hooks[0].command, timeout: group.hooks[0].timeout })
+    }
+    expect(pluginTrustRecords(root).map((record) => [record.key, record.trustedHash])).toEqual([
+      [key('session_start'), hash('SessionStart')],
+      [key('permission_request'), hash('PermissionRequest')],
+      [key('pre_tool_use'), hash('PreToolUse')],
+    ])
+  })
+
+  it('is trusted with the other hooks off Windows, and left out of the trust on Windows', async () => {
+    const home = codexHome()
+    const folder = marketplaceFolder()
+    expect(await codexSetUp(deps(fakeCodex(home, folder).run, home, folder, BUILT))).toEqual({ ok: true, outcome: 'installed', trusted: true })
+    const labels = onWindows ? ['session_start', 'permission_request', 'pre_tool_use'] : ['session_start', 'stop', 'permission_request', 'pre_tool_use']
+    const records = pluginTrustRecords(installedRoot(home))
+    expect(records.map((record) => record.key)).toEqual(labels.map(key))
+    const content = carriedCodexHash(BUILT, process.platform)
+    expect(trusted(home)).toEqual(Object.fromEntries(records.map((record) => [record.key, { trusted_hash: record.trustedHash, trusted_content_hash: content }])))
   })
 })
 

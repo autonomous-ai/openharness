@@ -131,16 +131,19 @@ function claudeBody(input: Record<string, unknown>): AskedBody | null {
   }
 }
 
-/** The hook's input as an object, or null when it is too long or not a JSON object. */
+/**
+ * The hook's input as an object, or null when it is too long or not a JSON object. A long one is still read to its end,
+ * none of it kept past the bound: left in the pipe, the engine's write of the rest would fail, and the hook with it.
+ */
 export async function hookInput(stdin: AsyncIterable<Buffer | string>): Promise<Record<string, unknown> | null> {
   const parts: Buffer[] = []
   let bytes = 0
   for await (const chunk of stdin) {
     const part = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
     bytes += part.length
-    if (bytes > MAX_STDIN_BYTES) return null
-    parts.push(part)
+    if (bytes <= MAX_STDIN_BYTES) parts.push(part)
   }
+  if (bytes > MAX_STDIN_BYTES) return null
   let input: unknown
   try {
     input = JSON.parse(Buffer.concat(parts).toString('utf8'))

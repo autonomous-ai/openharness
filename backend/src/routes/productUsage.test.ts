@@ -457,6 +457,11 @@ it('takes the dial skill\'s names', async () => {
   expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
   expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
 })
+it('takes the second look\'s names', async () => {
+  const counters = { dial_nudge_claude: 1, dial_nudge_codex: 1, dial_nudge_claude_rang: 1, dial_nudge_codex_rang: 1 }
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
 it('drops a dial name it does not know and keeps the rest', async () => {
   const response = await submit({ ...good, context: cli, counters: { dial_used_installation_days: 1, dial_future_name: 1 } })
   expect(response.statusCode).toBe(200)

@@ -261,9 +261,32 @@ async function jsonList(run: ClaudeRun, args: string[]): Promise<Record<string, 
   return { ...failure(answer, 'list', UNLISTED), reason: 'not json' }
 }
 
-/** Writes the marketplace folder; null when it holds the files now, else the write's error code. */
-function writeFolder({ folder, files }: ClaudeInstallDeps): string | null {
-  const written = ensurePluginFolder(folder, files.files, files.executable)
+/** The device plugin's hooks files: Claude Code's and Codex's. */
+const HOOKS_FILES = ['plugins/harness-device/hooks/hooks.json', 'plugins/harness-device/hooks/codex.json']
+
+/**
+ * [files] as the marketplace folder holds them on [platform]. On Windows the device plugin's hooks files have no `Stop`
+ * entry in this release: the engine waits for a Stop hook at every turn end, and there PowerShell's start and Node's
+ * load added 0.7-1.5 s to each (the needs-you-right design, Part 5). It comes back with a faster start. The folder is
+ * written from it and Codex's fingerprint is taken of it, so the copy Codex trusts is the one written.
+ */
+export function pluginFilesOn(files: ClaudePluginFiles, platform: NodeJS.Platform): ClaudePluginFiles {
+  if (platform !== 'win32') return files
+  const on = { ...files.files }
+  for (const path of HOOKS_FILES) {
+    const declared = on[path] === undefined ? undefined : JSON.parse(on[path]) as { hooks?: Record<string, unknown> }
+    if (!declared?.hooks || !Object.hasOwn(declared.hooks, 'Stop')) continue
+    delete declared.hooks.Stop
+    on[path] = `${JSON.stringify(declared, null, 2)}\n`
+  }
+  return { files: on, executable: files.executable }
+}
+
+/** Writes the marketplace folder, Claude Code's and Codex's alike, with [files] as [platform] holds them; null when it
+ *  holds them now, else the write's error code. */
+export function writeFolder({ folder, files, platform }: Pick<ClaudeInstallDeps, 'folder' | 'files' | 'platform'>): string | null {
+  const on = pluginFilesOn(files, platform)
+  const written = ensurePluginFolder(folder, on.files, on.executable)
   return typeof written === 'object' ? written.failed : null
 }
 

@@ -60,7 +60,7 @@ Missed on purpose:
 - A command the automatic review hands to the person, and a question in Default mode with Codex's
   `default_mode_request_user_input` on: both ring nothing, as before; a ring at every command the review approves would
   be worse.
-- A hook input over 256 KiB, such as a large `apply_patch`: the command reads no further and tells nothing.
+- A hook input over 256 KiB, such as a large `apply_patch`: the command reads it to its end and tells nothing.
 - Codex's own app tools (`mcp__codex_apps__…`): Codex takes their reviewer from `[apps]` in `config.toml`, over the
   turn's, so the rollout cannot say who reviews them, and they ring nothing.
 - An organization's managed requirements for automatic review (`requirements.toml`): the command does not read them and
@@ -91,6 +91,46 @@ outside Harness's data folder, where Harness's own one-shots run. It reads no da
 nothing. Anything else the launcher prints is dropped. `harness device claude disable` and `harness device codex disable`
 take the line away.
 
+## When a turn stops
+
+Each engine's `Stop` hook runs `harness device claude stop` (`hooks/stop`, in `hooks/hooks.json`) or
+`harness device codex stop` (`hooks/codex-stop`, in `hooks/codex.json`). It reads the session's id, its folder, the
+turn's last answer and whether the stop already continues one. For Codex it also reads the first line of the session's
+rollout, only a regular file inside the session's Codex home, to know a headless run.
+
+Not on Windows in this release: there the CLI writes both hooks files without the `Stop` entry, for Claude Code and
+Codex. The engine waits for the hook at every turn end, and on a Windows 11 ARM64 VM it added 0.7-1.5 s to each, most
+of it PowerShell starting and Node loading the CLI. It comes back with a faster start.
+
+It tells the devices nothing, and the turn ends as it would without Harness, for a headless run (`claude -p`,
+`codex exec`, Codex run as another agent's MCP tool), a session in Harness's data folder (Harness's own one-shots), or
+an engine whose dial skill is not on.
+Every other turn end is reported to the devices on this computer: the engine, the session's id, and whether the answer
+asks. The answer asks when its last 400 characters hold a question mark (`?` or `？`) and the stop does not already
+continue one. Once a session has reported, the devices wait for its report, at most 6 s, before the dial hears its
+turn is done. A session's first stop does not wait.
+
+The devices say yes only when all four hold:
+
+- a dial is attached;
+- the dial skill is on (the hook checks it);
+- the agent rang no notice in this turn: a notice rung in an earlier turn does not count, and another session's
+  message to it starts no new turn;
+- the person is not with that agent.
+
+On a yes, the hook stops the turn's end and gives the agent this reason:
+
+> Your answer asks the person something, and they are not at this session. If the task cannot go on without them, run harness device notify now, as the dial skill says, and end your turn. If nothing is needed from them, end your turn.
+
+The agent decides. It is stopped once: no second yes for that agent until the person's next prompt to it (another
+session's message does not count), it leaves, or 10 minutes pass. The devices hold the turn's end while it goes on:
+until its next stop, or 10 s with no activity, at most 120 s. The hook waits at most 300 ms for the devices' answer; no
+answer is a no. On Windows those 300 ms start once the hook has found the devices' process in the process table, which
+can take up to 3 s.
+
+What the person sees: one more round of the agent, and in Claude Code a "Stop hook feedback" line with the reason.
+`harness device claude disable` and `harness device codex disable` take it away.
+
 ## Measured hook times
 
 - Codex 0.172.0, hook start to exit, Harness CLI start-up included, median of 5 (#4660): macOS 238-269 ms; a Windows
@@ -108,7 +148,8 @@ take the line away.
   dial sees the tool's name and one line: what a permission ask acts on (a command, a file, a site's host, an MCP
   server and tool), the first question for a form, fixed words for a plan approval, whose plan never leaves the hook.
   The rest stays in the hook. The mod sends only the session's id.
-- It adds no other text to a session than that one line.
+- It adds no other text to a session than that one line and, on a yes at a turn's end, that reason.
+- It never logs, keeps or sends the answer: the hook reads its last characters and tells the devices one bit.
 
 ## Install and remove
 

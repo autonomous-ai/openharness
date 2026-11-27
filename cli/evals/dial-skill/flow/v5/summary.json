@@ -1,0 +1,22 @@
+{
+  "description": "v5",
+  "label": "v5",
+  "target": "skill",
+  "environment": {
+    "commit": "f1c1c32f3490461a61fb2a766870af1fa1c3abc0",
+    "lockfile": "cli/package-lock.json",
+    "lockfile_sha256": "a578fb81a3757cfd14de2c687dfe9b7f687d56f8c0112082edf640245995ea61",
+    "claude_version": "2.1.332 (Claude Code)",
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "max_turns": 40,
+    "agent_timeout_s": 660,
+    "case_timeout_s": 900,
+    "judge_model": "claude-opus-5-5",
+    "judge_effort": "low",
+    "harness_sha": "ea8282418c32b4c84b39f6b374043109589b2c379b08ced36dd430ed0235dd5e",
+    "rubric_sha": "9e6d7d4e8be762a401f47fcdbe675e610f15d936bf4ce85c3e5642295565761f",
+    "setting_sources": "project",
+    "date": "2026-11-27"
+  }
+}

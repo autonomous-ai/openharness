@@ -3,8 +3,9 @@
  * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, the selected
  * tab (`tab`), the thread the ChatGPT app shows (`thread`), the Notifications setting (`notify`) and whether Harness
  * Device wrote a person's words to a tab (`wrote`), the harness-device mod the session the Claude app shows (`attach`),
- * and `harness device notify` an agent's one line for the dial (`notice`); later device routes register a handler of
- * their own beside these, each with its own body and rate limit.
+ * `harness device notify` an agent's one line for the dial (`notice`), and an agent's Stop hook whether its answer asks
+ * the person something (`nudge`); later device routes register a handler of their own beside these, each with its own
+ * body and rate limit.
  *
  * Who may connect is the core's own answer (lib/localSocket.ts): a 0600 socket in a folder that is this account's
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
@@ -499,6 +500,28 @@ export function noticeHandler(notify: (ask: NoticeAsk) => NoticeResult): Listene
       if (sessionId !== undefined) ask.sessionId = sessionId
       if (folder !== undefined) ask.folder = folder
       return { result: notify(ask) }
+    },
+  }
+}
+
+/** One a second on a connection: each Stop hook opens its own and sends once. */
+export const NUDGE_PER_SECOND = 1
+/** The longest nudge, with a 128-character session id, is under 200 bytes. */
+export const NUDGE_MAX_BYTES = 256
+
+export interface NudgeAsk { engine: 'claude' | 'codex'; sessionId: string; ask: boolean }
+
+/** A Stop hook's report, from `harness device claude stop` or `codex stop`: handed on as three typed fields, answered
+ *  `{ nudge }`, whether the agent gets a second look. It keeps nothing and logs nothing: the id names a person's session. */
+export function nudgeHandler(nudge: (ask: NudgeAsk) => boolean): ListenerHandler {
+  return {
+    maxBytes: NUDGE_MAX_BYTES,
+    perSecond: NUDGE_PER_SECOND,
+    handle: ({ engine, sessionId, ask }) => {
+      if (!NOTICE_ENGINES.has(engine)) return REFUSED
+      if (typeof sessionId !== 'string' || !NOTICE_SESSION.test(sessionId)) return REFUSED
+      if (typeof ask !== 'boolean') return REFUSED
+      return { nudge: nudge({ engine: engine as NudgeAsk['engine'], sessionId, ask }) }
     },
   }
 }

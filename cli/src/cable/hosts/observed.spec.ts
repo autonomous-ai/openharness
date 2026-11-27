@@ -23,7 +23,7 @@ import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
+import { askedLine, CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, CONTINUE_MAX_MS, CONTINUE_QUIET_MS, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource, REPORT_WAIT_MS } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { createOrcaChatAdapter } from './orcaChat.js'
@@ -546,6 +546,58 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
+  describe('a transcript stamp read that never answers (a stalled network share)', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('holds no pass: another waiting agent still works again, and every pass after leaves one read waiting', async () => {
+      const stalled = '/share/a.jsonl'
+      const grown = new Map<string, number>()
+      const fileStamp = vi.fn((path: string) => (path === stalled
+        ? new Promise<{ stamp: string; mtime: number } | null>(() => {})
+        : Promise.resolve(grown.has(path) ? { stamp: '', mtime: grown.get(path)! } : null)))
+      const { src, clock, ev } = setup({ fileStamp })
+      src.ingest(ev('turn-start', { sessionId: 'a', callerPid: 100, transcriptPath: stalled }))
+      src.ingest(ev('turn-start', { sessionId: 'b', callerPid: 101, transcriptPath: '/t/b.jsonl' }))
+      clock.t += 6_000
+      src.ingest(ev('needs-input', { sessionId: 'a', callerPid: 100 }))
+      src.ingest(ev('needs-input', { sessionId: 'b', callerPid: 101 }))
+      grown.set('/t/b.jsonl', clock.t + 1)
+      const state = (id: string): string | undefined => src.list().find((x) => x.sessionId === id)?.state
+      void src.checkWorking()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(state('b')).toBe('working')
+      expect(state('a')).toBe('needs-you')
+      // The 3 s passes after it: the stalled transcript's one read is still the one waiting.
+      for (let i = 0; i < 5; i++) {
+        void src.checkWorking()
+        await vi.advanceTimersByTimeAsync(3_000)
+      }
+      expect(fileStamp.mock.calls.filter(([path]) => path === stalled)).toHaveLength(1)
+      expect(state('a')).toBe('needs-you')
+    })
+  })
+
+  it('one pass at a time: a pass called while one runs starts no other', async () => {
+    const { src, clock, open, owners, ev, hold, looks } = setup()
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1' }))
+    clock.t += 3_000
+    let release!: () => void
+    hold(new Promise((resolve) => { release = resolve }))
+    const before = looks()
+    const first = src.checkWorking()
+    const second = src.checkWorking()
+    await flushed()
+    expect(looks()).toBe(before + 1)
+    release()
+    await Promise.all([first, second])
+    expect(looks()).toBe(before + 1)
+    await src.checkWorking()
+    expect(looks()).toBe(before + 2)
+  })
+
   it('scanOpen adds terminal/app sessions, working while their owner reads busy, and skips harness-owned ones', async () => {
     const { src, open, owners, working, externals } = setup()
     open.set('a', 'terminal')
@@ -978,6 +1030,679 @@ describe('ObservedSource and a turn\'s end by hook', () => {
     clock.t += 3_000
     await src.checkWorking()
     expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+})
+
+// Part 5 (docs/plans/2026-11-27-needs-you-right-part5-plan.md, decisions 12 and 18): the plugin's Stop hook reports each
+// stop to the devices, which tell the source: a no releases the stop, a yes holds the turn the engine keeps going.
+describe('ObservedSource and a stop its Stop hook reports', () => {
+  const SESSION = 'sess-second-look-4e1b'
+  const TRANSCRIPT = '/t/look.jsonl'
+  const ANSWER = 'Which region should it deploy to?'
+  /** Each rig's log lines, read after each case. */
+  let logged: string[][] = []
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => {
+    vi.useRealTimers()
+    // Fixed words only: never the session.
+    expect(logged.flat().filter((line) => line.includes(SESSION))).toEqual([])
+    logged = []
+  })
+
+  /** A listed session with a transcript, on the fake clock. `told` holds each time its turn end was told, by the read of
+   *  its answer that each telling makes. */
+  const rig = (engine: ObservedHookEvent['engine'] = 'claude', over: Partial<ObservedDeps> = {}) => {
+    const told: number[] = []
+    const s = setup({ now: () => Date.now(), lastAnswer: async () => { told.push(Date.now()); return ANSWER }, ...over })
+    logged.push(s.logs)
+    const hook = (event: ObservedHookEvent['event'], more: Partial<ObservedHookEvent> = {}): void => {
+      s.src.ingest(s.ev(event, { engine, sessionId: SESSION, transcriptPath: TRANSCRIPT, ...more }))
+    }
+    const id = observedAgentId(engine, SESSION)
+    const report = (goesOn: boolean): boolean => s.src.stopReported(id, goesOn)
+    /** A notice of the agent rang now: the engine whose yes it counts after, or null. */
+    const rang = (): 'claude' | 'codex' | null => s.src.rangInHold(id)
+    const advance = (ms: number): Promise<unknown> => vi.advanceTimersByTimeAsync(ms)
+    // The transcript as it was when the session was listed.
+    s.stamps.set(TRANSCRIPT, Date.now())
+    hook('session-start')
+    return {
+      ...s, told, hook, report, rang, advance,
+      agent: () => s.src.list()[0],
+      missed: () => s.logs.filter((line) => line === '[observed] stop report missed').length,
+      /** Each hold that ended with no next stop, by the log line that says why. */
+      heldEnds: () => s.logs.filter((line) => line.startsWith('[observed] held stop')),
+      /** The transcript grows now. */
+      grow: () => { s.stamps.set(TRANSCRIPT, Date.now()) },
+      /** An earlier turn whose stop its hook reported: the session's stops wait for their report from here. */
+      mark: async () => {
+        hook('turn-start')
+        hook('turn-stop')
+        report(false)
+        await advance(1_500)
+        told.length = 0
+      },
+    }
+  }
+  type Rig = ReturnType<typeof rig>
+
+  /** The stop heard now waits for its own report, which comes at 2 s: told then, and not before. */
+  const waitsForItsReport = async (r: Rig): Promise<void> => {
+    r.hook('turn-stop')
+    const stop = Date.now()
+    await r.advance(1_999)
+    expect(r.told).toEqual([])
+    await r.advance(1)
+    r.report(false)
+    expect(r.told).toEqual([stop + 2_000])
+  }
+
+  /** The continuation's own stop, its report 0.3 s after it as its hook sends it: told done once, 1.5 s after it, with
+   *  its answer. */
+  const nextStopTold = async (r: Rig): Promise<void> => {
+    r.hook('turn-stop')
+    const stop = Date.now()
+    await r.advance(300)
+    r.report(false)
+    await r.advance(1_199)
+    expect(r.told).toEqual([])
+    await r.advance(1)
+    expect(r.told).toEqual([stop + 1_500])
+    await r.advance(0)
+    expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+    await r.advance(130_000)
+    expect(r.told).toHaveLength(1)
+    expect(r.heldEnds()).toEqual([])
+  }
+
+  /** A marked session's turn whose stop the devices said yes to 1.3 s after it, the order Task 1 saw: when the yes came. */
+  const heldAfterYes = async (r: Rig): Promise<number> => {
+    await r.mark()
+    r.hook('turn-start')
+    r.hook('turn-stop')
+    await r.advance(1_300)
+    expect(r.report(true)).toBe(true)
+    return Date.now()
+  }
+
+  describe('the stop waits for its report (decision 18)', () => {
+    it('waits 6 s for a report, and holds a turn a yes keeps going until 10 s quiet, 120 s at most', () => {
+      expect([REPORT_WAIT_MS, CONTINUE_QUIET_MS, CONTINUE_MAX_MS]).toEqual([6_000, 10_000, 120_000])
+    })
+
+    it.each(['claude', 'codex'] as const)('a marked session\'s stop waits for its report (%s)', async (engine) => {
+      const r = rig(engine)
+      await r.mark()
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(2_900)
+      expect(r.told).toEqual([])
+      expect(r.agent().state).toBe('working')
+      await r.advance(100)
+      expect(r.report(false)).toBe(true)
+      expect(r.told).toEqual([stop + 3_000])
+      await r.advance(0)
+      expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+      await r.advance(10_000)
+      expect(r.told).toHaveLength(1)
+    })
+
+    it('a report inside the grace is told at the grace\'s end, never before', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(300)
+      r.report(false)
+      await r.advance(1_100)
+      expect(r.told).toEqual([])
+      await r.advance(100)
+      expect(r.told).toEqual([stop + 1_500])
+    })
+
+    it('no report: told at 6 s, and the session is no longer marked', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(5_900)
+      expect(r.told).toEqual([])
+      expect(r.missed()).toBe(0)
+      await r.advance(100)
+      expect(r.told).toEqual([stop + 6_000])
+      await r.advance(0)
+      expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+      expect(r.missed()).toBe(1)
+      // Its next turn, with no report: the grace, as a session never marked.
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const next = Date.now()
+      await r.advance(1_500)
+      expect(r.told).toEqual([stop + 6_000, next + 1_500])
+      expect(r.missed()).toBe(1)
+    })
+
+    it('a session that never reported: the grace, as today', async () => {
+      const r = rig()
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(1_500)
+      expect(r.told).toEqual([stop + 1_500])
+      // Its reports at 2 s, its end already told.
+      await r.advance(500)
+      r.report(false)
+      expect(r.report(true)).toBe(false)
+      await r.advance(2_000)
+      expect(r.told).toEqual([stop + 1_500])
+      // The engine goes on in the same turn: no hold was started, so its next stop is told 1.5 s after it.
+      r.told.length = 0
+      await nextStopTold(r)
+    })
+
+    it('a report before its turn-stop', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      await r.advance(1_000)
+      r.report(false)
+      await r.advance(200)
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(1_499)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([stop + 1_500])
+      // Used once: a second stop with no report of its own waits until 6 s.
+      await r.advance(500)
+      r.hook('turn-stop')
+      const second = Date.now()
+      await r.advance(5_999)
+      expect(r.told).toEqual([stop + 1_500])
+      await r.advance(1)
+      expect(r.told).toEqual([stop + 1_500, second + 6_000])
+    })
+
+    it.each(['turn-start', 'needs-input', 'turn-error', 'turn-aborted', 'session-end'] as const)(
+      'an early report is dropped by %s', async (event) => {
+        const r = rig()
+        await r.mark()
+        r.hook('turn-start')
+        r.report(false)
+        r.hook(event)
+        await waitsForItsReport(r)
+      })
+
+    it('an early report older than 6 s is not used', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.report(false)
+      await r.advance(6_000)
+      await waitsForItsReport(r)
+    })
+
+    it('a report while the lead\'s subagents run is not kept for its own stop', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.hook('subagent-start')
+      r.hook('turn-stop')
+      r.report(false)
+      r.hook('subagent-stop')
+      await waitsForItsReport(r)
+    })
+
+    it.each([
+      ['a prompt', 'turn-start', 'working'], ['needs-input', 'needs-input', 'needs-you'], ['turn-error', 'turn-error', 'error'],
+      ['turn-aborted', 'turn-aborted', 'idle'], ['session-end', 'session-end', 'idle'],
+    ] as const)('a stop waiting for its report: %s tells nothing for it', async (_what, event, state) => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      await r.advance(1_000)
+      r.hook(event)
+      // Its report, late.
+      await r.advance(1_000)
+      r.report(false)
+      await r.advance(10_000)
+      expect(r.told).toEqual([])
+      expect(r.agent().state).toBe(state)
+      expect(r.missed()).toBe(0)
+    })
+
+    it('a removed session forgets its mark', async () => {
+      const r = rig()
+      await r.mark()
+      r.gens.set(100, null)
+      await r.src.tick()
+      expect(r.src.list()).toEqual([])
+      r.gens.delete(100)
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(1_500)
+      expect(r.told).toEqual([stop + 1_500])
+    })
+  })
+
+  describe('a stop that goes on (Part 5)', () => {
+    it.each([['a marked session', true, 1_300], ['an unmarked one, inside the grace', false, 1_200]] as const)(
+      'the yes after the blocked stop, %s: nothing told at 1.5 s or 9.9 s; the next stop is told done once, 1.5 s after it, with its answer',
+      async (_which, marked, yesAt) => {
+        const r = rig()
+        if (marked) await r.mark()
+        r.hook('turn-start')
+        r.hook('turn-stop')
+        await r.advance(yesAt)
+        expect(r.report(true)).toBe(true)
+        await r.advance(1_500 - yesAt)
+        expect(r.told).toEqual([])
+        await r.advance(8_400)
+        expect(r.told).toEqual([])
+        expect(r.agent().state).toBe('working')
+        await nextStopTold(r)
+      })
+
+    it('the yes before the blocked stop: that stop is held; the next one is told done once', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      await r.advance(1_000)
+      expect(r.report(true)).toBe(true)
+      await r.advance(300)
+      r.hook('turn-stop')
+      await r.advance(9_000)
+      expect(r.told).toEqual([])
+      expect(r.agent().state).toBe('working')
+      await nextStopTold(r)
+    })
+
+    it('a continuation longer than 10 s that keeps showing activity is still held, and is announced at its next stop', async () => {
+      const r = rig()
+      await heldAfterYes(r)
+      await r.advance(6_000)
+      r.grow()
+      await r.advance(4_000)
+      expect(r.told).toEqual([])
+      await r.advance(4_000)
+      r.grow()
+      await r.advance(6_000)
+      expect(r.told).toEqual([])
+      await r.advance(2_000)
+      r.grow()
+      await r.advance(8_000)
+      r.grow()
+      expect(r.told).toEqual([])
+      await r.advance(8_000)
+      expect(r.told).toEqual([])
+      await nextStopTold(r)
+    })
+
+    it('a hook for the session counts as activity', async () => {
+      const r = rig()
+      const yes = await heldAfterYes(r)
+      await r.advance(8_000)
+      r.hook('subagent-start')
+      r.hook('subagent-stop')
+      await r.advance(9_900)
+      expect(r.told).toEqual([])
+      await r.advance(100)
+      expect(r.told).toEqual([yes + 18_000])
+    })
+
+    it('no next stop, quiet: told once 10 s after the last activity', async () => {
+      const r = rig()
+      const yes = await heldAfterYes(r)
+      await r.advance(4_000)
+      r.grow()
+      await r.advance(9_900)
+      expect(r.told).toEqual([])
+      await r.advance(100)
+      expect(r.told).toEqual([yes + 14_000])
+      await r.advance(0)
+      expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+      await r.advance(16_000)
+      expect(r.told).toHaveLength(1)
+      expect(r.heldEnds()).toEqual(['[observed] held stop · quiet'])
+    })
+
+    it('the 120 s cap', async () => {
+      const r = rig()
+      const yes = await heldAfterYes(r)
+      for (let at = 5_000; at < 120_000; at += 5_000) {
+        await r.advance(5_000)
+        r.grow()
+      }
+      await r.advance(4_900)
+      expect(r.told).toEqual([])
+      await r.advance(100)
+      expect(r.told).toEqual([yes + 120_000])
+      for (let i = 0; i < 6; i++) {
+        await r.advance(5_000)
+        r.grow()
+      }
+      await r.advance(20_000)
+      expect(r.told).toHaveLength(1)
+      expect(r.heldEnds()).toEqual(['[observed] held stop · cap'])
+    })
+
+    it('an unreadable transcript shows no activity', async () => {
+      const r = rig('claude', { fileStamp: async () => null })
+      const yes = await heldAfterYes(r)
+      await r.advance(4_000)
+      r.grow()
+      await r.advance(5_999)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([yes + 10_000])
+    })
+
+    it('a stop while the stamp is being read', async () => {
+      let read!: (stamp: { stamp: string; mtime: number } | null) => void
+      const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>((resolve) => { read = resolve }))
+      const r = rig('claude', { fileStamp })
+      const yes = await heldAfterYes(r)
+      await r.advance(10_000)
+      expect(fileStamp).toHaveBeenCalledTimes(1)
+      r.hook('turn-stop')
+      const stop = Date.now()
+      read({ stamp: '', mtime: yes - 2_000 })
+      await r.advance(0)
+      expect(r.told).toEqual([])
+      await r.advance(300)
+      r.report(false)
+      await r.advance(1_199)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([stop + 1_500])
+      await r.advance(130_000)
+      expect(r.told).toHaveLength(1)
+    })
+
+    it.each<[string, (r: Rig) => Promise<void>]>([
+      ['a prompt', async (r) => { r.hook('turn-start') }],
+      ['a removal', async (r) => {
+        r.gens.set(100, null)
+        await r.src.tick()
+        expect(r.src.list()).toEqual([])
+      }],
+    ])('%s while the stamp is being read: nothing told at the read, and no timer left', async (_what, end) => {
+      let read!: (stamp: { stamp: string; mtime: number } | null) => void
+      const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>((resolve) => { read = resolve }))
+      const r = rig('claude', { fileStamp })
+      const yes = await heldAfterYes(r)
+      await r.advance(10_000)
+      expect(fileStamp).toHaveBeenCalledTimes(1)
+      await end(r)
+      read({ stamp: '', mtime: yes - 2_000 })
+      await r.advance(0)
+      expect(r.told).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+      expect(r.heldEnds()).toEqual([])
+    })
+
+    it('a stamp read that never answers (a stalled network share): told at the 120 s cap all the same', async () => {
+      const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>(() => {}))
+      const r = rig('claude', { fileStamp })
+      const yes = await heldAfterYes(r)
+      await r.advance(10_000)
+      expect(fileStamp).toHaveBeenCalledTimes(1)
+      await r.advance(109_999)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([yes + 120_000])
+      await r.advance(0)
+      expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+      expect(r.heldEnds()).toEqual(['[observed] held stop · cap'])
+    })
+
+    it('the yes before its stop, and no stop at all, quiet for 10 s: nothing told, and the turn still works', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      expect(r.report(true)).toBe(true)
+      await r.advance(30_000)
+      expect(r.told).toEqual([])
+      expect(r.agent().state).toBe('working')
+      expect(r.heldEnds()).toEqual(['[observed] held stop · unheard'])
+      // The hold is gone: the owner's record reading idle ends the turn, as it does any turn no stop is held for.
+      r.open.set(SESSION, 'terminal')
+      r.owners.set(SESSION, { pid: 100, engine: 'claude' })
+      r.working.set(SESSION, false)
+      await r.src.checkWorking()
+      expect(r.agent().state).toBe('idle')
+      expect(r.told).toEqual([])
+    })
+
+    it('the yes before its stop, and no stop at all, the transcript growing: nothing told at 120 s either', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.report(true)
+      for (let at = 5_000; at <= 125_000; at += 5_000) {
+        await r.advance(5_000)
+        r.grow()
+      }
+      expect(r.told).toEqual([])
+      expect(r.agent().state).toBe('working')
+      expect(r.heldEnds()).toEqual(['[observed] held stop · unheard'])
+    })
+
+    it.each([
+      ['a prompt', 'turn-start', 'working'], ['needs-input', 'needs-input', 'needs-you'], ['turn-error', 'turn-error', 'error'],
+      ['session-end', 'session-end', 'idle'], ['turn-aborted', 'turn-aborted', 'idle'],
+    ] as const)('%s during the hold: nothing told for the held stop', async (_what, event, state) => {
+      const r = rig()
+      await heldAfterYes(r)
+      await r.advance(2_000)
+      r.hook(event)
+      await r.advance(130_000)
+      expect(r.told).toEqual([])
+      expect(r.agent().state).toBe(state)
+    })
+
+    it('the continuation\'s report before its own stop leaves the hold as it is: that stop is told 1.5 s after it', async () => {
+      const r = rig()
+      await heldAfterYes(r)
+      await r.advance(5_000)
+      r.report(false)
+      await r.advance(200)
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(1_499)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([stop + 1_500])
+    })
+
+    it('stopReported for an agent no hook listed, an ended session, or another engine is false and changes nothing', async () => {
+      const r = rig()
+      expect(r.src.stopReported(observedAgentId('claude', 'never-listed'), false)).toBe(false)
+      expect(r.src.stopReported(observedAgentId('claude', 'never-listed'), true)).toBe(false)
+      expect(r.src.list()).toHaveLength(1)
+      r.hook('turn-start')
+      r.hook('session-end')
+      expect(r.report(false)).toBe(false)
+      expect(r.report(true)).toBe(false)
+      // Resumed, it was never marked: its stop takes the grace.
+      r.hook('session-start')
+      r.hook('turn-start')
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(1_500)
+      expect(r.told).toEqual([stop + 1_500])
+      const cursor = rig('cursor')
+      cursor.hook('turn-start')
+      cursor.hook('turn-stop')
+      expect(cursor.report(true)).toBe(false)
+      expect(cursor.report(false)).toBe(false)
+      const cursorStop = Date.now()
+      await cursor.advance(1_500)
+      cursor.hook('turn-start')
+      cursor.hook('turn-stop')
+      const next = Date.now()
+      await cursor.advance(1_500)
+      expect(cursor.told).toEqual([cursorStop + 1_500, next + 1_500])
+    })
+
+    it('a second yes keeps the first deadline', async () => {
+      const r = rig()
+      const yes = await heldAfterYes(r)
+      for (let at = 5_000; at <= 100_000; at += 5_000) {
+        await r.advance(5_000)
+        r.grow()
+      }
+      r.report(true)
+      for (let at = 105_000; at < 120_000; at += 5_000) {
+        await r.advance(5_000)
+        r.grow()
+      }
+      await r.advance(4_999)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([yes + 120_000])
+    })
+
+    it('a second yes is no activity: the hold still goes quiet 10 s after the first', async () => {
+      const r = rig()
+      const yes = await heldAfterYes(r)
+      await r.advance(5_000)
+      r.report(true)
+      await r.advance(4_999)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([yes + 10_000])
+    })
+
+    it('checkWorking leaves a held turn alone', async () => {
+      let read: ((stamp: { stamp: string; mtime: number } | null) => void) | undefined
+      const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>((resolve) => { read = resolve }))
+      const r = rig('claude', { fileStamp })
+      r.open.set(SESSION, 'terminal')
+      r.owners.set(SESSION, { pid: 100, engine: 'claude' })
+      r.working.set(SESSION, false)
+      await r.mark()
+      // Inside a report wait.
+      r.hook('turn-start')
+      await r.advance(3_000)
+      r.hook('turn-stop')
+      const stop = Date.now()
+      await r.advance(1_000)
+      await r.src.checkWorking()
+      expect(r.agent().state).toBe('working')
+      await r.advance(1_000)
+      r.report(false)
+      expect(r.told).toEqual([stop + 2_000])
+      // Inside a hold, and while its stamp is read.
+      r.hook('turn-start')
+      await r.advance(3_000)
+      r.hook('turn-stop')
+      await r.advance(1_300)
+      r.report(true)
+      const yes = Date.now()
+      await r.advance(3_000)
+      await r.src.checkWorking()
+      expect(r.agent().state).toBe('working')
+      await r.advance(7_000)
+      expect(fileStamp).toHaveBeenCalledTimes(1)
+      await r.src.checkWorking()
+      expect(r.agent().state).toBe('working')
+      expect(r.told).toEqual([stop + 2_000])
+      read!({ stamp: '', mtime: yes - 4_000 })
+      await r.advance(0)
+      expect(r.told).toEqual([stop + 2_000, yes + 10_000])
+    })
+
+    it('a lead with subagents running: the stop is not held by the yes, as today', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      r.hook('subagent-start')
+      r.hook('turn-stop')
+      expect(r.report(true)).toBe(false)
+      r.hook('subagent-stop')
+      await nextStopTold(r)
+    })
+  })
+
+  // A notice rung while a yes holds the turn is the yes's ring, counted once a yes (the spec's "Part 5's counts").
+  describe('the ring after a yes (Part 5\'s counts)', () => {
+    it.each(['claude', 'codex'] as const)('the yes\'s hold answers its engine once (%s)', async (engine) => {
+      const r = rig(engine)
+      await heldAfterYes(r)
+      expect(r.rang()).toBe(engine)
+      expect(r.rang()).toBeNull()
+    })
+
+    it('the yes before the blocked stop: its hold answers once, though it goes on past that stop', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      expect(r.report(true)).toBe(true)
+      expect(r.rang()).toBe('claude')
+      r.hook('turn-stop')
+      expect(r.rang()).toBeNull()
+    })
+
+    it.each<[string, (r: Rig) => Promise<void>]>([
+      ['its next stop', async (r) => { r.hook('turn-stop') }],
+      ['10 s quiet', async (r) => {
+        await r.advance(CONTINUE_QUIET_MS)
+        expect(r.told).toHaveLength(1)
+      }],
+      ['the 120 s cap', async (r) => {
+        for (let at = 0; at < CONTINUE_MAX_MS; at += 5_000) {
+          await r.advance(5_000)
+          r.grow()
+        }
+        expect(r.told).toHaveLength(1)
+      }],
+      ['a prompt', async (r) => { r.hook('turn-start') }],
+      ['session-end', async (r) => { r.hook('session-end') }],
+    ])('null once the hold ends: %s', async (_, end) => {
+      const r = rig()
+      await heldAfterYes(r)
+      await end(r)
+      expect(r.rang()).toBeNull()
+    })
+
+    it.each<[string, (r: Rig) => Promise<void>]>([
+      ['no report', async (r) => {
+        r.hook('turn-start')
+        r.hook('turn-stop')
+      }],
+      ['a no', async (r) => {
+        await r.mark()
+        r.hook('turn-start')
+        r.hook('turn-stop')
+        expect(r.report(false)).toBe(true)
+      }],
+      ['a second yes, the first one\'s ring read', async (r) => {
+        await heldAfterYes(r)
+        expect(r.rang()).toBe('claude')
+        expect(r.report(true)).toBe(true)
+      }],
+      ['a yes that started no hold', async (r) => {
+        r.hook('turn-start')
+        r.hook('turn-stop')
+        await r.advance(1_500)
+        expect(r.report(true)).toBe(false)
+      }],
+    ])('null with %s', async (_, setup) => {
+      const r = rig()
+      await setup(r)
+      expect(r.rang()).toBeNull()
+    })
+
+    it('null for an agent no hook listed', () => {
+      const r = rig()
+      expect(r.src.rangInHold(observedAgentId('claude', 'never-listed'))).toBeNull()
+    })
   })
 })
 

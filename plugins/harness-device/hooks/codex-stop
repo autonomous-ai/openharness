@@ -1,0 +1,24 @@
+#!/bin/sh
+# Codex runs this when the agent ends a turn. The launcher looks at the turn's last answer and prints a block, which
+# sends the agent back to ring the dial, or nothing. Codex reads what a Stop hook prints as its decision, as Claude Code
+# does (the spike, codex-cli 0.172.0), so only the block the launcher shapes passes on: an older or foreign launcher's
+# usage, another hook's JSON or anything on stderr is dropped, and the exit is always 0.
+# ~/.local/bin first: the installer puts the launcher there, and an app started from the Dock may not have it on PATH.
+#
+# codex.json's command is read by two shells, as for hooks/codex-asked: off Windows the first line execs this script;
+# on Windows PowerShell runs the second line, the same lookup and the same check on what the launcher prints.
+#
+# The input is read to its end after the launcher, as hooks/codex-start does: one that stops reading early (an older
+# launcher printing its usage, or one past its bound), or none, would leave Codex's write of it to meet a closed pipe.
+prefix='{"decision":"block","reason":'
+out=
+if [ -x "$HOME/.local/bin/harness" ]; then
+  out=$("$HOME/.local/bin/harness" device codex stop 2>/dev/null)
+elif command -v harness >/dev/null 2>&1; then
+  out=$(harness device codex stop 2>/dev/null)
+fi
+cat >/dev/null
+case "$out" in
+  "$prefix"*) printf '%s\n' "$out" ;;
+esac
+exit 0
