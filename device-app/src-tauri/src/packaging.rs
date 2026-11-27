@@ -80,65 +80,56 @@ fn every_windows_build_is_a_gui_program() {
     assert_eq!(file("src/main.rs").lines().next(), Some(r#"#![cfg_attr(windows, windows_subsystem = "windows")]"#));
 }
 
-// An icns is an 8-byte header, then chunks of a 4-byte type, a 4-byte big-endian length (header included) and the
-// image. This returns the drawing of `kind` as `(side, rgba)`.
-fn icns_drawing(kind: &str) -> (usize, Vec<u8>) {
+// The side of a square icon image: a PNG, or for an icns' ic04 (16 px) and ic05 (32 px) "ARGB" then each channel's
+// plane run-length encoded, where a byte below 0x80 copies the next byte + 1 bytes and any other repeats the next byte
+// (byte - 0x80 + 3) times.
+fn side(what: &str, image: &[u8]) -> usize {
+    let Some(planes) = image.strip_prefix(b"ARGB") else {
+        let png = tauri::image::Image::from_bytes(image).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(png.width(), png.height(), "{what}: not square");
+        return png.width() as usize;
+    };
+    let (mut len, mut at) = (0, 0);
+    while at < planes.len() {
+        let run = planes[at] as usize;
+        (len, at) = if run < 0x80 { (len + run + 1, at + 2 + run) } else { (len + run - 0x80 + 3, at + 2) };
+    }
+    (len / 4).isqrt()
+}
+
+/// icon.icns and icon.ico are the design team's (the Harness_AppIcon set, dark), as they sent them; the PNGs are
+/// written from icons/app-1024.png by `scripts/icons.py app`.
+#[test]
+fn the_icns_and_the_ico_hold_every_size() {
+    // An icns is an 8-byte header, then chunks of a 4-byte type, a 4-byte big-endian length (header included) and the
+    // image. iconutil adds an `info` chunk, which is no image.
     let icns = bytes("icons/icon.icns");
-    let mut at = 8;
+    assert_eq!(&icns[..4], b"icns");
+    let (mut images, mut at) = (Vec::new(), 8);
     while at < icns.len() {
+        let kind = std::str::from_utf8(&icns[at..at + 4]).unwrap();
         let len = u32::from_be_bytes(icns[at + 4..at + 8].try_into().unwrap()) as usize;
-        if &icns[at..at + 4] == kind.as_bytes() {
-            return decode(kind, &icns[at + 8..at + len]);
+        if kind != "info" {
+            images.push((kind, side(&format!("icons/icon.icns {kind}"), &icns[at + 8..at + len])));
         }
         at += len;
     }
-    panic!("icons/icon.icns has no {kind}");
-}
-
-// ic04 (16 px) and ic05 (32 px) are "ARGB" then each channel's plane run-length encoded: a byte below 0x80 copies the
-// next byte + 1 bytes, any other repeats the next byte (byte - 0x80 + 3) times. The colour is straight, not
-// premultiplied (`iconutil -c iconset` divides it by alpha anyway, so its 16 and 32 px edges come out pale). The
-// larger sizes are PNG.
-fn decode(kind: &str, body: &[u8]) -> (usize, Vec<u8>) {
-    let Some(planes) = body.strip_prefix(b"ARGB") else {
-        let image = tauri::image::Image::from_bytes(body).unwrap_or_else(|e| panic!("{kind}: {e}"));
-        return (image.width() as usize, image.rgba().to_vec());
-    };
-    let (mut argb, mut at) = (Vec::new(), 0);
-    while at < planes.len() {
-        let run = planes[at] as usize;
-        if run < 0x80 {
-            argb.extend_from_slice(&planes[at + 1..at + 2 + run]);
-            at += 2 + run;
-        } else {
-            argb.extend(std::iter::repeat_n(planes[at + 1], run - 0x80 + 3));
-            at += 2;
-        }
-    }
-    let n = argb.len() / 4;
-    let rgba = (0..n).flat_map(|i| [argb[n + i], argb[2 * n + i], argb[3 * n + i], argb[i]]).collect();
-    (n.isqrt(), rgba)
-}
-
-// `drawing` resized to `size` by nearest neighbour (each pixel takes the source pixel under its centre), which keeps
-// pixel art's hard edges; at the drawing's own size it is the drawing.
-fn nearest((side, rgba): &(usize, Vec<u8>), size: usize) -> Vec<u8> {
-    let source = |i: usize| (2 * i + 1) * side / (2 * size);
-    (0..size * size).flat_map(|i| rgba[(source(i / size) * side + source(i % size)) * 4..][..4].to_vec()).collect()
-}
-
-/// The Windows and Linux icons are the drawings macOS shows, from `icons/icon.icns`, size for size: its small sizes are
-/// drawn per size, not `icon.png` scaled. A size the icns has no drawing for takes the nearest one that keeps the Pixel
-/// H legible, by nearest neighbour: 24 px and 48 px are the 16 px solid H (the 32 px and 64 px dots merge into stripes
-/// at 24 and 48; 48 is exactly 3x 16, so its edges stay crisp).
-/// Regenerate: write each size as `nearest(icns_drawing(kind), size)` to its PNG, and the ICO's sizes as PNG entries.
-#[test]
-fn the_windows_and_linux_icons_are_the_macos_drawings() {
-    for (name, size, kind) in
-        [("icons/32x32.png", 32, "ic05"), ("icons/128x128.png", 128, "ic07"), ("icons/128x128@2x.png", 256, "ic08")]
-    {
-        assert_drawing(name, &bytes(name), size, kind);
-    }
+    images.sort();
+    assert_eq!(
+        images,
+        [
+            ("ic04", 16),
+            ("ic05", 32),
+            ("ic07", 128),
+            ("ic08", 256),
+            ("ic09", 512),
+            ("ic10", 1024),
+            ("ic11", 32),
+            ("ic12", 64),
+            ("ic13", 256),
+            ("ic14", 512)
+        ]
+    );
     // An ICO is a 6-byte header with the image count at 4, a 16-byte entry per image (width at 0 and height at 1, where
     // 0 means 256; length at 8; offset at 12), then the images, each a PNG.
     let ico = bytes("icons/icon.ico");
@@ -148,23 +139,10 @@ fn the_windows_and_linux_icons_are_the_macos_drawings() {
     for entry in (0..count).map(|i| 6 + 16 * i) {
         let size = if ico[entry] == 0 { 256 } else { ico[entry] as usize };
         assert_eq!(ico[entry + 1], ico[entry], "icons/icon.ico {size} px entry: height differs from width");
-        let kind = match size {
-            16 | 24 | 48 => "ic04",
-            32 => "ic05",
-            64 => "ic12",
-            _ => "ic08",
-        };
         let (len, at) = (u32_at(entry + 8), u32_at(entry + 12));
-        assert_drawing(&format!("icons/icon.ico {size}x{size}"), &ico[at..at + len], size, kind);
+        assert!(ico[at..].starts_with(b"\x89PNG"), "icons/icon.ico {size} px entry: not a PNG");
+        assert_eq!(side(&format!("icons/icon.ico {size} px"), &ico[at..at + len]), size);
         sizes.push(size);
     }
-    assert_eq!(sizes, [16, 24, 32, 48, 64, 256]);
-}
-
-fn assert_drawing(what: &str, png: &[u8], size: usize, kind: &str) {
-    let image = tauri::image::Image::from_bytes(png).unwrap_or_else(|e| panic!("{what}: {e}"));
-    assert_eq!((image.width() as usize, image.height() as usize), (size, size), "{what}");
-    let want = nearest(&icns_drawing(kind), size);
-    let differ = image.rgba().chunks(4).zip(want.chunks(4)).filter(|(got, want)| got != want).count();
-    assert_eq!(differ, 0, "{what}: pixels that are not icons/icon.icns's {kind} drawing at {size} px");
+    assert_eq!(sizes, [16, 24, 32, 48, 64, 128, 256]);
 }
