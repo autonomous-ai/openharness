@@ -888,6 +888,26 @@ describe('several cards an agent', () => {
     expect(lines(rig)).toEqual([long, W(2)])
   })
 
+  // A close frame takes only an asked question off a Harness Pro: a card held there, a drawer row, stays until the
+  // drawer is replaced.
+  it('an agent\'s last card going is followed by a drawer replace without its row', () => {
+    const held = desk()
+    held.state.present.add('a')
+    say(held, W(1))
+    clear(held)
+    expect(held.notices.done('a', cid(1))).toBe(1)
+    expect(held.calls).toEqual([['close', 'a', qid(1)]])
+    expect(held.state.redraws).toEqual([['a']])
+    expect(held.notices.rows('m')).toEqual([])
+    const asked = desk()
+    say(asked, W(1))
+    say(asked, VPN, 'b')
+    clear(asked)
+    asked.notices.ended('a')
+    expect(asked.state.redraws).toEqual([['a']])
+    expect(asked.notices.rows('m')).toEqual([row(VPN, 'b')])
+  })
+
   it('closing the card shown brings the next up without a ring', () => {
     const rig = desk()
     say(rig, W(1))
