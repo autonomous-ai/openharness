@@ -10231,6 +10231,143 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(logs).toContain(`[device] nudge · ${engine} · yes`)
     })
 
+    // Once an agent (decision 5): a yes holds its next one back until the person's next prompt to it, it leaves, or 10
+    // minutes pass, even for an engine that does not set `stop_hook_active` on the continuation.
+    it('a second nudge before the person\'s next prompt is no, as nudged; after their prompt, yes again', () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · nudged')
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+    })
+
+    it('a relayed turn-start does not end the once rule', () => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      port.observed(hook('turn-start', { relayed: true }))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · nudged')
+    })
+
+    it('after 10 minutes a nudge is yes again', async () => {
+      const { listener } = devices({ now: () => Date.now() })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+      await vi.advanceTimersByTimeAsync(599_999)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+    })
+
+    it('the continuation\'s ask false is no ask, not nudged', async () => {
+      const { listener } = devices({ now: () => Date.now() })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+      await vi.advanceTimersByTimeAsync(599_000)
+      expect(nudge(listener, 'sess-9', false)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · no ask')
+      expect(logs).not.toContain('[device] nudge · claude · nudged')
+      // Neither gone nor renewed by the report: the yes's own 10 minutes still run.
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+    })
+
+    // A Harness agent's continuation is its reader's: its first card starts a new `began`, which alone would read the
+    // person as there again (decision 13).
+    it('a Harness agent nudged with its tile on screen: its continuation\'s notice rings, not quiet, and its turn end leaves no quiet card', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      const done = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      processing(port)
+      port.desk(['h1'], true)
+      await vi.advanceTimersByTimeAsync(130_000)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      done()
+      processing(port)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      await vi.waitFor(() => expect(shownAsks().map(([agentId]) => agentId)).toEqual(['h1']))
+      done()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('hold')).toEqual([])
+      expect(logs.filter((line) => line.endsWith('· present'))).toEqual([])
+    })
+
+    it('the continuation over, the person there again: a notice in the next live exchange is quiet', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      const done = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      processing(port)
+      port.desk(['h1'], true)
+      await vi.advanceTimersByTimeAsync(130_000)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      done()
+      processing(port)
+      done()
+      processing(port)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      await vi.waitFor(() => expect(calls('hold')).toEqual([['h1', expect.stringMatching(/^shown:/), card('Harness')]]))
+      expect(shownAsks()).toEqual([])
+    })
+
+    it('the 65th nudged agent pushes out the first', () => {
+      const { listener } = devices({ now: () => Date.now() })
+      for (let i = 0; i < 65; i++) expect(nudge(listener, `sess-n${i}`, true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-n1', true)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-n0', true)).toEqual({ nudge: true })
+    })
+
+    // One agent known by two ids: a session a Harness agent holds is that agent's, whatever an outside hook says of it, so
+    // its marks go under the id its notice and its nudge were kept by.
+    it.each<[string, ObservedHookEvent['event']]>([
+      ['the person\'s prompt', 'turn-start'],
+      ['its end', 'session-end'],
+    ])('a session a Harness agent holds: %s ends its notice\'s turn and its once rule', (_, event) => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
+      port.observed(hook(event, { sessionId: 's-h1' }))
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+    })
+
+    // A session herdr lists too is the hook's copy while that is live, and herdr's row once it ends: its marks, kept under
+    // the hook's id, go as it ends and hold no place among the 64.
+    it('a session herdr lists too frees its places as it ends', async () => {
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'working', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const { port, listener } = devices({ herdr: client, orca: onMac, tty: async () => undefined, now: () => Date.now() })
+      seen.host.watching!(true)
+      port.swarms(null)
+      subs[0].started()
+      await list
+      const inHerdr = { sessionId: 'sess-h', hostHints: { HERDR_PANE_ID: 'w1:p1' } }
+      const rang = (i: number) => listener.notice({ text: LINE, engine: 'claude', sessionId: `sess-r${i}` })
+      rang(0)
+      expect(nudge(listener, 'sess-n0', true)).toEqual({ nudge: true })
+      port.observed(hook('turn-start', inHerdr))
+      expect(nudge(listener, 'sess-h', true)).toEqual({ nudge: true })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })
+      for (let i = 1; i < 63; i++) {
+        rang(i)
+        expect(nudge(listener, `sess-n${i}`, true)).toEqual({ nudge: true })
+      }
+      port.observed(hook('session-end', inHerdr))
+      rang(63)
+      expect(nudge(listener, 'sess-n63', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-r0', true)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-n0', true)).toEqual({ nudge: false })
+      expect(logs.slice(-4).filter((line) => !line.includes(' · day '))).toEqual(['[device] nudge · claude · notice', '[device] nudge · claude · nudged'])
+    })
+
     it('the tally names no session', () => {
       const { port, listener } = devices({ now: () => Date.now() })
       port.observed(hook('turn-start'))
@@ -10238,8 +10375,11 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       nudge(listener, 'sess-1', true)
       noDial()
       nudge(listener, 'sess-1', true)
+      ;(seen.cable as unknown as { connected: boolean }).connected = true
+      nudge(listener, 'sess-1', true)
       expect(logs.filter((line) => line.startsWith('[device] nudge') && !line.includes(' · day '))).toEqual([
         '[device] nudge · claude · no ask', '[device] nudge · claude · yes', '[device] nudge · claude · no dial',
+        '[device] nudge · claude · nudged',
       ])
       expect(logs.filter((line) => line.includes('sess-1'))).toEqual([])
     })
