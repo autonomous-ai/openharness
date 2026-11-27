@@ -58,7 +58,7 @@ import { runCodexAsked } from './codexAsked.js'
 import { CALLER_LIVENESS, createDaemonProof, followInbox } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 import { ownSkillIn, runStart } from './start.js'
-import { codexExecRun, NUDGE_ANSWER_MS, runStop, type StopDeps } from './stop.js'
+import { codexHeadless, NUDGE_ANSWER_MS, runStop, type StopDeps } from './stop.js'
 
 /** `asked`, `start`, `stop`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and
  *  typed by hand they only wait on stdin or the dial, print a path or a line, or turn the dial. `vscode status`, `cursor status` and
@@ -250,7 +250,7 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
     case 'stop':
       return runStop({
         stdin: deps.stdin, dataDir: deps.dataDir, engine: 'codex', out: deps.out, ask: nudge(deps),
-        headless: (input) => codexExecRun(input.transcript_path), acts: () => codexSkillOn(deps),
+        headless: (input) => codexHeadless(input.transcript_path), acts: () => codexSkillOn(deps),
       })
     default:
       deps.err(DEVICE_USAGE)

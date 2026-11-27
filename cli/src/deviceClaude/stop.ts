@@ -8,13 +8,13 @@
  * this process: they are not sent, logged, printed or kept. The devices get the engine, the session id and one bit,
  * whether the answer's tail asks.
  *
- * A session in the data folder (Harness's own one-shots), a headless run (`claude -p`, `codex exec`: nobody is there to
- * ring) and an engine whose skill is not on tell the devices nothing. Every other stop is reported, an ask or not: the
- * devices hold an outside session's turn end for its report, once it has reported, so the end is never told before a
- * yes could stop it. The input's own checks come before any file is read (Codex's rollout head, the skill's files), so
- * malformed input or a Harness one-shot costs no read, and the devices are asked last. Codex's headless sign is its
- * rollout's first line: nothing in the hook's input or the environment says `exec` (`permission_mode` is `bypass`
- * under `exec`, and likely under a `--yolo` TUI too).
+ * A session in the data folder (Harness's own one-shots), a headless run (`claude -p`, `codex exec`, Codex run as
+ * another agent's MCP tool: nobody is there to ring) and an engine whose skill is not on tell the devices nothing. Every
+ * other stop is reported, an ask or not: the devices hold an outside session's turn end for its report, once it has
+ * reported, so the end is never told before a yes could stop it. The input's own checks come before any file is read
+ * (Codex's rollout head, the skill's files), so malformed input or a Harness one-shot costs no read, and the devices
+ * are asked last. Codex's headless sign is its rollout's first line: nothing in the hook's input or the environment
+ * says `exec` (`permission_mode` is `bypass` under `exec`, and likely under a `--yolo` TUI too).
  *
  * Both engines read what this prints as the stop's decision, so it prints the block or nothing: any failure prints
  * nothing, and it always exits 0.
@@ -56,12 +56,15 @@ const HEAD_CHUNK_BYTES = 16_384
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 
+/** The `source` of a Codex session nobody is at: `codex exec`, and Codex run as another agent's MCP tool. */
+const HEADLESS_SOURCES = new Set(['exec', 'mcp'])
+
 /**
- * Whether the Codex rollout at [transcriptPath] is a `codex exec` run's: its first line is the session's
- * `session_meta`, whose `source` is `exec`. Only a regular file is opened, as a FIFO would wait for a writer. False for
+ * Whether the Codex rollout at [transcriptPath] is a headless run's: its first line is the session's `session_meta`,
+ * whose `source` is one of HEADLESS_SOURCES. Only a regular file is opened, as a FIFO would wait for a writer. False for
  * anything that cannot be read or does not say so, so a session is never taken for headless by mistake.
  */
-export function codexExecRun(transcriptPath: unknown): boolean {
+export function codexHeadless(transcriptPath: unknown): boolean {
   if (typeof transcriptPath !== 'string' || !transcriptPath) return false
   try {
     if (!statSync(transcriptPath).isFile()) return false
@@ -82,7 +85,8 @@ export function codexExecRun(transcriptPath: unknown): boolean {
     }
     if (newline < 0) return false
     const line: unknown = JSON.parse(head.subarray(0, newline).toString('utf8'))
-    return isRecord(line) && line.type === 'session_meta' && isRecord(line.payload) && line.payload.source === 'exec'
+    const source = isRecord(line) && line.type === 'session_meta' && isRecord(line.payload) ? line.payload.source : undefined
+    return typeof source === 'string' && HEADLESS_SOURCES.has(source)
   } catch {
     return false
   }

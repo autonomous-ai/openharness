@@ -96,10 +96,11 @@ take the line away.
 Each engine's `Stop` hook runs `harness device claude stop` (`hooks/stop`, in `hooks/hooks.json`) or
 `harness device codex stop` (`hooks/codex-stop`, in `hooks/codex.json`). It reads the session's id, its folder, the
 turn's last answer and whether the stop already continues one. For Codex it also reads the first line of the session's
-rollout, to know a `codex exec` run.
+rollout, to know a headless run.
 
 It tells the devices nothing, and the turn ends as it would without Harness, for a headless run (`claude -p`,
-`codex exec`), a session in Harness's data folder (Harness's own one-shots), or an engine whose dial skill is not on.
+`codex exec`, Codex run as another agent's MCP tool), a session in Harness's data folder (Harness's own one-shots), or
+an engine whose dial skill is not on.
 Every other turn end is reported to the devices on this computer: the engine, the session's id, and whether the answer
 asks. The answer asks when its last 400 characters hold a question mark (`?` or `？`) and the stop does not already
 continue one. Once a session has reported, the devices wait for its report, at most 6 s, before the dial hears its

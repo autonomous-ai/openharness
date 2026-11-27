@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  asksOf, codexExecRun, DIAL_STOP_REASON, NUDGE_ANSWER_MS, ROLLOUT_HEAD_MAX_BYTES, runStop, stopOutput, type StopDeps,
+  asksOf, codexHeadless, DIAL_STOP_REASON, NUDGE_ANSWER_MS, ROLLOUT_HEAD_MAX_BYTES, runStop, stopOutput, type StopDeps,
 } from './stop.js'
 
 const REASON = 'Your answer asks the person something, and they are not at this session. If the task cannot go on without them, run harness device notify now, as the dial skill says, and end your turn. If nothing is needed from them, end your turn.'
@@ -176,7 +176,7 @@ describe('runStop', () => {
   })
 })
 
-describe('codexExecRun', () => {
+describe('codexHeadless', () => {
   const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__')
   const EXEC_HEAD = readFileSync(join(FIXTURES, 'codex-rollout-head-exec.jsonl'), 'utf8')
 
@@ -213,26 +213,26 @@ describe('codexExecRun', () => {
   })
 
   it('the TUI\'s head is not exec', () => {
-    expect(codexExecRun(copied('codex-rollout-head-tui.jsonl'))).toBe(false)
+    expect(codexHeadless(copied('codex-rollout-head-tui.jsonl'))).toBe(false)
   })
 
   it('exec\'s head is exec', () => {
-    expect(codexExecRun(copied('codex-rollout-head-exec.jsonl'))).toBe(true)
+    expect(codexHeadless(copied('codex-rollout-head-exec.jsonl'))).toBe(true)
   })
 
   // Codex run as another agent's MCP tool: nobody is there to ring.
   it('an mcp head is headless', () => {
-    expect(codexExecRun(rollout(EXEC_HEAD.replace('"source":"exec"', '"source":"mcp"')))).toBe(true)
+    expect(codexHeadless(rollout(EXEC_HEAD.replace('"source":"exec"', '"source":"mcp"')))).toBe(true)
   })
 
   it('exec\'s head with more rollout lines after it is exec', () => {
     const more = '{"type":"event_msg","payload":{"type":"task_started"}}\n'.repeat(4_000)
-    expect(codexExecRun(rollout(`${EXEC_HEAD}${more}`))).toBe(true)
+    expect(codexHeadless(rollout(`${EXEC_HEAD}${more}`))).toBe(true)
   })
 
   it('exec\'s head whose newline is the last byte read is exec; one byte longer is not', () => {
-    expect(codexExecRun(rollout(padded(ROLLOUT_HEAD_MAX_BYTES - 1)))).toBe(true)
-    expect(codexExecRun(rollout(padded(ROLLOUT_HEAD_MAX_BYTES)))).toBe(false)
+    expect(codexHeadless(rollout(padded(ROLLOUT_HEAD_MAX_BYTES - 1)))).toBe(true)
+    expect(codexHeadless(rollout(padded(ROLLOUT_HEAD_MAX_BYTES)))).toBe(false)
   })
 
   it.each<[string, () => string]>([
@@ -244,18 +244,18 @@ describe('codexExecRun', () => {
     ['another type with source exec', () => rollout('{"type":"event_msg","payload":{"source":"exec"}}\n')],
     ['a session_meta with no payload', () => rollout('{"type":"session_meta"}\n')],
   ])('is false for %s', (_name, pathOf) => {
-    expect(codexExecRun(pathOf())).toBe(false)
+    expect(codexHeadless(pathOf())).toBe(false)
   })
 
   it.each([undefined, '', 42, null, ['/rollout.jsonl']])('is false for the path %j', (path) => {
-    expect(codexExecRun(path)).toBe(false)
+    expect(codexHeadless(path)).toBe(false)
   })
 
   // Opening a FIFO for reading waits for a writer, so a return at all shows it was never opened.
   it.skipIf(process.platform === 'win32')('is false for a FIFO at the path, at once', () => {
     const path = join(folder(), 'rollout.jsonl')
     execFileSync('mkfifo', [path])
-    expect(codexExecRun(path)).toBe(false)
+    expect(codexHeadless(path)).toBe(false)
   })
 })
 
