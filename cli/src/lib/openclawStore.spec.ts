@@ -4,7 +4,9 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { builtinSqlite, closeSqliteHandles } from './sqliteBuiltin.js'
-import { openclawStateDir, openclawUserRowSince } from './openclawStore.js'
+import type { WindowsFilesRead } from './windows/openFiles.js'
+import { nativeOpenFiles } from './nativeConversation.js'
+import { openclawStateDir, openclawUserRowSince, stateDirOfOpenFiles } from './openclawStore.js'
 
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -14,6 +16,31 @@ it('says once that a TUI\'s open files cannot be read, by the kind of failure, n
   expect(await openclawStateDir(4321, unreadable)).toBeNull()
   expect(await openclawStateDir(4321, unreadable)).toBeNull()
   expect(warn.mock.calls).toEqual([['[openclaw] open files of 4321 unreadable · EACCES']])
+})
+
+describe('a Windows TUI\'s state folder, from the files harness-pty reads it holds', () => {
+  const database = 'C:\\Users\\u\\.openclaw-dev\\state\\openclaw.sqlite'
+
+  it('is the folder above its state database', async () => {
+    const asked: (readonly number[])[] = []
+    const read: WindowsFilesRead = async (pids) => {
+      asked.push(pids)
+      return new Map([[4242, { startMarker: 'w:133700000000000000', files: ['C:\\Windows\\System32\\en-US\\kernel32.dll.mui', database] }]])
+    }
+    expect(stateDirOfOpenFiles(await nativeOpenFiles(4242, 'win32', read), 'win32')).toBe('C:\\Users\\u\\.openclaw-dev')
+    expect(asked).toEqual([[4242]])
+  })
+
+  it('is unknown, never "holds nothing", when the files could not be read or the pid was left out', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const asked: (readonly number[])[] = []
+    const failed: WindowsFilesRead = async (pids) => { asked.push(pids); return null }
+    const leftOut: WindowsFilesRead = async (pids) => { asked.push(pids); return new Map() }
+    await expect(nativeOpenFiles(4243, 'win32', failed)).rejects.toThrow()
+    await expect(nativeOpenFiles(4244, 'win32', leftOut)).rejects.toThrow()
+    expect(await openclawStateDir(4245, (pid) => nativeOpenFiles(pid, 'win32', failed))).toBeNull()
+    expect(asked).toEqual([[4243], [4244], [4245]])
+  })
 })
 
 describe('whether OpenClaw\'s store holds a user row for a key', () => {
