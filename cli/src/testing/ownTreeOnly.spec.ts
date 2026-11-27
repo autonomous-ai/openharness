@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -242,21 +242,30 @@ const NOTED = new Map([[SERVER, LSTART], [HERDR, LSTART], [STALE, LSTART]])
 /** What descends from the noted processes that still run as themselves. */
 const NOTED_TREE = [SERVER, HELPER, CAT, HERDR, HERDR_PANE]
 
-const PERSONS = P(80), OTHERS = P(81), TESTS = P(82)
+const PERSONS = P(80), OTHERS = P(81), TESTS = P(82), HARD_LINKED = P(83)
 /**
  * Codex app servers, launchd's, each named by a pid file in [root], which this writes: the person's, started an hour
- * before the root; another account's and the test's, after it.
+ * before the root; another account's and the test's, after it; and one of this account's after it whose pid file, written
+ * outside the root, the root holds a hard link to.
  */
 function codexServers(root: string): Made[] {
   const born = statSync(root).birthtimeMs
   const server = 'codex app-server --managed-daemon'
-  for (const [home, pid] of [['person', PERSONS], ['other', OTHERS], ['test', TESTS]] as const) {
-    mkdirSync(join(root, 'home', home, 'app-server-daemon'), { recursive: true })
-    writeFileSync(join(root, 'home', home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: LSTART }))
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'codex-outside-')))
+  folders.push(outside)
+  /** The pid file of a Codex home at [home] naming [pid]. */
+  const pidFile = (home: string, pid: number): string => {
+    mkdirSync(join(home, 'app-server-daemon'), { recursive: true })
+    writeFileSync(join(home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: LSTART }))
+    return join(home, 'app-server-daemon', 'daemon.pid')
   }
+  for (const [home, pid] of [['person', PERSONS], ['other', OTHERS], ['test', TESTS]] as const) pidFile(join(root, 'home', home), pid)
+  mkdirSync(join(root, 'home', 'hard', 'app-server-daemon'), { recursive: true })
+  linkSync(pidFile(outside, HARD_LINKED), join(root, 'home', 'hard', 'app-server-daemon', 'daemon.pid'))
   return [made(PERSONS, 1, PERSONS, server, '/Users/person', lstart(new Date(born - 3_600_000))),
     made(OTHERS, 1, OTHERS, server, '/', lstart(new Date(born + 2_000)), UID + 1),
-    made(TESTS, 1, TESTS, server, '/', lstart(new Date(born + 2_000)))]
+    made(TESTS, 1, TESTS, server, '/', lstart(new Date(born + 2_000))),
+    made(HARD_LINKED, 1, HARD_LINKED, server, '/', lstart(new Date(born + 2_000)))]
 }
 
 describe("the process table the harness reads of every process", () => {
@@ -318,7 +327,7 @@ describe("the daemon's close sweep", () => {
     expect(beyond([WORKER, MASTER, CORE, CODEX, CODEX_CHILD, OWN_CALL, ...NOTED_TREE], NOTED.keys())).toEqual([])
   })
 
-  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, never the person's or another account's", async () => {
+  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, and none of the others (codexServers)", async () => {
     const root = testRoot()
     machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
     expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
@@ -538,7 +547,7 @@ process.exit(status)
     expect(beyond([LEFT, ...NOTED_TREE], [TMUX, PANE, LEFT, ...NOTED.keys()])).toEqual([])
   })
 
-  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, never the person's or another account's", async () => {
+  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, and none of the others (codexServers)", async () => {
     const root = testRoot()
     // The worker is gone, and nothing it saw still runs.
     machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), ...codexServers(root)]

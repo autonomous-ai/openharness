@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -229,7 +229,7 @@ describe('a Codex app server a pid file in the root names', () => {
     expect(codexDaemons(rows, root, 501)).toEqual([10, 11, 12])
   })
 
-  it('is read from a pid file 4 folders below the root at most, never through a link', () => {
+  it('is read from a pid file 4 folders below the root at most, never through a link, soft or hard', () => {
     const root = folder(), outside = folder()
     pidFile(join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid'), daemonPid(1001))
     pidFile(join(root, 'b1', 'h', 'x', 'app-server-daemon', 'daemon.pid'), daemonPid(1002))
@@ -239,14 +239,19 @@ describe('a Codex app server a pid file in the root names', () => {
     symlinkSync(join(outside, 'codex', 'app-server-daemon'), join(root, 'home', 'app-server-daemon'))
     mkdirSync(join(root, 'c', 'app-server-daemon'), { recursive: true })
     symlinkSync(join(outside, 'codex', 'app-server-daemon', 'daemon.pid'), join(root, 'c', 'app-server-daemon', 'daemon.pid'))
+    // A hard link is the file outside the root under a second name.
+    mkdirSync(join(root, 'd', 'app-server-daemon'), { recursive: true })
+    linkSync(join(outside, 'codex', 'app-server-daemon', 'daemon.pid'), join(root, 'd', 'app-server-daemon', 'daemon.pid'))
     expect(codexPidFiles(root).sort()).toEqual([1001, 1002])
   })
 
-  it('is no text that is not JSON, nor a pid that is not a safe integer over 1', () => {
+  it('is no text that is not JSON, nor a pid that is not a safe integer over 1, nor a file over 16 KiB', () => {
     const root = folder()
     const texts = ['not json', 'null', '{}', '{"pid":1}', '{"pid":0}', '{"pid":-5}', '{"pid":"1005"}', '{"pid":10.5}', `{"pid":${2 ** 53}}`]
     texts.forEach((text, n) => pidFile(join(root, `h${n}`, 'app-server-daemon', 'daemon.pid'), text))
     pidFile(join(root, 'good', 'app-server-daemon', 'daemon.pid'), daemonPid(1005))
+    // Over 16 KiB, as the product reads none (lib/harnessResources.ts).
+    pidFile(join(root, 'large', 'app-server-daemon', 'daemon.pid'), daemonPid(1006) + ' '.repeat(16_384))
     expect(codexPidFiles(root)).toEqual([1005])
   })
 
