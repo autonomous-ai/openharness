@@ -58,6 +58,9 @@ describe('the keys\' routes, answered by the gateway', () => {
     expect(await routes('POST', '/api/pair', '{"code":"1"}')).toEqual({ status: 500, body: { error: 'the round timed out' } })
     ops.setRemotePassword.mockRejectedValueOnce('not an error')
     expect(await routes('POST', '/api/remote-password/set', '{"password":"pw"}')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
+    // `harness remote-password clear` reads this word, and does not clear the file behind the daemon's back.
+    ops.clearRemotePassword.mockRejectedValueOnce(new Error('REMOTE_PASSWORD_NOT_DELETED (EBUSY)'))
+    expect(await routes('POST', '/api/remote-password/clear', undefined)).toEqual({ status: 500, body: { error: 'REMOTE_PASSWORD_NOT_DELETED (EBUSY)' } })
     ops.groupSync.mockRejectedValueOnce(new Error('roster unreadable'))
     expect(await routes('POST', '/api/group/sync', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     ops.listPairs.mockRejectedValueOnce('gone')

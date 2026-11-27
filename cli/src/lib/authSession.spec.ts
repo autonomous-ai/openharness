@@ -6,8 +6,9 @@ import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { StateFileUnreadable, probeState } from './secureState.js'
 
-// Pass-through unless a test sets a hook: a disk that fails mid-write, and the order of the writer's steps.
-const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined, steps: undefined as string[] | undefined }))
+// Pass-through unless a test sets a hook: a disk that fails mid-write, the order of the writer's steps, and deletes that
+// fail, each with the next code queued (an antivirus holding the file open on Windows: EBUSY).
+const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined, steps: undefined as string[] | undefined, failRemove: [] as string[] }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
@@ -18,6 +19,11 @@ vi.mock('node:fs', async original => {
     },
     fsyncSync: (fd: number) => { io.steps?.push('flush'); return actual.fsyncSync(fd) },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { io.steps?.push('rename'); return actual.renameSync(...args) },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      const code = io.failRemove.shift()
+      if (code) throw Object.assign(new Error(`${code}: fixture, ${String(args[0])}`), { code })
+      return actual.rmSync(...args)
+    },
   }
 })
 
@@ -60,7 +66,7 @@ const baseSession = () => ({
 })
 
 afterEach(() => {
-  Object.assign(io, { failWrite: undefined, steps: undefined })
+  Object.assign(io, { failWrite: undefined, steps: undefined, failRemove: [] })
   clearAuthSession()
   vi.unstubAllGlobals()
 })
@@ -171,6 +177,48 @@ describe('writing the session', () => {
   })
 })
 
+// 11-27: a delete that failed (an antivirus holding the file open on Windows) was swallowed, and the refresh token stayed
+// after `harness logout` said the computer was signed out.
+describe('deleting the sign-in', () => {
+  it('a sign-in it cannot delete is said, without its path, and stays on disk', () => {
+    const session = baseSession()
+    writeAuthSession(session)
+    io.failRemove = ['EBUSY', 'EBUSY', 'EBUSY']
+    const waits: number[] = []
+
+    let said: unknown
+    try { clearAuthSession((ms) => { waits.push(ms) }) } catch (error) { said = error }
+
+    expect((said as Error).message).toBe('SIGN_IN_NOT_DELETED (EBUSY)')
+    expect((said as Error).message).not.toContain(authDir)
+    expect(waits).toHaveLength(2)
+    expect(readAuthSession()).toEqual(session)
+  })
+
+  it('a sign-in held for a moment is deleted on the next try', () => {
+    writeAuthSession(baseSession())
+    io.failRemove = ['EBUSY']
+
+    clearAuthSession(() => {})
+
+    expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
+  })
+
+  it('a sign-in it may not delete is said at once', () => {
+    const session = baseSession()
+    writeAuthSession(session)
+    io.failRemove = ['EACCES']
+
+    expect(() => clearAuthSession(() => { throw new Error('waited') })).toThrow('SIGN_IN_NOT_DELETED (EACCES)')
+    expect(readAuthSession()).toEqual(session)
+  })
+
+  it('no sign-in to delete is no failure', () => {
+    expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
+    expect(() => clearAuthSession()).not.toThrow()
+  })
+})
+
 // A session.json that is not a JSON object (a write cut off by a crash) is a credential nobody can read: it is signed
 // out, nothing automatic replaces it, and only a person signing in or out deletes it. Kept aside, its refresh token
 // would outlive the sign-out.
@@ -227,6 +275,14 @@ describe('a session that cannot be read', () => {
     clearAuthSession()
     expect(existsSync(AUTH_SESSION_FILE)).toBe(false)
     expect(existsSync(ASIDE)).toBe(false)
+  })
+
+  it('a sign-in by hand over one that cannot be read and cannot be deleted says so', async () => {
+    await writeFile(AUTH_SESSION_FILE, TORN, { mode: 0o600 })
+    io.failRemove = ['EACCES']
+
+    expect(() => writeSignIn(next)).toThrow('SIGN_IN_NOT_DELETED (EACCES)')
+    expect(await readFile(AUTH_SESSION_FILE, 'utf8')).toBe(TORN)
   })
 
   it('a session of another version is replaced as before', async () => {

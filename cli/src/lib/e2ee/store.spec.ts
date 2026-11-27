@@ -10,7 +10,8 @@ const IDENTITY_TAIL = join('e2e', 'identity.json')
 // other process: the one that creates the key between this store's look and its own create. `identityPlaced` runs the
 // moment a store puts its key at identity.json: a write to the path (created, not yet filled) or a link onto it.
 // `tornWrite` makes the next write stop part way, as a full disk does. `identityTaken` makes every link onto identity.json
-// find a name there while a read finds no file (a link to nothing); `identityLinks` counts those links.
+// find a name there while a read finds no file (a link to nothing); `identityLinks` counts those links. `failRemove` makes
+// each delete fail with the next code queued, as an antivirus holding the file open on Windows does (EBUSY).
 const hooks = vi.hoisted(() => ({
   identityRead: null as ((reads: number) => void) | null,
   identityReads: 0,
@@ -18,6 +19,7 @@ const hooks = vi.hoisted(() => ({
   tornWrite: false,
   identityTaken: false,
   identityLinks: 0,
+  failRemove: [] as string[],
 }))
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
@@ -41,6 +43,11 @@ vi.mock('node:fs', async (importOriginal) => {
       placed()
       return real.writeFileSync(file, data, { ...(typeof options === 'object' ? options : {}), flag: 'w' })
     }) as typeof real.writeFileSync,
+    rmSync: ((file: fs.PathLike, options?: fs.RmOptions) => {
+      const code = hooks.failRemove.shift()
+      if (code) throw Object.assign(new Error(`${code}: fixture, ${String(file)}`), { code })
+      return real.rmSync(file, options)
+    }) as typeof real.rmSync,
     linkSync: ((existing: fs.PathLike, target: fs.PathLike) => {
       if (isIdentity(target) && hooks.identityTaken) {
         // A loop with no end blocks the event loop, and the test's timeout with it: end it here, as a failure.
@@ -71,11 +78,11 @@ const passwordRecord = (recentFailures: number[] = []): string =>
 
 beforeEach(() => {
   rmSync(join(root, 'e2e'), { recursive: true, force: true })
-  Object.assign(hooks, { identityRead: null, identityReads: 0, identityPlaced: null, tornWrite: false, identityTaken: false, identityLinks: 0 })
+  Object.assign(hooks, { identityRead: null, identityReads: 0, identityPlaced: null, tornWrite: false, identityTaken: false, identityLinks: 0, failRemove: [] })
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 afterEach(() => {
-  Object.assign(hooks, { identityRead: null, identityPlaced: null, tornWrite: false, identityTaken: false })
+  Object.assign(hooks, { identityRead: null, identityPlaced: null, tornWrite: false, identityTaken: false, failRemove: [] })
   vi.restoreAllMocks()
 })
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -178,6 +185,54 @@ describe('E2eeStore trust files', () => {
     writeFileSync(pairedFile, JSON.stringify([{ identityPub: 'pub-a', label: 'A', pairedAt: 1, role: 'web' }]))
     store.addPaired('pub-c', 'C', 3)
     expect((JSON.parse(readFileSync(pairedFile, 'utf8')) as Array<{ identityPub: string }>).map((p) => p.identityPub)).toEqual(['pub-a', 'pub-c'])
+  })
+
+  // 11-27: a delete that failed was swallowed after the password had left memory, and the next start loaded it again.
+  it('a remote password it cannot delete is said, without its path, and stays on disk and in memory', () => {
+    leave(passwordFile, passwordRecord())
+    const store = new E2eeStore()
+    store.init()
+    hooks.failRemove = ['EBUSY', 'EBUSY', 'EBUSY']
+    const waits: number[] = []
+
+    let said: unknown
+    try { store.clearRemotePassword((ms) => { waits.push(ms) }) } catch (error) { said = error }
+
+    expect((said as Error).message).toBe('REMOTE_PASSWORD_NOT_DELETED (EBUSY)')
+    expect((said as Error).message).not.toContain(root)
+    expect(waits).toHaveLength(2)
+    expect(store.hasRemotePassword()).toBe(true)
+    expect(readFileSync(passwordFile, 'utf8')).toBe(passwordRecord())
+  })
+
+  it('a remote password held for a moment is deleted on the next try, and leaves memory', () => {
+    leave(passwordFile, passwordRecord())
+    const store = new E2eeStore()
+    store.init()
+    hooks.failRemove = ['EBUSY']
+
+    store.clearRemotePassword(() => {})
+
+    expect(store.hasRemotePassword()).toBe(false)
+    expect(existsSync(passwordFile)).toBe(false)
+  })
+
+  it('a remote password it may not delete is said at once', () => {
+    leave(passwordFile, passwordRecord())
+    const store = new E2eeStore()
+    store.init()
+    hooks.failRemove = ['EACCES']
+
+    expect(() => store.clearRemotePassword(() => { throw new Error('waited') })).toThrow('REMOTE_PASSWORD_NOT_DELETED (EACCES)')
+    expect(store.hasRemotePassword()).toBe(true)
+  })
+
+  it('no remote password to delete is no failure', () => {
+    const store = new E2eeStore()
+    store.init()
+
+    expect(() => store.clearRemotePassword()).not.toThrow()
+    expect(store.hasRemotePassword()).toBe(false)
   })
 
   it('a torn remotePassword.json is no password, and is not replaced', async () => {
