@@ -1502,9 +1502,11 @@ describe('harness device codex', () => {
     expect(await device(['codex', 'start'], { dataDir, codexHome, stdin, codex: noCodex })).toEqual({ code: 0, out: [], err: [] })
   })
 
-  /** Codex's Stop hook input as Codex 0.172.0 gives it, its rollout a copy of the TUI's or exec's recorded head (F8). */
-  function codexStopInput(head: 'tui' | 'exec'): AsyncIterable<string> {
-    const transcript = join(folder(), 'rollout.jsonl')
+  /** Codex's Stop hook input as Codex 0.172.0 gives it, its rollout in [codexHome] a copy of the TUI's or exec's recorded
+   *  head (F8). */
+  function codexStopInput(codexHome: string, head: 'tui' | 'exec'): AsyncIterable<string> {
+    const transcript = join(codexHome, 'sessions', '2026', '11', '27', 'rollout-019abc00-0000-7000-8000-000000000001.jsonl')
+    mkdirSync(dirname(transcript), { recursive: true })
     cpSync(fileURLToPath(new URL(`./__fixtures__/codex-rollout-head-${head}.jsonl`, import.meta.url)), transcript)
     return chunks(JSON.stringify({
       session_id: '019abc00-0000-7000-8000-000000000001', turn_id: USER_TURN, transcript_path: transcript, cwd: '/repo',
@@ -1514,7 +1516,8 @@ describe('harness device codex', () => {
 
   it('codex stop prints the block with the plugin on and Harness\'s skill in the Codex home, and exits 0', async () => {
     const ask = nudges()
-    expect(await device(['codex', 'stop'], { codexHome: codexHomeOn(), stdin: codexStopInput('tui'), ask, codex: noCodex }))
+    const codexHome = codexHomeOn()
+    expect(await device(['codex', 'stop'], { codexHome, stdin: codexStopInput(codexHome, 'tui'), ask, codex: noCodex }))
       .toEqual({ code: 0, out: [stopOutput()], err: [] })
     expect(ask.mock.calls).toStrictEqual([[{ type: 'nudge', engine: 'codex', sessionId: '019abc00-0000-7000-8000-000000000001', ask: true }]])
   })
@@ -1530,7 +1533,7 @@ describe('harness device codex', () => {
     const codexHome = codexHomeOn()
     const { head = 'tui', answer } = arrange(dataDir, codexHome) ?? {}
     const ask = nudges(answer)
-    expect(await device(['codex', 'stop'], { dataDir, codexHome, stdin: codexStopInput(head), ask, codex: noCodex }))
+    expect(await device(['codex', 'stop'], { dataDir, codexHome, stdin: codexStopInput(codexHome, head), ask, codex: noCodex }))
       .toEqual({ code: 0, out: [], err: [] })
     expect(ask).toHaveBeenCalledTimes(asked)
   })

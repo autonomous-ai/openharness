@@ -1,17 +1,15 @@
 /**
  * The second look at a stop, and `runStop` as the plugin's Stop hook runs it: the hook's input handed as stdin, the
  * devices' answer injected, Codex's rollout heads (Codex 0.172.0's own first lines, paths cut to /home/person/project)
- * copied into throwaway folders. No listener, engine or home of the person's is touched.
+ * copied into throwaway Codex homes. No listener, engine or home of the person's is touched.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  asksOf, codexHeadless, DIAL_STOP_REASON, NUDGE_ANSWER_MS, ROLLOUT_HEAD_MAX_BYTES, runStop, stopOutput, type StopDeps,
-} from './stop.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { asksOf, codexHeadless, DIAL_STOP_REASON, NUDGE_ANSWER_MS, runStop, stopOutput, type StopDeps } from './stop.js'
 
 const REASON = 'Your answer asks the person something, and they are not at this session. If the task cannot go on without them, run harness device notify now, as the dial skill says, and end your turn. If nothing is needed from them, end your turn.'
 const EVALS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'evals', 'dial-skill')
@@ -179,20 +177,28 @@ describe('runStop', () => {
 describe('codexHeadless', () => {
   const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__')
   const EXEC_HEAD = readFileSync(join(FIXTURES, 'codex-rollout-head-exec.jsonl'), 'utf8')
+  /** The bound Codex's first record is read within (engines/codex/sessionStore.ts). */
+  const HEAD_BYTES = 128 * 1024
 
-  /** [name] from the fixtures, copied into a throwaway folder; its path. */
+  /** The session's Codex home, a throwaway folder each case. */
+  let home: string
+  beforeEach(() => { home = folder() })
+
+  /** [name] from the fixtures, copied into the Codex home; its path. */
   function copied(name: string): string {
-    const path = join(folder(), name)
+    const path = join(home, name)
     copyFileSync(join(FIXTURES, name), path)
     return path
   }
 
-  /** [text] in a throwaway rollout; its path. */
+  /** [text] in a rollout in the Codex home; its path. */
   function rollout(text: string): string {
-    const path = join(folder(), 'rollout.jsonl')
+    const path = join(home, 'rollout.jsonl')
     writeFileSync(path, text)
     return path
   }
+
+  const headless = (path: unknown): boolean => codexHeadless(path, home)
 
   /** exec's head with its `source` padded by spaces, so the line before its newline is [bytes] long. */
   function padded(bytes: number): string {
@@ -213,49 +219,62 @@ describe('codexHeadless', () => {
   })
 
   it('the TUI\'s head is not exec', () => {
-    expect(codexHeadless(copied('codex-rollout-head-tui.jsonl'))).toBe(false)
+    expect(headless(copied('codex-rollout-head-tui.jsonl'))).toBe(false)
   })
 
   it('exec\'s head is exec', () => {
-    expect(codexHeadless(copied('codex-rollout-head-exec.jsonl'))).toBe(true)
+    expect(headless(copied('codex-rollout-head-exec.jsonl'))).toBe(true)
   })
 
   // Codex run as another agent's MCP tool: nobody is there to ring.
   it('an mcp head is headless', () => {
-    expect(codexHeadless(rollout(EXEC_HEAD.replace('"source":"exec"', '"source":"mcp"')))).toBe(true)
+    expect(headless(rollout(EXEC_HEAD.replace('"source":"exec"', '"source":"mcp"')))).toBe(true)
   })
 
   it('exec\'s head with more rollout lines after it is exec', () => {
     const more = '{"type":"event_msg","payload":{"type":"task_started"}}\n'.repeat(4_000)
-    expect(codexHeadless(rollout(`${EXEC_HEAD}${more}`))).toBe(true)
+    expect(headless(rollout(`${EXEC_HEAD}${more}`))).toBe(true)
   })
 
   it('exec\'s head whose newline is the last byte read is exec; one byte longer is not', () => {
-    expect(codexHeadless(rollout(padded(ROLLOUT_HEAD_MAX_BYTES - 1)))).toBe(true)
-    expect(codexHeadless(rollout(padded(ROLLOUT_HEAD_MAX_BYTES)))).toBe(false)
+    expect(headless(rollout(padded(HEAD_BYTES - 1)))).toBe(true)
+    expect(headless(rollout(padded(HEAD_BYTES)))).toBe(false)
+  })
+
+  // The path is the hook's input: a file elsewhere is not the session's rollout.
+  it('exec\'s head outside the Codex home is not headless', () => {
+    const outside = join(folder(), 'rollout.jsonl')
+    copyFileSync(join(FIXTURES, 'codex-rollout-head-exec.jsonl'), outside)
+    expect(headless(outside)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('a link in the Codex home to exec\'s head is not headless', () => {
+    const path = join(home, 'link.jsonl')
+    symlinkSync(copied('codex-rollout-head-exec.jsonl'), path)
+    expect(headless(path)).toBe(false)
   })
 
   it.each<[string, () => string]>([
-    ['a missing file', () => join(folder(), 'gone.jsonl')],
-    ['a folder', () => folder()],
+    ['a missing file', () => join(home, 'gone.jsonl')],
+    ['a folder', () => { mkdirSync(join(home, 'sessions')); return join(home, 'sessions') }],
     ['an empty file', () => rollout('')],
     ['a first line that is not JSON', () => rollout(`not json\n${EXEC_HEAD}`)],
     ['a first line with no newline', () => rollout(EXEC_HEAD.trimEnd())],
     ['another type with source exec', () => rollout('{"type":"event_msg","payload":{"source":"exec"}}\n')],
     ['a session_meta with no payload', () => rollout('{"type":"session_meta"}\n')],
   ])('is false for %s', (_name, pathOf) => {
-    expect(codexHeadless(pathOf())).toBe(false)
+    expect(headless(pathOf())).toBe(false)
   })
 
   it.each([undefined, '', 42, null, ['/rollout.jsonl']])('is false for the path %j', (path) => {
-    expect(codexHeadless(path)).toBe(false)
+    expect(headless(path)).toBe(false)
   })
 
   // Opening a FIFO for reading waits for a writer, so a return at all shows it was never opened.
   it.skipIf(process.platform === 'win32')('is false for a FIFO at the path, at once', () => {
-    const path = join(folder(), 'rollout.jsonl')
+    const path = join(home, 'rollout.jsonl')
     execFileSync('mkfifo', [path])
-    expect(codexHeadless(path)).toBe(false)
+    expect(headless(path)).toBe(false)
   })
 })
 
