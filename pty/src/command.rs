@@ -96,6 +96,85 @@ pub fn run(exe: io::Result<PathBuf>, args: Vec<OsString>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn os(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn follows_inbox_only_for_the_followers_line() {
+        let followers: [&[&str]; 5] = [
+            &["device", "claude", "inbox", "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"],
+            &["device", "claude", "inbox"],
+            &["device", "claude", "inbox", ""],
+            &["device", "--json", "claude", "inbox", "x"],
+            &["device", "claude", "-q", "inbox", "x"],
+        ];
+        for line in followers {
+            assert!(follows_inbox(&os(line)), "{line:?}");
+        }
+        let others: [&[&str]; 9] = [
+            &["device", "claude", "attach", "x"],
+            &["device", "claude", "inbox", "x", "extra"],
+            &["claude", "inbox", "x"],
+            &["Device", "claude", "inbox", "x"],
+            &["device", "Claude", "inbox", "x"],
+            // What `hn` hands on.
+            &["tui", "device", "claude", "inbox", "x"],
+            &["device"],
+            &["device", "claude"],
+            &[],
+        ];
+        for line in others {
+            assert!(!follows_inbox(&os(line)), "{line:?}");
+        }
+        #[cfg(unix)]
+        let not_utf8 = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![0x66, 0xff])
+        };
+        #[cfg(windows)]
+        let not_utf8 = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0xD800])
+        };
+        let mut line = os(&["device", "claude", "inbox"]);
+        line.push(not_utf8);
+        assert!(!follows_inbox(&line));
+    }
+
+    #[test]
+    fn script_for_runs_inbox_mjs_only_when_the_version_folder_holds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let version = dir.path().join("cli").join("1.2.3");
+        fs::create_dir_all(&version).unwrap();
+        let cli_js = version.join("cli.js");
+        fs::write(&cli_js, b"").unwrap();
+        let resolved = Resolved { node: dir.path().join("node"), cli_js: cli_js.clone() };
+        let follower = os(&["device", "claude", "inbox", "x"]);
+        let inbox = version.join(INBOX);
+
+        // A version folder from before inbox.mjs.
+        assert_eq!(script_for(&resolved, &follower), cli_js);
+        fs::create_dir(&inbox).unwrap();
+        assert_eq!(script_for(&resolved, &follower), cli_js);
+        fs::remove_dir(&inbox).unwrap();
+
+        fs::write(&inbox, b"").unwrap();
+        assert_eq!(script_for(&resolved, &follower), inbox);
+        assert_eq!(script_for(&resolved, &os(&["device", "claude", "attach", "x"])), cli_js);
+
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            let elsewhere = outside.path().join(INBOX);
+            fs::write(&elsewhere, b"").unwrap();
+            fs::remove_file(&inbox).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &inbox).unwrap();
+            assert_eq!(script_for(&resolved, &follower), cli_js);
+        }
+    }
 
     #[test]
     fn as_hn_it_is_the_terminal_app() {

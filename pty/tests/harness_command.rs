@@ -9,11 +9,17 @@ use harness_pty::command::BROKEN;
 
 const HARNESS: &str = env!("CARGO_BIN_EXE_harness");
 
-/// The fake CLI prints what it was given and where it ran, and exits with the code `exit=<n>` asks for.
+/// The fake CLI prints its own name, what it was given and where it ran, and exits with the code `exit=<n>` asks for.
 const CLI_JS: &str = "const a = process.argv.slice(2)\n\
-console.log(JSON.stringify({ args: a, cwd: process.cwd(), env: process.env.HARNESS_COMMAND_TEST ?? null }))\n\
+console.log(JSON.stringify({ script: 'cli.js', args: a, cwd: process.cwd(), env: process.env.HARNESS_COMMAND_TEST ?? null }))\n\
 const exit = a.find((x) => x.startsWith('exit='))\n\
 process.exitCode = exit ? Number(exit.slice(5)) : 0\n";
+
+/// The fake inbox follower prints its own name and what it was given. An ES module, as the real inbox.mjs is.
+const INBOX_MJS: &str = "console.log(JSON.stringify({ script: 'inbox.mjs', args: process.argv.slice(2) }))\n";
+
+/// The follower's line, as the plugin's mod runs it (`device.js`).
+const FOLLOWER: [&str; 4] = ["device", "claude", "inbox", "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"];
 
 /// A Node to run the fake CLI with: $NODE, or the first one on PATH. With none, the test is skipped on a Rust-only
 /// machine, and fails when `CI` is set (harness_launch.rs has the same rule).
@@ -144,4 +150,74 @@ fn a_node_that_cannot_start_exits_4() {
     let out = output_of(Command::new(command(root)).arg("version"));
     assert_eq!(out.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&out.stderr).contains("could not start its Node runtime"), "{out:?}");
+}
+
+/// `cli\1.2.3\inbox.mjs`, the follower's own file beside `cli.js`, as install.ps1 and the updaters stage it.
+fn inbox_of(root: &Path) -> PathBuf {
+    root.join("cli").join("1.2.3").join("inbox.mjs")
+}
+
+/// What the fake that ran printed: its name and its arguments.
+fn report_of(exe: &Path, args: &[&str]) -> serde_json::Value {
+    let out = output_of(Command::new(exe).args(args));
+    assert!(out.status.success(), "{out:?}");
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+fn the_follower_runs_inbox_mjs_with_its_arguments_untouched() {
+    let node = require_node!();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path(), &node);
+    fs::write(inbox_of(dir.path()), INBOX_MJS).unwrap();
+    let report = report_of(&exe, &FOLLOWER);
+    assert_eq!(report["script"], "inbox.mjs");
+    assert_eq!(report["args"], serde_json::json!(FOLLOWER));
+}
+
+#[test]
+fn every_other_line_runs_cli_js() {
+    let node = require_node!();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path(), &node);
+    fs::write(inbox_of(dir.path()), INBOX_MJS).unwrap();
+    let lines: [&[&str]; 3] = [&["version"], &["device", "claude", "attach", "x"], &["device", "claude", "inbox", "x", "extra"]];
+    for args in lines {
+        let report = report_of(&exe, args);
+        assert_eq!(report["script"], "cli.js", "{args:?}");
+        assert_eq!(report["args"], serde_json::json!(args));
+    }
+}
+
+/// A harness.exe from this change on a version folder an older installer or updater wrote.
+#[test]
+fn an_install_without_inbox_mjs_runs_cli_js_for_the_follower() {
+    let node = require_node!();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path(), &node);
+    let report = report_of(&exe, &FOLLOWER);
+    assert_eq!(report["script"], "cli.js");
+    assert_eq!(report["args"], serde_json::json!(FOLLOWER));
+}
+
+#[test]
+fn a_folder_named_inbox_mjs_is_not_run() {
+    let node = require_node!();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path(), &node);
+    fs::create_dir(inbox_of(dir.path())).unwrap();
+    assert_eq!(report_of(&exe, &FOLLOWER)["script"], "cli.js");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_inbox_mjs_that_leads_out_of_cli_is_not_run() {
+    let node = require_node!();
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path(), &node);
+    let outside = tempfile::tempdir().unwrap();
+    let elsewhere = outside.path().join("inbox.mjs");
+    fs::write(&elsewhere, INBOX_MJS).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, inbox_of(dir.path())).unwrap();
+    assert_eq!(report_of(&exe, &FOLLOWER)["script"], "cli.js");
 }
