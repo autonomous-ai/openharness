@@ -324,6 +324,79 @@ describe('askDevices, anywhere', () => {
   })
 })
 
+// Run 45948212750 printed `no dial` with nothing to say which of these nulls it was.
+describe('askDevices says why it answers null', () => {
+  const asked = async (dir: string, options: Parameters<typeof askDevices>[2] = {}) => {
+    const why = vi.fn<(reason: string) => void>()
+    const answer = await askDevices(dir, NOTICE, { ...options, why })
+    return { answer, reasons: why.mock.calls.map(([reason]) => reason) }
+  }
+
+  describe.skipIf(process.platform === 'win32')('on a socket', () => {
+    it('no listener with no socket there', async () => {
+      expect(await asked(dataDir())).toEqual({ answer: null, reasons: ['no listener'] })
+    })
+
+    it('unproven for a socket of another account, or one looser than 0600', async () => {
+      const dir = dataDir()
+      const { server } = await listener(dir, json('{"result":"shown"}'))
+      const other = vi.spyOn(process, 'getuid').mockReturnValue(process.getuid!() + 1)
+      expect(await asked(dir)).toEqual({ answer: null, reasons: ['unproven'] })
+      other.mockRestore()
+      chmodSync(server.path, 0o666)
+      expect(await asked(dir)).toEqual({ answer: null, reasons: ['unproven'] })
+    })
+
+    it('a timeout says whether the headers had come, and how long since the send', async () => {
+      const dir = dataDir()
+      await listener(dir, () => {})
+      const before = await asked(dir, { timeoutMs: 50 })
+      expect(before.answer).toBeNull()
+      expect(before.reasons).toHaveLength(1)
+      expect(before.reasons[0]).toMatch(/^timeout before headers \(\d+ ms\)$/)
+      const slow = dataDir()
+      await listener(slow, res => { res.writeHead(200, { 'content-type': 'application/json' }).write('{"result":') })
+      const body = await asked(slow, { timeoutMs: 50 })
+      expect(body.answer).toBeNull()
+      expect(body.reasons).toHaveLength(1)
+      expect(body.reasons[0]).toMatch(/^timeout in the body \(\d+ ms\)$/)
+    })
+
+    it('too big, not json, not an object', async () => {
+      const dir = dataDir()
+      let body = ''
+      await listener(dir, res => json(body)(res))
+      body = 'x'.repeat(2048)
+      expect(await asked(dir)).toEqual({ answer: null, reasons: ['too big'] })
+      body = '{not json'
+      expect(await asked(dir)).toEqual({ answer: null, reasons: ['not json'] })
+      for (body of ['[]', '"x"', 'null']) expect(await asked(dir)).toEqual({ answer: null, reasons: ['not an object'] })
+    })
+
+    it('nothing for a 200 object or a 400', async () => {
+      const dir = dataDir()
+      let status = 200
+      await listener(dir, res => { res.writeHead(status, { 'content-type': 'application/json' }).end('{"result":"shown"}') })
+      expect(await asked(dir)).toEqual({ answer: { result: 'shown' }, reasons: [] })
+      status = 400
+      expect(await asked(dir)).toEqual({ answer: 400, reasons: [] })
+    })
+  })
+
+  it("an error's code and nothing of its message; no listener for a refused or missing one", async () => {
+    const failing = (cause?: object) => vi.fn<typeof globalThis.fetch>(async () => { throw new TypeError('fetch failed', { cause }) })
+    const reset = await asked('/tmp/hdc-none', {
+      platform: 'linux', fetch: failing({ code: 'ECONNRESET', message: 'read ECONNRESET /Users/x/data' }),
+    })
+    expect(reset).toEqual({ answer: null, reasons: ['error ECONNRESET'] })
+    expect(reset.reasons.join()).not.toContain('/Users/x')
+    for (const code of ['ECONNREFUSED', 'ENOENT']) {
+      expect(await asked('/tmp/hdc-none', { platform: 'linux', fetch: failing({ code }) })).toEqual({ answer: null, reasons: ['no listener'] })
+    }
+    expect(await asked('/tmp/hdc-none', { platform: 'linux', fetch: failing() })).toEqual({ answer: null, reasons: ['error'] })
+  })
+})
+
 // On Windows the devices listen on the pipe their record names, and each request and answer proves devices-token
 // (listenerPipe.ts). Here the pipe is a socket named harness-<id> in the data folder, which isPipePath takes off Windows.
 describe('over a pipe', () => {
@@ -474,6 +547,34 @@ describe('over a pipe', () => {
       expect(chunk).not.toHaveBeenCalled()
       expect(log).toHaveLength(3)
     }
+  })
+
+  describe('askDevices says why it answers null', () => {
+    const asked = async (dir: string, options: Parameters<typeof askDevices>[2]) => {
+      const why = vi.fn<(reason: string) => void>()
+      const answer = await askDevices(dir, NOTICE, { ...options, why })
+      return { answer, reasons: why.mock.calls.map(([reason]) => reason) }
+    }
+
+    it('no listener with no record, or the recorded process gone', async () => {
+      const recordless = piped()
+      rmSync(devicesRecordPath(recordless.dir))
+      expect(await asked(recordless.dir, recordless.options)).toEqual({ answer: null, reasons: ['no listener'] })
+      const gone = piped({ alive: () => false })
+      expect(await asked(gone.dir, gone.options)).toEqual({ answer: null, reasons: ['no listener'] })
+    })
+
+    it('unproven for an answer with no proof or a wrong one', async () => {
+      const proofs: Array<(nonce: string) => string | undefined> = [() => undefined, nonce => pipeProofValue(randomBytes(32), nonce)]
+      for (const proofFor of proofs) {
+        const { dir, pipe, options } = piped()
+        await squat(pipe, (req, res) => {
+          const proof = proofFor(String(req.headers[PIPE_AUTH_HEADER]).split('.')[0]!)
+          res.writeHead(200, { 'content-type': 'application/json', ...(proof ? { [PIPE_PROOF_HEADER]: proof } : {}) }).end('{"result":"shown"}')
+        })
+        expect(await asked(dir, options)).toEqual({ answer: null, reasons: ['unproven'] })
+      }
+    })
   })
 
   it("a devices-token other than the listener's: false, null, false, and the listener takes nothing", async () => {
