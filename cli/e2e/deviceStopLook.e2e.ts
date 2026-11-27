@@ -36,7 +36,7 @@ import { tellDevices } from '../src/devices/listenerClient.js'
 import { LocalClient } from './harness/client.js'
 import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
-import { Desk } from './harness/desk.js'
+import { Desk, untilUnplugged } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { fileBundle } from './harness/fileBundle.js'
 import { InOrca } from './harness/inOrca.js'
@@ -408,10 +408,7 @@ describe('a second look when a turn stops', () => {
     desk!.forget('E2E-A')
     await until('the scan to close the dial', () => /cable: closed \(daemon stopping\) \[usb E2E-A\]/.test(d.log().slice(since)) || null, 30_000, 50)
     await dial.close()
-    await until('the dial to read as unplugged', async () => {
-      const answer = await window.request('harness_devices_list', {})
-      return (answer.status?.devices as Array<{ id: string; attached: boolean }> | undefined)?.find((device) => device.id === 'E2E-A')?.attached === false || null
-    }, 30_000, 500)
+    await untilUnplugged(window, 'E2E-A')
     window.close()
     const before = nudges(d).length
     const asked = await turn(a, true)

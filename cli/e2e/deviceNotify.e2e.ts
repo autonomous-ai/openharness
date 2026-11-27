@@ -37,7 +37,7 @@ import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { LocalClient } from './harness/client.js'
 import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
-import { Desk, devicesPids } from './harness/desk.js'
+import { Desk, devicesPids, untilUnplugged } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { InOrca } from './harness/inOrca.js'
@@ -518,10 +518,7 @@ describe('harness device notify', () => {
     await plugged(desk)
     const window = await LocalClient.connect(d)
     await desk.unplug('E2E-A')
-    await until('the dial to read as unplugged', async () => {
-      const answer = await window.request('harness_devices_list', {})
-      return (answer.status?.devices as Array<{ id: string; attached: boolean }> | undefined)?.find((device) => device.id === 'E2E-A')?.attached === false || null
-    }, 30_000, 500)
+    await untilUnplugged(window, 'E2E-A')
     expect(await notify(d, { CODEX_THREAD_ID: randomUUID() }, join(d.projectsDir, 'api'))).toMatchObject({ code: 0, out: 'no dial' })
     window.close()
   })
