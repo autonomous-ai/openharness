@@ -3,9 +3,10 @@
  * looked for in throwaway agent homes, the hook's input handed as stdin. The person's ~/.claude and ~/.codex are never
  * touched.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_START_LINE, ownSkillIn, runStart, startOutput } from './start.js'
@@ -163,5 +164,20 @@ describe('runStart', () => {
     ['over 256 KiB', () => chunks(JSON.stringify({ ...START_INPUT('/repo'), pad: 'x'.repeat(256 * 1024) }))],
   ])('prints nothing for input that is %s', async (_name, stdin) => {
     expect(await start(stdin())).toEqual({ code: 0, out: [] })
+  })
+})
+
+// The eval runs the variant against a fake harness, so its answer must be this command's output byte for byte.
+describe('the eval', () => {
+  const V3 = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'evals', 'dial-skill', 'flow', 'v3')
+
+  it('the eval\'s Part 4 variant answers exactly what this command prints', () => {
+    const answers = JSON.parse(readFileSync(join(V3, 'harness-answers.json'), 'utf8')) as { argv: string[], stdout?: string, stderr?: string, code?: number }[]
+    expect(answers.filter((answer) => answer.argv.join(' ') === 'device claude start'))
+      .toEqual([{ argv: ['device', 'claude', 'start'], stdout: `${startOutput()}\n` }])
+    const hooks = JSON.parse(readFileSync(join(V3, 'hooks.json'), 'utf8')) as Record<string, { matcher: string, hooks: { command: string }[] }[]>
+    expect(hooks.SessionStart).toHaveLength(1)
+    expect(hooks.SessionStart[0].matcher).toBe('startup|resume|clear|compact')
+    expect(hooks.SessionStart[0].hooks.map((hook) => hook.command)).toEqual(['harness device claude start'])
   })
 })
