@@ -654,6 +654,15 @@ describe('harness device claude stop', () => {
     expect(ask.mock.calls).toStrictEqual([[{ type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true }]])
   })
 
+  // Only an `sdk-` entry point says headless: a Claude Code that sets none still has the person at it.
+  it('claude stop with CLAUDE_CODE_ENTRYPOINT unset still reports', async () => {
+    skillIn(claudeHome)
+    const ask = nudges()
+    expect(await device(['claude', 'stop'], { stdin: chunks(JSON.stringify(STOP_INPUT)), env: {}, ask, claude: noClaude }))
+      .toEqual({ code: 0, out: [stopOutput()], err: [] })
+    expect(ask.mock.calls).toStrictEqual([[{ type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true }]])
+  })
+
   // The turn's end waits on this answer: the devices get NUDGE_ANSWER_MS, not askDevices' own 2 s.
   it('claude stop asks the devices\' listener of its data folder within NUDGE_ANSWER_MS', async () => {
     skillIn(claudeHome)
