@@ -3785,7 +3785,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // switched off.
     observed: (event) => {
       part.call('observed', () => {
-        if (!observed) return
+        if (!observed) {
+          // Its agent is gone (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5): with the source off
+          // no list holds a caller no list held, whose card is under its session's id, so nothing else would end it.
+          if (event.event === 'session-end') endNotice(observedAgentId(event.engine, event.sessionId))
+          return
+        }
         // The id the agent's notices and nudges were kept under (callerOf), read before the source takes the event: an
         // ended session hands its row to another source's live copy of it. Only Claude Code and Codex ring or are nudged.
         const caller = (event.event === 'turn-start' || event.event === 'session-end') && (event.engine === 'claude' || event.engine === 'codex')
