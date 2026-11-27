@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { chmodSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, killAgents, runAgent, spawnGroup, type AgentConfig } from './lib/agents.js'
+import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, killAgents, runAgent, runFollowUp, spawnGroup, type AgentConfig } from './lib/agents.js'
 import { gradeRun } from './lib/grade.js'
 import type { Judge } from './lib/judge.js'
 import { parseClaudeStream } from './lib/parse.js'
 import { loadScenarios, type Condition, type Scenario } from './lib/scenarios.js'
-import { readRings, stage, type Staged } from './lib/stage.js'
+import { markTurn, readRings, runProfileFolder, stage, unstage, type Staged } from './lib/stage.js'
 
 const SAMPLE = join(import.meta.dirname, 'test-data', 'claude-stream.jsonl')
 
@@ -26,11 +27,13 @@ const need: Scenario = {
 }
 const decide: Scenario = { ...need, id: 'design-undecided', ask: 'choose the cache', expect: 'proceeding' }
 const noNeed: Scenario = { ...need, id: 'fix-off-by-one', need: 'no-need', ask: null, expect: undefined }
+const answered: Scenario = { ...need, follow_up: { kind: 'answer', text: 'The key is WEATHER-FAKE-1.' } }
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'dial-skill-agents-'))
+  // Real, as stage's: Claude Code names a session's folder by the real path it runs in.
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'dial-skill-agents-')))
   for (const dir of ['repo', 'rec', 'tmp', 'bin', 'profile']) mkdirSync(join(root, dir))
 })
 
@@ -49,6 +52,7 @@ function staged(env: NodeJS.ProcessEnv = {}): Staged {
     skill: null,
     condition: 'clean',
     skills: [],
+    seed: null,
   }
 }
 
@@ -97,6 +101,17 @@ describe('claudeArgs', () => {
       '--add-dir', join(root, 'rec'), join(root, 'tmp'),
       '--settings', JSON.stringify(CLAUDE_SANDBOX),
     ])
+  })
+
+  it("saves a two-turn run's session in place of --no-session-persistence: --session-id for turn 1, --resume for turn 2", () => {
+    const plain = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.')
+    const at = plain.indexOf('--no-session-persistence')
+    const id = randomUUID()
+
+    expect(claudeArgs(AGENT_CONFIG, staged(), 'Fix it.', { id, resume: false })).toEqual([...plain.slice(0, at), '--session-id', id, ...plain.slice(at + 1)])
+    expect(claudeArgs(AGENT_CONFIG, staged(), 'Fix it.', { id, resume: true })).toEqual([...plain.slice(0, at), '--resume', id, ...plain.slice(at + 1)])
+    expect(plain).not.toContain('--session-id')
+    expect(plain).not.toContain('--resume')
   })
 
   it('holds no bound of its own: the runner gives each run its share of --timeout-s', () => {
@@ -279,6 +294,97 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
     const bin = fake('claude', `process.stderr.write("error: unknown option '--bogus'\\n"); process.exitCode = 1`)
 
     await expect(runAgent('claude', need, staged(), config(bin))).rejects.toThrow("claude exited 1: error: unknown option '--bogus'")
+  })
+})
+
+describe('a two-turn claude run', () => {
+  let profile: string
+
+  beforeEach(() => {
+    profile = realpathSync(mkdtempSync(join(tmpdir(), 'dial-skill-profile-')))
+  })
+
+  afterEach(() => {
+    rmSync(profile, { recursive: true, force: true })
+  })
+
+  /** A `claude` that logs its argv and saves its session as Claude Code does, at <profile>/projects/<repo>/<id>.jsonl; a
+   *  resumed run that `hangs` then runs until it is killed. Run once bare first, as shellAgent's. */
+  function sessionAgent(hangs: boolean): { bin: string; argvs: () => string[][] } {
+    const log = join(root, 'argv.jsonl')
+    const bin = fake('claude', `const fs = require('node:fs')
+const path = require('node:path')
+const argv = process.argv.slice(2)
+if (argv.length === 0) process.exit(0)
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(argv) + '\\n')
+const resumed = argv.includes('--resume')
+const id = argv[argv.indexOf(resumed ? '--resume' : '--session-id') + 1]
+const folder = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'))
+fs.mkdirSync(folder, { recursive: true })
+fs.appendFileSync(path.join(folder, id + '.jsonl'), JSON.stringify({ type: 'user', message: { role: 'user', content: argv[1] } }) + '\\n')
+if (resumed && ${hangs}) setTimeout(() => {}, 60_000)
+else process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
+    execFileSync(bin)
+    return { bin, argvs: () => readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) }
+  }
+
+  it("runs turn 1 under a new session id and turn 2 resuming it, and unstage removes the session's folder", async () => {
+    const { bin, argvs } = sessionAgent(false)
+    const st = staged({ CLAUDE_CONFIG_DIR: profile })
+    const id = randomUUID()
+
+    await runAgent('claude', answered, st, config(bin), { id, resume: false })
+    const run = await runFollowUp('claude', answered, st, config(bin), id)
+
+    expect(argvs()).toEqual([
+      claudeArgs(config(bin), st, answered.prompt, { id, resume: false }),
+      claudeArgs(config(bin), st, answered.follow_up!.text, { id, resume: true }),
+    ])
+    expect(run).toEqual(parseClaudeStream(readFileSync(SAMPLE, 'utf8')))
+    const folder = runProfileFolder(st)!
+    expect(readFileSync(join(folder, `${id}.jsonl`), 'utf8').trim().split('\n')).toHaveLength(2)
+    unstage(st)
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it("removes the session's folder at unstage when turn 2 is killed at its timeout", async () => {
+    const { bin } = sessionAgent(true)
+    const st = staged({ CLAUDE_CONFIG_DIR: profile })
+    const id = randomUUID()
+    await runAgent('claude', answered, st, config(bin), { id, resume: false })
+
+    const error = await runFollowUp('claude', answered, st, config(bin, 200), id).catch((e: unknown) => e)
+
+    expect(error).toMatchObject({ failure_class: 'timeout' })
+    const folder = runProfileFolder(st)!
+    expect(existsSync(join(folder, `${id}.jsonl`))).toBe(true)
+    unstage(st)
+    expect(existsSync(folder)).toBe(false)
+  })
+})
+
+describe('runFollowUp stand-ins', () => {
+  it.each([
+    ['oracle', 'answer', 'its ring'],
+    ['oracle', 'answer-one', 'its ring'],
+    ['oracle', 'relay', 'nothing'],
+    ['oracle', 'new-request', 'nothing'],
+    ['oracle', 'unrung', 'nothing'],
+    ['always', 'relay', 'all'],
+    ['null', 'answer', 'nothing'],
+  ] as const)('%s, follow-up %s: closes %s in turn 2', async (agent, kind, closes) => {
+    const s: Scenario = { ...loadScenarios().find((c) => c.id === 'api-key-missing')!, follow_up: { kind, text: 'Noted.' } }
+    // answer-one's seeded card is the other ask, which stays open.
+    const st = stage(s, agent, { skill: false, base: root, seed: kind === 'answer-one' })
+    await runAgent(agent, s, st, config(''))
+    markTurn(st)
+
+    const run = await runFollowUp(agent, s, st, config(''), randomUUID())
+
+    const calls = readRings(st)
+    const ids = closes === 'its ring' ? calls.filter((c) => c.turn === 1).map((c) => c.id!) : closes === 'all' ? ['all'] : []
+    expect(calls.filter((c) => c.turn === 2).map((c) => c.argv)).toEqual(ids.map((id) => ['device', 'notify', '--done', id]))
+    expect(run).toMatchObject({ answer: '', status: 'ok' })
   })
 })
 
