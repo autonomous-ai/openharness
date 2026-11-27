@@ -377,9 +377,9 @@ async function probeConditions(ctx, tasks, probesPath) {
 async function runCase(input, ctx, timeoutMs) {
   const { scenario, meta: { agent, condition, follow_up: kind } } = input;
   // answer-one's person answers one of two open asks, the other the fake's seeded card; unrung's answers an ask the
-  // dial never showed.
+  // dial never showed, while the seeded card stays open, so a close after that answer is a wrong one.
   const st = stage(scenario, agent, { skill: ctx.skill, condition, hooks: ctx.hooks, answers: ctx.answers,
-    seed: kind === 'answer-one', noDial: kind === 'unrung' });
+    seed: kind === 'answer-one' || kind === 'unrung', noDial: kind === 'unrung' });
   const clean = text => scrub(text, st);
   const until = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
   const session = kind ? { id: randomUUID(), resume: false } : undefined;

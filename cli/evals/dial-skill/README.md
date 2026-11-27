@@ -165,9 +165,9 @@ Each need scenario has one follow-up, of one of five kinds:
 | `relay` (2) | another Claude Code session's message about something else, opened `<cross-session-message ` | close nothing |
 | `new-request` (3) | a new small task in the same repo, the ask still open | close nothing |
 | `answer-one` (4) | the person's answer to the ask, while the fake also holds a seeded card | close the card turn 1 rang, keep the seeded one |
-| `unrung` (5) | the person's answer to an ask the dial never showed: every `notify` got `no dial` and kept no card | close nothing |
+| `unrung` (5) | the person's answer to an ask the dial never showed: every `notify` got `no dial` and kept no card, while the fake holds a seeded card | close nothing |
 
-`answer-one`'s seeded card is the caller's own, open from the start: an unrelated waiting ask, 12 minutes old,
+`answer-one`'s and `unrung`'s seeded card is the caller's own, open from the start: an unrelated waiting ask, 12 minutes old,
 `Waiting · Approve the Friday release window? · Suggest: Friday 10:00`. Each scenario keeps its split:
 
 | split | `answer` | `relay` | `new-request` | `answer-one` | `unrung` |
