@@ -9265,12 +9265,14 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
 
 describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)', () => {
   const LINE = 'Connect the VPN so I can run the staging tests'
+  /** A waiting card's line: only such a card keeps its agent's turn ends silent (rule 8). */
+  const ASK = `Waiting · ${LINE}`
   const ID = observedAgentId('claude', 'sess-1')
   const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
     hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
   })
-  const card = (app: string) => [{ key: 'notice', q: LINE, options: [`In ${app}`] }]
+  const card = (app: string, q = LINE) => [{ key: 'notice', q, options: [`In ${app}`] }]
   const host = () => seen.dial as unknown as DaemonCableHost
   /** The dial the person turned last. */
   const DIAL = {}
@@ -9405,16 +9407,36 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       kept('h1')
     })
 
-    // Rule 8: with cards outliving turns, a turn's end stays silent until the agent closes its card.
-    it('an agent\'s ordinary turn end stays silent while its card from an earlier turn is open; a failed one rings', async () => {
+    // Rule 8: with cards outliving turns, a turn's end stays silent until the agent closes its waiting card.
+    it('an agent\'s ordinary turn end stays silent while its waiting card from an earlier turn is open; a failed one rings', async () => {
       const { port, listener } = devices({ core: bound(), decideTier: null })
-      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: ASK, engine: 'claude', sessionId: 's-h1' })
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Broke.', failed: true } })
       await vi.waitFor(() => expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['h1', 'silent'], ['h1', 'alert']]))
       expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
     })
+
+    // Rule 8 (the PM, after the final review): a proceeding or plain card rarely gets an answer, so it would silence its
+    // agent for a day. Its turn ends ring or list as any; the recap's row takes the card's, so the card's goes back over it.
+    it.each([['proceeding', 'Proceeding · Ship it · Doing: the tests'], ['plain', LINE]])(
+      'an agent whose only open card is %s gets its ordinary turn end, then its card\'s row back', async (_, text) => {
+        const { port, listener } = devices({ core: bound(), decideTier: null })
+        listener.notice({ text, engine: 'claude', sessionId: 's-h1' })
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.', tier: 'alert' } })
+        await vi.waitFor(() => expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'summary' || name === 'replaceNotifications'))
+          .toEqual(['summary', 'replaceNotifications']))
+        expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['h1', 'alert']])
+        expect(calls('replaceNotifications')).toEqual([[[{ agentId: 'h1', machineId: 'machine-1', question: true, text }]]])
+        expect(logs.filter((line) => line.includes('rule:notice'))).toEqual([])
+        // A failed turn rings, and the card's row goes back over its row too.
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'error', text: 'The build broke.' } })
+        await vi.waitFor(() => expect(calls('replaceNotifications')).toHaveLength(2))
+        expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'turnError' || name === 'replaceNotifications').slice(-2))
+          .toEqual(['turnError', 'replaceNotifications'])
+      })
 
     it('an outside agent leaving its list, and agent_deleted, still end its cards', async () => {
       vi.useFakeTimers()
@@ -9863,10 +9885,10 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', recap: 'Built.', ...payload } })
     const tiers = () => calls('summary').map(([agentId, , , tier]) => [agentId, tier])
 
-    it.each(['full', 'you'])('is silent while the card is pending, decided upstream or here (Notifications %s)', async (mode) => {
+    it.each(['full', 'you'])('is silent while the waiting card is pending, decided upstream or here (Notifications %s)', async (mode) => {
       const { port, listener } = devices({ core: bound(), decideTier: null })
       if (mode === 'you') expect(listener.notify('you')).toEqual({ mode: 'you' })
-      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: ASK, engine: 'claude', sessionId: 's-h1' })
       summary(port, 'h1', { tier: 'alert' })
       summary(port, 'h1')
       await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'silent'], ['h1', 'silent']]))
@@ -9893,7 +9915,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       const { port, listener } = devices({ core: bound(), decideTier: null, readUsage })
       const card = (payload: Record<string, unknown>) => port.card({ type: 'commander_event', agentId: 'h1', payload })
       card({ kind: 'turn_started' })
-      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: ASK, engine: 'claude', sessionId: 's-h1' })
       card({ kind: 'done', text: 'done' })
       summary(port, 'h1', { tier: 'alert' })
       card({ kind: 'turn_started' })
@@ -9957,10 +9979,10 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(logs).toContain('[cable] notify · silent · rule:present · present · 0ms')
     })
 
-    it('a pending notice keeps rule:notice', async () => {
+    it('a pending waiting notice keeps rule:notice', async () => {
       const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
       there(port)
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
+      expect(listener.notice({ text: ASK, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       await stop(port)
       await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
       expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
@@ -9994,8 +10016,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done', ...payload } })
     /** The notice of [sessionId]'s agent, shown and held quiet on the dial: the id it is held under. No wait: a wait on
      *  fake timers moves the clock that presence reads. */
-    const quietly = (listener: Listener, sessionId: string): string => {
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual(SHOWN)
+    const quietly = (listener: Listener, sessionId: string, text = LINE): string => {
+      expect(listener.notice({ text, engine: 'claude', sessionId })).toEqual(SHOWN)
       const holds = calls('hold') as Array<[string, string]>
       expect(holds).toHaveLength(1)
       return holds[0][1]
@@ -10009,9 +10031,9 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       return held
     }
     /** Asked once, under a new id, the held one closed: a dial mutes a question under an id it holds. */
-    const askedAgain = (agentId: string, held: string, app: string) => {
+    const askedAgain = (agentId: string, held: string, app: string, q = LINE) => {
       expect(calls('questionClose')).toEqual([[agentId, held]])
-      expect(shownAsks()).toEqual([[agentId, expect.stringMatching(/^shown:/), card(app)]])
+      expect(shownAsks()).toEqual([[agentId, expect.stringMatching(/^shown:/), card(app, q)]])
       expect(shownAsks()[0][1]).not.toBe(held)
     }
     const stillHeld = () => {
@@ -10026,11 +10048,11 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('the person gone at its end: asked once, under a new id, and the summary stays silent under rule:notice', async () => {
       const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
       there(port)
-      const held = quietly(listener, 'sess-1')
+      const held = quietly(listener, 'sess-1', ASK)
       host().front('vscode')
       await stop(port)
       await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
-      askedAgain(ID, held, 'Orca')
+      askedAgain(ID, held, 'Orca', ASK)
       expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
       // One ring a turn: the turn's done, then the ask, then its summary, silent.
       expect(seen.cable.calls.map(([name]) => name).filter((name) => ['turnDone', 'questionClose', 'question', 'summary'].includes(name)))
@@ -10040,7 +10062,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('the person still there: it stays held', async () => {
       const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
       there(port)
-      quietly(listener, 'sess-1')
+      quietly(listener, 'sess-1', ASK)
       await stop(port)
       await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
       stillHeld()
@@ -10176,7 +10198,9 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       // Past the 6 s a stop waits for its report: held by the yes, not by the wait.
       await vi.advanceTimersByTimeAsync(5_000)
       expect(calls('turnDone')).toEqual([[ID]])
-      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
+      // A waiting card: only it keeps its agent's turn ends silent
+      // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8).
+      expect(listener.notice({ text: `Waiting · ${LINE}`, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       expect(shownAsks().map(([agentId]) => agentId)).toEqual([ID])
       port.observed(hook('turn-stop'))
       await vi.advanceTimersByTimeAsync(300)
@@ -10891,7 +10915,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
         coverAndClose(port)
         decide()
         await vi.waitFor(() => expect(calls('questionClose')).toHaveLength(1))
-        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications']))
+        // Then again over the failed turn's row, which took it (rule 8).
+        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications', 'replaceNotifications']))
         expect(calls('hold').at(-1)).toEqual(['h1', restored, card('Harness')])
         expect(calls('replaceNotifications').at(-1)).toEqual([[ROW]])
       })
@@ -10904,7 +10929,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
           coverAndClose(port)
         })
         decide()
-        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications']))
+        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications', 'replaceNotifications']))
         expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
         expect(calls('replaceNotifications').at(-1)).toEqual([[ROW]])
       })
