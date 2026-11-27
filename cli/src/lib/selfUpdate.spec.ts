@@ -2009,7 +2009,9 @@ describe('the inbox follower\'s file (Windows)', () => {
     try {
       const silent = `import { connect } from "node:net"\nconnect(${port}, "127.0.0.1")\nsetInterval(() => {}, 1000)\n`
       const result = runCanary(Buffer.from('console.log("9.9.9")\n'), tempDir(), '9.9.9', 1_000, undefined, Buffer.from(silent))
-      await started
+      // A canary that ended before the fake dialed (cli.js failed, or the fake did) shows how it ended below, rather
+      // than holding the test to its own timeout.
+      await Promise.race([started, result])
       await vi.advanceTimersByTimeAsync(1_000)
       expect(await result).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: no answer within 1 s' })
     } finally {

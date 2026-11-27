@@ -13,6 +13,11 @@ const fixture = JSON.parse(
 const follows = (line: string[]): boolean => line[0] === 'device' && inboxSessionOf(line.slice(1)) !== null
 
 describe('the follower\'s line, as harness.exe matches it', () => {
+  it('reads lines of both kinds', () => {
+    // An empty list would run no case below and pass.
+    expect([fixture.follower.length > 0, fixture.other.length > 0]).toEqual([true, true])
+  })
+
   it.each(fixture.follower.map((line) => [line]))('takes %j', (line) => {
     expect(follows(line)).toBe(true)
   })
