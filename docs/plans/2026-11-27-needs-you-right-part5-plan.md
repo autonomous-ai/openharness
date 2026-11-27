@@ -90,7 +90,7 @@ the `recall vs best` pair and the session-start command this plan reuses) and
    - `dial_nudge_<engine>`: a stop the devices said yes to (Task 8's `yes` answer), counted at that answer;
    - `dial_nudge_<engine>_rang`: a notice of that agent rung (shown, not held quiet) in the continuation after that
      yes, before its next stop or the hold's end, at most once a yes. For an outside agent the window is Task 7's hold
-     (`entry.continuing`, `'heard'` or `'awaited'`), and the mark that the yes may still count lives on that hold and
+     (`entry.secondLook.continuing`, `'heard'` or `'awaited'`), and the mark that the yes may still count lives on that hold and
      goes with it (the spec's "one mark on a held stop"). For a Harness agent, which has no observed hold, the window is
      Task 9's `'asked'` or `'continuing'` phase (until its continuation's `done`), and the mark lives on Task 9's entry
      (open question 1).
@@ -149,7 +149,8 @@ The PM's decisions on the draft's open questions (2026-11-27):
 13. **A Harness agent reads "not present"** from the yes until its continuation ends (Task 9).
 14. **No second look, and no report, for headless runs** (`claude -p`, `codex exec`; Task 10). Claude Code:
     `CLAUDE_CODE_ENTRYPOINT` starts `sdk-` (`sdk-cli` under `-p`, `cli` in the TUI; F1). Codex: only the rollout says
-    it (F8), on the first line of `transcript_path`, `{"type":"session_meta","payload":{…,"source":"exec",…}}`.
+    it (F8), on the first line of `transcript_path`, `{"type":"session_meta","payload":{…,"source":"exec",…}}`, or
+    `"mcp"` (Codex run as another agent's MCP tool).
 15. **Windows by hand:** one hand check on the Dell x64 Windows test PC with throwaway profile folders, under the Dell
     rules: the testers act on their own, no reboot, no change to Smart App Control, no real accounts, and everything
     restored afterwards (Verification 5).
@@ -167,7 +168,7 @@ The PM's decisions on the draft's open questions (2026-11-27):
     - `ask: false` is answered `{ nudge: false }` at once. The devices check nothing and change nothing but the held
       turn-stop's release: no presence read, no once rule, no "rang in this turn" change. It is tallied by its word
       alone (`no ask`). It gives away one bit, the one a nudge's existence gave away before.
-    - The observed source remembers the sessions that reported: a mark on the session's entry (`Entry.reported`), in
+    - The observed source remembers the sessions that reported: a mark on the session's entry (`entry.secondLook.reported`), in
       memory only. It goes with its entry, so at most the source's 50 sessions (`MAX_SESSIONS`) are marked, within the
       spec's 64, the least recently active out first as the source drops entries today; no second list is kept. Any
       report sets it.
@@ -178,7 +179,7 @@ The PM's decisions on the draft's open questions (2026-11-27):
       yes starts Task 7's hold. At `REPORT_WAIT_MS` with no report, the turn end is told done, the mark is cleared,
       and `[observed] stop report missed` is logged: a plugin turned off mid-session stops delaying it.
     - A report before its turn-stop (either order is possible) is matched: a no is kept on the entry as
-      `earlyReport` (the time it came) and consumed by the next `turn-stop` within `REPORT_WAIT_MS`, which then takes
+      `secondLook.earlyReport` (the time it came) and consumed by the next `turn-stop` within `REPORT_WAIT_MS`, which then takes
       the grace as today; a yes is Task 7's `'awaited'` hold. A `turn-start`, `needs-input`, `turn-error`,
       `turn-aborted` or `session-end` drops an early report, as each drops a held stop. A report while the lead's
       subagents run is kept only as the mark: its own stop is not held (as today), so its report is not kept for the
@@ -298,12 +299,14 @@ condition was hit. The records stay in the main session's scratchpad (`spike/`),
 - **The hold:** until the next stop, or `CONTINUE_QUIET_MS = 10_000` with no activity (decision 12), and at most
   `CONTINUE_MAX_MS = 120_000` from the yes. The held turn end is announced when the hold expires with no next stop.
 - **The hook:** event `Stop`, no matcher, `timeout: 5`, `onFailure: 'continue'`, in the plugin's two-shell form. stdin
-  reaches the launcher as the engine wrote it. The PowerShell form never reads or re-pipes stdin. stdout passes only
+  reaches the launcher as the engine wrote it. The PowerShell form never reads stdin before the launcher or pipes it
+  in; it reads the rest to its end after (`[Console]::In.ReadToEnd()`), as the sh script does. stdout passes only
   when it starts with `{"decision":"block","reason":`. stderr is dropped and the exit is always 0.
 - **Codex trust:** key `harness-device@openharness:hooks/codex.json:stop:0:0`, written by Part 7's unchanged
   `pluginTrustRecords` (`REVIEWED.events` labels `Stop` `stop`, and its matcher is not hashed).
 - **Logs:** fixed words only (`src/architecture.failureLogs.spec.ts`):
-  `[device] nudge · <engine> · yes|no ask|no dial|notice|present|nudged` and `[observed] stop report missed`.
+  `[device] nudge · <engine> · yes|no ask|no dial|notice|present|nudged`, `[observed] stop report missed` and
+  `[observed] held stop · quiet|cap|unheard`.
   Never a session, a path, an answer or a reason.
 - **Unchanged:** `cli/src/core/`, `cli/src/architecture.coreFiles.txt`, `core/api.ts`, `cli/hook/notify.mjs`,
   `lib/agentNotifications.ts`, `engines/claude/normalize.ts`, `engines/codex/normalizer.ts`,
@@ -331,7 +334,8 @@ A new local message is exposed, and four count names are stored and synced (deci
    the mark that its yes may still count a ring, one report mark and one early report time, within the source's 50
    sessions (decision 18: at most 50 marked, within the spec's 64; a mark goes with its entry or at a missed report).
    At most 64 nudged agents (Task 9), each with its engine and the same mark for a Harness agent, dropped at the
-   person's next prompt, when the agent leaves, or after 10 minutes. At most 64 agent ids that rang a notice in their
+   person's next prompt, when the agent leaves, or after 10 minutes. At most 64 Harness agents' last turn starts
+   (`lastBegan`, Task 9), each dropped at its next turn's first card or when the agent leaves. At most 64 agent ids that rang a notice in their
    turn (Task 8), each dropped at its next turn mark or when the agent leaves. On a computer, four more names a UTC day
    in `dial-usage.json`, within its 35 days and 128 KiB. In the backend, at most 12 more `product_usage_totals` rows a
    UTC day (four names, with their `staff:` and `testing:` copies), deleted by the existing TTL, whatever the number
@@ -340,7 +344,7 @@ A new local message is exposed, and four count names are stored and synced (deci
    `turn-stop` and the report can reach the devices in either order. Task 1 saw the turn-stop first in every run; Task 7
    handles both orders. The devices process is single-threaded, and `nudge` is answered inside `part.call`.
 3. **Read cost.** The hook spawns the CLI at every turn end where the plugin is on. The CLI reports to the listener at
-   every stop that passes step 1, and for Codex reads at most 64 KiB of the rollout's head first. The devices answer
+   every stop that passes step 1, and for Codex reads at most 128 KiB of the rollout's head first. The devices answer
    from what they hold, with no read. Verification 3 gives the hook's time. A hold reads its transcript's `fileStamp`
    (one `stat`) only when it would go quiet, so at most once per 10 s per held session, and never past 120 s. A count
    is one add per yes and per rung notice in a held continuation. The review's query is the same plain `$match`, its
@@ -401,8 +405,8 @@ its run-level test for (b) and the one-run reading of `harmed` and `went_on` for
    at most one extra round, after which the agent ends, and never a second block. Pinned in Task 10 (a tail of
    `user?.name` asks, which states the bound), Task 9 (a second nudge is no) and Task 4 (`nudged` on the no-need runs).
 3. **An answer in a non-Latin script on Windows PowerShell:** a re-encoded stdin would turn letters into `?`. Expected:
-   PowerShell never reads stdin, and the launcher reads the engine's bytes. Pinned in Tasks 11 and 12 (the Windows form
-   has no `[Console]::In` and no pipe into the launcher, and a win32 runner with a Vietnamese answer and no `?` prints
+   PowerShell never reads stdin before the launcher, and the launcher reads the engine's bytes. Pinned in Tasks 11 and
+   12 (the Windows form reads `[Console]::In` only after the launcher and has no pipe into it, and a win32 runner with a Vietnamese answer and no `?` prints
    nothing) and Task 10 (`Đã xong, không cần gì thêm.` does not ask; `要用哪个数据库？` asks).
 4. **An older or foreign launcher under the new plugin**, printing its usage or another hook's JSON on stdout.
    Expected: Claude Code and Codex read nothing, because stdout passes only with the block's prefix. Pinned in Tasks 11
@@ -781,7 +785,7 @@ F4, F9 and F10 hold).
 
 **Files:**
 - Modify: `cli/src/cable/hosts/observed.ts` (`CONTINUE_QUIET_MS`, `CONTINUE_MAX_MS`, `REPORT_WAIT_MS`,
-  `ObservedSource.stopReported`, `Entry.reported`, `Entry.stopWait`, `Entry.earlyReport`, `Entry.continuing`, the
+  `ObservedSource.stopReported`, `Entry.secondLook` (`reported`, `stopWait`, `earlyReport`, `continuing`), the
   hold's timer, the `turn-stop` case, the turn events that drop a held stop, `dropStop`)
 - Test: `cli/src/cable/hosts/observed.spec.ts`
 
@@ -790,25 +794,25 @@ F4, F9 and F10 hold).
   `export const REPORT_WAIT_MS = 6_000`, and `stopReported(agentId: string, goesOn: boolean): boolean`, which Task 8
   calls for every `nudge` (`goesOn` is the yes). It returns false and changes nothing when the agent is not listed, not
   live, or not of engine `claude` or `codex`. Otherwise:
-  - **The mark:** `entry.reported = true`. The spec's "at most 64" holds: the mark lives on the entry, so it goes with
+  - **The mark:** `entry.secondLook.reported = true`. The spec's "at most 64" holds: the mark lives on the entry, so it goes with
     the entry, within the source's 50 sessions (`MAX_SESSIONS`), and no second list is kept.
   - **`goesOn` false** (a no, or `ask: false`):
-    - a stop waiting for its report (`entry.stopWait = { at }`) is released: `finish` at `at + ANSWER_GRACE_MS`, or at
+    - a stop waiting for its report (`entry.secondLook.stopWait = { at }`) is released: `finish` at `at + ANSWER_GRACE_MS`, or at
       once when that has passed;
     - a stop in its grace (a session not yet marked at its turn-stop) is left to the grace;
-    - with no turn-stop in its grace or its report wait, and no subagent running, `entry.earlyReport = now` (a hold,
+    - with no turn-stop in its grace or its report wait, and no subagent running, `entry.secondLook.earlyReport = now` (a hold,
       if any, is left as it is).
   - **`goesOn` true:** a stop held (in its grace or waiting for its report) is cleared and the hold starts `'heard'`;
     with none held and the entry `working` with no subagent running, it starts `'awaited'`; else (its end already told,
-    or the lead's subagents run) it returns false and starts no hold. The hold is `entry.continuing = { phase: 'heard' |
-    'awaited', since: <now>, lastActive: <now> }`.
+    or the lead's subagents run) it returns false and starts no hold. The hold is `entry.secondLook.continuing = { phase:
+    'heard' | 'awaited', since: <now>, lastActive: <now> }`.
   - **The turn-stop** of an entry:
     - in a hold: `'awaited'` becomes `'heard'` and keeps the hold (the blocked stop's own); `'heard'` ends the hold, and
       the stop goes on as below (the continuation's own stop);
     - with subagents running: not held, as today;
     - with an `earlyReport` younger than `REPORT_WAIT_MS`: the report is used up and the stop takes the grace;
-    - marked (`entry.reported`): `entry.stopWait = { at: now }`, held until its report, at most `REPORT_WAIT_MS`. At
-      `REPORT_WAIT_MS` it is told done (`finish`), `entry.reported` is cleared, and `[observed] stop report missed` is
+    - marked (`secondLook.reported`): `secondLook.stopWait = { at: now }`, held until its report, at most
+      `REPORT_WAIT_MS`. At `REPORT_WAIT_MS` it is told done (`finish`), `secondLook.reported` is cleared, and `[observed] stop report missed` is
       logged;
     - else: the grace, as today.
   - A `turn-start`, `needs-input`, `turn-error`, `turn-aborted` or `session-end` drops a held stop as today, and with it
@@ -824,7 +828,8 @@ F4, F9 and F10 hold).
     again for the new due time; else the hold expires. At `since + CONTINUE_MAX_MS` it expires with no read. After the
     read's `await`, a hold that is no longer the entry's (a stop, an event, a removal) changes nothing.
   - Expiry while `'heard'`: `finish` runs, so the held turn end is announced, with its answer. Expiry while
-    `'awaited'`: the hold ends and nothing is told.
+    `'awaited'`: the hold ends and nothing is told. Each expiry logs `[observed] held stop · quiet|cap|unheard`
+    (`unheard` for `'awaited'`).
   - A second yes while one holds changes nothing: neither `since` nor `lastActive` moves.
 
 - [ ] **Step 1: Write the failing tests.** Use a fake clock (`vi.useFakeTimers()`, `deps.now` read from it), the spec's
@@ -913,7 +918,7 @@ F4, F9 and F10 hold).
     (decision 18: no presence read, no once rule, no `rangThisTurn` change, no `noticeCaller`);
   - `no dial` when `!cable.isConnected`;
   - `notice` when `rangThisTurn.has(agentId)`;
-  - `present` when `present(agentId)`;
+  - `present` when `presentAtStop(agentId)` (Task 9);
   - else `yes`.
   Each answer after `no ask` then calls `observed?.stopReported(observedAgentId(engine, sessionId), yes)`, so a no
   releases the held turn-stop and a yes holds it. `agentId` is `noticeCaller({ text: '', engine, sessionId }).agentId`.
@@ -976,20 +981,26 @@ F4, F9 and F10 hold).
 
 **Files:**
 - Modify: `cli/src/services/devices.ts` (`NUDGED_MAX = 64`, `NUDGE_ONCE_MS = 600_000`, the `nudged` map,
-  `harnessPresent`, `dispatch`'s `processing` and `done`, `port.observed`'s `turn-start`, the agent leaving)
+  `lastBegan`, `harnessPresent`, `presentAtStop`, `dispatch`'s `processing` and `done`, `port.observed`'s
+  `turn-start`, the agent leaving)
 - Test: `cli/src/services/devices.spec.ts`
 
 **Interfaces:**
 - Produces:
-  - `const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over' }>()`, at most
-    `NUDGED_MAX` entries, the oldest first out. A yes sets `{ at: monotonic(), phase: 'asked' }`.
+  - `const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over'; heard: number }>()`,
+    at most `NUDGED_MAX` entries, the oldest first out. A yes sets `{ at: monotonic(), phase: 'asked', heard: at }`.
   - A nudge with `ask` true for an agent in the map, younger than `NUDGE_ONCE_MS`, answers no as `nudged` (and, as
     every no, releases the held turn-stop). An `ask: false` never reads or changes the map (decision 18).
   - An entry goes on: an outside agent's `turn-start` whose source is `person` or `dial`; the agent leaving; or age
     past `NUDGE_ONCE_MS`.
   - For a Harness agent (no outside row), a `processing` card while `'asked'` makes it `'continuing'`. Its `done`
-    while `'continuing'` makes it `'over'`, after `rouse` is read.
+    while `'continuing'` makes it `'over'`, after `rouse` is read; a `done` while `'asked'` sets `heard`.
+  - The phase is bounded as the outside hold is: `'asked'` is `'over'` with no card `CONTINUE_QUIET_MS` after `heard`
+    (a block the engine never took starts no continuation), and any phase is `'over'` `CONTINUE_MAX_MS` after the yes.
   - `harnessPresent(agentId)` is false while the phase is `'asked'` or `'continuing'` (decision 13).
+  - `lastBegan`: each Harness agent's last ended turn's start, at most `NUDGED_MAX`, dropped at its next turn's first
+    card or when it leaves. `presentAtStop(agentId)` reads a Harness agent's presence from its turn under way, else from
+    that one: Claude Code's reader ends the turn at `end_turn`, before its Stop hook reports.
 
 - [ ] **Step 1: Write the failing tests.**
   - `'a second nudge before the person's next prompt is no, as nudged; after their prompt, yes again'`.
@@ -1039,11 +1050,13 @@ reads `flow/v5` and `flow/v6`), Task 2 (`stop-inputs.json`), V. Task 1 (done) se
     `export function asksOf(input: Record<string, unknown>): boolean`: `input.stop_hook_active !== true`, a string
     `last_assistant_message`, and `endsOnAsk` of it (the Global Constraints' ask).
   - `export const NUDGE_ANSWER_MS = 300`.
-  - `export const ROLLOUT_HEAD_MAX_BYTES = 65_536` and `export function codexExecRun(transcriptPath: unknown): boolean`
-    (decision 14, F8). False unless `transcriptPath` is a non-empty string naming a regular file (`statSync`, so a FIFO
-    or a folder is never opened). It reads from the start in chunks with `openSync`/`readSync` (closed in a `finally`)
-    until the first `\n` or `ROLLOUT_HEAD_MAX_BYTES`; with no newline by then, false. It parses that line and is true
-    only when the line is an object with `type === 'session_meta'` and `payload.source === 'exec'`. Any throw is false.
+  - `const ROLLOUT_HEAD_MAX_BYTES = 128 * 1024` and
+    `export function codexHeadless(transcriptPath: unknown, codexHome: string): boolean` (decision 14, F8). False
+    unless `transcriptPath` is a string that `openRollout` (`codexTurn.ts`, as `codex asked` opens one) opens: a
+    regular file inside the Codex home, never a link, a FIFO or a folder. It reads from the start in chunks with
+    `readSync` (closed in a `finally`) until the first `\n` or `ROLLOUT_HEAD_MAX_BYTES`; with no newline by then,
+    false. It parses that line and is true only when the line is an object with `type === 'session_meta'` and
+    `payload.source` `'exec'` or `'mcp'`. Any throw is false.
     It logs nothing and returns nothing of the line; the line is dropped.
   - `export interface StopDeps { stdin: AsyncIterable<Buffer | string>; dataDir: string; engine: 'claude' | 'codex';
     headless(input: Record<string, unknown>): boolean; acts(): boolean; ask(message: { type: 'nudge'; engine: 'claude'
@@ -1057,7 +1070,7 @@ reads `flow/v5` and `flow/v6`), Task 2 (`stop-inputs.json`), V. Task 1 (done) se
   - In `command.ts`, Claude:
     `case 'stop': return runStop({ stdin, dataDir, engine: 'claude', headless: () => /^sdk-/.test(deps.env.CLAUDE_CODE_ENTRYPOINT ?? ''), acts: () => pluginActs(deps.dataDir) && ownSkillIn(claudeHome()), ask: deps.ask ?? ((m) => askDevices(deps.dataDir, m, { timeoutMs: NUDGE_ANSWER_MS })), out })`.
     F1 found `sdk-cli` under `-p` and `cli` in the TUI. Codex: the same, with the `acts` `codex start` passes (decision
-    4) and `headless: (input) => codexExecRun(input.transcript_path)`.
+    4) and `headless: (input) => codexHeadless(input.transcript_path, deps.codexHome)`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `stop.spec.ts`:
@@ -1077,7 +1090,7 @@ reads `flow/v5` and `flow/v6`), Task 2 (`stop-inputs.json`), V. Task 1 (done) se
     - `'the order of checks'`: spies show `headless` is not called for a bad session id or a `cwd` in the data folder,
       and `acts` is not called when `headless` is true.
     - It prints nothing for answers `{ nudge: false }`, `{}`, `{ nudge: 'yes' }`, `429` and `null`.
-    - `describe('codexExecRun')`, over the two fixtures copied to a temporary folder: the TUI's head is false; `exec`'s
+    - `describe('codexHeadless')`, over the two fixtures copied to a temporary folder: the TUI's head is false; `exec`'s
       is true; `exec`'s head with more rollout lines after it is true; `exec`'s `source` padded so the line passes
       `ROLLOUT_HEAD_MAX_BYTES` before its newline is false; a missing file, a folder, an empty file, a first line that
       is not JSON, and `{"type":"event_msg","payload":{"source":"exec"}}` are false; `undefined`, `''` and `42` are
@@ -1128,10 +1141,10 @@ Task 10.
   `[{ hooks: [{ type: 'command', command, onFailure: 'continue', timeout: 5 }] }]`, with no matcher.
   - POSIX first line: ``echo `# <#` >/dev/null; exec "${CLAUDE_PLUGIN_ROOT}/hooks/stop"``.
   - After `#>` comes the PermissionRequest form's lookup without its `HARNESS_DEVICE_MOD_ASKS` check, ending
-    `if ($h) { $o = & $h device claude stop 2> $null; if ("$o".StartsWith('{"decision":"block","reason":')) { [Console]::Out.Write("$o") } }; exit 0`.
+    `if ($h) { $o = & $h device claude stop 2> $null; if ("$o".StartsWith('{"decision":"block","reason":')) { [Console]::Out.Write("$o") } }; $null = [Console]::In.ReadToEnd(); exit 0`.
   - `hooks/stop` is `hooks/start`'s shape (Part 4): the lookup, `device claude stop` with the hook's stdin, stderr to
-    `/dev/null`, stdout captured and printed with a newline only under the prefix; `cat >/dev/null` with no launcher;
-    `exit 0`.
+    `/dev/null`, stdout captured and printed with a newline only under the prefix; `cat >/dev/null` after the
+    launcher, or with none; `exit 0`.
 
 - [ ] **Step 1: Write the failing tests**, as Part 4's Task 2 wrote the SessionStart ones. Use `STOP_INPUT`
   (`session_id`, `transcript_path`, `cwd`, `hook_event_name: 'Stop'`, `stop_hook_active: false`,
@@ -1141,8 +1154,8 @@ Task 10.
     `STOP_INPUT` byte for byte, and the result is `{ status: 0, stdout: BLOCK + '\n', stderr: '' }`.
   - `'prints nothing but the block'` over usage text, `ALLOW`, `''`, exits 0, 1 and 2, and stderr.
   - With no launcher: nothing, exit 0. The executable check and `#!/bin/sh`.
-  - The Windows form: `device claude stop 2> $null` once, the guard, no `HARNESS_DEVICE_MOD_ASKS`, no `[Console]::In`
-    and no `|` into `$h`, ending `; exit 0`.
+  - The Windows form: `device claude stop 2> $null` once, the guard, no `HARNESS_DEVICE_MOD_ASKS`, `[Console]::In`
+    only after the launcher and no `|` into `$h`, ending `; $null = [Console]::In.ReadToEnd(); exit 0`.
   - In the win32 block, for PowerShell and Git Bash: the block passes (`stdout.trim()`); `ALLOW` prints nothing; no
     launcher prints nothing; a `last_assistant_message` of `Đã xong, không cần gì thêm.` reaches the stand-in byte
     for byte.
@@ -1345,7 +1358,7 @@ code, and the names cost nothing unless a CLI sends them.
 Task 7 (the hold), Task 8 (the yes, in `devices.ts`) and Task 9 (a Harness agent's phases, in `devices.ts`).
 
 **Files:**
-- Modify: `cli/src/cable/hosts/observed.ts` (`Entry.continuing.counts`, `ObservedSource.rangInHold`)
+- Modify: `cli/src/cable/hosts/observed.ts` (`Entry.secondLook.continuing.counts`, `ObservedSource.rangInHold`)
 - Modify: `cli/src/cable/dialUsage.ts` (`nudgeYes`, `nudgeRang`)
 - Modify: `cli/src/services/devices.ts` (the `yes` answer counts; `noticeShown` counts a ring in the window; Task 9's
   entry gains `engine` and `counts`)
@@ -1354,7 +1367,7 @@ Task 7 (the hold), Task 8 (the yes, in `devices.ts`) and Task 9 (a Harness agent
 - Test: `cli/src/cable/hosts/observed.spec.ts`, `cli/src/cable/dialUsage.spec.ts`, `cli/src/services/devices.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 16's names; Task 7's hold (`entry.continuing`, `stopReported`); Task 8's `nudged` and its `yes`;
+- Consumes: Task 16's names; Task 7's hold (`entry.secondLook.continuing`, `stopReported`); Task 8's `nudged` and its `yes`;
   Task 9's `nudgedAgents` and its phases; `count`, `noticeShown` and `noticeCaller` in `devices.ts`.
 - Produces:
   - `DialUsage.nudgeYes(engine: DialSkillEngine): void` adds `dial_nudge_<engine>`;
@@ -1364,7 +1377,8 @@ Task 7 (the hold), Task 8 (the yes, in `devices.ts`) and Task 9 (a Harness agent
     for an entry whose hold (`'heard'` or `'awaited'`) has `counts`, clears it and returns `entry.agent.engine`;
     else null. The mark goes with the hold, so after the hold's end (its next stop, its expiry, a turn event, the
     entry's removal) the answer is null.
-  - Task 9's entry becomes `{ at, phase, engine: 'claude' | 'codex', counts: boolean }`, `counts` true at the yes.
+  - Task 9's entry becomes `{ at, phase, heard, engine: 'claude' | 'codex', counts: boolean }`, `counts` true at the
+    yes.
   - In `devices.ts`: at the `yes` answer, `count((usage) => usage.nudgeYes(ask.engine))`. In `noticeShown`, for a
     notice not held quiet: `observed?.rangInHold(agentId)`; when null and no outside row holds the agent (a Harness
     agent), its Task 9 entry in phase `'asked'` or `'continuing'` with `counts` gives its `engine` and clears
