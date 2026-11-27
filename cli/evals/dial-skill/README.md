@@ -23,7 +23,9 @@ What each metric means and how a run scores: `flow/metrics.md`. Beside `score`, 
 description alone carried the command (no load of its body before the ring): a rate over the runs that rang, outside
 the score. `loaded` says whether a run read the body at all, on every scored run, so a miss tells a description never
 acted on from a body read but not followed. The held-out table in `flow/narrative.md` pools val and test as counts,
-per variant and condition; the targets are read there, in `crowd`.
+per variant and condition; the targets are read there, in `crowd`. Its `recall vs best` is the paired 95% interval of
+each case's held-out recall against the best round's same condition, so a round gains beyond noise when its low end is
+above 0 and falls when its high end is below 0.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
 recommendation, `waiting` for a missing key or sign-in, a harm step, or a prompt that says wait. The fake `harness`

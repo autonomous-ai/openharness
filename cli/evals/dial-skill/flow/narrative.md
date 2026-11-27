@@ -23,15 +23,15 @@ v1, the best variant, against the baseline on test:
 Held out: val and test pooled, as counts.
 
 <!-- held-out -->
-| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 |  |
-| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 |  |
-| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 |  |
-| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] |
-| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] |
-| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] |
-| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] |
+| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline | recall vs best |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 |  | -0.09 [-0.34, 0.15] |
+| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 |  | -0.20 [-0.44, 0.05] |
+| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 |  | +0.00 [0.00, 0.00] |
+| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] |  |
+| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] |  |
+| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] |  |
+| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] | +0.04 [-0.06, 0.14] |
 <!-- /held-out -->
 
 ## Round 1
