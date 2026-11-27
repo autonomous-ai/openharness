@@ -3545,6 +3545,13 @@ export class CableSession {
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
+    // The Pro's firmware drops an agent's question at any state but asking (pod_model.c set_state), and a turn start no
+    // longer closes a notice card (2026-11-27): the card stayed open, off the Pro. It goes back held, a drawer row, which
+    // the firmware's later sweeps keep; once a card, as a turn starts again at each working card. Never a question
+    // frame, and nothing to a round dial: it keeps the card through a turn start, and any question frame rings it.
+    const open = this.questionInbox.read(agentId)
+    if (this.seqOn && open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX) && this.questionInbox.rehold(agentId, open.id))
+      await this.replaceNotifications(this.host.listUnread())
     // The paragraph the agent last wrote, so the working screen has a sentence before the footer is read.
     if (this.stepsActivity && update) await this.send({ t: 'turn.activity', agentId, text, action: clipUtf8(update, ACTION_MAX_BYTES) })
     if (!this.link?.isOpen || !this.canReadActivity()) { this.activityReads.delete(agentId); return }

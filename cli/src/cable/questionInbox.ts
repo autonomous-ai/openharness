@@ -132,6 +132,17 @@ export class QuestionInbox {
     return true
   }
 
+  /** Whether that agent's open question, told, is to be held from now on, marking it held and asked: the dial lost it
+   *  while it stays open, and gets it back as a drawer row, never rung again. False when it was never told (it is rung
+   *  instead), is held already, or is no longer the open one. */
+  rehold(agentId: string, id: string): boolean {
+    const entry = this.entries.get(agentId)
+    if (!entry || entry.id !== id || !entry.told || entry.held) return false
+    entry.held = true
+    entry.asked = true
+    return true
+  }
+
   /** With `kept`, a drawer replaced whole: the dial holds, and so was told, the questions of the agents it names as
    *  rows, and holds no other; it was still told those. Without, a greeting: its RAM is gone, so each open question it
    *  is not given as a row is to be rung again. */
