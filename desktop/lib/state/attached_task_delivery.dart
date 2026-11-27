@@ -8,8 +8,8 @@ import 'app_state.dart';
 import 'harness_attachments.dart';
 
 /// How long a new harness has to open its terminal and start its engine.
-/// An observed Codex update waits for completion or pane closure instead: the
-/// person may leave its confirmation open for longer than this deadline.
+/// A Codex update can wait for confirmation longer than this deadline. Once
+/// the update finishes, give the launcher a fresh deadline to restart Codex.
 const kAttachedTaskOpenTimeout = Duration(minutes: 2);
 
 /// A beat after the engine reports ready, for its input to be drawn.
@@ -19,12 +19,12 @@ const kAttachedTaskSettle = Duration(milliseconds: 800);
 /// chat may not have a session ID yet either. Read only the visible terminal,
 /// looking for its composer as the last thing drawn, not a menu's selected row
 /// or an old prompt in scrollback.
-enum _CodexStartup { waiting, updating, ready }
+enum _CodexStartup { waiting, updating, restarting, ready }
 
-/// Codex's composer row (CLI engines/codex/composer.ts), never a numbered row
-/// of a menu: a trust, hooks or update question selects its first row with `›`.
-final _codexComposer = RegExp(r'^\s*›(?:\s|$)');
-final _codexMenuRow = RegExp(r'^\s*[›>]?\s*\d+\.\s');
+/// Codex's composer markers match the CLI reader (engines/codex/composer.ts).
+/// A numbered menu choice can also start with either marker.
+final _codexComposer = RegExp(r'^\s*[›»](?:\s|$)');
+final _codexMenuRow = RegExp(r'^\s*[›»>]?\s*\d+\.\s');
 
 /// Under the composer Codex draws only its footer, at most a few rows. More
 /// is some other screen below a prompt left in the conversation.
@@ -35,7 +35,7 @@ const _codexFooterRows = 3;
 /// read as an update, it cancelled the open timeout and the files waited
 /// forever.
 final _codexUpdating = RegExp(
-  r'^\s*[›>]?\s*1\. Update now|Updating Codex via|Update ran successfully! Please restart Codex\.',
+  r'^\s*[›>]?\s*1\. Update now|Updating Codex via',
   multiLine: true,
 );
 
@@ -46,6 +46,13 @@ _CodexStartup _codexStartup(Terminal terminal) {
       buffer.lines[row].getText(),
   ];
   if (_codexComposerIsLast(lines)) return _CodexStartup.ready;
+  // Match the updater and launch wrapper's notices across terminal rows.
+  // A narrow pane can wrap either one, and keyframes keep physical rows.
+  final notices = lines.join();
+  if (notices.contains('Update ran successfully! Please restart Codex.') ||
+      notices.contains('harness: Codex updated. Continuing startup…')) {
+    return _CodexStartup.restarting;
+  }
   if (_codexUpdating.hasMatch(lines.join('\n'))) return _CodexStartup.updating;
   return _CodexStartup.waiting;
 }
@@ -93,16 +100,18 @@ Future<String?> deliverAttachedTask(
   bool Function()? stillWanted,
 }) async {
   appLog.info('attach', 'waiting on $agentId for ${files.length} file(s)');
-  final session = await _readySession(
+  final readiness = await _readySession(
     app,
     machineId,
     agentId,
     terminal: terminal,
     stillWanted: stillWanted,
   );
+  final session = readiness?.session;
   if (session == null) {
     appLog.warn('attach', '$agentId never took input');
-    return 'The harness did not open in time. Attach the files in its pane.';
+    return readiness?.problem ??
+        'The harness did not open in time. Attach the files in its pane.';
   }
   for (final (index, file) in files.indexed) {
     if (stillWanted != null && !stillWanted()) {
@@ -128,8 +137,8 @@ Future<String?> deliverAttachedTask(
       : 'The files are attached, but the task was not sent.';
 }
 
-/// The harness's terminal once its engine is up and the pane takes input.
-Future<TerminalSession?> _readySession(
+/// The input-ready terminal or a reason that waiting cannot proceed.
+Future<({TerminalSession? session, String? problem})?> _readySession(
   AppNotifier app,
   String machineId,
   String agentId, {
@@ -137,9 +146,18 @@ Future<TerminalSession?> _readySession(
   bool Function()? stillWanted,
 }) async {
   var claimed = false;
+  var awaitingRestart = false;
   TerminalSession? watchedSession;
   Terminal? watchedTerminal;
   Timer? timeout;
+  final found = Completer<({TerminalSession? session, String? problem})?>();
+  Timer openDeadline({String? problem}) => Timer(kAttachedTaskOpenTimeout, () {
+    if (!found.isCompleted) {
+      found.complete(
+        problem == null ? null : (session: null, problem: problem),
+      );
+    }
+  });
   late void Function() check;
   TerminalSession? ready() {
     final agent = app
@@ -169,9 +187,22 @@ Future<TerminalSession?> _readySession(
     }
     if (session.acceptsInput) {
       if (agent?.engine == 'codex') {
-        final startup = _codexStartup(session.terminal);
-        if (startup == _CodexStartup.updating) timeout?.cancel();
-        if (startup != _CodexStartup.ready) return null;
+        switch (_codexStartup(session.terminal)) {
+          case _CodexStartup.waiting:
+            return null;
+          case _CodexStartup.updating:
+            if (!awaitingRestart) timeout?.cancel();
+            return null;
+          case _CodexStartup.restarting:
+            if (!awaitingRestart) {
+              awaitingRestart = true;
+              timeout?.cancel();
+              timeout = openDeadline(problem: 'Restart Codex, then try again.');
+            }
+            return null;
+          case _CodexStartup.ready:
+            break;
+        }
       }
       return session;
     }
@@ -192,7 +223,6 @@ Future<TerminalSession?> _readySession(
     return null;
   }
 
-  final found = Completer<TerminalSession?>();
   TerminalSession? candidate;
   Timer? settle;
   check = () {
@@ -215,7 +245,7 @@ Future<TerminalSession?> _readySession(
     settle = Timer(kAttachedTaskSettle, () {
       if (found.isCompleted) return;
       if (identical(ready(), session)) {
-        found.complete(session);
+        found.complete((session: session, problem: null));
       } else {
         candidate = null;
         check();
@@ -223,15 +253,13 @@ Future<TerminalSession?> _readySession(
     });
   };
 
-  timeout = Timer(kAttachedTaskOpenTimeout, () {
-    if (!found.isCompleted) found.complete(null);
-  });
+  timeout = openDeadline();
   app.addListener(check);
   check();
   try {
     return await found.future;
   } finally {
-    timeout.cancel();
+    timeout?.cancel();
     settle?.cancel();
     watchedSession?.removeListener(check);
     watchedTerminal?.removeListener(check);
@@ -252,10 +280,12 @@ Future<String?> deliverTask(
   required String task,
   bool Function()? stillWanted,
 }) async {
-  final session = await _readySession(app, machineId, agentId);
+  final readiness = await _readySession(app, machineId, agentId);
+  final session = readiness?.session;
   if (session == null) {
     appLog.warn('route', '$agentId never took input');
-    return 'The harness did not open in time. Nothing was sent.';
+    return readiness?.problem ??
+        'The harness did not open in time. Nothing was sent.';
   }
   if (stillWanted != null && !stillWanted()) return 'Nothing was sent.';
   return await session.sendComposerText(task)

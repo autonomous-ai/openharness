@@ -21,6 +21,10 @@ const _codexComposer =
     '\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\r\n'
     '\r\n  GPT-6-Astra · /tmp/work\r\n  ? for shortcuts';
 
+const _codexUpdateFinished =
+    '🎉 Update ran successfully! Please restart Codex.';
+const _codexAutoRelaunch = 'harness: Codex updated. Continuing startup…';
+
 /// A ready Codex 0.154 as captured in its pane (2026-10-18): the update box
 /// is only news, and the footer is a status line with no shortcut hint.
 const _codex154Ready =
@@ -197,6 +201,78 @@ void main() {
       session.dispose();
     });
 
+    testWidgets('delivers after the launcher restarts an updated Codex', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write('Updating Codex via installer…');
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskOpenTimeout + const Duration(seconds: 1));
+      expect(problem, 'pending');
+
+      // The Codex process exits after writing the notice. Its launcher sees
+      // that output and starts the replacement process in the same pane.
+      session.terminal.write('\r\n$_codexUpdateFinished');
+      await tester.pump(kAttachedTaskSettle);
+      expect(problem, 'pending');
+      expect(session.calls, isEmpty);
+
+      session.terminal.write('\r\n$_codexAutoRelaunch\r\n$_codexComposer');
+      await tester.pump(kAttachedTaskSettle);
+      await tester.pump();
+      expect(problem, isNull);
+      expect(session.calls, ['file:shot.png', 'paste: ', 'send:Look']);
+    });
+
+    testWidgets('times out once when an updated Codex never starts', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.resize(40, 24);
+      session.terminal.write('Updating Codex via installer…');
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskOpenTimeout + const Duration(seconds: 1));
+      expect(problem, 'pending');
+
+      // The notice wraps at this width. Seeing it again or seeing the retry
+      // announcement later must not reset the new startup deadline.
+      session.terminal.write('\r\n$_codexUpdateFinished');
+      await tester.pump(kAttachedTaskOpenTimeout - const Duration(seconds: 1));
+      expect(problem, 'pending');
+      session.notifyListeners();
+      session.terminal.write(
+        '\r\n$_codexAutoRelaunch\r\n'
+        'harness: codex exited (1). This pane is a shell now — run codex again, or stop the pane.',
+      );
+      await tester.pump(const Duration(seconds: 2));
+      expect(problem, contains('Restart Codex'));
+      expect(session.calls, isEmpty);
+    });
+
     testWidgets(
       'keeps the task and image queued through a Codex startup update',
       (tester) async {
@@ -298,6 +374,39 @@ void main() {
       await tester.pump();
       expect(session.calls, isEmpty);
       expect(problem, contains('did not open in time'));
+    });
+
+    testWidgets('waits for the Codex composer when the pane uses »', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write(
+        'Hooks need review\r\n» 1. Review hooks\r\n'
+        'Press enter to confirm',
+      );
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png')],
+          task: 'Look',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskSettle);
+      expect(problem, 'pending');
+      expect(session.calls, isEmpty);
+
+      final composer = _codex154Ready.replaceFirst('›', '»');
+      session.terminal.write('\u001b[2J\u001b[H$composer');
+      await tester.pump(kAttachedTaskSettle);
+      await tester.pump(kAttachedTaskOpenTimeout);
+      expect(problem, isNull);
+      expect(session.calls, ['file:shot.png', 'paste: ', 'send:Look']);
     });
 
     test('files first, each followed by a space, then the task', () async {
