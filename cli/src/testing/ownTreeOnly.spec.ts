@@ -18,8 +18,8 @@ import { namedTree, processTable, processTree, SpawnedRuns, type Run } from './s
 interface Made { pid: number; ppid: number; pgid: number; command: string; cwd: string; uid: number; started: string }
 /**
  * The made-up machine: its processes, the runs asked of it and the signals sent. [ANSWER] is what `ps` or `lsof` prints
- * there and its exit status, as source, so the fake binaries a process of its own runs (the worker's reaper) answer the
- * same way this worker's mock does.
+ * there and its exit status, and [ALIVE] what signal 0 finds, as source, so the fake binaries and the signals of a process
+ * of its own (the worker's reaper) answer the same way this worker's mocks do.
  */
 const machine = vi.hoisted(() => {
   const ANSWER = `(rows, name, args) => {
@@ -34,9 +34,15 @@ const machine = vi.hoisted(() => {
       : field === 'comm' ? row.command.split(' ')[0] : field === 'lstart' ? row.started : String(row[field])
     return { stdout: listed.map((row) => fields.map((field) => value(row, field)).join(' ') + '\\n').join(''), status }
   }`
+  /** Whether made-up [pid] runs there: the machine has it, and no signal went to it or its group ([sent], the pids signalled). */
+  const ALIVE = `(rows, sent, pid) => {
+    const row = rows.find((row) => row.pid === pid)
+    return row !== undefined && !sent.some((to) => to === pid || to === -row.pgid)
+  }`
   return {
-    ANSWER,
+    ANSWER, ALIVE,
     answer: new Function(`return ${ANSWER}`)() as (rows: Made[], name: string, args: readonly string[]) => { stdout: string; status: number },
+    alive: new Function(`return ${ALIVE}`)() as (rows: Made[], sent: readonly number[], pid: number) => boolean,
     rows: [] as Made[], runs: [] as Array<{ file: string; args: string[] }>, signals: [] as Array<[number, string | number]>,
     /** Whether `ps -A` fails there, as one cut off at its timeout does. */
     tableFails: false,
@@ -156,12 +162,14 @@ beforeEach(() => {
   machine.tableFails = false
   unreadable.path = ''
   const kill = process.kill.bind(process)
-  // Signal 0 to a made-up pid: gone. Any other signal is noted and sent nowhere; none ever reaches a real process.
+  // Signal 0 to a made-up pid: alive while the machine has it and no signal was sent to it or its group. Any other signal
+  // is noted, finds it gone and is sent nowhere; none ever reaches a real process.
   vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
     if (Math.abs(pid) < P(0)) {
       if (signal === 0) return kill(pid, 0)
       throw new Error(`a signal to a real process: ${pid} ${String(signal)}`)
     }
+    if (signal === 0 && machine.alive(machine.rows, machine.signals.map(([to]) => to), pid)) return true
     if (signal !== 0) machine.signals.push([pid, signal ?? 'SIGTERM'])
     throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
   })
@@ -451,7 +459,7 @@ describe("the worker's reaper", () => {
    * `ps`, `lsof` and `tmux` first on the reaper's PATH, answering from the made-up machine as this worker's mock does
    * and noting each run: the tmux server's `kill-server` ends it and its pane, and leaves launchd what the pane left.
    * And [preload], for the reaper to import first: a `process.kill` that notes each signal in [signals] and sends none,
-   * as this worker's mock does, so no process of this computer is signalled; signal 0 finds a made-up pid gone.
+   * and answers signal 0 from the made-up machine, as this worker's mock does, so no process of this computer is signalled.
    */
   function fakeBin(server: number[]): { bin: string; runs: string; preload: string; signals: string } {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'made-up-machine-')))
@@ -460,10 +468,12 @@ describe("the worker's reaper", () => {
     const preload = join(dir, 'signals.mjs'), signals = join(dir, 'signals.jsonl')
     writeFileSync(file, JSON.stringify({ rows: machine.rows, server }))
     writeFileSync(signals, '')
-    writeFileSync(preload, `import { appendFileSync } from 'node:fs'
+    writeFileSync(preload, `import { appendFileSync, readFileSync } from 'node:fs'
 const kill = process.kill.bind(process)
+const sent = () => readFileSync(${JSON.stringify(signals)}, 'utf8').split('\\n').filter(Boolean).map((line) => JSON.parse(line)[0])
 process.kill = (pid, signal) => {
   if (signal === 0 && Math.abs(pid) < ${P(0)}) return kill(pid, 0)
+  if (signal === 0 && (${machine.ALIVE})(JSON.parse(readFileSync(${JSON.stringify(file)}, 'utf8')).rows, sent(), pid)) return true
   if (signal !== 0) appendFileSync(${JSON.stringify(signals)}, JSON.stringify([pid, signal ?? 'SIGTERM']) + '\\n')
   throw Object.assign(new Error('no such process'), { code: 'ESRCH' })
 }

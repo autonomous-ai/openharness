@@ -206,6 +206,8 @@ describe('a Codex app server a pid file in the root names', () => {
   }
   const pidFile = (path: string, text: string) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) }
   const daemonPid = (pid: number) => JSON.stringify({ pid, processStartTime: 'Mon Nov 23 10:00:03 2026' })
+  /** Past any pid a real machine gives: macOS's are under 100000, Linux's at most 4194304. */
+  const NO_SUCH_PID = 4_194_305
 
   it('is the test\'s while it is this account\'s, an app server, and started no sooner than the second before the root', () => {
     // The root made at 10:00:00.400; `ps` gives a start to the second.
@@ -271,10 +273,9 @@ describe('a Codex app server a pid file in the root names', () => {
       server = undefined
     })
 
-    it('is ended by the close sweep, though it left the test\'s tree, names nothing of the root and works outside it', async () => {
-      const root = folder('htmux-')
-      const file = join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid')
-      // As `codex app-server --managed-daemon` starts: detached by a launcher that writes its pid file and exits.
+    /** A stand-in for `codex app-server --managed-daemon`, as it starts: detached by a launcher that writes its pid file
+     *  at [file] and exits. Its pid, once it runs its own command line. */
+    async function standIn(file: string): Promise<number> {
       const launch = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs')
 const server = spawn(process.execPath, ['-e', ${JSON.stringify(IDLE)}, 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore', cwd: ${JSON.stringify(tmpdir())} })
 mkdirSync(${JSON.stringify(dirname(file))}, { recursive: true })
@@ -286,6 +287,21 @@ server.unref()`
       const pid = server = (JSON.parse(readFileSync(file, 'utf8')) as { pid: number }).pid
       // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
       await until(() => commandLines([pid]).get(pid)?.includes('app-server --managed-daemon') || null)
+      return pid
+    }
+
+    it('is ended by the close sweep, though it left the test\'s tree, names nothing of the root and works outside it', async () => {
+      const root = folder('htmux-')
+      const pid = await standIn(join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid'))
+      expect(await endRootProcesses(root, new Map())).toEqual([])
+      expect(alive(pid)).toBe(false)
+    })
+
+    // macOS's `ps -p` given one pid of 100000 or over prints nothing of any pid asked with it, and exits 1.
+    it('is ended though another pid file names a pid no machine gives', async () => {
+      const root = folder('htmux-')
+      pidFile(join(root, 'home', 'stale', 'app-server-daemon', 'daemon.pid'), daemonPid(NO_SUCH_PID))
+      const pid = await standIn(join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid'))
       expect(await endRootProcesses(root, new Map())).toEqual([])
       expect(alive(pid)).toBe(false)
     })

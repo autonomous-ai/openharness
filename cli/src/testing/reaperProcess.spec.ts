@@ -85,13 +85,9 @@ setInterval(() => {}, 1 << 30)`
     expect(said).toContain(`[e2e reaper] ended 1 processes that still named ${dir} or ran in it`)
   })
 
-  // Codex's managed app server detaches itself, names no root and need not work in it: a real one from the tester of
-  // #4660 and #4668 outlived its test, launchd's. Codex records it in <CODEX_HOME>/app-server-daemon/daemon.pid.
-  it('ends a Codex app server a pid file in a root it was told names, though nothing of the worker still runs', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'htmux-')))
-    folders.push(dir)
-    const file = join(dir, 'home', 'codex', 'app-server-daemon', 'daemon.pid')
-    // As `codex app-server --managed-daemon` starts: detached by a launcher that writes its pid file and exits.
+  /** A stand-in for `codex app-server --managed-daemon`, as it starts: detached by a launcher that writes its pid file at
+   *  [file] and exits. Its pid, once it runs its own command line. */
+  const standIn = async (file: string): Promise<number> => {
     const launch = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs')
 const server = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)', 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore', cwd: ${JSON.stringify(tmpdir())} })
 mkdirSync(${JSON.stringify(dirname(file))}, { recursive: true })
@@ -104,9 +100,31 @@ server.unref()`
     detached.push(pid)
     // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
     await expect.poll(() => commandLines([pid]).get(pid) ?? '', { timeout: 10_000 }).toContain('app-server --managed-daemon')
+    return pid
+  }
+
+  // Codex's managed app server detaches itself, names no root and need not work in it: a real one from the tester of
+  // #4660 and #4668 outlived its test, launchd's. Codex records it in <CODEX_HOME>/app-server-daemon/daemon.pid.
+  it('ends a Codex app server a pid file in a root it was told names, though nothing of the worker still runs', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'htmux-')))
+    folders.push(dir)
+    const pid = await standIn(join(dir, 'home', 'codex', 'app-server-daemon', 'daemon.pid'))
     const said = await reaped([{ tmux: join(dir, 'no-server'), root: dir }])
     await expect.poll(() => alive(pid), { timeout: 10_000 }).toBe(false)
     expect(existsSync(dir)).toBe(false)
+    expect(said).toContain(`[e2e reaper] ended 1 Codex app servers that pid files in ${dir} named`)
+  })
+
+  // macOS's `ps -p` given one pid of 100000 or over prints nothing of any pid asked with it, and exits 1.
+  it('ends a Codex app server though another pid file in the root names a pid no machine gives', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'htmux-')))
+    folders.push(dir)
+    // Past any pid a real machine gives: macOS's are under 100000, Linux's at most 4194304.
+    mkdirSync(join(dir, 'home', 'stale', 'app-server-daemon'), { recursive: true })
+    writeFileSync(join(dir, 'home', 'stale', 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid: 4_194_305, processStartTime: 'Mon Nov 23 10:00:03 2026' }))
+    const pid = await standIn(join(dir, 'home', 'codex', 'app-server-daemon', 'daemon.pid'))
+    const said = await reaped([{ tmux: join(dir, 'no-server'), root: dir }])
+    await expect.poll(() => alive(pid), { timeout: 10_000 }).toBe(false)
     expect(said).toContain(`[e2e reaper] ended 1 Codex app servers that pid files in ${dir} named`)
   })
 
