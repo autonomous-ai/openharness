@@ -56,6 +56,18 @@ describe('the environment, as env.ts reads it', () => {
     expect(load({ OPENCLAW_STATE_DIR: '/s' }).env).toMatchObject({ OPENCLAW_STATE_DIR: '/s' })
   })
 
+  // Codex takes an empty CODEX_HOME as ~/.codex (measured with codex-cli 0.172.0: `CODEX_HOME= codex login status`
+  // is signed in, an empty folder is not); '' made every reader take a relative folder for Codex's home.
+  it('an empty CODEX_HOME is ~/.codex, as Codex reads it', () => {
+    const read = ['CODEX_HOME']
+    const empty = load({ CODEX_HOME: '' }, { read })
+    expect(empty.status, empty.stderr).toBe(0)
+    expect(empty.env).toEqual({ CODEX_HOME: join(empty.home, '.codex') })
+    const unset = load({}, { read })
+    expect(unset.env).toEqual({ CODEX_HOME: join(unset.home, '.codex') })
+    expect(load({ CODEX_HOME: '/x' }, { read }).env).toEqual({ CODEX_HOME: '/x' })
+  })
+
   // The master resolved a relative folder against the folder it was started from, the core against the home.
   it('a relative Harness folder is the home\'s, whatever folder the process starts in', () => {
     const home = folder(), elsewhere = folder()
