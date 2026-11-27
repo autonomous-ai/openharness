@@ -47,6 +47,10 @@ path available in the Repo tooltip.
 
 Opening, searching, and cancelling never send input to an existing harness.
 
+A task with files waits until the harness can take input. After a Codex startup
+update, the launcher gets two minutes to reopen the prompt. If Codex still
+cannot take input, the desktop asks the person to restart Codex and try again.
+
 | Entry | Initial values | Destination after a successful start |
 | --- | --- | --- |
 | Cmd-T, then Cmd-N | Last successful setup and last focused real project with its machine | The blank tab opened by Cmd-T |
