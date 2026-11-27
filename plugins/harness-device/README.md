@@ -76,6 +76,21 @@ Missed on purpose:
   the dial after the person has answered, and the dial rings for an ask already answered: on Windows, in 4 of 5 turns
   that ended right after the command (#4668). So the hooks stay in the foreground.
 
+## At session start
+
+When a session starts, resumes, is cleared or compacts, the plugin adds this one line to its context:
+
+> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the
+> dial skill and follow it. Not for finished work or progress.
+
+In Claude Code it comes from the `SessionStart` hook in `hooks/hooks.json` (`hooks/start`), in Codex from the one in
+`hooks/codex.json` (`hooks/codex-start`), which Harness trusts as the plugin's other hooks. Each runs
+`harness device claude start` or `harness device codex start`, which prints the line only while Harness's own dial
+skill is in that session's home, the plugin is on, `disable` has not removed that engine, and the session's folder is
+outside Harness's data folder, where Harness's own one-shots run. It reads no daemon and no network, and decides
+nothing. Anything else the launcher prints is dropped. `harness device claude disable` and `harness device codex disable`
+take the line away.
+
 ## What it never does
 
 - It never answers a prompt: the dial approves nothing, and each prompt is answered in its own app.
@@ -83,6 +98,7 @@ Missed on purpose:
   dial sees the tool's name and one line: what a permission ask acts on (a command, a file, a site's host, an MCP
   server and tool), the first question for a form, fixed words for a plan approval, whose plan never leaves the hook.
   The rest stays in the hook. The mod sends only the session's id.
+- It adds no other text to a session than that one line.
 
 ## Install and remove
 

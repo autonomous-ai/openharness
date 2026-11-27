@@ -8,8 +8,11 @@ import * as fs from 'node:fs'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { hooks } from '../engines/codex/hookContract.js'
+import { reviewHash } from '../engines/kit/hookReview.js'
 import { filesContentHash, pluginContentHash, pluginTrustRecords, readConfigText, replaceConfigText, writePluginTrust } from './codexPluginTrust.js'
 
 // A copy of the module, so a test can watch, or break, the file calls a write makes.
@@ -153,6 +156,25 @@ describe("the plugin's trust records", () => {
       ['stop:0:0', 'sha256:f0a5037f5c103124b923a3908564612f2f006fb26f54e3102e304fbe57d3d4d1'],
       ['post_tool_use:0:0', 'sha256:b938a9471c973339ca748a29f112df3a8fa6ccc1c7d2155b6823164c52c46bdd'],
     ])
+  })
+
+  // Codex runs the SessionStart hook unasked only with a record whose hash holds its matcher (the spike of 2026-11-27).
+  it("the repository's plugin gets a record for each of its hooks, session_start first, its matcher hashed", () => {
+    const root = fileURLToPath(new URL('../../../plugins/harness-device', import.meta.url))
+    const records = pluginTrustRecords(root)
+    expect(records.map((record) => record.key)).toEqual([
+      'harness-device@openharness:hooks/codex.json:session_start:0:0',
+      PERMISSION_KEY,
+      QUESTION_KEY,
+    ])
+    expect(new Set(records.map((record) => record.contentHash)).size).toBe(1)
+    const command = (JSON.parse(readFileSync(join(root, 'hooks', 'codex.json'), 'utf8')) as {
+      hooks: { SessionStart: Array<{ hooks: Array<{ command: string }> }> }
+    }).hooks.SessionStart[0].hooks[0].command
+    const reviewed = { ...hooks.settings.reviewed!, matcherEvents: ['PreToolUse', 'PermissionRequest', 'PostToolUse', 'SessionStart'] }
+    const withMatcher = reviewHash(reviewed, 'SessionStart', 'startup|resume|clear|compact', { command, timeout: 5 })
+    expect(records[0].trustedHash).toBe(withMatcher)
+    expect(reviewHash(reviewed, 'SessionStart', undefined, { command, timeout: 5 })).not.toBe(withMatcher)
   })
 })
 

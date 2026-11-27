@@ -475,12 +475,12 @@ describe('run-eval.mjs conditions and probes', () => {
     expect(made.filter((c) => c === 'probe')).toHaveLength(3)
     const probes = jsonl('baseline', 'probes.jsonl')
     expect(probes).toMatchObject([
-      { condition: 'clean', listing: { dial: 'full', cut: 0 }, instructions: false, claude_version: VERSION, model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 4 }, failure: null },
+      { condition: 'clean', listing: { dial: 'full', cut: 0 }, instructions: false, start_line: null, claude_version: VERSION, model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 4 }, failure: null },
       { condition: 'crowd', listing: { dial: 'full', cut: 0 }, instructions: true, failure: null },
       { condition: 'name-only', listing: { dial: 'name-only', cut: 0 }, instructions: true, failure: null },
     ])
     for (const probe of probes) {
-      expect(Object.keys(probe).sort()).toEqual(['at', 'claude_version', 'condition', 'failure', 'instructions', 'listing', 'model', 'skills', 'usage'])
+      expect(Object.keys(probe).sort()).toEqual(['at', 'claude_version', 'condition', 'failure', 'instructions', 'listing', 'model', 'skills', 'start_line', 'usage'])
       expect(JSON.stringify(probe)).not.toContain(tmp)
     }
     expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').filter((r) => r.meta.agent === 'claude').map((r) => [r.prompt_id, r.meta.listing])))

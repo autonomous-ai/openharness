@@ -1,0 +1,28 @@
+#!/bin/sh
+# Claude Code runs this when a session starts, resumes, is cleared or compacted. The launcher prints the line that tells
+# the agent about the dial, as SessionStart JSON, or nothing. Claude Code adds what a SessionStart hook prints to the
+# session's context, so only the line the launcher shapes passes on: an older or foreign launcher's usage, another
+# hook's JSON or anything on stderr is dropped, and the exit is always 0. The hook decides nothing.
+# ~/.local/bin first: the installer puts the launcher there, and an app started from the Dock may not have it on PATH.
+# Windows' installer puts it in %USERPROFILE%\.harness\bin.
+#
+# hooks.json's command is read by two shells, as for hooks/asked: a POSIX shell (and Git Bash on Windows) execs this
+# script; Windows PowerShell runs the second line, the same lookup and the same check on what the launcher prints.
+#
+# With no launcher the input is read whole all the same: Claude Code's write of one longer than the pipe holds would
+# fail, and that hook with it.
+prefix='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":'
+out=
+if [ -x "$HOME/.local/bin/harness" ]; then
+  out=$("$HOME/.local/bin/harness" device claude start 2>/dev/null)
+elif [ -n "$USERPROFILE" ] && [ -x "$USERPROFILE/.harness/bin/harness.exe" ]; then
+  out=$("$USERPROFILE/.harness/bin/harness.exe" device claude start 2>/dev/null)
+elif command -v harness >/dev/null 2>&1; then
+  out=$(harness device claude start 2>/dev/null)
+else
+  cat >/dev/null
+fi
+case "$out" in
+  "$prefix"*) printf '%s\n' "$out" ;;
+esac
+exit 0

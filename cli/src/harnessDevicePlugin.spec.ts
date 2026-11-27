@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process'
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'child_process'
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -45,6 +45,32 @@ const codexHooks = (root = pluginRoot) => (json(root, 'hooks', 'codex.json') as 
 const codexHook = (root = pluginRoot): Hook => codexHooks(root).PermissionRequest[0].hooks[0]
 // What PowerShell runs of the command: what follows the end of the block comment that hides the sh line from it.
 const windowsForm = (command: string): string => command.slice(command.indexOf('#>') + 2)
+const START = join(pluginRoot, 'hooks', 'start')
+const startHook = (root = pluginRoot): Hook =>
+  (json(root, 'hooks', 'hooks.json') as { hooks: Record<string, HookBlock[]> }).hooks.SessionStart[0].hooks[0]
+// Claude Code's SessionStart input.
+const START_INPUT = JSON.stringify({
+  session_id: 's-1',
+  transcript_path: '/home/person/.claude/projects/-home-person-work/s-1.jsonl',
+  cwd: '/home/person/work',
+  hook_event_name: 'SessionStart',
+  source: 'startup',
+})
+// A stand-in for what `harness device claude start` prints: the hook passes on only a line with this prefix.
+const SESSION_LINE = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The person has a Harness dial."}}'
+const SESSION_PREFIX = '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":'
+const CODEX_START = join(pluginRoot, 'hooks', 'codex-start')
+const codexStartHook = (root = pluginRoot): Hook => codexHooks(root).SessionStart[0].hooks[0]
+// Codex's SessionStart input, as Codex 0.172.0 writes it (the spike of 2026-11-27).
+const CODEX_START_INPUT = JSON.stringify({
+  session_id: 's-1',
+  transcript_path: '/home/person/.codex/sessions/2026/11/27/rollout-s-1.jsonl',
+  cwd: '/home/person/work',
+  hook_event_name: 'SessionStart',
+  model: 'gpt-5.5',
+  permission_mode: 'default',
+  source: 'startup',
+})
 
 const tmpDirs: string[] = []
 // Every child has exited when spawnSync returns, but Windows still holds a just-run copy of node.exe for a moment (its
@@ -73,8 +99,19 @@ function runCodexHook(shell: string, root: string, home: string, path = '/usr/bi
   })
 }
 
+/** Runs the Codex SessionStart hook's command as Codex does off Windows. */
+function runCodexStartHook(shell: string, root: string, home: string, path = '/usr/bin:/bin') {
+  return spawnSync(shell, ['-c', codexStartHook(root).command], {
+    input: CODEX_START_INPUT, env: { HOME: home, PATH: path, PLUGIN_ROOT: root }, encoding: 'utf8',
+  })
+}
+
 function runHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
   return spawnSync(HOOK, [], { input: INPUT, env: { HOME: home, PATH: path, ...env }, encoding: 'utf8' })
+}
+
+function runStartHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(START, [], { input: START_INPUT, env: { HOME: home, PATH: path, ...env }, encoding: 'utf8' })
 }
 
 describe('the harness-device plugin', () => {
@@ -101,11 +138,14 @@ describe('the harness-device plugin', () => {
 
   // Claude Code on Windows with no Git Bash runs the command in PowerShell, and there counts a hook that fails or times
   // out as a deny unless its onFailure is "continue", which is the default everywhere else.
-  it('hooks.json holds one PermissionRequest command hook for every tool, with a 5 s timeout, whose failure never blocks the tool call', () => {
-    const { hooks } = json(pluginRoot, 'hooks', 'hooks.json') as { hooks: Record<string, { matcher: string; hooks: Hook[] }[]> }
-    expect(Object.keys(hooks)).toEqual(['PermissionRequest'])
+  it('hooks.json holds the PermissionRequest hook and one SessionStart command hook for startup, resume, clear and compact, 5 s, onFailure continue', () => {
+    const { hooks } = json(pluginRoot, 'hooks', 'hooks.json') as { hooks: Record<string, HookBlock[]> }
+    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'SessionStart'])
     expect(hooks.PermissionRequest.map((block) => block.matcher)).toEqual(['*'])
     expect(hooks.PermissionRequest[0].hooks).toEqual([{ type: 'command', command: expect.any(String), onFailure: 'continue', timeout: 5 }])
+    expect(hooks.SessionStart.map((block) => block.matcher)).toEqual(['startup|resume|clear|compact'])
+    expect(hooks.SessionStart[0].hooks).toEqual([{ type: 'command', command: expect.any(String), onFailure: 'continue', timeout: 5 }])
+    expect(hooks.SessionStart[0].hooks[0].command.split('\n')[0]).toBe('echo `# <#` >/dev/null; exec "${CLAUDE_PLUGIN_ROOT}/hooks/start"')
   })
 
   // Claude Code puts the plugin's folder in place of ${CLAUDE_PLUGIN_ROOT} and runs the command through a shell.
@@ -233,6 +273,82 @@ describe('the harness-device plugin', () => {
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   })
 
+  // Claude Code adds what a SessionStart hook prints to the session's context.
+  posix.each(SHELLS)("the SessionStart hook runs hooks/start under %s from a folder with a space, and prints the launcher's line", (shell) => {
+    const root = join(tempDir(), 'Harness Device')
+    cpSync(pluginRoot, root, { recursive: true })
+    const home = tempDir()
+    const record = join(home, 'rec')
+    fakeLauncher(join(home, '.local', 'bin', 'harness'), record, SESSION_LINE)
+    const command = startHook(root).command.replaceAll('${CLAUDE_PLUGIN_ROOT}', root)
+    const result = spawnSync(shell, ['-c', command], { input: START_INPUT, env: { HOME: home, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
+    expect(readFileSync(`${record}.argv`, 'utf8')).toBe('device\nclaude\nstart\n')
+    expect(readFileSync(`${record}.stdin`, 'utf8')).toBe(START_INPUT)
+    expect(result).toMatchObject({ status: 0, stdout: `${SESSION_LINE}\n`, stderr: '' })
+  })
+
+  // An older or foreign launcher prints its usage, another hook's JSON or nothing, and may fail or write to stderr: none
+  // of it may reach the session's context.
+  posix('the SessionStart hook prints nothing but the line', () => {
+    const home = tempDir()
+    const launcher = join(home, '.local', 'bin', 'harness')
+    mkdirSync(join(launcher, '..'), { recursive: true })
+    for (const out of ['harness v0.6 — connect this computer to your machine', ALLOW, '']) {
+      for (const code of [0, 1, 2]) {
+        writeFileSync(launcher, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${out}'\necho 'usage: harness device' >&2\nexit ${code}\n`)
+        chmodSync(launcher, 0o755)
+        expect(runStartHook(home, '/usr/bin:/bin'), `${out} exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
+      }
+    }
+  })
+
+  posix('with no launcher the SessionStart hook prints nothing and exits 0', () => {
+    expect(runStartHook(tempDir(), '/usr/bin:/bin')).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix("the SessionStart hook runs ~/.local/bin/harness first, then the profile's harness.exe, then PATH", () => {
+    const home = tempDir()
+    const profile = tempDir()
+    const bin = tempDir()
+    const placements = [
+      join(home, '.local', 'bin', 'harness'),
+      join(profile, '.harness', 'bin', 'harness.exe'),
+      join(bin, 'harness'),
+    ]
+    const record = (i: number) => join(home, `rec-${i}`)
+    placements.forEach((launcher, i) => fakeLauncher(launcher, record(i), SESSION_LINE))
+    // Each run finds the first placement still there; the next run has it removed.
+    for (const [i, launcher] of placements.entries()) {
+      const result = runStartHook(home, `${bin}:/usr/bin:/bin`, { USERPROFILE: profile })
+      expect(readFileSync(`${record(i)}.argv`, 'utf8'), launcher).toBe('device\nclaude\nstart\n')
+      expect(readFileSync(`${record(i)}.stdin`, 'utf8'), launcher).toBe(START_INPUT)
+      for (let later = i + 1; later < placements.length; later++) expect(existsSync(`${record(later)}.argv`), launcher).toBe(false)
+      expect(result, launcher).toMatchObject({ status: 0, stdout: `${SESSION_LINE}\n`, stderr: '' })
+      rmSync(launcher)
+    }
+  })
+
+  posix('hooks/start is executable and starts with #!/bin/sh', () => {
+    expect(statSync(START).mode & 0o111).toBe(0o111)
+    expect(readFileSync(START, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
+  })
+
+  it('the SessionStart Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device claude start once, writes only the SessionStart line, and exits 0', () => {
+    const windows = windowsForm(startHook().command)
+    expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
+    expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
+    expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
+    const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
+    const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
+    expect(profile).toBeGreaterThan(-1)
+    expect(onPath).toBeGreaterThan(profile)
+    const calls = windows.match(/device claude start[^;}]*/g)
+    expect(calls).toHaveLength(1)
+    expect(calls![0].trim()).toBe('device claude start 2> $null')
+    expect(windows).toContain(`if ("$o".StartsWith('${SESSION_PREFIX}')) { [Console]::Out.Write("$o") }`)
+    expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
+  })
+
   // Codex reads .codex-plugin/ before .claude-plugin/, and a manifest's hooks path in place of hooks/hooks.json, so
   // Claude Code's hooks and mod stay Claude Code's. With no version, Codex installs the plugin as `local`.
   it('the Codex manifest is named harness-device, names hooks/codex.json, has no version, and promises no answer', () => {
@@ -244,16 +360,19 @@ describe('the harness-device plugin', () => {
     expect(manifest.description).not.toMatch(/allow|deny|approv|answers/i)
   })
 
-  it('hooks/codex.json holds one PermissionRequest hook for every tool and one PreToolUse hook for request_user_input, the same command, 5 s, onFailure continue, and no mod', () => {
+  it('hooks/codex.json holds the PermissionRequest and PreToolUse hooks and one SessionStart hook for startup, resume, clear and compact, 5 s, onFailure continue, and no mod', () => {
     expect(json(pluginRoot, 'hooks', 'codex.json')).not.toHaveProperty('modules')
     const hooks = codexHooks()
-    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'PreToolUse'])
+    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'PreToolUse', 'SessionStart'])
     expect(hooks.PermissionRequest.map((block) => block.matcher)).toEqual(['*'])
     expect(hooks.PreToolUse.map((block) => block.matcher)).toEqual(['request_user_input'])
     const command = codexHook().command
     for (const event of ['PermissionRequest', 'PreToolUse']) {
       expect(hooks[event][0].hooks, event).toEqual([{ type: 'command', command, onFailure: 'continue', timeout: 5 }])
     }
+    expect(hooks.SessionStart.map((block) => block.matcher)).toEqual(['startup|resume|clear|compact'])
+    expect(hooks.SessionStart[0].hooks).toEqual([{ type: 'command', command: expect.any(String), onFailure: 'continue', timeout: 5 }])
+    expect(hooks.SessionStart[0].hooks[0].command.split('\n')[0]).toBe('echo `# <#` >/dev/null; exec "$PLUGIN_ROOT/hooks/codex-start"')
   })
 
   // Codex runs the command through a shell with PLUGIN_ROOT in its environment: the shell expands it, so no character
@@ -321,6 +440,75 @@ describe('the harness-device plugin', () => {
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
   })
 
+  // Codex adds what a SessionStart hook prints to the model's request, JSON or plain text alike (the spike).
+  posix.each(SHELLS)("the Codex SessionStart hook runs hooks/codex-start under %s, from a folder named with a space, a quote and a dollar sign, and prints the launcher's line", (shell) => {
+    const root = join(tempDir(), 'Harness "Device" $x')
+    cpSync(pluginRoot, root, { recursive: true })
+    const home = tempDir()
+    const record = join(home, 'rec')
+    fakeLauncher(join(home, '.local', 'bin', 'harness'), record, SESSION_LINE)
+    const result = runCodexStartHook(shell, root, home)
+    expect(readFileSync(`${record}.argv`, 'utf8')).toBe('device\ncodex\nstart\n')
+    expect(readFileSync(`${record}.stdin`, 'utf8')).toBe(CODEX_START_INPUT)
+    expect(result).toMatchObject({ status: 0, stdout: `${SESSION_LINE}\n`, stderr: '' })
+  })
+
+  // An older launcher's usage, another hook's JSON, nothing, a failure or text on stderr: none of it may reach the model.
+  posix('the Codex SessionStart hook prints nothing but the line', () => {
+    const home = tempDir()
+    const launcher = join(home, '.local', 'bin', 'harness')
+    mkdirSync(join(launcher, '..'), { recursive: true })
+    for (const out of ['harness v0.6 — connect this computer to your machine', ALLOW, '']) {
+      for (const code of [0, 1, 2]) {
+        writeFileSync(launcher, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${out}'\necho 'usage: harness device' >&2\nexit ${code}\n`)
+        chmodSync(launcher, 0o755)
+        expect(runCodexStartHook('/bin/sh', pluginRoot, home), `${out} exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
+      }
+    }
+  })
+
+  posix('with no launcher the Codex SessionStart hook prints nothing and exits 0', () => {
+    expect(runCodexStartHook('/bin/sh', pluginRoot, tempDir())).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix('the Codex SessionStart hook runs ~/.local/bin/harness first, then PATH', () => {
+    const home = tempDir()
+    const bin = tempDir()
+    const placements = [join(home, '.local', 'bin', 'harness'), join(bin, 'harness')]
+    const record = (i: number) => join(home, `rec-${i}`)
+    placements.forEach((launcher, i) => fakeLauncher(launcher, record(i), SESSION_LINE))
+    // Each run finds the first placement still there; the next run has it removed.
+    for (const [i, launcher] of placements.entries()) {
+      const result = runCodexStartHook('/bin/sh', pluginRoot, home, `${bin}:/usr/bin:/bin`)
+      expect(readFileSync(`${record(i)}.argv`, 'utf8'), launcher).toBe('device\ncodex\nstart\n')
+      expect(readFileSync(`${record(i)}.stdin`, 'utf8'), launcher).toBe(CODEX_START_INPUT)
+      for (let later = i + 1; later < placements.length; later++) expect(existsSync(`${record(later)}.argv`), launcher).toBe(false)
+      expect(result, launcher).toMatchObject({ status: 0, stdout: `${SESSION_LINE}\n`, stderr: '' })
+      rmSync(launcher)
+    }
+  })
+
+  posix('hooks/codex-start is executable and starts with #!/bin/sh', () => {
+    expect(statSync(CODEX_START).mode & 0o111).toBe(0o111)
+    expect(readFileSync(CODEX_START, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
+  })
+
+  it('the Codex SessionStart Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device codex start once, writes only the SessionStart line, and exits 0', () => {
+    const windows = windowsForm(codexStartHook().command)
+    expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
+    expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
+    expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
+    const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
+    const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
+    expect(profile).toBeGreaterThan(-1)
+    expect(onPath).toBeGreaterThan(profile)
+    const calls = windows.match(/device codex start[^;}]*/g)
+    expect(calls).toHaveLength(1)
+    expect(calls![0].trim()).toBe('device codex start 2> $null')
+    expect(windows).toContain(`if ("$o".StartsWith('${SESSION_PREFIX}')) { [Console]::Out.Write("$o") }`)
+    expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
+  })
+
   it('the README names harness device claude disable, and says the dial never answers a prompt or approves anything', () => {
     const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
     expect(readme).toContain('harness device claude disable')
@@ -345,13 +533,13 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     {
       name: 'PowerShell',
       root: pluginRoot,
-      run: (command: string, options: object) => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      run: (command: string, options: SpawnSyncOptionsWithStringEncoding) => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-Command', command.replaceAll('${CLAUDE_PLUGIN_ROOT}', '${env:CLAUDE_PLUGIN_ROOT}') + SUFFIX], options),
     },
     ...(gitBash ? [{
       name: 'Git Bash',
       root: pluginRoot.replaceAll('\\', '/'),
-      run: (command: string, options: object) => spawnSync(gitBash, ['-c', command], options),
+      run: (command: string, options: SpawnSyncOptionsWithStringEncoding) => spawnSync(gitBash, ['-c', command], options),
     }] : []),
   ]
 
@@ -364,15 +552,16 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     return { profile, cwd, env: { ...Object.fromEntries(own), USERPROFILE: profile, PATH: `${system};${join(system, 'WindowsPowerShell', 'v1.0')}` } }
   }
 
-  /** node.exe as <profile>\.harness\bin\harness.exe: it reads `device` as ./device.js, which records its arguments and stdin. */
-  function standIn(profile: string, cwd: string, code: number): void {
+  /** node.exe as <profile>\.harness\bin\harness.exe: it reads `device` as ./device.js, which records its arguments and
+   *  stdin and prints [out]. */
+  function standIn(profile: string, cwd: string, code: number, out = ALLOW): void {
     mkdirSync(join(profile, '.harness', 'bin'), { recursive: true })
     copyFileSync(process.execPath, join(profile, '.harness', 'bin', 'harness.exe'))
     writeFileSync(join(cwd, 'device.js'), [
       "const fs = require('fs')",
       `fs.writeFileSync(${JSON.stringify(join(cwd, 'argv.json'))}, JSON.stringify(process.argv.slice(2)))`,
       `fs.writeFileSync(${JSON.stringify(join(cwd, 'stdin'))}, fs.readFileSync(0))`,
-      `process.stdout.write(${JSON.stringify(ALLOW)})`,
+      `process.stdout.write(${JSON.stringify(out)})`,
       `process.stderr.write(${JSON.stringify(ALLOW)})`,
       `process.exitCode = ${code}`,
     ].join('\n'))
@@ -405,12 +594,36 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
       const result = runner.run(permissionHook().command, { cwd, input, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
       expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
     }, 30_000)
+
+    // PowerShell rewrites a native command's output in its console code page, with CRLF: the line must arrive intact.
+    it(`${runner.name}: SessionStart prints the launcher's SessionStart line and exits 0`, () => {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, 0, SESSION_LINE)
+      const result = runner.run(startHook().command, { cwd, input: START_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+      expect(JSON.parse(readFileSync(join(cwd, 'argv.json'), 'utf8'))).toEqual(['claude', 'start'])
+      expect(readFileSync(join(cwd, 'stdin'), 'utf8')).toBe(START_INPUT)
+      expect(result.status).toBe(0)
+      expect(result.stdout.trim()).toBe(SESSION_LINE)
+    }, 30_000)
+
+    it(`${runner.name}: SessionStart prints nothing for a launcher that prints anything else`, () => {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, 0)
+      const result = runner.run(startHook().command, { cwd, input: START_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+      expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }, 30_000)
+
+    it(`${runner.name}: SessionStart with no launcher, prints nothing and exits 0`, () => {
+      const { cwd, env } = place()
+      const result = runner.run(startHook().command, { cwd, input: START_INPUT, encoding: 'utf8', env: { ...env, CLAUDE_PLUGIN_ROOT: runner.root } })
+      expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }, 30_000)
   }
 
   // Codex runs the command as `<PowerShell> -NoProfile -Command <command>`, with PLUGIN_ROOT in its environment: pwsh when
   // installed, else Windows PowerShell 5.1. These run 5.1, the one every Windows has; pwsh is not run here.
   const codexInput = JSON.stringify({ ...JSON.parse(CODEX_INPUT), tool_input: { command: 'echo "héllo" & dir %TEMP% | more' } })
-  const runCodex = (options: object) => spawnSync(powershell, ['-NoProfile', '-Command', codexHook().command], options)
+  const runCodex = (options: SpawnSyncOptionsWithStringEncoding, command = codexHook().command) => spawnSync(powershell, ['-NoProfile', '-Command', command], options)
 
   it("Codex: runs the profile's launcher with device codex asked and its stdin, prints nothing and exits 0", () => {
     for (const code of [0, 2]) {
@@ -426,6 +639,30 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
   it('Codex: with no launcher, prints nothing and exits 0', () => {
     const { cwd, env } = place()
     const result = runCodex({ cwd, input: codexInput, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } })
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  }, 30_000)
+
+  // PowerShell rewrites a native command's output in its console code page, with CRLF: the line must arrive intact.
+  it("Codex: SessionStart prints the launcher's SessionStart line and exits 0", () => {
+    const { profile, cwd, env } = place()
+    standIn(profile, cwd, 0, SESSION_LINE)
+    const result = runCodex({ cwd, input: CODEX_START_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStartHook().command)
+    expect(JSON.parse(readFileSync(join(cwd, 'argv.json'), 'utf8'))).toEqual(['codex', 'start'])
+    expect(readFileSync(join(cwd, 'stdin'), 'utf8')).toBe(CODEX_START_INPUT)
+    expect(result.status).toBe(0)
+    expect(result.stdout.trim()).toBe(SESSION_LINE)
+  }, 30_000)
+
+  it('Codex: SessionStart prints nothing for a launcher that prints anything else', () => {
+    const { profile, cwd, env } = place()
+    standIn(profile, cwd, 0)
+    const result = runCodex({ cwd, input: CODEX_START_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStartHook().command)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  }, 30_000)
+
+  it('Codex: SessionStart with no launcher, prints nothing and exits 0', () => {
+    const { cwd, env } = place()
+    const result = runCodex({ cwd, input: CODEX_START_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStartHook().command)
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   }, 30_000)
 })

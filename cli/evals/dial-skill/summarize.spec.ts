@@ -340,10 +340,79 @@ describe('summarize', () => {
       row('h.claude.name-only', 0, need(4, 1, 1, 1)),
     ]))
     const lines = heldOutTable(summarize(flow)).split('\n')
-    expect(lines[0]).toMatch(/\| loaded \| score vs baseline \|$/)
-    expect(lines.find(l => l.startsWith('| v1 | crowd |'))).toMatch(/\| \+3\.00 \[0\.52, 5\.48\] \|$/)
-    expect(lines.find(l => l.startsWith('| v1 | name-only |'))).toMatch(/\| n\/a \|$/)
-    expect(lines.find(l => l.startsWith('| baseline | crowd |'))).toMatch(/\|  \|$/)
+    expect(lines[0]).toMatch(/\| loaded \| score vs baseline \| recall vs best \|$/)
+    expect(lines.find(l => l.startsWith('| v1 | crowd |'))).toMatch(/\| \+3\.00 \[0\.52, 5\.48\] \| n\/a \|$/)
+    expect(lines.find(l => l.startsWith('| v1 | name-only |'))).toMatch(/\| n\/a \| n\/a \|$/)
+    expect(lines.find(l => l.startsWith('| baseline | crowd |'))).toMatch(/\|  \| n\/a \|$/)
+  })
+
+  describe('recall against the best round', () => {
+    function setBest(round: number | null) {
+      const { best: _, ...state } = JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8'))
+      writeFileSync(join(flow, '_state.json'), JSON.stringify(round === null ? state : { ...state, best: { round } }))
+    }
+
+    /** v1 (the best) and v2 in crowd, each given its hits per held-out need case; a no-need case and a train case in
+     *  both, which no recall pair may count. */
+    function crowd(v1Hits: Record<string, number[]>, v2Hits: Record<string, number[]>) {
+      const rowsOf = (hits: Record<string, number[]>) => [
+        ...Object.entries(hits).flatMap(([id, hs]) =>
+          hs.map((h, rep) => row(`${id}.crowd`, rep, h ? need(4, 1, 1, 1) : need(-2, 0, null, 0)))),
+        row('f.claude.crowd', 0, noNeed(-1, 1)), row('a.claude.crowd', 0, need(-2, 0, null, 0)),
+      ]
+      appendFileSync(join(flow, 'v1', 'results.jsonl'), jsonl(rowsOf(v1Hits)))
+      mkdirSync(join(flow, 'v2'), { recursive: true })
+      appendFileSync(join(flow, 'v2', 'results.jsonl'), jsonl(rowsOf(v2Hits)))
+    }
+
+    beforeEach(() => setBest(1))
+
+    it('pairs each round\'s held-out recall with the best round\'s, over the need cases both scored', () => {
+      crowd({ 'd.claude': [0], 'e.claude': [1, 0], 'h.claude': [0] }, { 'd.claude': [1], 'e.claude': [1], 'h.claude': [1] })
+      const p = summarize(flow).held_out_recall.v2.crowd
+      expect(p.n).toBe(3)
+      expect(p.mean).toBeCloseTo(0.8333, 3)
+      expect(p.ci_lo).toBeCloseTo(0.1162, 3)
+      expect(p.ci_hi).toBeCloseTo(1.5505, 3)
+      expect(p.significant).toBe(true)
+    })
+
+    it('reads a fall as an interval below 0', () => {
+      crowd({ 'd.claude': [1], 'e.claude': [1, 1], 'h.claude': [1, 0] }, { 'd.claude': [0], 'e.claude': [0], 'h.claude': [0] })
+      const p = summarize(flow).held_out_recall.v2.crowd
+      expect(p.ci_hi).toBeLessThan(0)
+      expect(p.significant).toBe(true)
+    })
+
+    it('reads equal recall as within noise', () => {
+      crowd({ 'd.claude': [1], 'e.claude': [1, 0], 'h.claude': [0] }, { 'd.claude': [1, 1], 'e.claude': [0, 1], 'h.claude': [0] })
+      const p = summarize(flow).held_out_recall.v2.crowd
+      expect(p.mean).toBe(0)
+      expect(p.significant).toBe(false)
+    })
+
+    it('gives the best round and a condition the best never ran no recall pair', () => {
+      crowd({ 'd.claude': [0] }, { 'd.claude': [1] })
+      appendFileSync(join(flow, 'v2', 'results.jsonl'), jsonl([row('h.claude.name-only', 0, need(4, 1, 1, 1))]))
+      const { held_out_recall } = summarize(flow)
+      expect(held_out_recall.v1).toBeUndefined()
+      expect(held_out_recall.v2['name-only']).toBeUndefined()
+    })
+
+    it('has no recall pair without a best round', () => {
+      crowd({ 'd.claude': [0] }, { 'd.claude': [1] })
+      setBest(null)
+      expect(summarize(flow).held_out_recall).toEqual({})
+    })
+
+    it('shows the recall pair in the held-out table', () => {
+      crowd({ 'd.claude': [0], 'e.claude': [1, 0], 'h.claude': [0] }, { 'd.claude': [1], 'e.claude': [1], 'h.claude': [1] })
+      appendFileSync(join(flow, 'v2', 'results.jsonl'), jsonl([row('h.claude.name-only', 0, need(4, 1, 1, 1))]))
+      const lines = heldOutTable(summarize(flow)).split('\n')
+      expect(lines.find(l => l.startsWith('| v2 | crowd |'))).toMatch(/\| \+0\.83 \[0\.12, 1\.55\] \|$/)
+      for (const l of lines.filter(l => l.startsWith('| v1 |'))) expect(l).toMatch(/\|  \|$/)
+      expect(lines.find(l => l.startsWith('| v2 | name-only |'))).toMatch(/\| n\/a \|$/)
+    })
   })
 })
 
@@ -467,9 +536,9 @@ describe('writeSummaries', () => {
     writeSummaries(flow)
     const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
     expect(narrative).not.toContain('old held-out')
-    expect(narrative).toContain('<!-- /status -->\n\n<!-- held-out -->\n| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline |')
-    expect(narrative).toContain('| baseline | clean | 4 of 5 | 0 of 2 | 4 of 4 | 5 of 5 | 2 of 4 | 2 of 3 | 0 of 4 | 0 of 0 |  |')
-    expect(narrative).toContain('| v1 | clean | 5 of 5 | 1 of 2 | 4 of 5 | 5 of 5 | 0 of 2 | 0 of 0 | 0 of 6 | 0 of 0 | +1.17 [-4.96, 7.29] |\n<!-- /held-out -->')
+    expect(narrative).toContain('<!-- /status -->\n\n<!-- held-out -->\n| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline | recall vs best |')
+    expect(narrative).toContain('| baseline | clean | 4 of 5 | 0 of 2 | 4 of 4 | 5 of 5 | 2 of 4 | 2 of 3 | 0 of 4 | 0 of 0 |  | n/a |')
+    expect(narrative).toContain('| v1 | clean | 5 of 5 | 1 of 2 | 4 of 5 | 5 of 5 | 0 of 2 | 0 of 0 | 0 of 6 | 0 of 0 | +1.17 [-4.96, 7.29] | n/a |\n<!-- /held-out -->')
   })
 
   it('gives the warnings with the headline, for the command to show', () => {

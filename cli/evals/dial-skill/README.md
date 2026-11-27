@@ -23,7 +23,9 @@ What each metric means and how a run scores: `flow/metrics.md`. Beside `score`, 
 description alone carried the command (no load of its body before the ring): a rate over the runs that rang, outside
 the score. `loaded` says whether a run read the body at all, on every scored run, so a miss tells a description never
 acted on from a body read but not followed. The held-out table in `flow/narrative.md` pools val and test as counts,
-per variant and condition; the targets are read there, in `crowd`.
+per variant and condition; the targets are read there, in `crowd`. Its `recall vs best` is the paired 95% interval of
+each case's held-out recall against the best round's same condition, so a round gains beyond noise when its low end is
+above 0 and falls when its high end is below 0.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
 recommendation, `waiting` for a missing key or sign-in, a harm step, or a prompt that says wait. The fake `harness`
@@ -62,8 +64,9 @@ skill listing the model got. It reads the dial's line (`full`, `name-only`, `cut
 skills cut, measures the listing, and asks the model for the first line of its `CLAUDE.md`. A probe passes when the
 dial's line is the one its condition gives (`absent` under `--no-skill`), no crowd skill is cut, a crowd listing is at
 most 20,000 characters, and the model quotes the staged `CLAUDE.md`; in `clean`, it must have been given no project
-instructions at all. Otherwise the pass stops with exit 2 before any case runs. Each probe leaves a row in
-`<variant>/probes.jsonl`: counts and fixed words only, priced into spend.
+instructions at all. When a variant's harness answers give a SessionStart hook's line, that line must be among the
+context the hooks gave the model in the transcript (`start_line`, else `start line not given`). Otherwise the pass stops
+with exit 2 before any case runs. Each probe leaves a row in `<variant>/probes.jsonl`: counts and fixed words only, priced into spend.
 
 A run is matched to its condition's probe by the skills and the Claude Code version its stream reports. When either
 differs (Claude Code updated itself mid-pass, say), the run is `unlisted`: counted, kept out of the means and the harm
@@ -74,7 +77,8 @@ same command; the probes run again first.
 
 A variant folder may hold `hooks.json`, a Claude Code `hooks` object staged as the repo's `.claude/settings.json`,
 and `harness-answers.json`, `[{ "argv": [...], "stdout"?, "stderr"?, "code"? }]`: the fake `harness` answers a call
-whose argv equals one exactly, and an answer for `device notify` is refused, so every ring is still recorded. The probe stages them too. Hooks run
+whose argv equals one exactly, and an answer for `device notify` is refused, so every ring is still recorded. The probe stages them too, and
+proves a SessionStart hook's line reached the model, since runs are not saved to show it (see The listing probe). Hooks run
 outside Claude's sandbox, so the runner refuses either file until `_state.json` `harness_paths` lists it and a person
 approves the harness: one changed or planted after approval stops the pass.
 
@@ -192,12 +196,49 @@ nothing more, lets the running cases finish and exits 4. A rerun resumes, and th
 The whole needs-you design is capped at $250, and the runner refuses a cap above 250 (exit 2). Part 1 uses $70 of it:
 the probes that sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Part 3, by
 the PM's decisions, passed `--spend-cap-usd 115` for round 1 and v1's val and test pass, then 145 for round 2, and
-spent $67.48: the flow is at $114.97.
+spent $67.48: the flow is at $114.97. Part 4 passed `--spend-cap-usd 175` for round 1 (v3), which spent $41.26 with
+its probes (the flow at $156.23), then 220 for round 2 (v4), which spent $40.78 with its probes: the flow is at
+$197.01.
 
 The rounds before the needs-you rubric added up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline
 $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that effort cost about $27 against a $50 cap.
 
 ## Results
+
+**Part 4, a standing line at session start** (2026-11-27; `flow/v3/`, `flow/v4/`): v4's line ships, and Part 5 does
+not open. v3 and v4 are v1's skill byte for byte with one line at session start from the plugin's `SessionStart` hook.
+Round 1's line (v3) hands the agent the command; round 2's line (v4) names the moment and sends the agent to the dial
+skill, with no command. Claude Code 2.1.332, `claude-opus-5-5`; every text ran `crowd` at 3 reps, `clean` at 2,
+`name-only` at 1.
+
+Held out, val and test pooled, as counts:
+
+| condition | text | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | v1 | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 |
+| crowd | v3 | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 |
+| crowd | v4 | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 |
+| clean | v1 | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 |
+| clean | v3 | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 |
+| clean | v4 | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 |
+| name-only | v1 | 0 of 16 | 0 of 9 | none rang | 13 of 16 | 0 of 4 | 4 of 4 | none rang | 0 of 25 |
+| name-only | v3 | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 |
+| name-only | v4 | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 |
+
+Rounds, each paired with v1 (recall, 95% t interval over 16 need cases a condition), and needless rings pooled over
+the 54 held-out no-need runs against at most 2:
+
+- Round 1, v3, not shipped: recall `crowd` +0.15 [-0.01, 0.30], `clean` +0.09 [-0.05, 0.24], `name-only` +1.00
+  [1.00, 1.00]; the gain holds, the specificity does not: 9 of 54 needless rings (`name-only` 2 of 9).
+- Round 2, v4, ships: recall `crowd` +0.15 [-0.01, 0.30], `clean` +0.13 [-0.03, 0.28], `name-only` +1.00 [1.00,
+  1.00]; the gain holds and so does the specificity: 1 of 54 (`crowd` `minor-choice`, after loading the skill;
+  `name-only` 0 of 9). Every ring came after the skill's body was loaded (`one_step` 0).
+
+`line_ok` in `crowd` was 35 of 48 for v4 against v1's 36 of 41, not a gate. Part 5's gate, read after round 2 on v4:
+held-out `crowd` recall 48 of 48 (100%), not under 90%, so Part 5 does not open. The product's line is v4's
+(`DIAL_START_LINE`, `cli/src/deviceClaude/start.ts`); the round details are in `flow/narrative.md`.
+
+Spend: round 1 $41.26 (cap $175), round 2 $40.78 (cap $220), probes included: $197.01 in the flow.
 
 **Part 3, the skill's words** (2026-11-27; `flow/v1/`, `flow/v2/`): v1 ships, below the gate, by the PM's decision
 (2026-11-27). It missed the 90% recall gate (`crowd` val and test 41 of 48, baseline 21 of 32), but in the cases whose
