@@ -71,7 +71,7 @@ describe('the keys\' routes, answered by the gateway', () => {
     expect(await routes('GET', '/api/pairs', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     // A body of JSON that holds no record, reached for a field, as the door's catch-all answered it.
     expect(await routes('POST', '/api/pair', 'null')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(log.mock.calls).toEqual([['[gateway] POST /api/remote-password/clear REMOTE_PASSWORD_NOT_DELETED (EBUSY)'],
+    expect(log.mock.calls).toEqual([['[gateway] POST KEY_ROUTE_FAILED · SecretNotDeleted EBUSY'],
       ['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] GET KEY_ROUTE_FAILED · string'],
       ['[gateway] POST KEY_ROUTE_FAILED · TypeError']])
   })

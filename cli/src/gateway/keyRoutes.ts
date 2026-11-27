@@ -121,14 +121,11 @@ export function keyRoutes(ops: KeyOps, log: (line: string) => void = (line) => c
         try { body = JSON.parse(text ?? '') as Record<string, unknown> } catch { return BAD_JSON }
         return await route.body!(body)
       } catch (error) {
-        // A secret file left on disk: its word and errno code alone, so it is logged and answered as it is; `harness
-        // remote-password clear` reads it, and does not delete the file behind the daemon's back.
-        if (error instanceof SecretNotDeleted) {
-          log(`[gateway] ${method} ${path} ${error.message}`)
-          return answer(500, { error: error.message })
-        }
+        // Logged by its kind and errno code (SecretNotDeleted EBUSY), as every failure here is.
         log(`[gateway] ${method} KEY_ROUTE_FAILED · ${errorKind(error)}`)
-        return answer(500, { error: 'INTERNAL' })
+        // A secret file left on disk is answered in its word and errno code alone; `harness remote-password clear` reads
+        // it, and does not delete the file behind the daemon's back.
+        return answer(500, { error: error instanceof SecretNotDeleted ? error.message : 'INTERNAL' })
       }
     })()
   }
