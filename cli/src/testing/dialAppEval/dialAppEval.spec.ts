@@ -13,6 +13,8 @@
 import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FRONT_SETTLE_MS } from '../../cable/hosts/appFilter.js'
+import { FOCUS_POLL_MS } from '../../cable/hosts/focusPoll.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
   orcaSession, orcaStarted, scenario, scenariosFor, started, turned } from './catalog.js'
@@ -433,6 +435,71 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(run.wrongSends).toEqual([])
     const open = Object.fromEntries(run.results.filter((r) => r.check.startsWith('open.')).map((r) => [r.check, r.score]))
     expect(open).toMatchObject({ 'open.worktree': 1, 'open.switch': 1, 'open.pane': 1 })
+  })
+
+  /** O24 to O26: tmux inside an Orca tab (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md, "The eval"). */
+  const [o24, o25, o26] = ['O24', 'O25', 'O26'].map((id) => MAIN.find((s) => s.id === id)!)
+  const scoresOf = (run: ScenarioRun): Record<string, number> => Object.fromEntries(run.results.map((r) => [r.check, r.score]))
+  /** The tmux pane poll's one read: each client's tty and the pane its session shows (tmux.ts clientPanes). */
+  const isPollRead = (argv: string[]): boolean => programOf(argv) === 'tmux' && argv[1] === 'list-clients' && argv[2] === '-F'
+
+  it.for(['darwin', 'linux'] as const)("O24 on %s: Orca's focus on c's tab turns the dial to c within a second, and again from a's tab within one read", async (platform) => {
+    const run = await runScenario(new TierADriver({ startDevices }), o24, platform)
+    expect(run.error).toBeUndefined()
+    expect(run.wrongSends).toEqual([])
+    expect(scoresOf(run)).toMatchObject({ 'focus.lands': 1, 'focus.latency': 1, 'again.lands': 1, 'again.latency': 1 })
+  })
+
+  it.for(['darwin', 'linux'] as const)("O25 on %s: the tmux pane switch to d in c's tab turns the dial to d, the ring [a, c, d] by their names", async (platform) => {
+    const run = await runScenario(new TierADriver({ startDevices }), o25, platform)
+    expect(run.error).toBeUndefined()
+    expect(run.wrongSends).toEqual([])
+    const scores = scoresOf(run)
+    expect(scores).toMatchObject({ 'focus.lands': 1, 'focus.latency': 1 })
+    const ring = Object.entries(scores).filter(([check]) => check.startsWith('ring.'))
+    expect(ring.length).toBeGreaterThan(0)
+    expect(ring.filter(([, score]) => score !== 1)).toEqual([])
+  })
+
+  // A guard: nothing follows there before the change either.
+  it("O26: a focus on one of two tmux tabs that cannot be told apart moves nothing, and tmux's clients are never listed", async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o26, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.wrongSends).toEqual([])
+    expect(scoresOf(run)['still.still']).toBe(1)
+    expect(driver.seen().commands.filter((c) => isPollRead(c.argv))).toEqual([])
+  })
+
+  // The devices' CPU with Orca in front of a real tmux client needs tier B's backlog item (the plan's Open question 2):
+  // the poll's reads are counted here instead. Behind another app it stays on c's tab, so that minute is not one a plain
+  // tab already explains.
+  it("the poll's cost, in virtual time: a minute with Orca settled on c's tab lists tmux's clients at most once a FOCUS_POLL_MS, and a minute on a's tab or behind another app not at all", async () => {
+    const minute: Step = { kind: 'wait', ms: 60_000 }
+    const cost = scenario({
+      id: 'S6', app: 'orca', title: "Eval the tmux pane poll's reads with Orca on a tmux tab, behind and on a plain tab", dims: ['D2'],
+      platforms: ['darwin'], tiers: ['a'], sessions: o24.sessions,
+      steps: [...orcaOpening(['w1']), ...orcaStarted(['c', 'a']), ...listed('orca', ['a', 'c']),
+        { label: 'tmux', kind: 'orca.focus', session: 'c' }, minute,
+        { label: 'behind', kind: 'front', app: 'other' }, minute,
+        { label: 'back', kind: 'front', app: 'orca' },
+        { label: 'plain', kind: 'orca.focus', session: 'a' }, minute],
+      checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, cost, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const at = (label: string): number => steps.find((s) => s.label === label)!.at
+    const reads = (from: number, to = Infinity): number => commands.filter((c) => isPollRead(c.argv) && c.at >= from && c.at < to).length
+    const counts = { tmux: reads(at('tmux'), at('behind')), behind: reads(at('behind'), at('back')), plain: reads(at('plain')) }
+    // The counts the pull request quotes (the plan's Verification 4).
+    process.stdout.write(`${JSON.stringify({ scenario: cost.id, platform: 'darwin', pollReads: counts })}\n`)
+    expect(counts.tmux).toBeGreaterThanOrEqual(100)
+    expect(counts.tmux).toBeLessThanOrEqual(60_000 / FOCUS_POLL_MS + 1)
+    // None once the step took: another app settles FRONT_SETTLE_MS after it comes, and a read under way then may still run.
+    expect(reads(at('behind') + FRONT_SETTLE_MS + 1_000, at('back'))).toBe(0)
+    expect(reads(at('plain') + 1_000)).toBe(0)
   })
 
   it("a ring of 40 agents in 40 worktrees reads Orca's layout at most once per change in its agents, and not once in a minute with no change", async () => {
