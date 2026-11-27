@@ -55,6 +55,9 @@ const TURN_SETTLE_MS = 2_000
 /** The tool call's line reaches the transcript just after its permission hook ran, and nobody answers a prompt sooner than
  *  this: a write that soon after the prompt is the asking's own, not the app's answer. */
 const ASK_SETTLE_MS = 1_000
+/** How long a turn pass waits for its transcripts' stamps in all: a stat can hang on a stalled network share, and the
+ *  pass runs every 3 s. */
+const STAMP_WAIT_MS = 1_000
 /** Codex runs its PermissionRequest hook before it reads the session's "don't ask again" answers, and nothing it sends
  *  says the person gave one: the same tool and line asked again in the session rings no dial that opened no dialog
  *  (harness-pm, 2026-11-27). At most this many a session, the oldest forgotten first. */
@@ -403,6 +406,10 @@ export class ObservedSource implements HostSource {
    *  with none of that adapter's at, by agent id. */
   private readonly paneNames = new Map<string, { names: ReadonlyMap<string, PaneName>; placed: ReadonlyMap<string, string> }>()
   private scanning: Promise<void> | null = null
+  private checking: Promise<void> | null = null
+  /** Each transcript's stamp read still out: one that hangs is waited on again, never started again, so reads of a
+   *  stalled share do not pile up. */
+  private readonly stamping = new Map<string, Promise<{ mtime: number } | null>>()
   /** Each tap and rest here, in turn: past its wait for a fresh place (waitFresh) a rest acts only while no later tap or
    *  rest came, so it shows nothing the person left meanwhile (PM, 2026-11-24: last action wins). A tap asks the dial's
    *  own count (focus), as a later tap on another source's agent is none of these. */
@@ -1632,11 +1639,16 @@ export class ObservedSource implements HostSource {
   }
 
   /** A transcript's stamp, or none once `by` passed first: a stat can hang on a stalled network share, and a hold ends
-   *  by its cap whatever the read does. */
+   *  by its cap and a turn pass goes on whatever the read does. */
   private stampBefore(path: string, by: number): Promise<{ mtime: number } | null> {
+    let read = this.stamping.get(path)
+    if (!read) {
+      read = this.deps.fileStamp(path).finally(() => { this.stamping.delete(path) })
+      this.stamping.set(path, read)
+    }
     let timer: ReturnType<typeof setTimeout> | undefined
     return Promise.race([
-      this.deps.fileStamp(path),
+      read,
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), by - this.deps.now())
         timer.unref()
@@ -2196,14 +2208,22 @@ export class ObservedSource implements HostSource {
    * growing past the moment the agent began waiting says the turn goes on. An older Codex sends no end-of-turn hook, and a
    * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over. A Stop held (its grace, its
    * report, a yes's hold), and a lead's subagents, are the hooks' word that the turn goes on, whatever the record reads.
+   * One pass at a time.
    */
-  async checkWorking(): Promise<void> {
+  checkWorking(): Promise<void> {
+    this.checking ??= this.checkOnce().finally(() => { this.checking = null })
+    return this.checking
+  }
+
+  private async checkOnce(): Promise<void> {
     const all = [...this.entries.values()]
     // A prompt its hook told of writes a line of its own as it asks.
     const answeredAfter = (e: Entry): number => e.since + (e.asked === undefined ? 0 : ASK_SETTLE_MS)
+    const by = this.deps.now() + STAMP_WAIT_MS
     for (const e of all) {
       if (e.agent.state !== 'needs-you' || !e.transcriptPath) continue
-      const stamp = await this.deps.fileStamp(e.transcriptPath)
+      // A read that lost is no stamp: the next pass reads again.
+      const stamp = await this.stampBefore(e.transcriptPath, by)
       if (!stamp || stamp.mtime <= answeredAfter(e) || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       this.setState(e, 'working', now)
