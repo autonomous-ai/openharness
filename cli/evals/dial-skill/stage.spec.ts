@@ -553,6 +553,32 @@ describe('stage', () => {
     }
   })
 
+  it("unstage removes what Claude Code keeps by the run's session id in the profile's other folders, and no other session's", () => {
+    const profile = mkdtempSync(join(tmpdir(), 'dial-skill-profile-'))
+    try {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', profile)
+      const id = '0b5c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3'
+      const other = '9f8e7d6c-5b4a-4321-8fed-cba987654321'
+      const st = staging('claude', { skill: true, session: id })
+      // A session's own todos, and a subagent's of it.
+      const entries = (session: string) => [
+        join('debug', `${session}.txt`), join('file-history', session, 'backup@v1'), join('session-env', session, 'hook-1.sh'),
+        join('tasks', session, '1.json'), join('todos', `${session}-agent-${session}.json`), join('todos', `${session}-agent-a1b2c3d4.json`),
+      ]
+      const kept = [...entries(other), join('shell-snapshots', 'snapshot-zsh-1794913307363-2xgr91.sh')]
+      for (const path of [...entries(id), ...kept]) {
+        mkdirSync(dirname(join(profile, path)), { recursive: true })
+        writeFileSync(join(profile, path), '{}\n')
+      }
+
+      unstage(st)
+
+      expect(files(profile).map((path) => path.slice(profile.length + 1)).sort()).toEqual(kept.sort())
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
   it('unstage removes the folder claude made for the run in the profile, by its exact name, and nothing else there', () => {
     const profile = mkdtempSync(join(tmpdir(), 'dial-skill-profile-'))
     const projects = mkdtempSync(join(tmpdir(), 'dial-skill-projects-'))
