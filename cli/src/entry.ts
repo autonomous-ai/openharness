@@ -9,7 +9,8 @@
  * master and the services load only their own modules: esbuild, bundling without code splitting, turns
  * each dynamic import below into a module initialised the first time it is imported, so the code a
  * process never imports is parsed but never run. The core (`__run`) starts as it does from the lean bundle
- * (coreProcess.ts), and everything else is the CLI as it always was.
+ * (coreProcess.ts), the Windows follower of a session's inbox from its own module (deviceClaude/inboxCommand.ts), and
+ * everything else is the CLI as it always was.
  *
  * Nothing heavy may be imported statically here: it would be evaluated by every process.
  */
@@ -17,6 +18,10 @@ import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
+// The Windows follower, `device claude inbox <session id>`, lives as long as its session: it starts from its own module,
+// without evaluating the CLI (deviceClaude/inboxCommand.ts has the measurement).
+const inbox = command === 'device' ? await import('./deviceClaude/inboxCommand.js') : null
+const inboxSession = inbox?.inboxSessionOf(process.argv.slice(3)) ?? null
 // The master's handler of an error nothing caught, first: the team guard and Linux's home move below run before
 // startMaster installs its own, and Node's report of their error is its message and stack, on the stderr launchd and
 // systemd make the daemon's log. Windows' master installs its own once that log is open (masterProcess.ts).
@@ -51,6 +56,8 @@ if (command === '__swarm-shell-guard') {
 } else if (command === '__run') {
   // The core: started the one way it is started from the lean bundle too (coreProcess.ts), on cli.js.
   (await import('./coreProcess.js')).startCoreProcess(fileURLToPath(import.meta.url))
+} else if (inbox && inboxSession !== null) {
+  process.exitCode = await inbox.runInbox(inboxSession, inbox.processInboxDeps())
 } else {
   await import('./cli.js')
 }

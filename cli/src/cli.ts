@@ -77,6 +77,7 @@ import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
+import { writeStdoutLine } from './deviceClaude/inboxCommand.js'
 import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
 import { carriedClaudePlugin, claudeRun, claudeRunIn } from './devices/claudePlugin.js'
 import { codexRunIn } from './devices/codexPlugin.js'
@@ -3165,16 +3166,7 @@ switch (cmd) {
       orca: orcaPluginRun,
       env: process.env,
       cwd: process.cwd(),
-      write: (line) => new Promise((resolve) => {
-        // A failed write's 'error' follows its callback, and unheard it would end the process with a trace on stderr:
-        // the listener stays for it, and goes once a write succeeds.
-        const failed = (): void => resolve(false)
-        process.stdout.once('error', failed)
-        process.stdout.write(`${line}\n`, (error) => {
-          if (!error) process.stdout.off('error', failed)
-          resolve(!error)
-        })
-      }),
+      write: writeStdoutLine,
       out: (line) => console.log(line),
       err: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
