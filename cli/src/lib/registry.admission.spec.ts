@@ -1,7 +1,7 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import type { Server } from 'node:http'
 import type { HookServerHandlers } from '../hookServer.js'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -492,6 +492,85 @@ it('rechecks an unwritten derived locator proof under the lock and never grants 
   unchanged(before)
   fault.beforeVerify = undefined
   expect((await registry.register(body))?.entry.sessionId).toBe(A)
+})
+
+// Claude reports `<projects>/<folder>/<id>.jsonl` at SessionStart and writes it at the first prompt (and after `/clear`).
+const claudeProjects = () => join(root, '.claude', 'projects'), rootFolder = () => root.replace(/[^A-Za-z0-9]/g, '-')
+const claudeTranscript = (folder = rootFolder()) => join(claudeProjects(), folder, `${A}.jsonl`)
+const claudeOpening = (id: string) => JSON.stringify({ type: 'user', sessionId: id, cwd: root, isSidechain: false }) + '\n'
+const claudeAgent = async () => (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
+  processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<claude>' } }))!.entry
+const claudeHook = (transcriptPath: string, override: Record<string, unknown> = {}) => ({ engine: 'claude', tmuxPane: '%3',
+  transcriptPath, hookEvent: 'SessionStart', ...override })
+it.each(['present', 'absent'])('admits a Claude SessionStart before its transcript is written, the project folder %s', async folder => {
+  const agent = await claudeAgent()
+  mkdirSync(folder === 'present' ? dirname(claudeTranscript()) : claudeProjects(), { recursive: true })
+  const f = await httpFixture()
+  expect(await f.post(claudeHook(claudeTranscript()))).toEqual({ status: 200, body: { ok: true } })
+  expect(f.reasons).toEqual([])
+  expect(registry.byAgent(agent.agentId)).toMatchObject({ sessionId: A, transcriptPath: claudeTranscript() })
+  expect(f.registered).toHaveBeenCalledOnce()
+})
+// No exact match of the folder's name is asked: the hook's cwd is the shell's after a `cd` or a `/clear`, and Claude
+// cuts a long folder name short.
+it.each([['the hook\'s cwd another folder', () => join(root, 'elsewhere'), rootFolder], ['a 200-character folder', () => root, () => '-'.padEnd(200, 'x')]])(
+  'admits a Claude SessionStart before its transcript is written, %s', async (_, cwd, folder) => {
+    const agent = await claudeAgent()
+    mkdirSync(dirname(claudeTranscript(folder())), { recursive: true })
+    const f = await httpFixture()
+    expect(await f.post(claudeHook(claudeTranscript(folder()), { cwd: cwd() }))).toEqual({ status: 200, body: { ok: true } })
+    expect(f.reasons).toEqual([])
+    expect(registry.byAgent(agent.agentId)).toMatchObject({ sessionId: A, transcriptPath: claudeTranscript(folder()) })
+  })
+// #1137: a missing path a hook reports is bound only by the shape the core derives; any other stays held.
+it.each([
+  ['named otherwise', A, () => join(claudeProjects(), rootFolder(), 'session.jsonl')],
+  ['named for another session', A, () => join(claudeProjects(), rootFolder(), `${B}.jsonl`)],
+  ['named from the session id ../x', '../x', () => `${join(claudeProjects(), rootFolder())}/../x.jsonl`],
+  ['named from the session id a/b', 'a/b', () => `${join(claudeProjects(), rootFolder())}/a/b.jsonl`],
+  ['two folders deep', A, () => join(claudeProjects(), rootFolder(), 'sub', `${A}.jsonl`)],
+  ['outside the roots', A, () => join(root, 'elsewhere', rootFolder(), `${A}.jsonl`)],
+  ['under a linked folder', A, () => claudeTranscript()],
+  ['a dangling link', A, () => claudeTranscript()],
+])('holds a Claude SessionStart whose unwritten transcript is %s', async (kind, sessionId, path) => {
+  const agent = await claudeAgent()
+  mkdirSync(join(claudeProjects(), '-other'), { recursive: true }); mkdirSync(join(root, 'elsewhere', rootFolder()), { recursive: true })
+  if (kind === 'under a linked folder') symlinkSync(join(claudeProjects(), '-other'), dirname(claudeTranscript()))
+  else mkdirSync(join(dirname(claudeTranscript()), 'sub'), { recursive: true })
+  if (kind === 'a dangling link') symlinkSync(join(root, 'absent.jsonl'), claudeTranscript())
+  const f = await httpFixture()
+  expect(await f.post(claudeHook(path(), { sessionId }))).toEqual({ status: 200, body: { pending: true } })
+  expect(f.reasons.at(-1)).toBeTruthy()
+  expect(registry.byAgent(agent.agentId)?.sessionId).toBe('')
+  expect(f.registered).not.toHaveBeenCalled()
+})
+it('rechecks an unwritten Claude transcript under the lock', async () => {
+  const agent = await claudeAgent()
+  mkdirSync(claudeProjects(), { recursive: true }); await registry.flush()
+  const before = snapshot()
+  fault.beforeVerify = () => {
+    expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
+    symlinkSync(join(root, 'elsewhere'), dirname(claudeTranscript()))
+  }
+  await expect((async () => (await registry.register({ engine: 'claude', sessionId: A, tmuxPane: '%3', cwd: root,
+    transcriptPath: claudeTranscript(), processIdentity: agent.processIdentity! })))()).rejects.toThrow('changed')
+  unchanged(before)
+})
+it('commits the next Claude prompt once the admitted transcript is written, and only through its usual checks', async () => {
+  const agent = await claudeAgent()
+  mkdirSync(dirname(claudeTranscript()), { recursive: true })
+  const f = await httpFixture()
+  expect(await f.post(claudeHook(claudeTranscript()))).toEqual({ status: 200, body: { ok: true } })
+  writeFileSync(claudeTranscript(), claudeOpening(A))
+  expect(await f.post(claudeHook(claudeTranscript(), { hookEvent: 'UserPromptSubmit' }))).toEqual({ status: 200, body: { ok: true } })
+  expect(f.committed()).toEqual([A, A])
+  // Admitted once is not trusted later: the file replaced by a link out of the roots is refused at the next prompt.
+  writeFileSync(join(root, 'outside.jsonl'), claudeOpening(A)); rmSync(claudeTranscript())
+  symlinkSync(join(root, 'outside.jsonl'), claudeTranscript())
+  expect(await f.post(claudeHook(claudeTranscript(), { hookEvent: 'UserPromptSubmit' })))
+    .toEqual({ status: 400, body: { error: 'invalid session registration' } })
+  expect(f.committed()).toEqual([A, A])
+  expect(registry.byAgent(agent.agentId)?.sessionId).toBe(A)
 })
 
 it('the actual Stop job blocks hook admission before its first asynchronous step settles', async () => {
