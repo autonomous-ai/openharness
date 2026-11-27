@@ -6,6 +6,7 @@ import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { getDevicePresence, consumeNewIdQuota, publishDeviceStatus } from '../lib/bus.js'
 import { env } from '../config/env.js'
 import { AppError } from '../errors/index.js'
+import { HARNESS_CLI_CHIP } from '../lib/clientVersion.js'
 
 export interface DeviceView {
   deviceId: string
@@ -33,7 +34,11 @@ export interface DeviceDetail {
   lastSeenAt: Date | null
   createdAt: Date
   macAddress: string | null
+  /** A dial's firmware; null on a `harness-cli` device, whose version is never firmware. */
   firmwareVersion: string | null
+  /** The Harness CLI's version. A `harness-cli` row with no hello since `cliVersion` was added falls back to
+   *  its old `firmwareVersion`, where an older CLI put its version. Null on a dial. */
+  cliVersion: string | null
   chip: string | null
   ssid: string | null
   rssi: number | null
@@ -54,6 +59,7 @@ function toDeviceView(d: DeviceBinding): DeviceView {
 }
 
 function toDeviceDetail(d: DeviceBinding, online: boolean): DeviceDetail {
+  const isCli = d.chip === HARNESS_CLI_CHIP
   return {
     deviceId: d.deviceId,
     name: d.name,
@@ -63,7 +69,8 @@ function toDeviceDetail(d: DeviceBinding, online: boolean): DeviceDetail {
     // The column is gone with the SDS path; a computer-backed dial has a hostname, not a MAC.
     // Kept as a literal so the mobile response shape does not change.
     macAddress: null,
-    firmwareVersion: d.firmwareVersion,
+    firmwareVersion: isCli ? null : d.firmwareVersion,
+    cliVersion: d.cliVersion ?? (isCli ? d.firmwareVersion : null),
     chip: d.chip,
     ssid: d.ssid,
     rssi: d.rssi,
@@ -201,12 +208,14 @@ export const deviceService = {
    */
   async recordHello(input: {
     deviceId: string
+    cliVersion?: string | null
     firmwareVersion?: string | null
     chip?: string | null
     ssid?: string | null
     rssi?: number | null
   }): Promise<void> {
-    const data: Record<string, unknown> = {}
+    const data: Prisma.DeviceBindingUpdateManyMutationInput = {}
+    if (input.cliVersion) data.cliVersion = input.cliVersion
     if (input.firmwareVersion) data.firmwareVersion = input.firmwareVersion
     if (input.chip) data.chip = input.chip
     if (input.ssid) data.ssid = input.ssid

@@ -12,12 +12,14 @@
  *   - the lane signs in with the core's token, with one forced refresh after a 401;
  *   - the lane's sessions end at the gateway when the lane does.
  */
+import { readFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { LaneOpened, LaneSeal, LaneSealed } from '../core/api.js'
 import { FAKE_COMPUTER_NAME } from '../__fixtures__/computerNameFake.js'
 import { DeviceLink, type DeviceFrame } from './deviceLink.js'
+import { VERSION } from '../version.js'
 
 // A computer's name that is not its hostname, so the device-ws label shows which one it sends.
 vi.mock('../lib/computerName.js', () => import('../__fixtures__/computerNameFake.js'))
@@ -147,6 +149,19 @@ const until = async (what: string, check: () => boolean, ms = 4_000): Promise<vo
 }
 
 describe('the fleet\'s lane, sealed by the gateway', () => {
+  // The backend's tests read this file as the new CLI's hello (backend/src/lib/deviceHello.test.ts,
+  // backend/integration/oldDeviceHello.test.ts): a hello that changes here must change there too.
+  const CLI_HELLO = JSON.parse(readFileSync(new URL('../../../tests/fixtures/cli-device-hello.json', import.meta.url), 'utf8')) as Frame
+
+  it('says hello with its version as cliVersion, never as firmware', async () => {
+    const { server, link } = await lane()
+    await link.online()
+    await until('the hello', () => server.received.some((frame) => frame.type === 'device_hello'))
+    const hello = server.received.find((frame) => frame.type === 'device_hello')!
+    expect(hello).toEqual({ ...CLI_HELLO, payload: { ...(CLI_HELLO.payload as Frame), cliVersion: VERSION } })
+    expect(hello.payload).not.toHaveProperty('firmwareVersion')
+  })
+
   it('says which backend it dials in fixed words, never its URL', async () => {
     const { link, lines } = await lane()
     await link.online()

@@ -17,6 +17,7 @@ export default defineConfig({ test: {
     'integration/pushDevices.test.ts',
     'integration/swarmDataRemoval.test.ts',
     'integration/dialUsageReview.test.ts',
+    'integration/oldDeviceHello.test.ts',
   ],
   hookTimeout: 120000, testTimeout: 30000, setupFiles: ['src/lib/noRedis.test-support.ts'],
   fileParallelism: false, env: { NODE_ENV: 'test', HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' } } })

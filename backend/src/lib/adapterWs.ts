@@ -36,6 +36,7 @@ import { logger } from '../utils/logger.js'
 import { utcDayKey } from '../types/analytics.js'
 import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
+import { sanitizeClientVersion } from './clientVersion.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
 import { DAEMONS } from '../config/env.js'
@@ -85,10 +86,6 @@ type AdapterFrame =
 const APP_ENGINES = new Set(['cursor'])
 const APP_STATES = new Set(['open', 'closed', 'missing'])
 
-// `?v=` is self-declared by the client, so it is never persisted raw: anything outside a plain
-// semver-ish token (or longer than 64 chars) is dropped rather than stored.
-const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
-
 // How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
 // heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
 // Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. The floor starts from the row's own
@@ -122,11 +119,6 @@ const APP_PRESENCE_KINDS = new Set(['open', 'ping'])
 // past this is a bug or abuse and is dropped, never written.
 const TURN_AGENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const TURN_WRITES_PER_MINUTE = 120
-
-function sanitizeClientVersion(raw: string | null): string | undefined {
-  const v = raw?.trim()
-  return v && CLIENT_VERSION_RE.test(v) ? v : undefined
-}
 
 /** Adapter authentication is SSO-only: accept precisely the first WS subprotocol, never x-api-key. */
 function accessTokenFromProtocol(req: IncomingMessage): string | undefined {
