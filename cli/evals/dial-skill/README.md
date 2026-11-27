@@ -208,12 +208,40 @@ the probes that sized the crowd spent $0.58 outside the flow, so its passes take
 the PM's decisions, passed `--spend-cap-usd 115` for round 1 and v1's val and test pass, then 145 for round 2, and
 spent $67.48: the flow is at $114.97. Part 4 passed `--spend-cap-usd 175` for round 1 (v3), which spent $41.26 with
 its probes (the flow at $156.23), then 220 for round 2 (v4), which spent $40.78 with its probes: the flow is at
-$197.01.
+$197.01. Part 5 passed `--spend-cap-usd 270`, the whole cap: (b) (v6) spent $23.21 with its probe, then (a)
+(v5) $41.46 with its three probes, $64.67 in all: the flow is at $261.68 of the $270 cap.
 
 The rounds before the needs-you rubric added up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline
 $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that effort cost about $27 against a $50 cap.
 
 ## Results
+
+**Part 5, a second look when a turn stops** (2026-11-27; `flow/v5/`, `flow/v6/`): the Stop hook ships on (a), by the
+PM's decision (2026-11-27). v5 is v4's text and session-start line with the plugin's `Stop` hook; v6 is v1's text with
+the hook alone. Claude Code 2.1.332, `claude-opus-5-5`; `crowd` at 3 reps, `clean` at 2, `name-only` at 1.
+
+(a) No harm, the gate: v5 against v4, held out, val and test pooled, as counts:
+
+| condition | text | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | nudged |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | v4 | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 | n/a |
+| crowd | v5 | 48 of 48 | 0 of 27 | 43 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 48 | 50 of 75 | 1 of 75 |
+| clean | v4 | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 | n/a |
+| clean | v5 | 32 of 32 | 1 of 18 | 25 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 33 | 35 of 50 | 2 of 50 |
+| name-only | v4 | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 | n/a |
+| name-only | v5 | 16 of 16 | 1 of 9 | 14 of 16 | 15 of 16 | 0 of 4 | 4 of 4 | 0 of 17 | 18 of 25 | 0 of 25 |
+
+Recall vs v4, paired over 16 need cases a condition: +0.00 [0.00, 0.00] in `crowd`, `clean` and `name-only`. Needless
+rings pooled over the 54 held-out no-need runs: 2 of 54 against at most 2 (v4 1 of 54), each after loading the skill.
+`harmed` and `went_on` equal v4's in every condition. `nudged` 0 of 96 need runs and 3 of 54 no-need runs, each quiet
+after the block. Mean cost per held-out run within $0.002-0.013 of v4's. (a) passes, and the hook ships.
+
+(b) The case it is for, reported, not a gate: v6 against v1 in `crowd`, held out: recall 44 of 48 against 41 of 48,
+one-sided Fisher p = 0.262 (paired +0.06 [-0.03, 0.16], within noise); needless rings 0 of 27 against 0 of 27; no run
+blocked (`nudged` 0 of 75). It failed as the gate it was; the PM ruled (2026-11-27) that short `claude -p` runs cannot
+make the hook's case, so the verdict rests on (a) and the hook's gain is read in the field.
+
+Spend: (b) $23.21, (a) $41.46, probes included, $64.67 in Part 5: $261.68 in the flow, under the $270 cap.
 
 **Part 4, a standing line at session start** (2026-11-27; `flow/v3/`, `flow/v4/`): v4's line ships, and Part 5 does
 not open. v3 and v4 are v1's skill byte for byte with one line at session start from the plugin's `SessionStart` hook.

@@ -1,13 +1,15 @@
 # Dial skill hill-climb
 
-Part 4's result: v4's line ships at session start, and Part 5 does not open. Round 1's line (v3) gained recall and
-rang needlessly 9 of 54 held-out no-need runs, so it did not ship; round 2's (v4) gained recall too, with 1 of 54, so
-it ships (below). The skill under the line is Part 3's v1, shipped by the PM's decision (2026-11-27).
-v4, the best variant, against the baseline on test:
+Part 5's result: the Stop hook ships on (a), by the PM's decision (2026-11-27). v5 (v4 and the hook) against v4,
+held out: recall 48 of 48, 32 of 32 and 16 of 16 in `crowd`, `clean` and `name-only`, as v4's, paired +0.00
+[0.00, 0.00] in each; 2 needless rings of 54 no-need runs against at most 2 (v4 1 of 54); `harmed` and `went_on` as
+v4's. (b), v6 against v1 in `crowd`, is reported, not a gate: 44 of 48 against 41 of 48, Fisher p = 0.262, `nudged` 0
+of 75. Part 4's line (v4) and Part 3's skill (v1) stay under it (below).
+v5, the best variant, against the baseline on test:
 
-- crowd: v4 test 1.50 -> 2.50, paired +1.00 [-0.32, 2.32] over 12 cases, within noise
-- clean: v4 test 1.67 -> 2.58, paired +0.92 [-0.37, 2.21] over 12 cases, within noise
-- name-only: v4 test -0.75 -> 2.58, paired +3.33 [1.77, 4.90] over 12 cases, clears noise
+- crowd: v5 test 1.50 -> 2.56, paired +1.06 [-0.19, 2.30] over 12 cases, within noise
+- clean: v5 test 1.67 -> 2.50, paired +0.83 [-0.49, 2.16] over 12 cases, within noise
+- name-only: v5 test -0.75 -> 2.58, paired +3.33 [1.77, 4.90] over 12 cases, clears noise
 
 <!-- status -->
 | round | condition | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |

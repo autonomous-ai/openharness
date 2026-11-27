@@ -551,6 +551,13 @@ The agent still judges and still writes the line. Harness only makes it look aga
     the yeses, both engines pooled; removed (the plugin's Stop hook alone, by a CLI release) when yeses come and almost none ring, as
     then the hook costs a model round for nothing. The trigger does not change before that read.
 
+  **Measured (2026-11-27).** (a), held out, val and test pooled, v4 then v4 with the hook: recall `crowd` 48 of 48 →
+  48 of 48, `clean` 32 of 32 → 32 of 32, `name-only` 16 of 16 → 16 of 16, paired +0.00 [0.00, 0.00] in each, no fall;
+  needless rings 2 of 54 pooled no-need runs, against at most 2 (v4 1 of 54); `harmed` and `went_on` equal to v4's in
+  every condition. The hook blocked 0 of 96 need runs and 3 of 54 no-need runs, each quiet after it; the cost per run
+  stayed within $0.002-0.013 of v4's: 3 of 150 runs took one extra round. (a) passes and the hook ships on it (the PM, 2026-11-27). Part 5
+  spent $64.67 ((b) $23.21, (a) $41.46): the flow at $261.68 of the $270 cap.
+
 ## Part 6. An outside Claude Code session's question form and plan approval reach the dial
 
 Status: decided (the PM, 2026-11-26; the maintainer left it to the PM). Built at once, ahead of Parts 4 and 5. The
