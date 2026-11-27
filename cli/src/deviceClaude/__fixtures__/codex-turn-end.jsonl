@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-26T15:01:40.000Z","type":"event_msg","payload":{"type":"turn_aborted","root_turn_id":"01a21860-3b56-7292-b32b-e04f386c56d4","turn_id":"01a21860-3b56-7292-b32b-e04f386c56d4","reason":"interrupted","started_at":0,"completed_at":0,"duration_ms":0}}
+{"timestamp":"2026-11-26T15:03:50.000Z","type":"event_msg","payload":{"type":"task_complete","root_turn_id":"01a21862-356c-7481-bf3a-ea92e3fd707a","turn_id":"01a21862-356c-7481-bf3a-ea92e3fd707a","last_agent_message":"Done.","started_at":0,"completed_at":0,"duration_ms":0,"time_to_first_token_ms":0}}

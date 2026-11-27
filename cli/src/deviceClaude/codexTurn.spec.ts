@@ -34,6 +34,10 @@ function edited(line: string, change: (payload: Record<string, unknown>) => void
   change(record.payload)
   return JSON.stringify(record)
 }
+/** Codex 0.172.0's own turn-end lines (__fixtures__/codex-turn-end.jsonl): line 1 interrupts line 2's turn, line 2
+ * ends line 6's. */
+const [AUTO_REVIEW_ABORTED, USER_COMPLETE] = readFileSync(new URL('./__fixtures__/codex-turn-end.jsonl', import.meta.url), 'utf8')
+  .split(/\r?\n/).filter(Boolean)
 const PLAN_LINE = edited(USER_LINE, (payload) => { payload.collaboration_mode = { ...payload.collaboration_mode as object, mode: 'plan' } })
 
 /** The event line Codex 0.172.0 writes at [turnId]'s end (EventMsg::TurnComplete, persisted by rollout/src/policy.rs). */
@@ -174,6 +178,15 @@ describe('readTurnSetting', () => {
       ['turn_aborted', turnAborted(USER_TURN)],
     ])('the turn\'s own %s after its turn_context: nothing', (_, end) => {
       expect(settingIn(HEAD + lines(USER_LINE) + filler(4096) + lines(end) + filler(1024))).toBeNull()
+    })
+
+    it('the turn followed by Codex 0.172.0\'s own task_complete record: nothing', () => {
+      expect(settingIn(HEAD + lines(USER_LINE) + filler(4096) + lines(USER_COMPLETE) + filler(1024))).toBeNull()
+    })
+
+    it('the turn followed by Codex 0.172.0\'s own turn_aborted record (interrupted): nothing', () => {
+      expect(settingIn(HEAD + lines(AUTO_REVIEW_LINE) + filler(4096) + lines(AUTO_REVIEW_ABORTED) + filler(1024), AUTO_REVIEW_TURN))
+        .toBeNull()
     })
 
     it('a turn still running reads as before', () => {
