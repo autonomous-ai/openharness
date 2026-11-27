@@ -232,7 +232,7 @@ jobs:
 
       # From the repo root, the way `make upload-cli` calls it. The script bundles with
       # ADAPTER_VERSION="$VERSION" baked in, refuses to upload if `node dist/cli.js version` does
-      # not read back that exact string, uploads cli.js + notify.mjs to harness/cli/$VERSION/, then
+      # not read back that exact string, uploads cli.js + notify.mjs + inbox.mjs to harness/cli/$VERSION/, then
       # merges the `cli` key into $METADATA_PATH.
       #
       # Expect `>> could not read remote metadata` on a dry run: METADATA_PATH points at a file that
@@ -281,7 +281,7 @@ jobs:
               if (!entry) throw new Error("manifest has no `cli` key")
               if (entry.version !== want) throw new Error(`manifest says ${entry.version}, expected ${want}`)
 
-              for (const [key, file] of [["cli", "cli.js"], ["notify", "notify.mjs"]]) {
+              for (const [key, file] of [["cli", "cli.js"], ["notify", "notify.mjs"], ["inbox", "inbox.mjs"]]) {
                 const ref = entry[key]
                 if (!ref || !ref.url || !ref.sha256) throw new Error(`${key}: manifest entry has no url/sha256`)
                 const res = await fetch(ref.url, { cache: "no-store" })
@@ -442,6 +442,13 @@ jobs:
             const main = async () => {
               const cli = (await json("cli/metadata.json")).cli
               if (!cli || cli.version !== process.env.VERSION) throw new Error(`staging cli is ${cli && cli.version}`)
+              // install.ps1 downloads inbox.mjs from this entry: the dial's follower starts on it, not on cli.js.
+              const inbox = cli.inbox
+              if (!inbox || !inbox.url) throw new Error("staging cli has no inbox")
+              const served = await fetch(inbox.url, { cache: "no-store" })
+              if (!served.ok) throw new Error(`inbox: GET ${inbox.url} -> ${served.status}`)
+              const inboxBytes = Buffer.from(await served.arrayBuffer())
+              if (crypto.createHash("sha256").update(inboxBytes).digest("hex") !== inbox.sha256 || inboxBytes.length !== inbox.size) throw new Error("inbox: served inbox bytes differ")
               const pty = (await json("pty/metadata.json")).pty || {}
               for (const key of ["win32-x64", "win32-arm64"]) {
                 const entry = pty[key]
@@ -456,7 +463,7 @@ jobs:
               if (!node["win32-x64"] || !node["win32-arm64"]) console.log("::warning::staging has no Windows Node yet: run the Node runtime for Windows workflow")
               const script = await (await fetch(`https://cdn.autonomous.ai/${process.env.STAGING_PREFIX}/cli/install.ps1`, { cache: "no-store" })).text()
               if (!script.includes(`$HarnessManifestBase = '${base}'`)) console.log("::warning::the CDN does not serve the staging install.ps1 yet")
-              console.log(`staging ${process.env.VERSION}: cli, pty x64 + arm64 verified`)
+              console.log(`staging ${process.env.VERSION}: cli, inbox, pty x64 + arm64 verified`)
             }
             main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
           JS
@@ -643,6 +650,7 @@ jobs:
           |---|---|
           | \`cli.js\` | [download](${base}/cli.js) |
           | \`notify.mjs\` | [download](${base}/notify.mjs) |
+          | \`inbox.mjs\` | [download](${base}/inbox.mjs) |
           EOF
           echo "::group::RELEASE_NOTES.md"; cat RELEASE_NOTES.md; echo "::endgroup::"
 
