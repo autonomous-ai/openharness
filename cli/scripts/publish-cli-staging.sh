@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish a CLI build to STAGING only: <prefix>/cli/<version>/{cli.js,notify.mjs} and the `cli` key of
+# Publish a CLI build to STAGING only: <prefix>/cli/<version>/{cli.js,notify.mjs,inbox.mjs} and the `cli` key of
 # <prefix>/cli/metadata.json, in the shape upload-cli.sh gives harness/cli/metadata.json. The staging install.ps1
 # (upload-install-ps1.sh) reads that manifest. It is for a build that must not reach a released path, such as a
 # branch build stamped 0.4.18-dev.win1: a -dev version never updates itself (selfUpdate.ts isLocalDevBuild).
@@ -50,11 +50,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/gcs.sh"
 
 CLI_OBJECT="${STAGING_PREFIX}/cli/${VERSION}/cli.js"
 NOTIFY_OBJECT="${STAGING_PREFIX}/cli/${VERSION}/notify.mjs"
+INBOX_OBJECT="${STAGING_PREFIX}/cli/${VERSION}/inbox.mjs"
 METADATA_PATH="${STAGING_PREFIX}/cli/metadata.json"
 # Before the bundle, so a version that is already there fails in seconds; and every check before any upload, so a
-# failure never leaves one immutable object published without the other.
+# failure never leaves one immutable object published without the others.
 if [ "$DRY_RUN" != 1 ]; then
-  for object in "$CLI_OBJECT" "$NOTIFY_OBJECT"; do
+  for object in "$CLI_OBJECT" "$NOTIFY_OBJECT" "$INBOX_OBJECT"; do
     if exists "gs://${GCS_BUCKET}/${object}"; then
       echo "error: gs://${GCS_BUCKET}/${object} already exists. Versioned artifacts are immutable (the CDN keeps the first bytes); publish a new version." >&2
       exit 1
@@ -68,7 +69,8 @@ if [ "$DO_BUILD" = 1 ]; then
 fi
 CLI="$CLI_DIST_DIR/cli.js"
 NOTIFY="$CLI_DIST_DIR/notify.mjs"
-[ -f "$CLI" ] && [ -f "$NOTIFY" ] || { echo "error: $CLI or $NOTIFY is missing; bundle first (drop --no-build)" >&2; exit 1; }
+INBOX="$CLI_DIST_DIR/inbox.mjs"
+[ -f "$CLI" ] && [ -f "$NOTIFY" ] && [ -f "$INBOX" ] || { echo "error: $CLI, $NOTIFY or $INBOX is missing; bundle first (drop --no-build)" >&2; exit 1; }
 # upload-cli.sh's checks on the bundle.
 head -1 "$CLI" | grep -q '^#!' || { echo "error: $CLI lost its shebang on line 1" >&2; exit 1; }
 said="$(node "$CLI" version)"
@@ -80,12 +82,13 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 # The `cli` entry upload-cli.sh (merge-manifest.mjs) writes: version, then url, sha256 and size per file.
 node -e '
-  const [version, cliUrl, cliSha, cliSize, notifyUrl, notifySha, notifySize, out] = process.argv.slice(1)
-  const entry = { version, cli: { url: cliUrl, sha256: cliSha, size: Number(cliSize) }, notify: { url: notifyUrl, sha256: notifySha, size: Number(notifySize) } }
+  const [version, cliUrl, cliSha, cliSize, notifyUrl, notifySha, notifySize, inboxUrl, inboxSha, inboxSize, out] = process.argv.slice(1)
+  const entry = { version, cli: { url: cliUrl, sha256: cliSha, size: Number(cliSize) }, notify: { url: notifyUrl, sha256: notifySha, size: Number(notifySize) }, inbox: { url: inboxUrl, sha256: inboxSha, size: Number(inboxSize) } }
   require("node:fs").writeFileSync(out, JSON.stringify(entry))
 ' "$VERSION" \
   "${CDN_ASSET_BASE_URL%/}/${CLI_OBJECT}" "$(sha256_of "$CLI")" "$(wc -c < "$CLI" | tr -d ' ')" \
   "${CDN_ASSET_BASE_URL%/}/${NOTIFY_OBJECT}" "$(sha256_of "$NOTIFY")" "$(wc -c < "$NOTIFY" | tr -d ' ')" \
+  "${CDN_ASSET_BASE_URL%/}/${INBOX_OBJECT}" "$(sha256_of "$INBOX")" "$(wc -c < "$INBOX" | tr -d ' ')" \
   "$WORK/cli-entry.json"
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -98,14 +101,15 @@ node "$ROOT/scripts/lib/runtimeManifest.mjs" key "$WORK/metadata.json" "$WORK/me
 if [ "$DRY_RUN" = 1 ]; then
   out="${DRY_RUN_OUT:?DRY_RUN=1 needs DRY_RUN_OUT, a folder for the bundle and the manifest}"
   mkdir -p "$out"
-  cp "$CLI" "$NOTIFY" "$out/"
+  cp "$CLI" "$NOTIFY" "$INBOX" "$out/"
   cp "$WORK/metadata.next.json" "$out/metadata.json"
-  echo ">> dry run: cli.js, notify.mjs and the manifest in $out"
+  echo ">> dry run: cli.js, notify.mjs, inbox.mjs and the manifest in $out"
   exit 0
 fi
-echo ">> uploading cli.js + notify.mjs ($VERSION) to gs://${GCS_BUCKET}/${STAGING_PREFIX}/cli/${VERSION}/"
+echo ">> uploading cli.js + notify.mjs + inbox.mjs ($VERSION) to gs://${GCS_BUCKET}/${STAGING_PREFIX}/cli/${VERSION}/"
 gcloud storage cp --cache-control='public, max-age=31536000, immutable' "$CLI" "gs://${GCS_BUCKET}/${CLI_OBJECT}"
 gcloud storage cp --cache-control='public, max-age=31536000, immutable' "$NOTIFY" "gs://${GCS_BUCKET}/${NOTIFY_OBJECT}"
+gcloud storage cp --cache-control='public, max-age=31536000, immutable' "$INBOX" "gs://${GCS_BUCKET}/${INBOX_OBJECT}"
 gcloud storage cp --content-type=application/json --cache-control='no-cache, no-store, must-revalidate' \
   "$WORK/metadata.next.json" "gs://${GCS_BUCKET}/${METADATA_PATH}"
 echo ">> published the CLI $VERSION to https://storage.googleapis.com/${GCS_BUCKET}/${METADATA_PATH}"
