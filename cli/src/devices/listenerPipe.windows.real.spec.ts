@@ -60,7 +60,6 @@ describe.runIf(process.platform === 'win32')('the devices over a real pipe on Wi
 
     expect(await tellDevices(dataDir, { type: 'front', app: 'vscode' })).toBe(true)
     expect(fronts).toEqual(['vscode'])
-    expect(await askDevices(dataDir, { type: 'notify', mode: 'you' })).toEqual({ mode: 'you' })
 
     const stop = new AbortController()
     const chunks: Buffer[] = []
@@ -70,6 +69,12 @@ describe.runIf(process.platform === 'win32')('the devices over a real pipe on Wi
     await vi.waitFor(() => expect(Buffer.concat(chunks).toString()).toBe('{"app":"terminal-app","tty":"/dev/ttys023","raise":true}\n'))
     stop.abort()
     expect(await streamed).toBe(true)
+
+    // The last message on a connection this process keeps: the hold outlasts the listener's 2 s deadline too, so the
+    // listener, in this process as well, ends the ask's connection as the hold ends, before this side reads that end
+    // and lets the connection go; a message sent next on it fails with EPIPE (CI run 45968139151). The 401s below
+    // connect anew.
+    expect(await askDevices(dataDir, { type: 'notify', mode: 'you' })).toEqual({ mode: 'you' })
 
     const refused = { status: 401, body: '{"error":"PIPE_AUTH_REQUIRED"}' }
     expect(await raw(pipe, null)).toEqual(refused)
