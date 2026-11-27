@@ -93,6 +93,21 @@ describe("Orca's terminal list", () => {
     expect(await readBack(orcaListing([], {}))).toEqual({ tabs: [], terminals: [], worktrees: new Map() })
   })
 
+  it('a handle two open sessions share is one terminal, at the first of them by split, with the identity given; with none '
+    + 'given each session keeps its own engine', async () => {
+    const at = (key: SessionKey, tab: number, split: number, engine?: 'codex'): SessionDef => ({ key, app: 'orca', id: `eval-${key}`,
+      title: `Eval ${key}`, cwd: '/work/eval-w1', ageMs: 0, worktree: 'w1', tab, split, ...(engine === undefined ? {} : { engine }) })
+    // x and y share y's handle, x declared first but split second; b is a Codex of its own.
+    const of: Scenario = { ...SCENARIO, sessions: [at('x', 0, 1, 'codex'), at('y', 0, 0), at('b', 1, 0, 'codex')] }
+    const open = (key: SessionKey): string => H(key === 'b' ? 'b' : 'y')
+    const panes = (identity?: (key: SessionKey) => 'claude' | 'codex') =>
+      orcaLayout(of, { kind: 'orca.layout', worktrees: ['w1'] }, open, undefined, identity)[0]!.panes.map((p) => [p.key, p.handle, p.identity])
+    expect(panes()).toEqual([['y', H('y'), 'claude'], ['b', H('b'), 'codex']])
+    expect(panes((key) => (key === 'y' ? 'codex' : 'claude'))).toEqual([['y', H('y'), 'codex'], ['b', H('b'), 'claude']])
+    const listed = await readBack(orcaListing(orcaLayout(of, { kind: 'orca.layout', worktrees: ['w1'] }, open), {}))
+    expect([listed.tabs.map((t) => t.handle), listed.terminals.map((t) => t.handle)]).toEqual([[H('y'), H('b')], [H('y'), H('b')]])
+  })
+
   it("folder writes each worktree path as the tier's own", async () => {
     const tabs = await read(allOpen, {}, (path) => `/tmp/eval-root${path}`)
     expect(new Set(tabs.terminals.map((t) => t.worktreePath))).toEqual(new Set(['/tmp/eval-root/work/eval-w1', '/tmp/eval-root/work/eval-w2']))
