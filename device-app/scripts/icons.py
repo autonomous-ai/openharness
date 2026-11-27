@@ -140,7 +140,8 @@ def encode_png(width, height, rgba):
 
 
 def decode_png(data):
-    """(width, height, RGBA bytes) of an 8-bit RGB or RGBA PNG, not interlaced; anything else raises."""
+    """(width, height, RGBA bytes) of an 8-bit RGB or RGBA PNG, not interlaced, with no transparent colour (tRNS);
+    anything else raises."""
     if data[:8] != PNG:
         raise ValueError("not a PNG")
     at, header, idat = 8, None, bytearray()
@@ -148,6 +149,8 @@ def decode_png(data):
         length, kind = struct.unpack(">I4s", data[at:at + 8])
         if kind == b"IHDR":
             header = struct.unpack(">IIBBBBB", data[at + 8:at + 21])
+        elif kind == b"tRNS":
+            raise ValueError("PNG: a transparent colour (tRNS): only an RGBA PNG's alpha is read")
         elif kind == b"IDAT":
             idat += data[at + 8:at + 8 + length]
         elif kind == b"IEND":
