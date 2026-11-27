@@ -63,8 +63,10 @@ afterAll(() => { vi.useRealTimers() })
 const NEW_CLI_HELLO = JSON.parse(readFileSync(new URL('../../../tests/fixtures/cli-device-hello.json', import.meta.url), 'utf8'))
 const info = vi.spyOn(logger, 'info')
 
-/** One device socket that says [payload] as its hello; what reached recordHello. */
+/** One device socket that says [payload] as its hello; what reached recordHello, or undefined when nothing did. */
 async function hello(payload: Record<string, unknown>) {
+  // Cleared first, so a hello that never reaches recordHello cannot pass on the previous hello's call.
+  m.recordHello.mockClear()
   const device = new Socket()
   m.upgrade.mockImplementationOnce((_r, _s, _h, done) => done(device))
   handleDeviceUpgrade({ url: `/api/device-ws?computer=${'a'.repeat(32)}`, headers: { 'sec-websocket-protocol': 'access-token' } } as never,
