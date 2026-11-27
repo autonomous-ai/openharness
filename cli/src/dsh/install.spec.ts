@@ -19,6 +19,25 @@ vi.mock('../lib/gitOnPath.js', async (original) => {
   return { ...real, gitPath: () => real.createProgramPath('git', () => real.findGit({ platform, loginShell: async () => null }))() }
 })
 
+// What Windows answers to the removal of a folder another program still holds a file in (holdFetched), and a disk that
+// fails the move of a fetched copy to its place (place).
+const faults = vi.hoisted(() => ({ holdFetched: false, place: false }))
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof import('node:fs')>()
+  const fetched = (path: unknown): boolean => /[\\/]\.tmp-/.test(String(path))
+  return { ...fs,
+    rmSync: (...args: Parameters<typeof fs.rmSync>) => {
+      if (faults.holdFetched && fetched(args[0]) && fs.existsSync(args[0])) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+      return fs.rmSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof fs.renameSync>) => {
+      if (faults.place && fetched(args[0]) && /[\\/]acme[\\/]thing$/.test(String(args[1]))) throw new Error('disk full while placing')
+      return fs.renameSync(...args)
+    },
+  }
+})
+afterEach(() => { faults.holdFetched = faults.place = false })
+
 // A setup or a doctor runs in the login shell (dsh/shell.ts): the person's own, with their rc files, took seconds a spawn here.
 // A plain sh stands in for it, as update.spec does. Written and started once per file: a new script's first exec pays
 // the system's check of it, which a loaded Mac made slow when every test paid it.
@@ -362,6 +381,35 @@ describe('installDsh, every way it can go', () => {
       const sparse = await installDsh({ source: join(root, 'no-such-repo'), ref: 'main', path: 'store/agents/x' })
       expect(sparse).toMatchObject({ ok: false, error: 'CLONE_FAILED' })
       expect(leftovers()).toEqual([])
+    })
+
+    it('a fetch that failed is reported, not the removal of its temporary folder', async () => {
+      const bare = gitRepo(join(root, 'src', 'bare'), { 'README.md': '# no manifest\n' })
+      faults.holdFetched = true
+      expect(await installDsh({ source: bare })).toMatchObject({ ok: false, error: 'INVALID_MANIFEST' })
+    })
+
+    it('a wrong package is reported, not the removal of its fetched copy', async () => {
+      const repo = thing()
+      faults.holdFetched = true
+      expect(await installDsh({ source: repo, expectedId: 'acme/other' })).toMatchObject({ ok: false, error: 'PACKAGE_ID_MISMATCH' })
+    })
+
+    it('installs one folder of a repo when the rest of its clone cannot be removed', async () => {
+      const repo = gitRepo(join(root, 'src', 'mono'), {
+        'store/agents/thing/harness.json': JSON.stringify({ spec: 1, id: 'acme/thing', name: 'Thing', engine: 'claude' }),
+      })
+      faults.holdFetched = true
+      const result = await installDsh({ source: repo, path: 'store/agents/thing' })
+      expect(result.ok, JSON.stringify(result)).toBe(true)
+    })
+
+    it('throws the error that stopped placing, not the removal of the fetched copy, and releases its lock', async () => {
+      const repo = thing()
+      faults.holdFetched = faults.place = true
+      await expect(installDsh({ source: repo })).rejects.toThrow('disk full while placing')
+      faults.holdFetched = faults.place = false
+      expect((await installDsh({ source: repo })).ok).toBe(true)
     })
 
     it('a folder the repo lacks at a ref is said with the ref; a path that is a file fails at the sparse checkout', async () => {
