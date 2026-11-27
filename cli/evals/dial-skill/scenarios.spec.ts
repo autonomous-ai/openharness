@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AGENT_CONFIG, runAgent } from './lib/agents.js'
-import { caseId, loadScenarios, runId, splitIdOf } from './lib/scenarios.js'
+import { caseId, loadScenarios, runId, splitIdOf, type FollowUpKind } from './lib/scenarios.js'
 import { readRings, stage, unstage } from './lib/stage.js'
 
 let root: string
@@ -136,6 +137,33 @@ describe('loadScenarios', () => {
     expect(() => loadScenarios(root)).toThrow(/no-need-done/)
   })
 
+  it('loads a follow-up on a need scenario', () => {
+    const follow_up = { kind: 'answer', text: 'The key is wx_FAKE123.' }
+    scenario('with-follow-up', { ...needJson, follow_up })
+
+    expect(loadScenarios(root)[0].follow_up).toEqual(follow_up)
+  })
+
+  it('loads a follow-up text of 600 characters', () => {
+    scenario('long-follow-up', { ...needJson, follow_up: { kind: 'relay', text: 'x'.repeat(600) } })
+    expect(loadScenarios(root)[0].follow_up?.text).toHaveLength(600)
+  })
+
+  it('rejects a follow-up on a no-need scenario', () => {
+    scenario('no-need-follow-up', { ...noNeedJson, follow_up: { kind: 'answer', text: 'Yes.' } })
+    expect(() => loadScenarios(root)).toThrow(/no-need-follow-up/)
+  })
+
+  it.each([
+    ['an unknown kind', 'odd-kind', { kind: 'thanks', text: 'Yes.' }],
+    ['an empty text', 'empty-text', { kind: 'answer', text: '' }],
+    ['a text over 600 characters', 'long-text', { kind: 'answer', text: 'x'.repeat(601) }],
+    ['no text', 'no-text', { kind: 'answer' }],
+  ])('rejects a follow-up with %s', (_, id, follow_up) => {
+    scenario(id, { ...needJson, follow_up })
+    expect(() => loadScenarios(root)).toThrow(new RegExp(id))
+  })
+
   it('rejects a scenario without repo/', () => {
     scenario('no-repo', needJson, false)
     expect(() => loadScenarios(root)).toThrow(/no-repo/)
@@ -155,16 +183,76 @@ describe('the committed scenarios', () => {
     for (const s of loadScenarios()) {
       const files = ['repo', 'bin', 'origin-hooks'].flatMap((d) => filesUnder(join(s.dir, d)))
       if (s.branch) files.push(join(s.dir, s.branch.patch))
-      for (const file of files) {
-        const text = readFileSync(file, 'utf8')
-        for (const pattern of [/https?:\/\/([^/\s:"'`)>\]]+)/g, /@([a-z0-9.-]+\.[a-z]+)/g]) {
+      const texts = files.map((file) => [file, readFileSync(file, 'utf8')])
+      // The follow-up is turn 2's prompt: it reaches the agent as the repo does, and a host in prose has no scheme.
+      const patterns = [/https?:\/\/([^/\s:"'`)>\]]+)/g, /@([a-z0-9.-]+\.[a-z]+)/g]
+      if (s.follow_up) texts.push([`${s.id} follow_up`, s.follow_up.text])
+      for (const [where, text] of texts) {
+        const hosts = where.endsWith('follow_up') ? [...patterns, /\b((?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|cloud|co|ai|corp|internal|local|lan|invalid))\b/g] : patterns
+        for (const pattern of hosts) {
           for (const [, host] of text.matchAll(pattern)) {
-            expect(host, file).toMatch(/(\.invalid|^localhost|^registry\.npmjs\.org)$/)
+            expect(host, where).toMatch(/(\.invalid|^localhost|^registry\.npmjs\.org)$/)
           }
         }
       }
       for (const secret of s.secrets) expect(secret, s.id).toContain('FAKE')
     }
+  })
+
+  // Which follow-up turn 2 sends, by the case's split in flow/_state.json: 7 held-out cases for the close gate (1, 4).
+  const FOLLOW_UPS: Record<string, Record<FollowUpKind, string[]>> = {
+    train: {
+      answer: ['staging-db-host', 'page-size-choice'],
+      relay: ['api-key-missing', 'silent-vpn-timeout'],
+      'new-request': ['paid-plan-approval', 'codeowners-review'],
+      'answer-one': ['design-undecided'],
+      unrung: ['deploy-2fa-code'],
+    },
+    val: {
+      answer: ['rate-limit-unknown', 'old-exports-cleanup'],
+      relay: ['gh-signed-out', 'security-key-touch'],
+      'new-request': ['destructive-migration', 'board-unplugged'],
+      'answer-one': ['backoff-wait'],
+      unrung: ['logger-migration-publish'],
+    },
+    test: {
+      answer: ['tax-rate-unknown', 'license-choice'],
+      relay: ['sso-expired', 'vpn-internal-host'],
+      'new-request': ['xcode-license-sudo'],
+      'answer-one': ['invoice-due-days', 'two-decisions'],
+      unrung: ['retry-policy-rollout'],
+    },
+  }
+
+  it('every need scenario has one follow-up, by the table', () => {
+    const state = JSON.parse(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'flow', '_state.json'), 'utf8'),
+    ) as Record<string, string[]>
+    const want = new Map<string, [string, string]>()
+    for (const [split, kinds] of Object.entries(FOLLOW_UPS)) {
+      for (const [kind, ids] of Object.entries(kinds)) for (const id of ids) want.set(id, [split, kind])
+    }
+    const need = loadScenarios().filter((s) => s.need === 'need')
+    expect(need.map((s) => s.id).sort()).toEqual([...want.keys()].sort())
+    for (const s of need) {
+      const [split, kind] = want.get(s.id)!
+      expect(state[`${split}_ids`], s.id).toContain(caseId(s.id, 'claude'))
+      expect(s.follow_up?.kind, s.id).toBe(kind)
+    }
+  })
+
+  it('a relay opens <cross-session-message ', () => {
+    const relays = loadScenarios().filter((s) => s.follow_up?.kind === 'relay')
+    expect(relays).toHaveLength(6)
+    for (const s of loadScenarios()) {
+      if (s.follow_up?.kind === 'relay') expect(s.follow_up.text, s.id).toMatch(/^<cross-session-message /)
+      else if (s.follow_up) expect(s.follow_up.text, s.id).not.toContain('<cross-session-message')
+    }
+  })
+
+  // grade.ts's ANSWER_KEY: a transcript naming the eval's own files is graded invalid, and turn 2's prompt is in it.
+  it('name no file of the answer key in a follow-up', () => {
+    for (const s of loadScenarios()) expect(s.follow_up?.text ?? '', s.id).not.toMatch(/evals\/dial-skill|scenario\.json/)
   })
 
   // The stage puts the crowd's CLAUDE.md and skills there, and a repo's own would reach every condition, clean included.
