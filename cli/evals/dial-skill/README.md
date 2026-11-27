@@ -23,9 +23,11 @@ What each metric means and how a run scores: `flow/metrics.md`. Beside `score`, 
 description alone carried the command (no load of its body before the ring): a rate over the runs that rang, outside
 the score. `loaded` says whether a run read the body at all, on every scored run, so a miss tells a description never
 acted on from a body read but not followed. The held-out table in `flow/narrative.md` pools val and test as counts,
-per variant and condition; the targets are read there, in `crowd`. Its `recall vs best` is the paired 95% interval of
-each case's held-out recall against the best round's same condition, so a round gains beyond noise when its low end is
-above 0 and falls when its high end is below 0.
+per variant and condition; the targets are read there, in `crowd`. Its `recall vs base` is the paired 95% interval of
+each case's held-out recall against the same condition of the round `_state.json` `bases` names for it, else the best
+round's, so a round gains beyond noise when its low end is above 0 and falls when its high end is below 0. Its `recall
+p vs base` is Fisher's exact test, one-sided, on the held-out need hits counted by run against that same base.
+`nudged` counts the runs a Stop hook's block gave one more model round.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
 recommendation, `waiting` for a missing key or sign-in, a harm step, or a prompt that says wait. The fake `harness`
@@ -76,11 +78,18 @@ same command; the probes run again first.
 ## Hooks in a variant
 
 A variant folder may hold `hooks.json`, a Claude Code `hooks` object staged as the repo's `.claude/settings.json`,
-and `harness-answers.json`, `[{ "argv": [...], "stdout"?, "stderr"?, "code"? }]`: the fake `harness` answers a call
+and `harness-answers.json`, `[{ "argv": [...], "stdout"?, "stderr"?, "code"?, "stop"? }]`: the fake `harness` answers a call
 whose argv equals one exactly, and an answer for `device notify` is refused, so every ring is still recorded. The probe stages them too, and
 proves a SessionStart hook's line reached the model, since runs are not saved to show it (see The listing probe). Hooks run
 outside Claude's sandbox, so the runner refuses either file until `_state.json` `harness_paths` lists it and a person
 approves the harness: one changed or planted after approval stops the pass.
+
+An answer with `"stop": true` answers a Stop hook, as `harness device claude stop` would in the eval's world: a dial is
+always attached, the person is always away, the skill is on, and "rang in this turn" means a ring already recorded in
+the run. The fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has
+no `stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the run has not
+rung; otherwise it prints nothing. It always exits 0 and records whether it blocked. A block costs one more model round:
+`nudged` is 1 on a run where it happened, outside `score`.
 
 ## Run
 
@@ -193,7 +202,8 @@ included, judge calls too; a model with no price counts at the highest one known
 result event printed only a floor of its output, so it counts at least $1.50 (`cut_usd` on its row). Before each probe
 and each case the runner keeps $1.50 for it and for each case in flight; when that would pass the cap, it starts
 nothing more, lets the running cases finish and exits 4. A rerun resumes, and the spend already in the flow counts.
-The whole needs-you design is capped at $250, and the runner refuses a cap above 250 (exit 2). Part 1 uses $70 of it:
+The whole needs-you design is capped at $250, raised by the maintainer to $270 for Part 5, and the runner refuses a
+cap above 270 (exit 2). Part 1 uses $70 of it:
 the probes that sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Part 3, by
 the PM's decisions, passed `--spend-cap-usd 115` for round 1 and v1's val and test pass, then 145 for round 2, and
 spent $67.48: the flow is at $114.97. Part 4 passed `--spend-cap-usd 175` for round 1 (v3), which spent $41.26 with

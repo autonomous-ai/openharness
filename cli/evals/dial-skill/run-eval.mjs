@@ -29,7 +29,7 @@
 //     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
 //   - a probe or case starts only while all the flow has spent, a reserve for it
 //     and one for each case in flight fit under --spend-cap-usd, at most the
-//     design's $250 (lib/spend.ts); a worker whose case does not fit beside
+//     design's $270 (lib/spend.ts); a worker whose case does not fit beside
 //     those in flight stops; once one does not fit alone, the pass starts
 //     nothing more and exits 4
 //   - a failed run's spend is added as it happens, its retry starts only while
@@ -167,7 +167,7 @@ const REF_EXTS = ['', '.html', '.txt', '.json'];
 const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
-const DESIGN_CAP_USD = 250;
+const DESIGN_CAP_USD = 270;
 // A stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
 const ACCOUNT_LIMIT = 'account limit reached: pass stopped; report it, do not switch accounts';
 const spendCapLine = ctx => `spend cap · $${ctx.guard.spentUsd.toFixed(2)} of $${ctx.spendCapUsd.toFixed(2)}: `
@@ -190,7 +190,8 @@ function flowSpend(flow) {
 
 /** What the fake harness can answer (lib/stage.ts HarnessAnswer). */
 const isAnswer = a => a !== null && typeof a === 'object' && Array.isArray(a.argv) && a.argv.every(w => typeof w === 'string')
-  && [a.stdout, a.stderr].every(s => s === undefined || typeof s === 'string') && (a.code === undefined || Number.isInteger(a.code));
+  && [a.stdout, a.stderr].every(s => s === undefined || typeof s === 'string') && (a.code === undefined || Number.isInteger(a.code))
+  && (a.stop === undefined || a.stop === true);
 
 /**
  * The variant's hooks.json (Claude Code's `hooks`, staged as the repo's .claude/settings.json) and harness-answers.json
@@ -212,7 +213,7 @@ function variantHooks(vdir, state) {
     return value;
   };
   const hooks = read('hooks.json', v => v !== null && typeof v === 'object' && !Array.isArray(v), "Claude Code's hooks object");
-  const answers = read('harness-answers.json', v => Array.isArray(v) && v.every(isAnswer), 'a list of { argv, stdout?, stderr?, code? }');
+  const answers = read('harness-answers.json', v => Array.isArray(v) && v.every(isAnswer), 'a list of { argv, stdout?, stderr?, code?, stop? }');
   // Refused here, before anything runs, as well as at each stage (lib/stage.ts): a notify answered by the variant would no
   // longer be the dial the rings are read from.
   if (answers?.some(a => a.argv[0] === 'device' && a.argv[1] === 'notify'))
@@ -482,7 +483,8 @@ function parseArgs(argv) {
   if (!(a.spendCapUsd > 0 && Number.isFinite(a.spendCapUsd))) {
     eprint('--spend-cap-usd is required: the dollars the whole flow may spend, above 0'); usage(); process.exit(2);
   }
-  // dial skill eval: the maintainer capped the whole design at $250 (2026-11-26); no pass may be allowed more.
+  // dial skill eval: the maintainer capped the whole design at $250 (2026-11-26) and raised it to $270 for Part 5
+  // (2026-11-27); no pass may be allowed more.
   if (a.spendCapUsd > DESIGN_CAP_USD) {
     eprint(`--spend-cap-usd is at most ${DESIGN_CAP_USD}: the design's cap is $${DESIGN_CAP_USD}`); usage(); process.exit(2);
   }

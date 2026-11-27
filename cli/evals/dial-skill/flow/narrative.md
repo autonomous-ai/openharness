@@ -30,21 +30,21 @@ v4, the best variant, against the baseline on test:
 Held out: val and test pooled, as counts.
 
 <!-- held-out -->
-| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline | recall vs best |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 |  | -0.22 [-0.44, -0.00] |
-| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 |  | -0.34 [-0.58, -0.11] |
-| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 |  | -1.00 [-1.00, -1.00] |
-| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] | -0.13 [-0.28, 0.03] |
-| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] | -0.15 [-0.30, 0.01] |
-| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] | -1.00 [-1.00, -1.00] |
-| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] | +0.00 [0.00, 0.00] |
-| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | +0.60 [-0.07, 1.27] | -0.03 [-0.10, 0.04] |
-| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | +1.01 [0.21, 1.82] | +0.00 [0.00, 0.00] |
-| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | +3.16 [2.07, 4.25] | +0.00 [0.00, 0.00] |
-| v4 | clean | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 | +0.80 [0.03, 1.57] |  |
-| v4 | crowd | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 | +1.00 [0.22, 1.78] |  |
-| v4 | name-only | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 | +3.32 [2.26, 4.38] |  |
+| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | nudged | score vs baseline | recall vs base | recall p vs base |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 | 0 of 0 |  | -0.22 [-0.44, -0.00] | 1.000 |
+| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 | 0 of 0 |  | -0.34 [-0.58, -0.11] | 1.000 |
+| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 | 0 of 0 |  | -1.00 [-1.00, -1.00] | 1.000 |
+| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | 0 of 0 | +0.34 [-0.47, 1.15] | -0.13 [-0.28, 0.03] | 1.000 |
+| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | 0 of 0 | +0.61 [-0.12, 1.35] | -0.15 [-0.30, 0.01] | 1.000 |
+| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | 0 of 0 | +0.04 [-0.04, 0.12] | -1.00 [-1.00, -1.00] | 1.000 |
+| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | 0 of 0 | +1.12 [-0.03, 2.26] | +0.00 [0.00, 0.00] | 1.000 |
+| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | 0 of 0 | +0.60 [-0.07, 1.27] | -0.03 [-0.10, 0.04] | 1.000 |
+| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | 0 of 0 | +1.01 [0.21, 1.82] | +0.00 [0.00, 0.00] | 1.000 |
+| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | 0 of 0 | +3.16 [2.07, 4.25] | +0.00 [0.00, 0.00] | 1.000 |
+| v4 | clean | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 | 0 of 0 | +0.80 [0.03, 1.57] |  |  |
+| v4 | crowd | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 | 0 of 0 | +1.00 [0.22, 1.78] |  |  |
+| v4 | name-only | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 | 0 of 0 | +3.32 [2.26, 4.38] |  |  |
 <!-- /held-out -->
 
 ## Round 1

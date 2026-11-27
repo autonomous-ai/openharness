@@ -10,14 +10,14 @@ export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number;
 export interface HeldOut {
   need: number; hit: number; no_need: number; rang: number; line_n: number; line_ok: number; ask_ok: number
   checked: number; harmed: number; went_n: number; went_on: number; rang_runs: number; one_step: number
-  loaded: number; loaded_n: number
+  loaded: number; loaded_n: number; nudged: number; nudged_n: number
 }
 export interface VariantStats {
   change: string
   splits: Record<string, SplitStats>
   recall: number; specificity: number; precision: number; line_ok: number; ask_ok: number
   harmed: number; harm_rate: number
-  went_on: number; one_step: number; loaded: number
+  went_on: number; one_step: number; loaded: number; nudged: number
   latency_s: number; tool_calls: number; rings: number; tokens: number
   errors: Record<string, number>; truncated: number; invalid: number; unlisted: number
   spend_usd: number
@@ -31,10 +31,14 @@ export interface Summary {
   /** Variant → condition: as `paired`, over the val and test cases pooled, where "above the baseline beyond noise" is
    *  read; one split alone holds too few cases for its interval to clear 0. */
   held_out_paired: Record<string, Record<string, Paired>>
-  /** Variant → condition: the paired difference in held-out recall (each case's mean hit) against the best round's
-   *  same condition, where a round's gain or fall beyond noise is read. */
+  /** Variant → condition: the paired difference in held-out recall (each case's mean hit) against its base's same
+   *  condition, where a round's gain or fall beyond noise is read. */
   held_out_recall: Record<string, Record<string, Paired>>
+  /** Variant → condition: fisherOneSided of the base's and the variant's held-out need hits, run by run. */
+  held_out_recall_p: Record<string, Record<string, number>>
   best: string | null // _state.json's best round, by variant name
+  /** _state.json's bases, by variant name: the round each listed variant's recall is paired with. */
+  bases: Record<string, string>
   warnings: string[]
 }
 
@@ -158,6 +162,8 @@ function heldOut(rows: Row[], split: (id: string) => string | undefined): HeldOu
     rang_runs: scored.filter(r => r.grade?.rang === 1).length, one_step: sum('one_step'),
     // Rows graded before loaded existed have none, so its own count is the denominator.
     loaded: sum('loaded'), loaded_n: count('loaded'),
+    // The same for nudged, which rows graded before Part 5 have none of.
+    nudged: sum('nudged'), nudged_n: count('nudged'),
   }
 }
 
@@ -200,6 +206,8 @@ function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: 
     one_step: rate(scored, 'one_step'),
     // The grader gives it to every scored run; rows graded before it existed have none and are left out.
     loaded: rate(scored, 'loaded'),
+    // The rate of runs a Stop hook's block gave one more model round, over the scored rows graded with it.
+    nudged: rate(scored, 'nudged'),
     latency_s: mean(scored.map(r => r.latency_s ?? NaN)),
     tool_calls: mean(scored.map(r => r.tool_calls ?? NaN)),
     rings: mean(scored.map(r => r.rings ?? NaN)),
@@ -262,20 +270,55 @@ export function summarize(flow: string): Summary {
       if (p) heldOutPaired[v][c] = p
     }
   }
-  const round = (state.best as { round?: unknown } | undefined)?.round
-  const best = typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null
-  // Against the best round, not the baseline: a round ships by beating the text it would replace.
+  const nameOf = (round: unknown) => (typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null)
+  const best = nameOf((state.best as { round?: unknown } | undefined)?.round)
+  const bases: Record<string, string> = {}
+  for (const [v, round] of Object.entries((state.bases as Record<string, unknown> | undefined) ?? {})) {
+    const base = nameOf(round)
+    if (base !== null) bases[v] = base
+  }
+  // Against the best round, not the baseline: a round ships by beating the text it would replace. A round may name its
+  // own base instead: Part 5's two pairs compare with v4 and with v1, while the best round is v4 and may change at the
+  // verdict, so the pairs must not follow it.
   const heldOutRecall: Record<string, Record<string, Paired>> = {}
+  const heldOutRecallP: Record<string, Record<string, number>> = {}
   const heldOutCase = (id: string) => split(id) === 'val' || split(id) === 'test'
-  const bestRecalls = best === null ? undefined : recalls[best]
-  if (bestRecalls) for (const v of Object.keys(variants).filter(v => v !== best)) {
+  for (const v of Object.keys(variants)) {
+    const base = bases[v] ?? best
+    const baseRecalls = base === null || base === v ? undefined : recalls[base]
+    if (!baseRecalls) continue
     heldOutRecall[v] = {}
+    heldOutRecallP[v] = {}
     for (const c of Object.keys(variants[v])) {
-      const p = bestRecalls[c] && pairOf(recalls[v][c], bestRecalls[c], heldOutCase)
-      if (p) heldOutRecall[v][c] = p
+      const p = baseRecalls[c] && pairOf(recalls[v][c], baseRecalls[c], heldOutCase)
+      if (!p) continue
+      heldOutRecall[v][c] = p
+      const [b, x] = [variants[base!][c].held_out, variants[v][c].held_out]
+      heldOutRecallP[v][c] = fisherOneSided(b.hit, b.need, x.hit, x.need)
     }
   }
-  return { variants, paired, held_out_paired: heldOutPaired, held_out_recall: heldOutRecall, best, warnings }
+  return { variants, paired, held_out_paired: heldOutPaired, held_out_recall: heldOutRecall,
+    held_out_recall_p: heldOutRecallP, best, bases, warnings }
+}
+
+/** Fisher's exact test, one-sided: the chance that `hit` or more of the variant's `n` runs are hits when the
+ *  `baseHit + hit` hits of all `baseN + n` runs are dealt at random (the hypergeometric upper tail). Counted by run,
+ *  where a case's few reps leave a paired case interval no test of a gain of a run or two. */
+export function fisherOneSided(baseHit: number, baseN: number, hit: number, n: number): number {
+  const total = baseN + n
+  const hits = baseHit + hit
+  // At or below the fewest hits the variant could get, every deal counts: exactly 1, not a float sum near it.
+  if (hit <= Math.max(0, n - (total - hits))) return 1
+  // log C(a, k) as a running sum, so the counts' factorials never overflow.
+  const logChoose = (a: number, k: number) => {
+    let sum = 0
+    for (let i = 1; i <= k; i++) sum += Math.log((a - k + i) / i)
+    return sum
+  }
+  const all = logChoose(total, n)
+  let p = 0
+  for (let x = hit; x <= Math.min(hits, n); x++) p += Math.exp(logChoose(hits, x) + logChoose(total - hits, n - x) - all)
+  return Math.min(1, p)
 }
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
@@ -362,11 +405,11 @@ export function statusTable(s: Summary): string {
 
 export function aggregateTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'one_step',
-    'loaded', 'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
+    'loaded', 'nudged', 'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
   for (const { v, c, x } of each(s)) {
     const errors = Object.entries(x.errors).map(([cls, n]) => `${cls} ${n}`).join(', ')
     out.push(line([v, c, pct(x.recall), pct(x.specificity), pct(x.precision), pct(x.line_ok), pct(x.ask_ok),
-      pct(x.one_step), pct(x.loaded), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
+      pct(x.one_step), pct(x.loaded), pct(x.nudged), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
   }
   return out.join('\n')
 }
@@ -374,14 +417,17 @@ export function aggregateTable(s: Summary): string {
 // Val and test pooled, as counts: the held-out numbers the spec's targets are read against.
 export function heldOutTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'needless rings', 'line_ok', 'ask_ok', 'harmed', 'went_on',
-    'one_step', 'loaded', 'score vs baseline', 'recall vs best'])
+    'one_step', 'loaded', 'nudged', 'score vs baseline', 'recall vs base', 'recall p vs base'])
   for (const { v, c, x: { held_out: h } } of each(s)) {
     const p = s.held_out_paired[v]?.[c]
     const r = s.held_out_recall[v]?.[c]
+    const rp = s.held_out_recall_p[v]?.[c]
+    // A round that is its own base has nothing to pair with.
+    const own = (s.bases[v] ?? s.best) === v
     out.push(line([v, c, of(h.hit, h.need), of(h.rang, h.no_need), of(h.line_ok, h.line_n), of(h.ask_ok, h.need),
       of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs),
-      of(h.loaded, h.loaded_n), v === 'baseline' ? '' : p ? fmtPaired(p) : 'n/a',
-      v === s.best ? '' : r ? fmtPaired(r) : 'n/a']))
+      of(h.loaded, h.loaded_n), of(h.nudged, h.nudged_n), v === 'baseline' ? '' : p ? fmtPaired(p) : 'n/a',
+      own ? '' : r ? fmtPaired(r) : 'n/a', own ? '' : rp === undefined ? 'n/a' : fmt(rp, 3)]))
   }
   return out.join('\n')
 }
