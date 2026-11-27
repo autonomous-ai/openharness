@@ -7,7 +7,7 @@
  *
  * The dial skill's use rides the same report (docs/plans/2026-11-26-dial-skill-usage-design.md): an outside Claude Code
  * session runs the real `harness device notify`, the dial shows it, and the agent answers it by closing its card with
- * `notify --done <id>`, the id `--list` printed, before its next prompt: the person's prompt answers no card
+ * `notify --done <id>`, the id `--list` printed, before its next prompt: the person's prompt answers no waiting card
  * (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md). The attach's setup pass wrote the skill, which the
  * devices then find.
  *
