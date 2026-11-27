@@ -476,7 +476,13 @@ model DeviceBinding {
   // These exist so the mobile app can render a device WITHOUT a live socket of its own; the web reads
   // the same facts off the wire instead. All nullable: a device that has never connected on a build
   // that reports them has none of them, and that must read as "unknown", never as a zero value.
+  // A dial's firmware. On a `harness-cli` row it is an old CLI version (CLIs said hello with it before
+  // `cliVersion` existed, and stored rows are not rewritten), which backend readers take as that row's
+  // last CLI version, never as firmware.
   firmwareVersion String?
+  // The Harness CLI's version as of its last hello. Null on a dial, and on a row whose CLI has not said
+  // hello since the backend began storing it.
+  cliVersion      String?
   chip            String?
   // WiFi as of the last hello. No shipping client reports these since the dial went cable-only, so they
   // stay null — which clients must render as "no data" rather than an empty name or a zero-bar meter.

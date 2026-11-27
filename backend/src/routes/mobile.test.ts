@@ -52,6 +52,7 @@ const device = (over: Record<string, unknown> = {}): Record<string, unknown> => 
   createdAt: new Date('2026-07-01T00:00:00Z'),
   macAddress: 'AA:BB:CC:DD:EE:FF',
   firmwareVersion: '0.2.8',
+  cliVersion: null,
   chip: 'esp32s3',
   ssid: null,
   rssi: null,
@@ -324,6 +325,24 @@ describe('rename', () => {
     const res = await call(app, { method: 'PATCH', url: '/api/mobile/v1/devices/dev-1', payload: { name: 'Kitchen' } })
 
     expect(res.statusCode).toBe(404)
+  })
+})
+
+describe('the CLI\'s version', () => {
+  const both = async () => {
+    const app = await buildApp()
+    const listed = JSON.parse((await overview(app)).payload).data.devices[0]
+    const one = JSON.parse((await call(app, { method: 'GET', url: '/api/mobile/v1/devices/6a70088ae13f6277cdf9015a' })).payload).data.device
+    return [listed, one]
+  }
+  it('a harness-cli device carries cliVersion, and firmwareVersion stays the CLI\'s version for the Autonomous app', async () => {
+    const cli = device({ chip: 'harness-cli', firmwareVersion: null, cliVersion: '0.6.97' })
+    listDetailedForUser.mockResolvedValue([cli]); detailForUser.mockResolvedValue(cli)
+    for (const d of await both()) expect(d).toMatchObject({ cliVersion: '0.6.97', firmwareVersion: '0.6.97' })
+  })
+  it('a dial carries its firmware and a null cliVersion', async () => {
+    listDetailedForUser.mockResolvedValue([device()]); detailForUser.mockResolvedValue(device())
+    for (const d of await both()) expect(d).toMatchObject({ cliVersion: null, firmwareVersion: '0.2.8' })
   })
 })
 
