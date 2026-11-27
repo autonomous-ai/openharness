@@ -1008,12 +1008,14 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
     }
     const id = observedAgentId(engine, SESSION)
     const report = (goesOn: boolean): boolean => s.src.stopReported(id, goesOn)
+    /** A notice of the agent rang now: the engine whose yes it counts after, or null. */
+    const rang = (): 'claude' | 'codex' | null => s.src.rangInHold(id)
     const advance = (ms: number): Promise<unknown> => vi.advanceTimersByTimeAsync(ms)
     // The transcript as it was when the session was listed.
     s.stamps.set(TRANSCRIPT, Date.now())
     hook('session-start')
     return {
-      ...s, told, hook, report, advance,
+      ...s, told, hook, report, rang, advance,
       agent: () => s.src.list()[0],
       missed: () => s.logs.filter((line) => line === '[observed] stop report missed').length,
       /** The transcript grows now. */
@@ -1521,6 +1523,81 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.report(true)).toBe(false)
       r.hook('subagent-stop')
       await nextStopTold(r)
+    })
+  })
+
+  // A notice rung while a yes holds the turn is the yes's ring, counted once a yes (the spec's "Part 5's counts").
+  describe('the ring after a yes (Part 5\'s counts)', () => {
+    it.each(['claude', 'codex'] as const)('the yes\'s hold answers its engine once (%s)', async (engine) => {
+      const r = rig(engine)
+      await heldAfterYes(r)
+      expect(r.rang()).toBe(engine)
+      expect(r.rang()).toBeNull()
+    })
+
+    it('the yes before the blocked stop: its hold answers once, though it goes on past that stop', async () => {
+      const r = rig()
+      await r.mark()
+      r.hook('turn-start')
+      expect(r.report(true)).toBe(true)
+      expect(r.rang()).toBe('claude')
+      r.hook('turn-stop')
+      expect(r.rang()).toBeNull()
+    })
+
+    it.each<[string, (r: Rig) => Promise<void>]>([
+      ['its next stop', async (r) => { r.hook('turn-stop') }],
+      ['10 s quiet', async (r) => {
+        await r.advance(CONTINUE_QUIET_MS)
+        expect(r.told).toHaveLength(1)
+      }],
+      ['the 120 s cap', async (r) => {
+        for (let at = 0; at < CONTINUE_MAX_MS; at += 5_000) {
+          await r.advance(5_000)
+          r.grow()
+        }
+        expect(r.told).toHaveLength(1)
+      }],
+      ['a prompt', async (r) => { r.hook('turn-start') }],
+      ['session-end', async (r) => { r.hook('session-end') }],
+    ])('null once the hold ends: %s', async (_, end) => {
+      const r = rig()
+      await heldAfterYes(r)
+      await end(r)
+      expect(r.rang()).toBeNull()
+    })
+
+    it.each<[string, (r: Rig) => Promise<void>]>([
+      ['no report', async (r) => {
+        r.hook('turn-start')
+        r.hook('turn-stop')
+      }],
+      ['a no', async (r) => {
+        await r.mark()
+        r.hook('turn-start')
+        r.hook('turn-stop')
+        expect(r.report(false)).toBe(true)
+      }],
+      ['a second yes, the first one\'s ring read', async (r) => {
+        await heldAfterYes(r)
+        expect(r.rang()).toBe('claude')
+        expect(r.report(true)).toBe(true)
+      }],
+      ['a yes that started no hold', async (r) => {
+        r.hook('turn-start')
+        r.hook('turn-stop')
+        await r.advance(1_500)
+        expect(r.report(true)).toBe(false)
+      }],
+    ])('null with %s', async (_, setup) => {
+      const r = rig()
+      await setup(r)
+      expect(r.rang()).toBeNull()
+    })
+
+    it('null for an agent no hook listed', () => {
+      const r = rig()
+      expect(r.src.rangInHold(observedAgentId('claude', 'never-listed'))).toBeNull()
     })
   })
 })

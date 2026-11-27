@@ -20,7 +20,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
-import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, CONTINUE_QUIET_MS, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
@@ -17726,6 +17726,120 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
           .toBe(waits)
         expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/sess-1/)
       })
+  })
+
+  // A yes to a stop, and a notice rung in the continuation it holds, once a yes (docs/plans/2026-11-26-needs-you-right-
+  // design.md, "Part 5's counts").
+  describe('the second look\'s counts', () => {
+    type Listener = ReturnType<typeof fakeListener>
+    const LINE = 'Waiting · Connect the VPN'
+    const LATER = 'Waiting · Sign in to the registry'
+    const nudge = (listener: Listener, sessionId: string, ask: boolean, engine = 'claude') => listener.nudge({ engine, sessionId, ask })
+    const outsideNotice = (listener: Listener, text = LINE) =>
+      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+    /** What the second look counted, once the stop wrote it. */
+    const nudges = async (port: DevicesPort): Promise<Record<string, number>> =>
+      Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_nudge_')))
+    /** sess-1, the person away: an earlier turn whose Stop hook reported (`ask: false`), so each next stop of it waits for
+     *  its own report; then its stop in the person's next turn, and the devices' yes to it 0.3 s later. */
+    const heldYes = async (port: DevicesPort, listener: Listener): Promise<void> => {
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+    }
+    const secrets = (file: string): string[] => ['sess-1', 's-h1', ID, 'VPN', 'registry'].filter((secret) => file.includes(secret))
+    beforeEach(() => { vi.useFakeTimers() })
+
+    it('a yes counts dial_nudge_claude; a no of every word counts nothing', async () => {
+      const { port, listener } = withNotices()
+      expect(nudge(listener, 'sess-9', false)).toEqual({ nudge: false })
+      ;(seen.cable as unknown as { connected: boolean }).connected = false
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      ;(seen.cable as unknown as { connected: boolean }).connected = true
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-2' })
+      expect(nudge(listener, 'sess-2', true)).toEqual({ nudge: false })
+      // The person with sess-1: their prompt to it in Orca, Orca in front, and the dial on it.
+      host().front('orca')
+      host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+      port.observed(hook('turn-start'))
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: false })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: true })
+      expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
+      for (const word of ['no ask', 'no dial', 'notice', 'present', 'yes', 'nudged']) expect(logs).toContain(`[device] nudge · claude · ${word}`)
+      expect(nudge(listener, 'thr-1', true, 'codex')).toEqual({ nudge: true })
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_codex: 1 })
+    })
+
+    it('an outside agent\'s notice in its held continuation counts rang, once a yes', async () => {
+      const { port, listener } = withNotices()
+      await heldYes(port, listener)
+      outsideNotice(listener)
+      // Its next notice, past the agent's minute, its hooks keeping the hold on.
+      for (let at = 0; at < NOTICE_AGENT_MS; at += 8_000) {
+        await vi.advanceTimersByTimeAsync(8_000)
+        port.observed(hook('subagent-start'))
+        port.observed(hook('subagent-stop'))
+      }
+      outsideNotice(listener, LATER)
+      expect(calls('turnDone')).toEqual([[ID]])
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_claude_rang: 1 })
+      expect(secrets(readFileSync(usageFile(), 'utf8'))).toEqual([])
+    })
+
+    it.each<[string, (port: DevicesPort, listener: Listener) => Promise<void>]>([
+      ['its next stop and its report', async (port, listener) => {
+        port.observed(hook('turn-stop'))
+        await vi.advanceTimersByTimeAsync(300)
+        expect(nudge(listener, 'sess-1', false)).toEqual({ nudge: false })
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      }],
+      ['10 s quiet', async () => { await vi.advanceTimersByTimeAsync(CONTINUE_QUIET_MS) }],
+    ])('a notice after the hold ended at %s counts no rang', async (_, end) => {
+      const { port, listener } = withNotices()
+      await heldYes(port, listener)
+      await end(port, listener)
+      expect(calls('turnDone')).toEqual([[ID], [ID]])
+      outsideNotice(listener)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
+
+    it('a yes no hold took counts the yes and never rang', async () => {
+      const { port, listener } = withNotices()
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(calls('turnDone')).toEqual([[ID]])
+      expect(nudge(listener, 'sess-1', true)).toEqual({ nudge: true })
+      outsideNotice(listener)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
+
+    it('a Harness agent\'s notice in its continuation counts rang, once a yes', async () => {
+      const { port, listener } = withNotices()
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+      notice(listener, 'h1', LINE)
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      notice(listener, 'h1', LATER)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1, dial_nudge_claude_rang: 1 })
+      expect(secrets(readFileSync(usageFile(), 'utf8'))).toEqual([])
+    })
+
+    it('a Harness agent\'s notice after its continuation\'s done counts no rang', async () => {
+      const { port, listener } = withNotices()
+      const card = (kind: 'processing' | 'done') => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind, text: kind } })
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+      card('processing')
+      card('done')
+      card('processing')
+      notice(listener, 'h1', LINE)
+      expect(await nudges(port)).toEqual({ dial_nudge_claude: 1 })
+    })
   })
 })
 

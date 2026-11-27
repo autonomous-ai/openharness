@@ -1106,6 +1106,15 @@ describe('the dial skill\'s use', () => {
     expect(vi.getTimerCount()).toBe(1)
   })
 
+  it('counts a second look\'s yes and its ring by engine', () => {
+    const { usage, added } = rig()
+    usage.nudgeYes('claude')
+    usage.nudgeYes('claude')
+    usage.nudgeYes('codex')
+    usage.nudgeRang('claude')
+    expect(added).toEqual(['dial_nudge_claude', 'dial_nudge_claude', 'dial_nudge_codex', 'dial_nudge_claude_rang'])
+  })
+
   // A pass can settle after the devices stopped: a `claude` run it waited on was still going.
   it('nothing is armed after stop', () => {
     const { usage, prefixed, installed } = rig()
