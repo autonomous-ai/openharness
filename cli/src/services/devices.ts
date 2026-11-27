@@ -1537,10 +1537,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     noticeFrom: (agentId) => notices.from(agentId),
     newsKept: (agentId) => notifyMode.get() !== 'you' || failedLast.has(agentId),
     // A caller no list holds has no face on the dial to ask on, and with no session its next turn is never heard: kept,
-    // its card would stay pinned until the devices restart. The tap is its end, as its leaving would be. Only a card its
-    // notice found no list for (`who`): a router that has read no list yet, as while the fleet is unavailable, finds no
-    // machine for a Harness agent either, whose card waits for its next turn.
-    tappedUnlisted: (agentId) => part.call('notices', () => { if (notices.from(agentId)) notices.ended(agentId) }),
+    // its card would stay pinned until the devices restart. The tap is that card's end, as its leaving would be. Only a
+    // card its notice found no list for (`who`): a router that has read no list yet, as while the fleet is unavailable,
+    // finds no machine for a Harness agent either, whose card waits for its next turn.
+    tappedUnlisted: (agentId) => part.call('notices', () => notices.tapped(agentId)),
     // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer,
     // which holds them too.
     noticeRows: () => {
@@ -3357,7 +3357,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('notices', () => {
         // Only a session's notice: none other is ever nudged.
         if (ask.engine && ask.sessionId) noteRang(noticeCaller(ask).agentId)
-        result = notices.notify(ask)
+        result = notices.notify(ask).result
         if (result === 'shown') noticeShown(ask)
       })
       return result
