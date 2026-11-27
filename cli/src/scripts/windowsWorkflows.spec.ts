@@ -159,6 +159,8 @@ describe('the Windows release workflows', () => {
     const staging = stepNamed(release, 'Read staging back the way install.ps1 will')
     expect(staging).toContain('cli.inbox')
     expect(staging).toContain('served inbox bytes differ')
+    // As the post-publish check compares it: a manifest's digest in capitals is the same digest.
+    expect(staging).toContain('digest("hex") !== String(inbox.sha256).toLowerCase()')
     expect(release).toContain('| \\`inbox.mjs\\` | [download](${base}/inbox.mjs) |')
   })
 

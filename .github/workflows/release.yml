@@ -448,7 +448,7 @@ jobs:
               const served = await fetch(inbox.url, { cache: "no-store" })
               if (!served.ok) throw new Error(`inbox: GET ${inbox.url} -> ${served.status}`)
               const inboxBytes = Buffer.from(await served.arrayBuffer())
-              if (crypto.createHash("sha256").update(inboxBytes).digest("hex") !== inbox.sha256 || inboxBytes.length !== inbox.size) throw new Error("inbox: served inbox bytes differ")
+              if (crypto.createHash("sha256").update(inboxBytes).digest("hex") !== String(inbox.sha256).toLowerCase() || inboxBytes.length !== inbox.size) throw new Error("inbox: served inbox bytes differ")
               const pty = (await json("pty/metadata.json")).pty || {}
               for (const key of ["win32-x64", "win32-arm64"]) {
                 const entry = pty[key]
