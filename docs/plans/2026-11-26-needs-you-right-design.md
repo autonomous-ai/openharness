@@ -566,10 +566,13 @@ The change:
    - **A post that lands after the answer.** Running in the background, the post can reach the devices after the
      person has answered in Codex, likelier on Windows. The dial may then show, and ring, an ask already answered. It
      must never stay: the card closes once the session's record grows past the post (`checkWorking`,
-     `ASK_SETTLE_MS`) or at the session's next event, and a post that lands after its turn's Stop shows nothing where
-     the devices can tell from what they hold; where they cannot, the pull request says so and it closes at the next
-     event. Its end-to-end case: answered before the post, the card gone within one `checkWorking` round after the
-     record grows.
+     `ASK_SETTLE_MS`). A turn that has ended posts nothing: the command reads the record's end of that turn
+     (`event_msg` `task_complete` or `turn_aborted` with the hook's `turn_id`, after the turn's last `turn_context`)
+     and posts nothing (#4668). Two gaps are left, both needing the person to answer within the hook's own run time
+     (about 0.25 s on macOS, 1.5 s on Windows): Codex runs its Stop hook before it writes `task_complete`, so a read in
+     that window posts and the card stays until the session's next turn writes; and a command that runs long writes
+     nothing until its output, so the card stays for that long. Its end-to-end case: answered before the post, the
+     card gone within one `checkWorking` round after the record grows; a turn ended before the post shows nothing.
 2. **Who reviews it, read where the ask is heard** (the PM, 2026-11-26, from Codex 0.172.0's source). A
    `PermissionRequest`'s input says nothing of whether a dialog follows; the hook runs before Codex's automatic review,
    which is a model session of its own with hooks off; and the next event of a command it approves is `PostToolUse`,
