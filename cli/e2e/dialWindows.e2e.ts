@@ -61,12 +61,17 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
     expect(paths).toHaveLength(1)
     const systemRoot = process.env.SystemRoot!.toLowerCase()
     expect(paths[0]!.split(';').filter((entry) => !entry.toLowerCase().startsWith(systemRoot) && !entry.startsWith(d.root))).toEqual([])
+    // Why the CLI said `no dial` or failed is on its stderr (a reason line), not in the daemon's log.
+    const stderrs: string[] = []
+    onTestFailed(() => { console.log(`---- harness device notify stderr\n${stderrs.join('\n')}`) })
     const before = await d.harness(['device', 'notify', LINE])
+    stderrs.push(before.stderr)
     expect({ code: before.code, out: before.stdout.trim() }).toEqual({ code: 0, out: 'no dial' })
 
     await d.dial.greet(90_000)
     await d.dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     const after = await d.harness(['device', 'notify', LINE])
+    stderrs.push(after.stderr)
     expect({ code: after.code, out: after.stdout.trim() }).toEqual({ code: 0, out: 'shown' })
     await d.dial.next((m) => JSON.stringify(m).includes(LINE), 45_000, 'the notice')
   })
