@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fsyncSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { creationFingerprint } from '../lib/agentCreationReceipt.js'
+import { removeQuietly } from '../lib/removePath.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
 
 export class DshPreparationUnavailable extends Error {}
@@ -27,7 +28,7 @@ export function dshPreparations(directory: string): PrepareDsh {
       if (!exclusive) renameSync(temp, file)
       syncStateDirectory(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally {
-      if (!exclusive && opened) rmSync(temp, { force: true })
+      if (!exclusive && opened) removeQuietly(temp)
     }
   }
   return async <T>(workspace: string, input: unknown, run: () => Promise<T>, replay = false): Promise<T> => {

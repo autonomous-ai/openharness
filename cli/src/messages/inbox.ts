@@ -18,6 +18,7 @@
 import { chmodSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PTY_HOST_INSTANCE_SOURCE } from '../lib/ptyHost/instance.js'
+import { removeQuietly } from '../lib/removePath.js'
 
 /** What one inbox file holds: the text, and the engine conversation it is for. A hook in any other conversation
  *  (a Codex sub-agent runs its hooks from its parent's pane) leaves it. `notice` is the line the pane shows the
@@ -100,7 +101,7 @@ export class PaneInbox {
     for (let tries = 0; ; tries++) {
       mkdirSync(dir, { recursive: true, mode: 0o700 })
       try { renameSync(temporary, join(dir, `${key}.json`)); return } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || tries >= 3) { rmSync(temporary, { force: true }); throw error }
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || tries >= 3) { removeQuietly(temporary); throw error }
       }
     }
   }

@@ -3,11 +3,12 @@
  * absence as a lost conversation blocked a retained harness even though search still showed it.
  * Nothing here runs during discovery, and the archive remains available after any failure. */
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, createReadStream, createWriteStream, fstatSync, linkSync, lstatSync, openSync, unlinkSync, type BigIntStats } from 'node:fs'
+import { closeSync, constants, createReadStream, createWriteStream, fstatSync, linkSync, lstatSync, openSync, type BigIntStats } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import * as zlib from 'node:zlib'
+import { removeQuietly } from '../lib/removePath.js'
 import { sessionStoreOf } from './sessionStoreContracts.js'
 import { transcriptEvidence } from './transcriptBindings.js'
 import { NativeFiles } from './kit/nativeFiles.js'
@@ -124,6 +125,6 @@ export async function materializeResumeTranscript(engine: AgentEngine, sessionId
     clearTimeout(timer)
     if (input !== undefined) closeSync(input)
     if (output !== undefined) closeSync(output)
-    if (temporary !== undefined) unlinkSync(temporary)
+    if (temporary !== undefined) removeQuietly(temporary)
   }
 }
