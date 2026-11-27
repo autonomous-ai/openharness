@@ -12,6 +12,7 @@ import { readProcessEvidence } from './processEvidence.js'
 import { argvTokens, engineProcessMatchScore } from './processTable.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 import type { RepairedSession } from './sessionRepair.js'
+import { windowsOpenFiles, type WindowsFilesRead } from './windows/openFiles.js'
 
 export interface NativeConversationSources {
   processes: typeof readProcessEvidence
@@ -25,8 +26,13 @@ export interface NativeConversationOptions {
 }
 const nativeSources: NativeConversationSources = { processes: readProcessEvidence, descriptors: readDescriptorEvidence }
 
-export async function nativeOpenFiles(pid: number): Promise<string[]> {
+export async function nativeOpenFiles(pid: number, platform: NodeJS.Platform = process.platform,
+  windowsFiles: WindowsFilesRead = windowsOpenFiles): Promise<string[]> {
   if (!Number.isSafeInteger(pid) || pid <= 0) return []
+  // Windows has no lsof; harness-pty reads its files. A failed read or a pid it left out is unknown, never "holds nothing".
+  if (platform === 'win32') {
+    return (await windowsFiles([pid]))?.get(pid)?.files ?? nativeUnavailable('the open files could not be read')
+  }
   const evidence = await readDescriptorEvidence(pid, new NativeEvidenceBudget())
   await evidence.verify()
   return evidence.descriptors.map(row => row.path).filter(path => path.startsWith('/'))
