@@ -257,9 +257,14 @@ def straight(rows):
     return bytes(out)
 
 
-def write_trays(out):
+def mark():
+    """The polygons of harness-mark.svg's path."""
     svg = ElementTree.fromstring(MARK.read_text())
-    polygons = polygons_of(svg.find("{http://www.w3.org/2000/svg}path").get("d"))
+    return polygons_of(svg.find("{http://www.w3.org/2000/svg}path").get("d"))
+
+
+def write_trays(out):
+    polygons = mark()
     for name, width, height, rgb, scale, offset in TRAYS:
         rgba = bytearray()
         for row in coverage(polygons, width, height, scale, offset):

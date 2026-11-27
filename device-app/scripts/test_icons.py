@@ -65,6 +65,30 @@ class Tray(unittest.TestCase):
                 # Decoded pixels, not bytes: another zlib may compress the same rows differently.
                 self.assertEqual(committed, drawn, name)
 
+    def test_a_pixel_takes_the_share_of_it_the_path_covers_by_nonzero_fill(self):
+        def covered(d, width, height, scale=1, offset=(0, 0)):
+            rows = icons.coverage(icons.polygons_of(d), width, height, scale, offset)
+            return [[round(share, 9) for share in row] for row in rows]
+
+        # A square on half pixels: its corners cover a quarter of a pixel, its sides a half, its middle all.
+        self.assertEqual(covered("M0.5 0.5 H2.5 V2.5 H0.5 Z", 3, 3), [[0.25, 0.5, 0.25], [0.5, 1, 0.5], [0.25, 0.5, 0.25]])
+        # The same square from a unit one, scaled by 2 and moved by half a pixel.
+        self.assertEqual(covered("M0 0 H1 V1 H0 Z", 3, 3, 2, (0.5, 0.5)), covered("M0.5 0.5 H2.5 V2.5 H0.5 Z", 3, 3))
+        # Two squares wound alike cover their overlap once; one wound the other way inside another is a hole.
+        self.assertEqual(covered("M0 0 H2 V2 H0 Z M1 0 H3 V2 H1 Z", 3, 2), [[1, 1, 1], [1, 1, 1]])
+        self.assertEqual(covered("M0 0 H3 V3 H0 Z M1 1 V2 H2 V1 Z", 3, 3), [[1, 1, 1], [1, 0, 1], [1, 1, 1]])
+        # What lies outside the image is left out.
+        self.assertEqual(covered("M-1 -1 H2 V0.5 H-1 Z", 2, 2), [[0.5, 0.5], [0, 0]])
+
+    def test_each_tray_holds_the_whole_mark(self):
+        # The mark's area by the shoelace formula, against what each tray covers: a mark cut at an edge covers less.
+        (polygon,) = icons.mark()
+        area = abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]))) / 2
+        for name, width, height, _, scale, offset in icons.TRAYS:
+            with self.subTest(name):
+                covered = sum(map(sum, icons.coverage([polygon], width, height, scale, offset)))
+                self.assertAlmostEqual(covered, area * scale * scale, delta=0.1)
+
     def test_the_path_parser_takes_absolute_m_l_h_v_c_z(self):
         self.assertEqual(icons.polygons_of("M0 0 L10 0 V10 H0 Z"), [[(0, 0), (10, 0), (10, 10), (0, 10)]])
         curve = icons.polygons_of("M0 0C0 10 10 10 10 0Z")[0]
