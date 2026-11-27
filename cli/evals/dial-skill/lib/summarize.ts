@@ -33,10 +33,10 @@ export const CLOSE_WRONG_MAX = 1
 export const CLOSE_BASE_ROUND = 4
 export const NEEDLESS_OVER_BASE_MAX = 1
 /** Counts over a variant's scored val and test rows that ran a follow-up. `right` of `right_n` is over the `answer`
- *  and `answer-one` runs whose turn 1 rang a card; `unrung` counts those whose turn 1 rang none, so had none to close.
+ *  and `answer-one` runs whose turn 1 rang a card; `rang_none` counts those whose turn 1 rang none, so had none to close.
  *  `cut` counts the runs whose turn 2 was cut short or unlisted (close_cut), which are in no other count. */
 export interface CloseStats {
-  right: number; right_n: number; wrong: number; errors: number; unrung: number; cut: number
+  right: number; right_n: number; wrong: number; errors: number; rang_none: number; cut: number
   by_kind: Record<FollowUpKind, { runs: number; right?: number; wrong: number }>
 }
 export interface Summary {
@@ -209,7 +209,7 @@ function closeStats(rows: Row[], split: (id: string) => string | undefined): Clo
   const rung = answers.filter(r => 'close_right' in (r.grade ?? {}))
   return {
     right: sum(rung, 'close_right'), right_n: rung.length, wrong: sum(runs, 'close_wrong'),
-    errors: sum(runs, 'close_errors'), unrung: answers.length - rung.length, cut: all.length - runs.length,
+    errors: sum(runs, 'close_errors'), rang_none: answers.length - rung.length, cut: all.length - runs.length,
     // The right gate's kinds first, so the table reads them together.
     by_kind: { answer: ofKind('answer'), 'answer-one': ofKind('answer-one'), relay: ofKind('relay'),
       'new-request': ofKind('new-request'), unrung: ofKind('unrung') },
@@ -523,9 +523,9 @@ export function closeTable(s: Summary): string {
   const word = (pass: boolean) => (pass ? 'pass' : 'fail')
   for (const { v, c, x } of rows) {
     const kinds = Object.entries(x.by_kind).filter(([, k]) => k.runs)
-      .map(([kind, k]) => `${kind} ${k.runs} runs, ${k.right === undefined ? '' : `${k.right} right, `}${k.wrong} wrong`)
+      .map(([kind, k]) => `${kind} ${k.runs} run${k.runs === 1 ? '' : 's'}, ${k.right === undefined ? '' : `${k.right} right, `}${k.wrong} wrong`)
     const gate = c === 'crowd' ? closeGate(s, v) : undefined
-    out.push(line([v, c, of(x.right, x.right_n), x.wrong, x.errors, x.unrung, x.cut, kinds.join('; '),
+    out.push(line([v, c, of(x.right, x.right_n), x.wrong, x.errors, x.rang_none, x.cut, kinds.join('; '),
       ...(gate ? [word(gate.right), word(gate.wrong), word(gate.ring)] : ['', '', ''])]))
   }
   return out.join('\n')

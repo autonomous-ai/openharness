@@ -583,7 +583,7 @@ describe('the close gates', () => {
     ])
     const s = summarize(flow)
     expect(s.close.v7.crowd).toEqual({
-      right: 2, right_n: 3, wrong: 2, errors: 3, unrung: 1, cut: 0,
+      right: 2, right_n: 3, wrong: 2, errors: 3, rang_none: 1, cut: 0,
       by_kind: {
         answer: { runs: 2, right: 1, wrong: 0 }, 'answer-one': { runs: 2, right: 1, wrong: 1 },
         relay: { runs: 1, wrong: 1 }, 'new-request': { runs: 1, wrong: 0 }, unrung: { runs: 1, wrong: 0 },
@@ -600,7 +600,7 @@ describe('the close gates', () => {
       followUp('e.claude.crowd', 10, 'relay', { close_cut: 1 }),
     ])
     expect(summarize(flow).close.v7.crowd).toEqual({
-      right: 1, right_n: 1, wrong: 0, errors: 0, unrung: 0, cut: 2,
+      right: 1, right_n: 1, wrong: 0, errors: 0, rang_none: 0, cut: 2,
       by_kind: {
         answer: { runs: 1, right: 1, wrong: 0 }, 'answer-one': { runs: 0, right: 0, wrong: 0 },
         relay: { runs: 0, wrong: 0 }, 'new-request': { runs: 0, wrong: 0 }, unrung: { runs: 0, wrong: 0 },
@@ -669,9 +669,9 @@ describe('the close gates', () => {
       expect(narrative).toContain('<!-- close -->\n'
         + '| variant | condition | right | wrong | errors | rang no card | turn 2 cut | by kind | right ≥ 90% | wrong ≤ 1 | ring |\n'
         + '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
-        + '| v7 | clean | 1 of 1 | 0 | 1 | 0 | 0 | answer 1 runs, 1 right, 0 wrong |  |  |  |\n'
+        + '| v7 | clean | 1 of 1 | 0 | 1 | 0 | 0 | answer 1 run, 1 right, 0 wrong |  |  |  |\n'
         + '| v7 | crowd | 13 of 14 | 1 | 0 | 0 | 0 | answer 7 runs, 7 right, 0 wrong; answer-one 7 runs, 6 right, 0 wrong; '
-        + 'relay 1 runs, 1 wrong | pass | pass | pass |\n'
+        + 'relay 1 run, 1 wrong | pass | pass | pass |\n'
         + '<!-- /close -->\n\nThe story so far.\n')
       expect(closeTable(summarize(flow))).toBe(narrative.slice(narrative.indexOf('<!-- close -->\n') + 15, narrative.indexOf('\n<!-- /close -->')))
     })

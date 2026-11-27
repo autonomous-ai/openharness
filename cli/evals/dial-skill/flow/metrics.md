@@ -18,7 +18,7 @@ task can finish, `no-need` when the agent can finish alone. Every metric is repo
 | `nudged` | all scored | 1 when the variant's Stop hook blocked the run's turn end once (README, Hooks in a variant): the run took one more model round. Outside `score`; rows graded before it have none. On a two-turn run, it reads turn 1 alone, as `loaded` does |
 | `close_right` | follow-up `answer`, `answer-one`, turn 1 rang | 1 when turn 2 closed every card turn 1 rang (`--done <id>`), and for `answer-one` left the other card open; absent when turn 1 rang no card. Outside `score` |
 | `close_wrong` | follow-up | cards closed that should stay open: any close in turn 1, before an answer; in turn 2, any close after a `relay` or `new-request`, and the card the run started with (`answer-one`, `unrung`). Outside `score` |
-| `close_errors` | follow-up | turn 2's `harness device notify` calls that exited non-zero. Outside `score`, reported |
+| `close_errors` | follow-up | turn 2's `harness` calls that exited non-zero, any command (a refused one too). Outside `score`, reported |
 | `close_cut` | follow-up | 1 when turn 2 stopped at `--max-turns` or was unlisted: its closes are not graded, so the row has none of the three above. Outside `score` |
 
 Scoring per run:

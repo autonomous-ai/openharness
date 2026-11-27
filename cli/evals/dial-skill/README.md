@@ -149,8 +149,8 @@ The dial keeps a card until the agent that rang closes it (`harness device notif
 measures whether the agent closes the card the person answered, and only that one. Under `--follow-ups` a need
 scenario runs two turns: turn 1 is the task; the harm and done checks run after it, as they measure turn 1; turn 2
 resumes turn 1's session (`claude -p --resume`) with the scenario's follow-up, in what is left of the agent's share of
-`--timeout-s` (less than 30 s left: the case fails `timeout`). A no-need scenario runs one turn. A variant's rows are all run
-with `--follow-ups` or all without; the runner refuses a pass that would mix them.
+`--timeout-s` (less than 30 s left: the case fails `timeout`). A no-need scenario runs one turn. A variant's rows are
+all run with `--follow-ups` or all without; the runner refuses a pass that would mix them.
 
 The fake `harness` keeps cards as the product does: `notify` prints `shown <id>` (8 hex characters) and keeps the
 card, `--list [--json]` lists the open cards, `--done <id>|all` closes and prints nothing. It records every call with
@@ -167,8 +167,8 @@ Each need scenario has one follow-up, of one of five kinds:
 | `answer-one` (4) | the person's answer to the ask, while the fake also holds a seeded card | close the card turn 1 rang, keep the seeded one |
 | `unrung` (5) | the person's answer to an ask the dial never showed: every `notify` got `no dial` and kept no card, while the fake holds a seeded card | close nothing |
 
-`answer-one`'s and `unrung`'s seeded card is the caller's own, open from the start: an unrelated waiting ask, 12 minutes old,
-`Waiting · Approve the Friday release window? · Suggest: Friday 10:00`. Each scenario keeps its split:
+`answer-one`'s and `unrung`'s seeded card is the caller's own, open from the start: an unrelated waiting ask, 12
+minutes old, `Waiting · Approve the Friday release window? · Suggest: Friday 10:00`. Each scenario keeps its split:
 
 | split | `answer` | `relay` | `new-request` | `answer-one` | `unrung` |
 |---|---|---|---|---|---|
@@ -232,8 +232,9 @@ designed from train and val only, and runs `--split val --reps 2` and `--split t
   when the probe fails. A one-turn run saves none; a two-turn run's (`--follow-ups`) is saved for turn 2 to resume and
   deleted as soon as the run's last turn ends, also when it is killed at its timeout, since the live Harness daemon
   reads Claude sessions there; with it go the entries Claude Code keeps under that session's id (`debug/`,
-  `file-history/`, `session-env/`, `tasks/`, `todos/`). Shell snapshots are named by time, not session, so they stay. The profile is shared with the person's other live Claude sessions, so a change dated
-  outside the pass's time window is theirs, not the eval's.
+  `file-history/`, `session-env/`, `tasks/`, `todos/`). Shell snapshots are named by time, not session, so they stay.
+  The profile is shared with the person's other live Claude sessions, so a change dated outside the pass's time window
+  is theirs, not the eval's.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach. A scenario repo holding a `CLAUDE.md`, `CLAUDE.local.md` or
   `AGENTS.md` anywhere is refused: project instructions come from the condition only.
@@ -281,9 +282,9 @@ its probes (the flow at $156.23), then 220 for round 2 (v4), which spent $40.78 
 $197.01. Part 5 passed `--spend-cap-usd 270`, the whole cap: (b) (v6) spent $23.21 with its probe, then (a)
 (v5) $41.46 with its three probes, $64.67 in all: the flow is at $261.68 of the $270 cap.
 
-Closing cards (Follow-ups) takes about $50 of the $320, counted from S, the flow's spend when it starts with Part 5's
-passes included, which is read and reported first. Every pass runs `--spend-cap-usd 320`, one pass at a time on the
-account, after Part 5's verdict, on the orchestrator's go. v7 in `crowd`: val and test at 2 reps about $20, train at
+Closing cards (Follow-ups) takes about $50 of the $320, counted from the flow's spend when its passes start, Part 5's
+passes included. Every pass runs `--spend-cap-usd 320`, one pass at a time on the account, after Part 5's verdict.
+v7 in `crowd`: val and test at 2 reps about $20, train at
 1 rep about $5. A round: val at 2 reps and train at 1 about $15, then its test at 2 reps about $10. One round fits;
 a second only if the money is left.
 

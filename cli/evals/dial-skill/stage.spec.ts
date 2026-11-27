@@ -842,7 +842,8 @@ describe('the fake harness keeps cards as the product does', () => {
     expect(ringOf(['device', 'notify', 'Ship it?', '--done', '0000abcd']).line).toBeNull()
   })
 
-  // Decision 6: the eval runs beside the maintainer's real daemon, whose devices would ring the real dial.
+  // Decision 6 of docs/plans/2026-11-27-dial-notice-cards-agent-closes-plan.md: the eval runs beside the maintainer's
+  // real daemon, whose devices would ring the real dial.
   it('the fake harness never reaches the real daemon', async () => {
     const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'stop'] }] })
     const script = readFileSync(join(st.root, 'bin', 'harness'), 'utf8')

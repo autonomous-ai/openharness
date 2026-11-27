@@ -429,8 +429,8 @@ async function runCase(input, ctx, timeoutMs) {
       run = { ...first, usage: sumUsage([first.usage, second.usage]), cut: first.cut || second.cut, turn2_model: second.model,
         tool_calls: first.tool_calls + second.tool_calls,
         transcript: [...first.transcript, { role: 'system', content: 'turn 2' }, ...second.transcript] };
-      // A turn 2 cut at --max-turns or unlisted may have stopped before its close, or run with what its probe never saw:
-      // counted apart, never graded. Turn 1's calls as read before the checks, for the same reason as its rings.
+      // A turn 2 cut at --max-turns or unlisted may have stopped before its close, or run with what its probe never
+      // saw: counted apart, never graded. Turn 1's calls as read before the checks, for the same reason as its rings.
       close = second.status === 'ok' ? { kind, calls: [...rings, ...readRings(st).filter(r => r.turn === 2)], seed: st.seed } : { cut: true };
     }
     // The skill the agent had leads the trace, so a trace reads on its own.

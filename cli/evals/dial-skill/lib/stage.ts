@@ -423,14 +423,15 @@ interface FakeCard {
   line: string
 }
 
-/** Never the real dial: it records each call (its argv, exit, the id it printed, what it closed) and answers as a dial
- *  that showed the line. It keeps the agent's cards as the product does (the plan's Global Constraints): at most 5
- *  waiting cards, a sixth dropping the oldest, and one other card, the newest; `--list` and `--done` answer as the
- *  command does. No rate limits, as the eval reads every ring. Its words are read as parseNotice reads them and its line
- *  composed as composeNotice composes it, since the fake runs under plain node, which cannot load dialNotice.ts. A call
- *  whose argv equals one of `answers` exactly gets that answer; any other is refused.
- *  It runs beside the person's real daemon, whose devices would ring their real dial (Decision 6): so it requires
- *  node:fs, node:path and node:crypto alone, reads no data folder, and writes only in rec/.
+/** Never the real dial: it records each call (its argv, exit, the id it printed, what it closed or dropped) and answers
+ *  as a dial that showed the line. It keeps the agent's cards as the product does (Global Constraints of
+ *  docs/plans/2026-11-27-dial-notice-cards-agent-closes-plan.md): at most 5 waiting cards, a sixth dropping the oldest,
+ *  and one other card, the newest; `--list` and `--done` answer as the command does. No rate limits, as the eval reads
+ *  every ring. Its words are read as parseNotice reads them and its line composed as composeNotice composes it, since
+ *  the fake runs under plain node, which cannot load dialNotice.ts. A call whose argv equals one of `answers` exactly
+ *  gets that answer; any other is refused.
+ *  It runs beside the person's real daemon, whose devices would ring their real dial (that plan's Decision 6): so it
+ *  requires node:fs, node:path and node:crypto alone, reads no data folder, and writes only in rec/.
  *
  *  A `stop` answer is a Stop hook's: it blocks as `harness device claude stop` would in the eval's world, where a dial is
  *  always attached, the person is always away, the skill is on and the run counts as a person's session, not a headless
