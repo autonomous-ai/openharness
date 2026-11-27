@@ -5,12 +5,15 @@
  * newer build is published it downloads `cli.js` + `notify.mjs`, verifies sha256 IN MEMORY (so a bad
  * download never touches disk), canary-runs the new bundle, then atomically swaps them into the install
  * dir (keeping a `.prev` for rollback). Firing the restart, supervising the new process, and rolling
- * back are all the CALLER's job (`restartForUpdate` in cli.ts) — this module only stages.
+ * back are all the CALLER's job (`restartForUpdate` in cli.ts) — this module only stages. On Windows it also
+ * downloads, canaries and stages `inbox.mjs` when the manifest names one: the dial's inbox follower, which harness.exe
+ * starts instead of cli.js (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
  *
  * Manifest entry shape (key = ADAPTER_UPDATE_KEY, coexists with the device `commander` key):
  *   { "adapter": { "version": "0.0.2",
  *                  "cli":    { "url": "…/cli.js",    "sha256": "…", "size": N },
- *                  "notify": { "url": "…/notify.mjs","sha256": "…", "size": M } } }
+ *                  "notify": { "url": "…/notify.mjs","sha256": "…", "size": M },
+ *                  "inbox":  { "url": "…/inbox.mjs", "sha256": "…", "size": K } } }   (inbox: optional, Windows only)
  */
 
 import { createHash } from 'crypto'
@@ -39,10 +42,13 @@ export interface UpdateEntry {
   version: string
   cli: FileRef
   notify: FileRef
+  /** The build's inbox.mjs; absent from a manifest from before it, and then the follower runs on cli.js. */
+  inbox?: FileRef
 }
 
 const CLI = 'cli.js'
 const NOTIFY = 'notify.mjs'
+const INBOX = 'inbox.mjs'
 const PACKAGE = 'package.json'
 const RUNTIME_PACKAGE = `${JSON.stringify({ type: 'module' })}\n`
 /** The version a staged update put in place, until it is kept (`confirm`) or rolled back (`restore`). */
@@ -259,7 +265,8 @@ export async function fetchManifest(url: string, key: string, limits: TransferLi
   const okFile = (f: unknown): f is FileRef =>
     !!f && typeof (f as FileRef).url === 'string' && typeof (f as FileRef).sha256 === 'string'
   if (!entry || typeof entry.version !== 'string' || !okFile(entry.cli) || !okFile(entry.notify)) return null
-  return { version: entry.version, cli: entry.cli, notify: entry.notify }
+  // An inbox of any other shape is read as none, never as a bad entry: the build still updates, its follower on cli.js.
+  return { version: entry.version, cli: entry.cli, notify: entry.notify, ...(okFile(entry.inbox) ? { inbox: entry.inbox } : {}) }
 }
 
 /** The whole download arrived, and it is not what the manifest names. */
@@ -275,6 +282,23 @@ export async function downloadVerified(ref: FileRef, limits: TransferLimits = DO
     throw new DigestMismatchError(`sha256 mismatch for ${ref.url}: expected ${ref.sha256}, got ${got}`)
   }
   return res.body
+}
+
+/** A build's files, downloaded and verified in memory. `inboxBuf`: its inbox.mjs, or null where none is staged. */
+export interface CliBuild { cliBuf: Buffer; notifyBuf: Buffer; inboxBuf: Buffer | null }
+
+/** The manifest's inbox.mjs [platform] stages: only harness.exe runs it, so only Windows fetches it. */
+function inboxOf(entry: UpdateEntry, platform: NodeJS.Platform): FileRef | undefined {
+  return platform === 'win32' ? entry.inbox : undefined
+}
+
+/** Download [entry]'s build for [platform], one file after another; throws as `downloadVerified` does, a
+ *  DigestMismatchError for any file that is not what the manifest names. */
+export async function downloadBuild(entry: UpdateEntry, platform: NodeJS.Platform, limits: TransferLimits = DOWNLOAD_LIMITS): Promise<CliBuild> {
+  const cliBuf = await downloadVerified(entry.cli, limits)
+  const notifyBuf = await downloadVerified(entry.notify, limits)
+  const inbox = inboxOf(entry, platform)
+  return { cliBuf, notifyBuf, inboxBuf: inbox ? await downloadVerified(inbox, limits) : null }
 }
 
 /**
@@ -310,6 +334,41 @@ const VERSION_SHAPE = /^\d+\.\d+\.\d+[\w.+-]*$/
 export const CANARY_TIMEOUT_MS = 15_000
 /** How long a canary that outlived its deadline has between SIGTERM and SIGKILL. */
 export const CANARY_KILL_GRACE_MS = 2_000
+/** What the inbox follower prints, exiting 0, for a session id it refuses (../deviceClaude/inbox.ts). */
+const INBOX_OFF = '{"off":true}'
+
+/** Run [args] on [node] within [timeoutMs]: its stdout once it exits 0, else how it ended (an exit code, a signal, no
+ *  answer in time, or an error's kind), with no output. */
+function runWithin(node: string, args: string[], timeoutMs: number): Promise<{ failure: string | null; stdout: string }> {
+  // The deadline counts only time this process's event loop ran (patientDeadline): Node's own timeout,
+  // fired late after a held loop, threw a build's answer away and took it for no answer. A build that
+  // outlives it is sent SIGTERM, and SIGKILL [CANARY_KILL_GRACE_MS] later: one that ignores SIGTERM held
+  // the check open for good, and with it every later check (`checking`), a fixed release's included.
+  return new Promise<{ failure: string | null; stdout: string }>((resolve) => {
+    let timedOut = false
+    let grace: ReturnType<typeof setTimeout> | undefined
+    let cancel = (): void => {}
+    const child = execFile(node, args, { encoding: 'utf8' }, (error, stdout) => {
+      cancel()
+      clearTimeout(grace)
+      // An answer is an answer, even one that raced the kill.
+      if (!error) { resolve({ failure: null, stdout }); return }
+      const failed = error as NodeJS.ErrnoException & { signal?: NodeJS.Signals | null; code?: number | string }
+      resolve({
+        failure: timedOut ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
+          : typeof failed.code === 'number' ? `exit ${failed.code}`
+          : failed.signal ? `signal ${failed.signal}`
+          : errorKind(failed),
+        stdout: '',
+      })
+    })
+    cancel = patientDeadline(timeoutMs, () => {
+      timedOut = true
+      child.kill('SIGTERM')
+      grace = setTimeout(() => child.kill('SIGKILL'), CANARY_KILL_GRACE_MS)
+    })
+  })
+}
 
 /** Cheap runnability check: write the new bundle into a temp install-shaped dir and run
  *  `node cli.js version --json`. This catches broken ESM/CJS packaging before the live install is touched,
@@ -320,11 +379,18 @@ export const CANARY_KILL_GRACE_MS = 2_000
  *  was otherwise installed, came up, still reported the older version, found the newer one in the
  *  manifest again and installed it again: a restart a minute on every machine until it was fixed.
  *
+ *  Given [inboxBuf] (Windows: the build's inbox.mjs), once cli.js passed it runs that too, as harness.exe starts the
+ *  follower, with `canary` for a session id it refuses: it must answer `{"off":true}` and exit 0, on the same Node and
+ *  deadline. The dial's mod has no fallback of its own: a follower that fails is not started again (device.js
+ *  `restartAfter`), so a build whose follower does not run is refused as one whose cli.js does not
+ *  (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
+ *
  *  Asynchronous. It ran with `spawnSync` inside the daemon's own updater, on the core's event loop: for
  *  as long as the new build took to load and answer, up to its 15 s timeout, no terminal byte, hook,
  *  heartbeat or request was handled, and the master kills a core that stops beating as hung. */
 export async function runCanary(
   cliBuf: Buffer, dir: string, version?: string, timeoutMs = CANARY_TIMEOUT_MS, node: string = managedNodePath(),
+  inboxBuf: Buffer | null = null,
 ): Promise<CanaryResult> {
   const tmpDir = join(dir, `.canary-${process.pid}-${Date.now()}`)
   const tmpCli = join(tmpDir, CLI)
@@ -340,34 +406,7 @@ export async function runCanary(
     // The interpreter the NEXT daemon will run on — managedNodePath(), or the Node an update moves it to
     // (`startSelfUpdater`'s `node`). Canarying on this process's interpreter would assert about a Node the
     // new build may never be started with.
-    // The deadline counts only time this process's event loop ran (patientDeadline): Node's own timeout,
-    // fired late after a held loop, threw a build's answer away and took it for no answer. A build that
-    // outlives it is sent SIGTERM, and SIGKILL [CANARY_KILL_GRACE_MS] later: one that ignores SIGTERM held
-    // the check open for good, and with it every later check (`checking`), a fixed release's included.
-    const r = await new Promise<{ failure: string | null; stdout: string }>((resolve) => {
-      let timedOut = false
-      let grace: ReturnType<typeof setTimeout> | undefined
-      let cancel = (): void => {}
-      const child = execFile(node, [tmpCli, 'version', '--json'], { encoding: 'utf8' }, (error, stdout) => {
-        cancel()
-        clearTimeout(grace)
-        // An answer is an answer, even one that raced the kill.
-        if (!error) { resolve({ failure: null, stdout }); return }
-        const failed = error as NodeJS.ErrnoException & { signal?: NodeJS.Signals | null; code?: number | string }
-        resolve({
-          failure: timedOut ? `no answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
-            : typeof failed.code === 'number' ? `exit ${failed.code}`
-            : failed.signal ? `signal ${failed.signal}`
-            : errorKind(failed),
-          stdout: '',
-        })
-      })
-      cancel = patientDeadline(timeoutMs, () => {
-        timedOut = true
-        child.kill('SIGTERM')
-        grace = setTimeout(() => child.kill('SIGKILL'), CANARY_KILL_GRACE_MS)
-      })
-    })
+    const r = await runWithin(node, [tmpCli, 'version', '--json'], timeoutMs)
     if (r.failure !== null) return { ok: false, problem: 'failed', ended: r.failure }
     const lines = r.stdout.trim().split('\n')
     const said = readVersionAnswer(lines[lines.length - 1].trim())
@@ -375,6 +414,18 @@ export async function runCanary(
       // Not JSON, the version is the build's whole last line of output, which can name the person's folders.
       const shown = !said.version ? 'nothing' : VERSION_SHAPE.test(said.version) ? said.version : `text(${said.version.length})`
       return { ok: false, problem: 'wrong-version', ended: `it says it is ${shown}` }
+    }
+    if (inboxBuf) {
+      const tmpInbox = join(tmpDir, INBOX)
+      try {
+        writeFileSync(tmpInbox, inboxBuf) // not a state file: the canary's own folder
+      } catch (error) {
+        return { ok: false, problem: 'unwritable', ended: errorKind(error) }
+      }
+      const followed = await runWithin(node, [tmpInbox, 'device', 'claude', 'inbox', 'canary'], timeoutMs)
+      if (followed.failure !== null) return { ok: false, problem: 'failed', ended: `${INBOX}: ${followed.failure}` }
+      // Said as another answer, never quoted: the log names kinds, not a build's output.
+      if (followed.stdout.trim() !== INBOX_OFF) return { ok: false, problem: 'failed', ended: `${INBOX}: another answer` }
     }
     return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
@@ -403,11 +454,14 @@ export async function canary(cliBuf: Buffer, dir: string, version?: string): Pro
  * for, and never a partial one. While the bundle on disk is itself an update still being judged (a
  * newer build staged during its probation), the backups already hold the last build that was kept,
  * and stay: a rollback goes back to a build that proved itself, not to one that never did.
+ *
+ * [inboxBuf], the build's inbox.mjs, goes into its Windows version folder; off Windows nothing runs it, and it is not read.
  */
 export function stage(
   dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = process.platform, previousNode: string | null = null,
+  inboxBuf: Buffer | null = null,
 ): void {
-  if (platform === 'win32') { stageVersion(dir, cliBuf, notifyBuf, version, previousNode); return }
+  if (platform === 'win32') { stageVersion(dir, cliBuf, notifyBuf, version, previousNode, inboxBuf); return }
   mkdirSync(dir, { recursive: true })
   const path = (name: string): string => join(dir, name)
   const temporary = (name: string): string => `${path(name)}.tmp`
@@ -469,14 +523,16 @@ export function stage(
  * that proved itself, not to one that never did. The note is written before the pointer moves, as on a Mac before the
  * swap; if the pointer cannot be moved, the note goes back to what it was.
  */
-function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: string | undefined, previousNode: string | null): void {
+function stageVersion(
+  dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: string | undefined, previousNode: string | null, inboxBuf: Buffer | null,
+): void {
   if (!version) throw new Error('a Windows install stages a build into its own version folder, which needs its version')
   const live = currentCli(dirname(dir))
   const pending = readPending(dir)
   const judged = live !== null && !!pending?.sha256 && pending.sha256 === fileSha256(live.cliJs)
   const previous = judged ? pending!.previous : live?.version ?? null
   const node = judged ? pending!.previousNode : previousNode
-  writeVersionFolder(dir, version, cliBuf, notifyBuf)
+  writeVersionFolder(dir, version, cliBuf, notifyBuf, inboxBuf)
   const note = join(dir, PENDING)
   const before = readText(note)
   writeJson(note, {
