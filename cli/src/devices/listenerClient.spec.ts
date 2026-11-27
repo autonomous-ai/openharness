@@ -395,6 +395,14 @@ describe('askDevices says why it answers null', () => {
     }
     expect(await asked('/tmp/hdc-none', { platform: 'linux', fetch: failing() })).toEqual({ answer: null, reasons: ['error'] })
   })
+
+  it('a body read that fails with ECONNRESET: its code, carried on the error itself, and nothing of its message', async () => {
+    const reset = Object.assign(new Error('read ECONNRESET /Users/x/data'), { code: 'ECONNRESET' })
+    const body = new ReadableStream<Uint8Array>({ start: controller => controller.error(reset) })
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(body, { status: 200 }))
+    const read = await asked('/tmp/hdc-none', { platform: 'linux', fetch })
+    expect(read).toEqual({ answer: null, reasons: ['error ECONNRESET'] })
+  })
 })
 
 /** This process's event loop held for [ms], as a busy CLI or daemon holds it: not a wait, the repro. */
