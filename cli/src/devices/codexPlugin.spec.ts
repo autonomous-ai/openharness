@@ -45,6 +45,7 @@ const FILES = carried()
 
 const cleanup: Array<() => void> = []
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
   for (const step of cleanup.splice(0).reverse()) step()
@@ -289,13 +290,28 @@ describe('the --version, asked once per binary', () => {
     expect((await setUpWith(bin)).calls[0]).toBe('--version')
   })
 
-  it('a --version that hung is kept: the next home asks nothing and fails launcher with the same reason', async () => {
+  it('a --version that hung is kept for its pass: the next home asks nothing and fails launcher with the same reason', async () => {
     const bin = binary()
     const hung = await setUpWith(bin, { '--version': { code: null, timedOut: true } })
     expect(hung.result).toMatchObject({ ok: false, step: 'launcher', reason: 'timeout' })
     const next = await setUpWith(bin)
     expect(next.result).toMatchObject({ ok: false, step: 'launcher', reason: 'timeout' })
     expect(next.calls).toEqual([])
+  })
+
+  // A version manager's shim (mise or volta link, asdf script) keeps its path and time across an upgrade.
+  it('a --version too old is kept for its hour, then asked again with the same binary', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.now()
+    const bin = binary()
+    expect((await setUpWith(bin, { '--version': { stdout: 'codex-cli 0.171.9\n' } })).result).toMatchObject({ ok: false, step: 'unsupported' })
+    vi.setSystemTime(start + 3_600_000 - 1)
+    expect((await setUpWith(bin)).calls).toEqual([])
+
+    vi.setSystemTime(start + 3_600_000)
+    const upgraded = await setUpWith(bin)
+    expect(upgraded.calls[0]).toBe('--version')
+    expect(upgraded.result).toEqual({ ok: true, outcome: 'installed', trusted: true })
   })
 
   it('a binary that cannot be found is asked each time', async () => {

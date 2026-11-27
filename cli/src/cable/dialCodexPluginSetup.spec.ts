@@ -1042,16 +1042,22 @@ describe('createDialCodexPluginSetup', () => {
     expect(r.fake(home).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, ADD])
   })
 
-  // One pass asked each due home's --version with its 15 s bound: 16 minutes with 64 homes on a hanging Codex.
-  it('64 homes with a --version that never answers end the pass after one bound', async () => {
+  /** A `codex` binary whose --version never answers: each ask ends at its bound, on fake timers. */
+  function hangingCodex() {
     vi.useFakeTimers()
     const bin = join(temp(), 'codex')
     writeFileSync(bin, '')
     const calls: string[] = []
-    const hanging: CodexRun = Object.assign((args: string[], timeoutMs: number) => {
+    const run: CodexRun = Object.assign((args: string[], timeoutMs: number) => {
       calls.push(args.join(' '))
       return new Promise<ClaudeAnswer>((resolve) => setTimeout(() => resolve({ code: null, stdout: '', stderr: '', timedOut: true }), timeoutMs))
     }, { bin })
+    return { run, calls }
+  }
+
+  // One pass asked each due home's --version with its 15 s bound: up to 16 minutes with 64 homes on a hanging Codex.
+  it('64 homes with a --version that never answers end the pass after one bound', async () => {
+    const { run: hanging, calls } = hangingCodex()
     const r = rig({ codex: async () => hanging })
     r.state.homes = Array.from({ length: MAX_HOMES }, () => codexHome())
     let settled = false
@@ -1060,6 +1066,25 @@ describe('createDialCodexPluginSetup', () => {
     expect(settled).toBe(true)
     expect(calls).toEqual(['--version'])
     expect(r.counted).toEqual(Array.from({ length: MAX_HOMES }, () => ['failed', 'launcher · timeout']))
+  })
+
+  // A first launch on macOS or a loaded machine can hang once: the home is not failed for as long as the process lives.
+  it('a --version that hung is asked again at the next pass after its hour', async () => {
+    const { run: hanging, calls } = hangingCodex()
+    const r = rig({ codex: async () => hanging })
+    const home = codexHome()
+    r.state.homes = [home]
+    const first = r.setup.pass()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await first
+
+    r.state.now = HOUR
+    vi.setSystemTime(Date.now() + HOUR)
+    const second = r.setup.pass()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await second
+    expect(calls).toEqual(['--version', '--version'])
+    expect(r.counted).toEqual([['failed', 'launcher · timeout'], ['failed', 'launcher · timeout']])
   })
 
   it('a lookup that throws is failed · error for that home alone, which waits its hour', async () => {
