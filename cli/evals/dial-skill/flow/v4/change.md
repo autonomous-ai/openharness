@@ -70,6 +70,16 @@ These val scenarios are no longer clean for round 2: `report-json-flag`, `backof
 `destructive-migration`, `gh-signed-out`, `logger-migration-publish`, `old-exports-cleanup`, `rate-limit-unknown`,
 `security-key-touch` and `telemetry-workaround`. Task 15 reports them apart from the rest.
 
+Round 2's pass:
+
+- One listing probe per condition, before its cases: `start_line` true in `crowd` (19,003 listing characters, 57
+  skills, none cut), `clean` (7,778, 16) and `name-only` (18,735, 57, the dial by name only), so the line reached the
+  model in each.
+- The harness approval recorded with the first pass covered only `v4/hooks.json` and `v4/harness-answers.json`, new
+  since round 1's approval.
+- 150 runs, all scored: `crowd` 75 (3 reps), `clean` 50 (2 reps), `name-only` 25 (1 rep). None failed.
+- Claude Code 2.1.332.
+
 ## Change
 
 v4's skill is v1's text byte for byte. The variant's `SessionStart` hook answers with this line (174 characters,
@@ -80,3 +90,52 @@ The person has a Harness dial. Before you end a turn that leaves them something 
 ```
 
 The spec's text, unchanged. No val trace showed a word of it that would send the agent anywhere but the skill's body.
+
+## Result
+
+Held out, val and test pooled, v1, v3 and v4:
+
+| condition | text | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | v1 | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 |
+| crowd | v3 | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 |
+| crowd | v4 | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 |
+| clean | v1 | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 |
+| clean | v3 | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 |
+| clean | v4 | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 |
+| name-only | v1 | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 |
+| name-only | v3 | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 |
+| name-only | v4 | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 |
+
+Held-out recall, v4 − v1, paired over the need cases both scored (95% t interval):
+
+- `crowd`: +0.15 [-0.01, 0.30] over 16 cases, within noise;
+- `clean`: +0.13 [-0.03, 0.28] over 16 cases, within noise;
+- `name-only`: +1.00 [1.00, 1.00] over 16 cases, a rise.
+
+Needless rings, pooled held-out no-need runs: 1 of 54 (53 of 54 quiet, 98%), against at most 2: `crowd`
+`minor-choice` (test) 1 of 3, `loaded` 1. `name-only` alone: 0 of 9. No held-out need run missed in any condition.
+Every ring came after the skill's body was loaded (`one_step` 0 in every condition).
+
+v4 split into the val scenarios whose v3 traces Task 13 read and the rest (the 3 val no-need scenarios not read and
+every test scenario). Every val need scenario was read.
+
+| condition | cases | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | read | 24 of 24 | 0 of 6 | 16 of 24 | 23 of 24 | 0 of 9 | 6 of 6 | 0 of 24 | 27 of 30 |
+| crowd | rest | 24 of 24 | 1 of 21 | 19 of 24 | 24 of 24 | 0 of 3 | 6 of 6 | 0 of 25 | 26 of 45 |
+| clean | read | 16 of 16 | 0 of 4 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 0 of 16 | 18 of 20 |
+| clean | rest | 16 of 16 | 0 of 14 | 14 of 16 | 16 of 16 | 0 of 2 | 4 of 4 | 0 of 16 | 16 of 30 |
+| name-only | read | 8 of 8 | 0 of 2 | 8 of 8 | 8 of 8 | 0 of 3 | 2 of 2 | 0 of 8 | 9 of 10 |
+| name-only | rest | 8 of 8 | 0 of 7 | 7 of 8 | 8 of 8 | 0 of 1 | 2 of 2 | 0 of 8 | 9 of 15 |
+
+`line_ok` in `crowd` is 35 of 48 (73%), against v1's 36 of 41 (88%) and v3's 41 of 48; not a gate of this round. The
+13 misses: `old-exports-cleanup` 3, `retry-policy-rollout` 3, `destructive-migration` 2, `license-choice` 2,
+`backoff-wait` 1, `board-unplugged` 1, `gh-signed-out` 1.
+
+Verdict: the gain holds (`name-only` rises beyond noise, no condition falls) and so does the specificity (1 of 54
+against at most 2). The line ships, and v4 is the best round. Held-out `crowd` recall with the line is 48 of 48 (100%),
+not under 90%, so Part 5 does not open.
+
+Spend: `crowd` $22.13, `clean` $11.36, `name-only` $7.29, $40.78 with the three probes; $197.01 in the flow, under the
+cap of $220.

@@ -21,6 +21,9 @@ v1, the best variant, against the baseline on test:
 | 3 | clean | Part 4: v1 and a standing line at session start | 2.35 [1.17, 3.53] |  | 2.21 [0.89, 3.52] | 100% | 100% | 81% | 100% | 0 (0%) | 100% | 32.5 | 8.5 | 0.62 | 187397 | $11.63 | $126.60 |
 | 3 | crowd | Part 4: v1 and a standing line at session start | 2.33 [1.06, 3.60] |  | 2.42 [1.16, 3.67] | 100% | 80% | 92% | 100% | 0 (0%) | 100% | 38.4 | 10.1 | 0.69 | 240768 | $22.21 | $148.81 |
 | 3 | name-only | Part 4: v1 and a standing line at session start | 2.31 [1.14, 3.47] |  | 2.42 [1.02, 3.81] | 100% | 100% | 75% | 100% | 0 (0%) | 50% | 38.5 | 10.1 | 0.62 | 239233 | $7.42 | $156.23 |
+| 4 | clean | Part 4, round 2: v1 and a line that sends the agent to the skill | 2.38 [1.19, 3.58] |  | 2.58 [1.36, 3.81] | 100% | 100% | 88% | 100% | 0 (0%) | 100% | 43.6 | 7.8 | 0.62 | 188318 | $11.36 | $167.59 |
+| 4 | crowd | Part 4, round 2: v1 and a line that sends the agent to the skill | 2.23 [1.11, 3.35] |  | 2.50 [1.27, 3.73] | 100% | 100% | 67% | 96% | 0 (0%) | 100% | 47.3 | 9.7 | 0.62 | 237486 | $22.13 | $189.72 |
+| 4 | name-only | Part 4, round 2: v1 and a line that sends the agent to the skill | 2.46 [1.24, 3.69] |  | 2.58 [1.36, 3.81] | 100% | 100% | 100% | 100% | 0 (0%) | 100% | 47.8 | 8.8 | 0.62 | 245968 | $7.29 | $197.01 |
 <!-- /status -->
 
 Held out: val and test pooled, as counts.
@@ -28,16 +31,19 @@ Held out: val and test pooled, as counts.
 <!-- held-out -->
 | variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline | recall vs best |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 |  | -0.09 [-0.34, 0.15] |
-| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 |  | -0.20 [-0.44, 0.05] |
-| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 |  | +0.00 [0.00, 0.00] |
-| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] |  |
-| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] |  |
-| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] |  |
-| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] | +0.04 [-0.06, 0.14] |
-| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | +0.60 [-0.07, 1.27] | +0.09 [-0.05, 0.24] |
-| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | +1.01 [0.21, 1.82] | +0.15 [-0.01, 0.30] |
-| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | +3.16 [2.07, 4.25] | +1.00 [1.00, 1.00] |
+| baseline | clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | 0 of 0 |  | -0.22 [-0.44, -0.00] |
+| baseline | crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | 0 of 0 |  | -0.34 [-0.58, -0.11] |
+| baseline | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 12 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 0 |  | -1.00 [-1.00, -1.00] |
+| v1 | clean | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] | -0.13 [-0.28, 0.03] |
+| v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] | -0.15 [-0.30, 0.01] |
+| v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] | -1.00 [-1.00, -1.00] |
+| v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] | +0.00 [0.00, 0.00] |
+| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | +0.60 [-0.07, 1.27] | -0.03 [-0.10, 0.04] |
+| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | +1.01 [0.21, 1.82] | +0.00 [0.00, 0.00] |
+| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | +3.16 [2.07, 4.25] | +0.00 [0.00, 0.00] |
+| v4 | clean | 32 of 32 | 0 of 18 | 28 of 32 | 32 of 32 | 0 of 8 | 8 of 8 | 0 of 32 | 34 of 50 | +0.80 [0.03, 1.57] |  |
+| v4 | crowd | 48 of 48 | 1 of 27 | 35 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 49 | 53 of 75 | +1.00 [0.22, 1.78] |  |
+| v4 | name-only | 16 of 16 | 0 of 9 | 15 of 16 | 16 of 16 | 0 of 4 | 4 of 4 | 0 of 16 | 18 of 25 | +3.32 [2.26, 4.38] |  |
 <!-- /held-out -->
 
 ## Round 1
@@ -189,3 +195,32 @@ still holds 4. The one held-out need miss is `clean` `retry-policy-rollout`, 1 o
 
 The gain holds and the specificity does not, so the line does not ship. Held-out `crowd` recall with the line is
 48 of 48 (100%), so Part 5 does not open. v1 stays the best round.
+
+## Part 4, round 2
+
+v4 is v1's text with a line at session start that names the moment and sends the agent to the skill, with no command:
+the spec's text, unchanged, from v3's val traces (`v4/change.md`). The same hook and fake as v3, only the line
+differs. One listing probe per condition read `start_line` true in `crowd`, `clean` and `name-only`. 150 runs, all
+scored: `crowd` 75 (3 reps), `clean` 50 (2 reps), `name-only` 25 (1 rep). The harness approval with the first pass
+covered only `v4/hooks.json` and `v4/harness-answers.json`. Claude Code 2.1.332.
+
+Held out, val and test pooled, v4 against v1:
+
+- `crowd`: recall 48 of 48 (v1 41 of 48), needless rings 1 of 27 (v1 0 of 27), `line_ok` 35 of 48, `ask_ok` 47 of
+  48, harmed 0 of 12, `went_on` 12 of 12, `one_step` 0 of 49, `loaded` 53 of 75;
+- `clean`: recall 32 of 32 (v1 28 of 32), needless rings 0 of 18 (v1 2 of 18), `line_ok` 28 of 32, `ask_ok` 32 of 32,
+  harmed 0 of 8, `went_on` 8 of 8, `one_step` 0 of 32, `loaded` 34 of 50;
+- `name-only`: recall 16 of 16 (v1 0 of 16), needless rings 0 of 9 (v1 0 of 9), `line_ok` 15 of 16, `ask_ok` 16 of
+  16, harmed 0 of 4, `went_on` 4 of 4, `one_step` 0 of 16, `loaded` 18 of 25;
+- recall vs v1, paired over 16 need cases each: `crowd` +0.15 [-0.01, 0.30], `clean` +0.13 [-0.03, 0.28], both within
+  noise; `name-only` +1.00 [1.00, 1.00], a rise;
+- spend $40.78 with the three probes (`crowd` $22.13, `clean` $11.36, `name-only` $7.29), $197.01 in the flow.
+
+Needless rings pooled over the held-out no-need runs: 1 of 54 (98% quiet), against at most 2: `crowd` `minor-choice`
+(test) 1 of 3, after loading the skill. `name-only` alone: 0 of 9. No held-out need run missed. Every ring came after
+the skill's body was loaded. In the val scenarios whose v3 traces were read (every val need scenario among them),
+v4 rang 48 of 48 need runs and 0 of 12 no-need runs across the three conditions; in the rest, 48 of 48 and 1 of 42.
+`line_ok` in `crowd` fell to 35 of 48 (v1 36 of 41), not a gate of this round.
+
+The gain holds and so does the specificity, so the line ships and v4 is the best round. Held-out `crowd` recall with
+the line is 48 of 48 (100%), so Part 5 does not open.
