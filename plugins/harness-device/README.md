@@ -38,6 +38,7 @@ the session.
 The same folder is a Codex plugin too (`.codex-plugin/plugin.json`, Codex 0.172.0 or later). Its hooks are in
 `hooks/codex.json`: `PermissionRequest`, on every tool, and `PreToolUse`, on `request_user_input`. Both run
 `harness device codex asked` (off Windows through `hooks/codex-asked`), which tells the daemon and decides nothing.
+Codex runs them in the background (`async`), so its prompt shows at once while the hook still tells the daemon.
 Claude Code's `hooks/hooks.json` and its mod stay Claude Code's.
 
 Codex runs these hooks before its own automatic review, and their input does not say whether the person is asked. So
