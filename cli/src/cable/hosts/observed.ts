@@ -272,6 +272,8 @@ interface Continuing {
   phase: 'heard' | 'awaited'
   since: number
   lastActive: number
+  /** Its yes may still count a notice rung as its ring (rangInHold). */
+  counts: boolean
 }
 
 /** Part 5's second look at a stop, on its entry: what the plugin's Stop hook reported (devices.ts `nudge`), and the stop
@@ -1535,7 +1537,7 @@ export class ObservedSource implements HostSource {
       if (look.continuing) return true
       if (!held && (entry.agent.state !== 'working' || entry.subagents)) return false
       this.dropStop(entry)
-      this.holdOn(entry, { phase: held ? 'heard' : 'awaited', since: now, lastActive: now })
+      this.holdOn(entry, { phase: held ? 'heard' : 'awaited', since: now, lastActive: now, counts: true })
       return true
     }
     if (look.stopWait) {
@@ -1545,6 +1547,20 @@ export class ObservedSource implements HostSource {
       else this.finish(entry)
     } else if (!held && !entry.subagents) look.earlyReport = now
     return true
+  }
+
+  /**
+   * A notice of this agent rang (Part 5's counts): the engine whose yes holds its turn, the first time only, else null.
+   * The mark lives on the hold, so a ring counts only in the continuation the yes started, and goes when that ends (its
+   * next stop, the hold's expiry, a turn event, the entry's removal).
+   */
+  rangInHold(agentId: string): 'claude' | 'codex' | null {
+    const entry = this.entries.get(agentId)
+    const hold = entry?.secondLook.continuing
+    if (!entry || !hold?.counts) return null
+    hold.counts = false
+    // Only a Claude Code or Codex session is held (stopReported).
+    return entry.agent.engine as 'claude' | 'codex'
   }
 
   /** Its turn-stop: told done once the grace passed with no word of the turn going on, and a marked session's once its

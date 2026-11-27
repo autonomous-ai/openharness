@@ -60,6 +60,10 @@ export interface DialUsage {
   noticeShown(agentId: string, present: boolean): void
   /** A notice held quiet was asked at its turn's end, the person gone (cable/notices.ts `rouse`). */
   noticeRoused(): void
+  /** The devices said yes to a stop of that engine's agent: it is asked to ring or end (Part 5's second look). */
+  nudgeYes(engine: DialSkillEngine): void
+  /** A notice of that agent rang in the continuation a yes started, at most once a yes. */
+  nudgeRang(engine: DialSkillEngine): void
   /** A dial setup pass ended: the skill is looked for now, and at each UTC midnight from the first; nothing after stop(). */
   setupPassed(): void
   stop(): void
@@ -477,6 +481,14 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
 
     noticeRoused() {
       add('dial_notice_present_roused')
+    },
+
+    nudgeYes(engine) {
+      add(`dial_nudge_${engine}`)
+    },
+
+    nudgeRang(engine) {
+      add(`dial_nudge_${engine}_rang`)
     },
 
     setupPassed() {

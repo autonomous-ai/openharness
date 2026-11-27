@@ -18,12 +18,17 @@
  * A third session's notice is held quiet the same way, mid-turn, and is asked once its turn ends with the person gone to
  * another app (Part 2b): a question frame under a new id, as the dial mutes the id it holds, the turn's end silent, and
  * the rouse counted.
+ *
+ * A fourth session gets a second look (Part 5), with the person gone to another app: its Stop hook's report, sent as
+ * `harness device claude stop` sends it, marks it after its first turn; the devices say yes to its next turn's stop, and
+ * its notice while that yes holds the turn is counted as the ring after the yes. The fake engine has no Stop hook of the
+ * plugin's, so the test sends each report itself.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
-import { tellDevices } from '../src/devices/listenerClient.js'
+import { askDevices, tellDevices } from '../src/devices/listenerClient.js'
 import { DIAL_USAGE_FILE } from '../src/lib/dialUsageContract.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
@@ -227,19 +232,47 @@ describe('the dial\'s usage counts', () => {
     await left.idle(d)
     await turn(left, 'connected', 2)
 
+    // The person in another app: a second look at the fourth session's stop, and its notice in the turn the yes holds.
+    const look = await Outside.start(d, 'PRIVATE_LOOK_CANARY', { TERM_PROGRAM: 'ghostty' })
+    outsides.push(look)
+    await dial.next((m) => m.t === 'agent' && m.id === look.id, 45_000, 'the fourth outside session listed')
+    // The hook sends each report from a process of its own; the test's share one kept-alive connection, which the listener
+    // allows a nudge a second: one refused so is sent again.
+    const report = (ask: boolean) => until('the report taken', async () => {
+      const answer = await askDevices(d.dataDir, { type: 'nudge', engine: 'claude', sessionId: look.sessionId, ask })
+      return answer === 429 ? null : answer
+    }, 10_000, 200)
+    /** The person types [text] to it, and its Stop hook runs a [stops]th time: its stop, which waits for its report. */
+    const stopped = async (text: string, stops: number): Promise<void> => {
+      look.type(text)
+      await until('its Stop hook', () => look.ran(d, 'Stop', stops) || null, 60_000, 100)
+    }
+    await withFront('kitty', look)
+    await turn(look, 'first', 1)
+    expect(await report(false)).toEqual({ nudge: false })
+    await stopped('second', 2)
+    expect(await report(true)).toEqual({ nudge: true })
+    expect(await notify(caller(look), join(d.projectsDir, look.folder), ['PRIVATE_LOOK_CANARY needs a key', '--waiting']))
+      .toMatchObject({ code: 0, out: 'shown' })
+    // The person's answer: the hold ends, and that turn's stop is told once its report came.
+    const answered = dial.messages.length
+    await stopped('connected', 3)
+    expect(await report(false)).toEqual({ nudge: false })
+    await dial.next((m) => m.t === 'summary' && m.agentId === look.id, 60_000, 'its answer', answered)
+
     // Claude Code's skill is written because the case's Harness Claude agent is listed (cable/dialHomeSetup.ts).
     const skill = { dial_notice_installation_days: 1, dial_notice_claude_installation_days: 1,
-      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 3,
-      dial_notice_shown: 3, dial_notice_waiting: 3, dial_notice_answered_10m: 3, dial_notice_present: 2,
-      dial_notice_present_answered_10m: 2, dial_notice_present_roused: 1 }
+      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 4,
+      dial_notice_shown: 4, dial_notice_waiting: 4, dial_notice_answered_10m: 4, dial_notice_present: 2,
+      dial_notice_present_answered_10m: 2, dial_notice_present_roused: 1, dial_nudge_claude: 1, dial_nudge_claude_rang: 1 }
     const expected = { dial_connected_installation_days: 1, dial_used_installation_days: 1,
       dial_engine_claude_installation_days: 1, dial_host_harness_installation_days: 1, dial_open_ok: 1, ...skill }
     await until('the devices to write the day', () => {
       if (!existsSync(usageFile())) return null
       const counts = (JSON.parse(readFileSync(usageFile(), 'utf8')) as { days: Record<string, Record<string, number>> }).days[day] ?? {}
-      // Two waits, the rung notice's and the roused one's: the quiet one never asked opened none.
+      // Three waits, the two rung notices' and the roused one's: the quiet one never asked opened none.
       const waits = Object.entries(counts).filter(([metric]) => metric.startsWith('dial_wait_')).reduce((n, [, value]) => n + value, 0)
-      return (Object.entries(expected).every(([metric, value]) => counts[metric] === value) && waits === 2) || null
+      return (Object.entries(expected).every(([metric, value]) => counts[metric] === value) && waits === 3) || null
     }, 30_000, 500)
     // The gateway's tick took the day into its queue, which the restart keeps.
     await until('the gateway to take the day', () => taken(day).dial_open_ok === 1 || null, TAKEN_MS, 1_000)
@@ -262,7 +295,7 @@ describe('the dial\'s usage counts', () => {
     const wire = JSON.stringify(backend.productUsage!.reports)
     const file = readFileSync(usageFile(), 'utf8')
     for (const secret of ['PRIVATE_', cwd, agentId, SERIAL, MAC, machine.name, machine.machineId, machine.computerId, machine.token,
-      there.sessionId, away.sessionId, left.sessionId]) {
+      there.sessionId, away.sessionId, left.sessionId, look.sessionId]) {
       expect(wire).not.toContain(secret)
       expect(file).not.toContain(secret)
     }

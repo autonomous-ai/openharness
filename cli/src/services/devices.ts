@@ -1779,16 +1779,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const NUDGED_MAX = 64
   /** How long a yes holds the next one back with no prompt of the person's. */
   const NUDGE_ONCE_MS = 600_000
-  /** The agents said yes to: when (monotonic), and how far a Harness agent's continuation has come. */
-  const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over' }>()
+  /** The agents said yes to: when (monotonic), how far a Harness agent's continuation has come, the engine said yes to,
+   *  and whether that yes may still count a notice rung as its ring (rangInContinuation). */
+  const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over'; engine: NudgeAsk['engine']; counts: boolean }>()
   /** Its yes while the once rule holds. */
   const nudgeOf = (agentId: string) => {
     const entry = nudgedAgents.get(agentId)
     return entry && monotonic() - entry.at < NUDGE_ONCE_MS ? entry : undefined
   }
-  const noteNudged = (agentId: string): void => {
+  const noteNudged = (agentId: string, engine: NudgeAsk['engine']): void => {
     nudgedAgents.delete(agentId)
-    nudgedAgents.set(agentId, { at: monotonic(), phase: 'asked' })
+    nudgedAgents.set(agentId, { at: monotonic(), phase: 'asked', engine, counts: true })
     if (nudgedAgents.size > NUDGED_MAX) nudgedAgents.delete(nudgedAgents.keys().next().value as string)
   }
   /** The person's next prompt to it, or it left: its next ask may get a yes. */
@@ -1807,6 +1808,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const nudgeOver = (agentId: string): void => {
     const entry = nudgedAgents.get(agentId)
     if (entry?.phase === 'continuing') entry.phase = 'over'
+  }
+  /** A Harness agent's notice rang: the engine of its yes, the first time only, while that yes's continuation lasts. */
+  const rangInContinuation = (agentId: string): NudgeAsk['engine'] | undefined => {
+    const entry = nudgeOf(agentId)
+    if (!entry?.counts || !nudgeHolds(agentId)) return undefined
+    entry.counts = false
+    return entry.engine
   }
 
   /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
@@ -2108,9 +2116,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  so that wait is answered; waiting, it is the same wait. Of every kind, the person's next prompt to that agent within
    *  10 min answers it. */
   const noticeShown = (ask: NoticeAsk): void => count((usage) => {
-    const { agentId } = noticeCaller(ask)
+    const { agentId, host } = noticeCaller(ask)
     const quiet = notices.quiet(agentId)
     usage.noticeShown(agentId, quiet)
+    // A ring after a yes, once a yes (Part 5's counts): an outside agent's while the hold its yes started lasts; a Harness
+    // agent's while its continuation runs, till that one's done, as the devices hold no stop of its: its reader continues
+    // the turn (rangInContinuation).
+    const rang = quiet ? undefined : host === 'harness' ? rangInContinuation(agentId) : observed?.rangInHold(agentId)
+    if (rang) usage.nudgeRang(rang)
     if (noticeKind(ask.text) === 'proceeding') usage.waitEnded(`notice:${agentId}`, 'answered')
     else if (!quiet) usage.waitOpened(`notice:${agentId}`, agentId)
   })
@@ -2149,7 +2162,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const answer = !cable.isConnected ? 'no dial' : rangThisTurn.has(agentId) ? 'notice' : present(agentId) ? 'present'
       : nudgeOf(agentId) ? 'nudged' : 'yes'
     nudgeTally(engine, answer)
-    if (answer === 'yes') noteNudged(agentId)
+    if (answer === 'yes') {
+      noteNudged(agentId, engine)
+      count((usage) => usage.nudgeYes(engine))
+    }
     observed?.stopReported(stopped, answer === 'yes')
     return answer === 'yes'
   }
