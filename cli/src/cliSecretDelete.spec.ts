@@ -209,4 +209,27 @@ describe.skipIf(process.platform === 'win32')('a secret file the command cannot 
     expect(backend.paths).toContain('/api/auth/revoke')
     expect(existsSync(file)).toBe(true)
   })
+
+  it.skipIf(!modesHold)('reset: state it cannot delete is said in a word, and the sign-in is still removed and ended', async () => {
+    const root = tempRoot()
+    const signIn = seedSignIn(root)
+    const password = seedRemotePassword(root)
+    const backend = await fakeBackend()
+    lock(join(root, 'data', 'e2e'))
+
+    const out = await run(root, ['reset', '--from-sign-out-button'], backend.base)
+
+    expect(out.status).toBe(1)
+    expect(out.stderr).toContain('✗')
+    // A recursive delete says what it met at the top: ENOTEMPTY on macOS, EACCES elsewhere.
+    expect(out.stderr).toMatch(/STATE_NOT_DELETED \((EACCES|ENOTEMPTY)\)/)
+    expect(out.stderr).toContain('harness reset')
+    expect(out.stderr).not.toContain(root)
+    expect(out.stderr).not.toContain('Failed to start adapter')
+    expect(out.stdout).not.toContain('Cleared local machine CLI state')
+    expect(out.stdout).not.toContain('Start again with')
+    expect(backend.paths).toContain('/api/auth/revoke')
+    expect(existsSync(signIn)).toBe(false)
+    expect(existsSync(password)).toBe(true)
+  })
 })
