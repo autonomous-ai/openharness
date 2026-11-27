@@ -5493,6 +5493,81 @@ describe('hello capabilities', () => {
   })
 })
 
+// A notice card stays open through its agent's turn start (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md,
+// rule 9). The Pro's firmware drops the agent's question there, so the Pro gets the card back held; the round dial keeps
+// it, and any question frame rings it.
+describe("a notice card after its agent's turn start", () => {
+  const LINE = 'Ship the release?'
+  const notice = [{ key: 'notice', q: LINE, options: ['In Terminal'] }]
+  const CARD = `${SHOWN_ONLY_PREFIX}1b2c3d4e-0000-4000-8000-000000000001`
+  // As each firmware greets today: both say questionTier.
+  const PRO = { t: 'hello', product: 'harness', mac: 'aa:bb', board: 'pro', questionTier: 'v1' }
+  const ROUND = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }
+  const ofType = (port: LoopbackPort, t: string) => port.sent.filter((m) => m.t === t)
+  const after = (port: LoopbackPort, t: string) => port.sent.slice(port.types().indexOf(t) + 1)
+
+  /** A dial that greeted and was rung a1's question `id`, the window's drawer naming a1's question as its row. */
+  async function rung(hello: Record<string, unknown>, id: string, questions: unknown = notice) {
+    const { session, port } = await connect(makeHost({
+      listUnread: () => [{ agentId: 'a1', machineId: 'mac-local', question: true, text: LINE }] }))
+    port.say(hello)
+    await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+    await session.question('a1', id, questions)
+    await vi.waitFor(() => expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id }]))
+    await settle()
+    port.sent.length = 0
+    return { session, port }
+  }
+
+  it('a Pro gets the card back as a drawer row after the turn starts', async () => {
+    const { session, port } = await rung(PRO, CARD)
+    try {
+      await session.turnStarted('a1')
+      expect(after(port, 'turn.started').filter((m) => m.t === 'notif.replace')).toEqual([{ t: 'notif.replace',
+        items: [expect.objectContaining({ agentId: 'a1', summary: LINE, question: true })] }])
+      expect(ofType(port, 'question')).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a Pro gets the row once a card, not at every turn start', async () => {
+    const { session, port } = await rung(PRO, CARD)
+    const next = `${SHOWN_ONLY_PREFIX}5f6a7b8c-0000-4000-8000-000000000002`
+    try {
+      // A turn starts again at each of its working cards.
+      await session.turnStarted('a1')
+      await session.turnStarted('a1')
+      expect(ofType(port, 'notif.replace')).toHaveLength(1)
+      await session.question('a1', next, notice)
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: next }])
+      port.sent.length = 0
+      await session.turnStarted('a1')
+      expect(ofType(port, 'notif.replace')).toHaveLength(1)
+      expect(ofType(port, 'question')).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('the round dial gets no question frame after a turn start', async () => {
+    const { session, port } = await rung(ROUND, CARD)
+    try {
+      await session.turnStarted('a1')
+      await session.turnStarted('a1')
+      expect(ofType(port, 'turn.started')).toHaveLength(2)
+      expect(ofType(port, 'question')).toEqual([])
+      expect(ofType(port, 'notif.replace')).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it("a Pro is not given back an agent's real question", async () => {
+    const { session, port } = await rung(PRO, 'q1', [{ key: 'k', q: LINE, options: ['yes', 'no'] }])
+    try {
+      await session.turnStarted('a1')
+      expect(ofType(port, 'turn.started')).toHaveLength(1)
+      expect(ofType(port, 'notif.replace')).toEqual([])
+      expect(ofType(port, 'question')).toEqual([])
+    } finally { await session.stop() }
+  })
+})
+
 describe('the machine list with no window', () => {
   type Snapshot = Awaited<ReturnType<NonNullable<CableHost['listAgentSnapshot']>>>
   const MACHINE: CableAgent[] = [
