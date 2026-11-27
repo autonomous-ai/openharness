@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,8 +9,11 @@ import { DeviceOperationSchema } from './storeContract.js'
 import { AutonomousDeviceService } from './service.js'
 import { AgentCreationReceipts } from '../agentCreationReceipt.js'
 
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
+
 const roots: string[] = []
-afterEach(() => { for (const p of roots.splice(0)) rmSync(p, { recursive: true, force: true }) })
+afterEach(() => { vi.restoreAllMocks(); for (const p of roots.splice(0)) rmSync(p, { recursive: true, force: true }) })
 const request = (type: string, extra: Record<string, unknown> = {}) => ({ type, requestId: randomUUID(), ...extra })
 function fixture(installed = true) {
   const directory = mkdtempSync(join(tmpdir(), 'device-store-')); roots.push(directory)
@@ -274,6 +278,19 @@ describe('device preparation failure boundaries', () => {
     expect(await f.settled(f.id(await f.prepare()))).toMatchObject({ state: 'failed', error: { code: 'PACKAGE_NOT_FOUND' } })
     expect(f.deps.install).not.toHaveBeenCalled(); expect(f.deps.create).not.toHaveBeenCalled()
   })
+})
+
+it('throws the error that stopped a save, not the one of its temporary\'s removal', async () => {
+  const f = fixture(); const id = f.id(await f.prepare()); await f.settled(id)
+  const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+  vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw denied })
+  // What Windows answers to the removal of a file another program still holds.
+  const rm = fs.rmSync, unlink = fs.unlinkSync
+  const held = (path: unknown) => String(path).endsWith('.tmp') && fs.existsSync(String(path))
+  const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (held(path)) throw busy(); rm(path, options) })
+  vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (held(path)) throw busy(); unlink(path) })
+  expect(() => f.store.acknowledgeReveal(id, 'agent1')).toThrow(denied)
 })
 
 it('withdraws a ready result if the same agent is restarting', async () => {
