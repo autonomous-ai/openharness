@@ -409,8 +409,20 @@ function Install-HarnessCli {
       if ($inbox) { Save-HarnessVerified -Source (Resolve-HarnessRef $inbox.url $Source) -Destination (Join-Path $staging 'inbox.mjs') -Sha256 $inbox.sha256 -Size (Get-HarnessProperty $inbox 'size') }
       # The bundle is an ES module, and Node decides that from the nearest package.json. install.sh writes the same file.
       [IO.File]::WriteAllText((Join-Path $staging 'package.json'), "{""type"":""module""}`n", (New-Object Text.UTF8Encoding $false))
-      if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
-      Move-Item -LiteralPath $staging -Destination $target
+      # A folder already here is moved aside whole, never removed in place: a lock partway through a removal (an
+      # antivirus scan) left half a folder that a running daemon uses. A failed move leaves it as it was, and one
+      # the staged folder could not replace is put back. The aside name is one the daemon's retirement removes
+      # (writeVersionFolder's, cliVersions.ts), so a copy this removal leaves goes at its next pass.
+      $aside = $null
+      if (Test-Path -LiteralPath $target) {
+        $aside = Join-Path $cliRoot ".$version.$PID-$([DateTime]::UtcNow.Ticks).old"
+        Move-Item -LiteralPath $target -Destination $aside
+      }
+      try { Move-Item -LiteralPath $staging -Destination $target } catch {
+        if ($aside) { Move-Item -LiteralPath $aside -Destination $target }
+        throw
+      }
+      if ($aside) { Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue }
     } finally { if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue } }
   }
   Write-HarnessPointer -Path (Join-Path $cliRoot 'current') -Value $version
