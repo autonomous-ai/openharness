@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { once } from 'node:events'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { assertTestRoot, endRootProcesses, lsofFolders, ownFolders, rootProcesses, workingFolders } from './rootProcesses.js'
+import { assertTestRoot, codexDaemons, codexPidFiles, endRootProcesses, lsofFolders, ownFolders, rootProcesses, workingFolders, type PidRow } from './rootProcesses.js'
 import { alive, commandLines, processTable, type NamedRow } from './spawnedRuns.js'
 
 const row = (pid: number, ppid: number, pgid: number, command: string): NamedRow => ({ pid, ppid, pgid, command })
@@ -189,5 +190,115 @@ describe('endRootProcesses', () => {
       // The link itself: Node 23 to 24.3's rmSync refuses a link to a folder without `recursive` (ERR_FS_EISDIR).
       unlinkSync(link)
     }
+  })
+})
+
+// Codex's managed app server detaches itself, names no root and need not work in it: a real one from the tester of #4660
+// and #4668 outlived close(), launchd's. Codex records it in <CODEX_HOME>/app-server-daemon/daemon.pid.
+describe('a Codex app server a pid file in the root names', () => {
+  const IDLE = 'setInterval(() => {}, 1 << 30)'
+  let made: string[] = []
+  afterEach(() => { for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true }) })
+  const folder = (prefix = 'codex-pid-files-') => {
+    const path = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+    made.push(path)
+    return path
+  }
+  const pidFile = (path: string, text: string) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) }
+  const daemonPid = (pid: number) => JSON.stringify({ pid, processStartTime: 'Mon Nov 23 10:00:03 2026' })
+
+  it('is the test\'s while it is this account\'s, an app server, and started no sooner than the second before the root', () => {
+    // The root made at 10:00:00.400; `ps` gives a start to the second.
+    const root = Date.parse('Mon Nov 23 10:00:00 2026') + 400
+    const server = 'codex app-server --managed-daemon'
+    const pidRow = (pid: number, started: string, command = server, uid = 501): PidRow => ({ pid, uid, started, command })
+    const rows = [
+      pidRow(10, 'Mon Nov 23 10:00:03 2026'),
+      // Linux's start can name the second before the one the clock was in (spawnedRuns.ts daemonOf).
+      pidRow(11, 'Mon Nov 23 09:59:59 2026'),
+      pidRow(12, 'Mon Nov 23 10:00:03 2026', 'node /x/node_modules/@openai/codex/bin/codex.js app-server --managed-daemon'),
+      pidRow(20, 'Mon Nov 23 10:00:03 2026', server, 502),
+      pidRow(21, 'Mon Nov 23 09:59:58 2026'),
+      pidRow(22, 'Mon Nov 23 10:00:03 2026', 'node /x/node_modules/vitest/dist/workers/forks.js'),
+      pidRow(23, 'Mon Nov 23 10:00:03 2026', 'codex exec hi'),
+      pidRow(24, 'Mon Nov 23 10:00:03 2026', '/x/codex-tools app-server'),
+      pidRow(25, ''),
+    ]
+    expect(codexDaemons(rows, root, 501)).toEqual([10, 11, 12])
+  })
+
+  it('is read from a pid file 4 folders below the root at most, never through a link', () => {
+    const root = folder(), outside = folder()
+    pidFile(join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid'), daemonPid(1001))
+    pidFile(join(root, 'b1', 'h', 'x', 'app-server-daemon', 'daemon.pid'), daemonPid(1002))
+    pidFile(join(root, 'a', 'b', 'c', 'd', 'app-server-daemon', 'daemon.pid'), daemonPid(1003))
+    pidFile(join(outside, 'codex', 'app-server-daemon', 'daemon.pid'), daemonPid(1004))
+    symlinkSync(outside, join(root, 'link'))
+    symlinkSync(join(outside, 'codex', 'app-server-daemon'), join(root, 'home', 'app-server-daemon'))
+    mkdirSync(join(root, 'c', 'app-server-daemon'), { recursive: true })
+    symlinkSync(join(outside, 'codex', 'app-server-daemon', 'daemon.pid'), join(root, 'c', 'app-server-daemon', 'daemon.pid'))
+    expect(codexPidFiles(root).sort()).toEqual([1001, 1002])
+  })
+
+  it('is no text that is not JSON, nor a pid that is not a safe integer over 1', () => {
+    const root = folder()
+    const texts = ['not json', 'null', '{}', '{"pid":1}', '{"pid":0}', '{"pid":-5}', '{"pid":"1005"}', '{"pid":10.5}', `{"pid":${2 ** 53}}`]
+    texts.forEach((text, n) => pidFile(join(root, `h${n}`, 'app-server-daemon', 'daemon.pid'), text))
+    pidFile(join(root, 'good', 'app-server-daemon', 'daemon.pid'), daemonPid(1005))
+    expect(codexPidFiles(root)).toEqual([1005])
+  })
+
+  it('is read from 16 pid files and 2,000 folders at most, a bound reached said once', () => {
+    const root = folder(), wide = folder()
+    for (let n = 0; n < 20; n++) pidFile(join(root, `h${n}`, 'app-server-daemon', 'daemon.pid'), daemonPid(2000 + n))
+    for (let n = 0; n <= 2_000; n++) mkdirSync(join(wide, `f${n}`))
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(codexPidFiles(root)).toHaveLength(16)
+      expect(codexPidFiles(wide)).toEqual([])
+      expect(said.mock.calls).toEqual([
+        [`[e2e sweep] read 16 Codex app server pid files under ${root}: looked no further`],
+        [`[e2e sweep] read 2000 folders of ${wide} for Codex app server pid files: looked no further`],
+      ])
+    } finally { said.mockRestore() }
+  })
+
+  describe.skipIf(process.platform === 'win32')('in a real root', () => {
+    let server: number | undefined
+    // Only the stand-in this spec started, by its own pid: the person's own Codex app servers run on this machine.
+    afterEach(() => {
+      if (server !== undefined && alive(server)) process.kill(server, 'SIGKILL')
+      server = undefined
+    })
+
+    it('is ended by the close sweep, though it left the test\'s tree, names nothing of the root and works outside it', async () => {
+      const root = folder('htmux-')
+      const file = join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid')
+      // As `codex app-server --managed-daemon` starts: detached by a launcher that writes its pid file and exits.
+      const launch = `const { execFileSync, spawn } = require('node:child_process'), { mkdirSync, writeFileSync } = require('node:fs')
+const server = spawn(process.execPath, ['-e', ${JSON.stringify(IDLE)}, 'app-server', '--managed-daemon'], { argv0: 'codex', detached: true, stdio: 'ignore', cwd: ${JSON.stringify(tmpdir())} })
+mkdirSync(${JSON.stringify(dirname(file))}, { recursive: true })
+const processStartTime = execFileSync('ps', ['-o', 'lstart=', '-p', String(server.pid)], { encoding: 'utf8' }).trim()
+writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: server.pid, processStartTime }))
+server.unref()`
+      const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })
+      expect((await once(launcher, 'exit'))[0]).toBe(0)
+      const pid = server = (JSON.parse(readFileSync(file, 'utf8')) as { pid: number }).pid
+      // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
+      await until(() => commandLines([pid]).get(pid)?.includes('app-server --managed-daemon') || null)
+      expect(await endRootProcesses(root, new Map())).toEqual([])
+      expect(alive(pid)).toBe(false)
+    })
+
+    it('is never the worker a pid file names, as e2e/harness/sharedCodex.ts writes one', async () => {
+      const root = folder('htmux-')
+      pidFile(join(root, 'home', 'codex', 'app-server-daemon', 'daemon.pid'), daemonPid(process.pid))
+      const real = process.kill.bind(process)
+      const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => pid === process.pid || real(pid, signal))
+      try {
+        expect(await endRootProcesses(root, new Map())).toEqual([])
+        expect(kill.mock.calls.filter(([pid]) => pid === process.pid)).toEqual([])
+      } finally { kill.mockRestore() }
+    })
   })
 })

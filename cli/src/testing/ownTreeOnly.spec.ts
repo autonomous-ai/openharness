@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -98,6 +98,11 @@ const LSTART = 'Mon Nov 23 10:00:00 2026'
 const UID = process.getuid?.() ?? 501
 const made = (pid: number, ppid: number, pgid: number, command: string, cwd = '/repo', started = LSTART, uid = UID): Made =>
   ({ pid, ppid, pgid, command, cwd, uid, started })
+/** [date] as `ps` prints a start. */
+const lstart = (date: Date): string => {
+  const [day, month, , year] = date.toDateString().split(' ')
+  return `${day} ${month} ${String(date.getDate()).padStart(2)} ${date.toTimeString().slice(0, 8)} ${year}`
+}
 
 /** The fields a read asked for, and the pids it asked of (none: every process). */
 const fieldsOf = (args: readonly string[]): string[] => {
@@ -111,11 +116,12 @@ const askedOf = (args: readonly string[]): number[] | undefined => {
 /**
  * The reads that went past what the harness may read: anything more than a pid, a parent, a group of every process;
  * more than a start time of a process not in [tree] nor in [seen] (a pid the test once saw, read to tell whether it is
- * still that process); anything of a process not in [tree] beyond that; and every pgrep and pkill, which read each
- * process's command line.
+ * still that process); anything of a process not in [tree] beyond that, but the account, start and command line of
+ * [named], the pids a Codex pid file inside the test's root names, by a `ps -p` of them alone (what the sweep checks
+ * before it ends one); and every pgrep and pkill, which read each process's command line.
  */
-function beyond(tree: Iterable<number>, seen: Iterable<number> = []): string[] {
-  const ours = new Set(tree), once = new Set([...ours, ...seen])
+function beyond(tree: Iterable<number>, seen: Iterable<number> = [], named: Iterable<number> = []): string[] {
+  const ours = new Set(tree), once = new Set([...ours, ...seen]), pidFiles = new Set(named)
   const IDENTITY = ['pid', 'ppid', 'pgid']
   return machine.runs.filter(({ file, args }) => {
     const name = basename(file)
@@ -124,6 +130,7 @@ function beyond(tree: Iterable<number>, seen: Iterable<number> = []): string[] {
     const asked = askedOf(args)
     const fields = name === 'lsof' ? ['cwd'] : fieldsOf(args)
     if (asked === undefined) return !fields.every((field) => IDENTITY.includes(field))
+    if (name === 'ps' && asked.every((pid) => pidFiles.has(pid)) && fields.every((field) => ['pid', 'uid', 'lstart', 'command'].includes(field))) return false
     if (fields.every((field) => [...IDENTITY, 'lstart'].includes(field))) return asked.some((pid) => !once.has(pid))
     return asked.some((pid) => !ours.has(pid))
   }).map(({ file, args }) => `${file} ${args.join(' ')}`)
@@ -272,6 +279,25 @@ describe("the daemon's close sweep", () => {
     expect(ended.filter((pid) => [STALE, ...PERSON].includes(Math.abs(pid)))).toEqual([])
     expect(beyond([WORKER, MASTER, CORE, CODEX, CODEX_CHILD, OWN_CALL, ...NOTED_TREE], NOTED.keys())).toEqual([])
   })
+
+  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, never the person's or another account's", async () => {
+    const root = testRoot()
+    const born = statSync(root).birthtimeMs
+    const PERSONS = P(80), OTHERS = P(81), TESTS = P(82)
+    const server = 'codex app-server --managed-daemon'
+    // launchd's, each: the person's started an hour before the root, another account's and the test's after it.
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'),
+      made(PERSONS, 1, PERSONS, server, '/Users/person', lstart(new Date(born - 3_600_000))),
+      made(OTHERS, 1, OTHERS, server, '/', lstart(new Date(born + 2_000)), UID + 1),
+      made(TESTS, 1, TESTS, server, '/', lstart(new Date(born + 2_000)))]
+    for (const [home, pid] of [['person', PERSONS], ['other', OTHERS], ['test', TESTS]] as const) {
+      mkdirSync(join(root, 'home', home, 'app-server-daemon'), { recursive: true })
+      writeFileSync(join(root, 'home', home, 'app-server-daemon', 'daemon.pid'), JSON.stringify({ pid, processStartTime: LSTART }))
+    }
+    expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
+    expect(machine.signals).toEqual([[TESTS, 'SIGKILL']])
+    expect(beyond([WORKER], [], [PERSONS, OTHERS, TESTS])).toEqual([])
+  })
 })
 
 describe("the harness's note of a process it started (IsolatedDaemon.own)", () => {
@@ -323,10 +349,6 @@ describe("tier B's cost", () => {
 describe('a spec run\'s processes (SpawnedRuns)', () => {
   /** 10:00:00 on the day of the made-up machine, plus [seconds], and as `ps` prints a start. */
   const at = (seconds: number): Date => new Date(2026, 10, 23, 10, 0, seconds)
-  const lstart = (date: Date): string => {
-    const [day, month, , year] = date.toDateString().split(' ')
-    return `${day} ${month} ${String(date.getDate()).padStart(2)} ${date.toTimeString().slice(0, 8)} ${year}`
-  }
   const GROUP = P(210), MEMBER = P(211), ITS_CHILD = P(212), DAEMON = P(200), DAEMONS_CHILD = P(201), NAMES_ROOT = P(300)
 
   /**
