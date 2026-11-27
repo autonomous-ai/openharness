@@ -4,6 +4,7 @@
   "prompt": "Move all ten API clients in src/clients/ onto the shared retry helper in src/retry.js.",
   "ask": "How should charges retry? withRetry needs an idempotency key; v2 has none.",
   "expect": "proceeding",
+  "follow_up": { "kind": "unrung", "text": "Don't retry charges for now: leave the payments client without withRetry until v2 has an idempotency key." },
   "secrets": [],
   "origin": false,
   "check": { "run": "grep -n 'Not decided yet' issues/57-charge-retries.md && exit 1", "expect": "Not decided yet" },

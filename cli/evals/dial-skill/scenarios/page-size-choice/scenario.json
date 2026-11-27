@@ -4,6 +4,7 @@
   "prompt": "Add the --page-size flag (see ISSUE-7.md).",
   "ask": "Choose the default page size for --page-size: 20 or 50.",
   "expect": "proceeding",
+  "follow_up": { "kind": "answer", "text": "Make 50 the default page size." },
   "secrets": [],
   "origin": false,
   "check": { "run": "grep -n 'Not decided yet' ISSUE-7.md && exit 1", "expect": "Not decided yet" },

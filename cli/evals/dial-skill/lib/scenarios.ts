@@ -27,8 +27,23 @@ export interface Scenario {
   // Need scenarios only. Run in the staged repo after the agent's run; its output holds expect when the agent did the
   // part it could do without the person.
   done?: { run: string; expect: string }
+  // Need scenarios only: turn 2's prompt, after turn 1 rang, which tells whether the agent closes the right card.
+  follow_up?: FollowUp
   dir: string
 }
+
+/** What turn 2 is: the person's answer to the ask (close it), another session's message on something else, a new
+ *  request that leaves the ask open (close nothing), the answer to one of two open asks (close that one), or the
+ *  answer to an ask the dial never showed (nothing to close). */
+export type FollowUpKind = 'answer' | 'relay' | 'new-request' | 'answer-one' | 'unrung'
+
+export interface FollowUp {
+  kind: FollowUpKind
+  text: string
+}
+
+const FOLLOW_UP_KINDS: readonly string[] = ['answer', 'relay', 'new-request', 'answer-one', 'unrung'] satisfies FollowUpKind[]
+const FOLLOW_UP_MAX = 600
 
 export interface Branch {
   name: string
@@ -79,7 +94,7 @@ function parse(id: string, dir: string): Scenario {
   const repo = join(dir, 'repo')
   if (!existsSync(repo) || !statSync(repo).isDirectory()) throw new Error('repo/ is missing')
   const json = JSON.parse(readFileSync(join(dir, 'scenario.json'), 'utf8')) as Record<string, unknown>
-  const { need, kind, prompt, ask, expect, secrets, origin, branch, check, harm, done } = json
+  const { need, kind, prompt, ask, expect, secrets, origin, branch, check, harm, done, follow_up } = json
   if (need !== 'need' && need !== 'no-need') throw new Error('need must be "need" or "no-need"')
   if (need === 'need' && (typeof ask !== 'string' || ask === '')) throw new Error('a need scenario needs an ask')
   if (need === 'no-need' && ask !== undefined) throw new Error('a no-need scenario has no ask')
@@ -103,6 +118,14 @@ function parse(id: string, dir: string): Scenario {
   const d = done as Record<string, unknown> | undefined
   if (d !== undefined && need === 'no-need') throw new Error('a no-need scenario has no done check')
   if (d !== undefined && (typeof d.run !== 'string' || typeof d.expect !== 'string')) throw new Error('done needs run and expect')
+  const f = follow_up as Record<string, unknown> | undefined
+  if (f !== undefined && need === 'no-need') throw new Error('a no-need scenario has no follow-up')
+  if (f !== undefined && (typeof f.kind !== 'string' || !FOLLOW_UP_KINDS.includes(f.kind))) {
+    throw new Error(`follow_up kind must be one of ${FOLLOW_UP_KINDS.join(', ')}`)
+  }
+  if (f !== undefined && (typeof f.text !== 'string' || f.text === '' || f.text.length > FOLLOW_UP_MAX)) {
+    throw new Error(`follow_up text must be 1 to ${FOLLOW_UP_MAX} characters`)
+  }
   return {
     id,
     need,
@@ -116,6 +139,7 @@ function parse(id: string, dir: string): Scenario {
     check: { run: c.run, expect: c.expect },
     ...(h && { harm: { run: h.run as string, expect: h.expect as string } }),
     ...(d && { done: { run: d.run as string, expect: d.expect as string } }),
+    ...(f && { follow_up: { kind: f.kind as FollowUpKind, text: f.text as string } }),
     dir,
   }
 }

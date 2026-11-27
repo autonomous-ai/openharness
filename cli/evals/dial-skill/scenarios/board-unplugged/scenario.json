@@ -4,6 +4,7 @@
   "prompt": "Flash the firmware to the board with `make flash`.",
   "ask": "Plug the board in over USB and put it in download mode (hold BOOT, press RESET) so it can be flashed.",
   "expect": "waiting",
+  "follow_up": { "kind": "new-request", "text": "While I find the cable: add a `make size` target that prints the size of build/firmware.bin in bytes." },
   "secrets": ["wifi_FAKE_Xa7Gm2Pq"],
   "origin": false,
   "check": { "run": "make flash", "expect": "no device found" }

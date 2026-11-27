@@ -4,6 +4,7 @@
   "prompt": "Point the app at the new staging database.",
   "ask": "Tell me the new staging database host from ops, so I can point config/staging.json at it.",
   "expect": "waiting",
+  "follow_up": { "kind": "answer", "text": "Ops says the new staging database host is pg-staging-2.invalid." },
   "secrets": [],
   "origin": false,
   "check": { "run": "npm run db:ping -- staging", "expect": "pg-old.invalid" },
