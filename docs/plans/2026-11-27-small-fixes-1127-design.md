@@ -40,8 +40,10 @@ time. Other candidates: the answer fails its proof, or the listener answers with
    that reproduces it. The cause and its evidence go in the pull request.
 3. On the client side, in every client of the devices that has the same bound (`askDevices`, `tellDevices`,
    `streamDevices`): the bound never drops an answer that arrived inside it, even when the loop runs again only after
-   the bound (for example, measure it from the request being written and check for an answer before aborting). A unit
-   test holds the loop past the bound after the answer lands, red first. If the evidence shows the daemon's loop
+   the bound: when the bound's timer fires, the abort waits one loop turn, so an answer already waiting is read first;
+   and a timer that fires more than half the bound late (the loop was held, perhaps before the request was even
+   written) waits the bound once more instead of aborting (final review). Unit tests hold the loop past the bound
+   after the answer lands and before the request is on the wire, red first. If the evidence shows the daemon's loop
    held: fixed here when the cause is small and outside the core; inside the core or large, it goes to the
    orchestrator as its own item (orchestrator's answer).
 4. Remove the test's row from "Recorded flaky tests".
@@ -87,9 +89,11 @@ change, so no red test.
 
 `supportedRun` (`cli/src/devices/codexPlugin.ts`) asks `--version` with a 15 s bound for each home
 (`cable/dialCodexPluginSetup.ts` runs every due home in one pass), so a hanging Codex holds a pass up to 15 s per home,
-16 minutes with 64 homes. Change: the version is asked once per binary path and modification time, and kept for the
-pass and later passes until the binary changes; a `--version` that failed or hung is kept the same way, so the pass
-asks it at most once per binary. Red test: 64 homes with a `--version` that never answers end the pass after one bound,
+16 minutes with 64 homes. Change: the version is asked once per binary path and modification time. A supported answer
+is kept until the binary changes; a too-old one for the hour the setup already waits before asking again; a
+`--version` that failed, hung or was refused for one bound (15 s), so the pass asks it at most once per binary and
+the next pass asks again (final review: kept until the process ended, a transient hang failed every home for good,
+and a version manager's shim kept "too old" after an upgrade). Red test: 64 homes with a `--version` that never answers end the pass after one bound,
 not 64.
 
 ## 5. Windows: deleting the held temporary file replaces the original error
