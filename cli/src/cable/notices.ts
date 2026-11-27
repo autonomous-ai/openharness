@@ -172,6 +172,7 @@ export class Notices {
     }
     // With no dial a notice is nobody's: it must not use up the agent's minute for when one attaches.
     if (!this.deps.connected()) return answer('no dial')
+    this.expire()
     const caller = this.deps.resolve(ask)
     // Its cards, and its restored ones still waiting under the id a listing source gave it before the restart, which are
     // its own from now.
@@ -217,6 +218,7 @@ export class Notices {
 
   /** That agent's cards, oldest first, each with its own line. */
   list(agentId: string): Array<{ id: string; at: number; kind: NoticeKind; line: string }> {
+    this.expire()
     return this.of(agentId).map(({ id, at, kind, line }) => ({ id: cardId(id), at, kind, line }))
   }
 
@@ -249,6 +251,7 @@ export class Notices {
    *  redraw: the attach's greeting replaces the drawer after its carousel push, and a close still in an agent's order
    *  came with its own reask, whose redraw waits behind it. */
   attached(): void {
+    this.expire()
     for (const agentId of this.faces().keys()) this.send(agentId)
   }
 
@@ -397,13 +400,19 @@ export class Notices {
     // A card ahead of a clock set back waits a day at most for the next look: a delay past what a timer holds fires at
     // once, and again.
     const ms = Math.min(Math.max(0, due - this.deps.clock()), NOTICE_MAX_AGE_MS)
-    this.timer = { due, cancel: this.deps.after(ms, () => this.expire()) }
+    this.timer = {
+      due,
+      cancel: this.deps.after(ms, () => {
+        this.timer = undefined
+        this.expire()
+      }),
+    }
   }
 
-  /** The timer fired: every card 24 hours old goes, by the wall clock, so a sleep that held the timer back ends each
-   *  aged card at once; the next comes up as after any close. */
+  /** Every card 24 hours old by the wall clock goes; the next comes up as after any close. At the timer, and before a
+   *  notify, a list or an attach: Node's timers do not run on in a sleep, so the timer can fire a day late. A scan of the
+   *  twenty at most. */
   private expire(): void {
-    this.timer = undefined
     const now = this.deps.clock()
     this.drop([...this.cards.values()].filter(({ at }) => now - at >= NOTICE_MAX_AGE_MS), 'expired')
     this.schedule()
