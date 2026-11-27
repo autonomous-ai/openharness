@@ -14,6 +14,7 @@
  */
 import { request } from 'node:http'
 import { daemonFetch, localSocketRoute } from '../lib/localTransport.js'
+import { WINDOWS_PS_TIMEOUT_MS } from '../lib/windows/processTable.js'
 
 export interface AskedBody {
   engine: 'claude' | 'codex'
@@ -35,8 +36,17 @@ const MAX_STDIN_BYTES = 256 * 1024
 export const MAX_TOOL_CHARS = 64
 const MAX_SUMMARY_BYTES = 200
 const MAX_CWD_CHARS = 1024
-/** Claude Code waits for this hook before the person's prompt can be answered: the post never holds it longer. */
+/**
+ * Claude Code waits for this hook before the person's prompt can be answered: off Windows the post never holds it
+ * longer.
+ */
 const WRITE_MS = 1_000
+/**
+ * On Windows the pipe is dialled only after the recorded daemon's process check (`harness-pty ps --json`,
+ * lib/windows/daemonPipe.ts), bounded at WINDOWS_PS_TIMEOUT_MS, which a busy or cold machine can spend most of: the
+ * post waits that out and WRITE_MS more, still under the hooks' 5 s.
+ */
+const PIPE_MS = WINDOWS_PS_TIMEOUT_MS + WRITE_MS
 /** A form with no words of its own still waits on the person, so it is told with these. */
 const NO_QUESTION = 'A question'
 /** A plan approval's line: the plan's text is the person's work in progress and never leaves this process. */
@@ -197,13 +207,13 @@ export function daemonPost(
 
 /**
  * On Windows the pipe's answer proves the daemon's token (lib/localTransport.ts `daemonFetch`), so only this account's
- * daemon hears the prompt. A pipe request is done when answered, not when written: the wait is bounded and the answer
- * cancelled unread.
+ * daemon hears the prompt. A pipe request is done when answered, not when written: the wait is bounded by PIPE_MS and
+ * the answer cancelled unread.
  */
 async function pipePost(send: typeof fetch, port: number, body: AskedBody): Promise<void> {
   const abort = new AbortController()
   let timer: NodeJS.Timeout | undefined
-  const late = new Promise<void>((resolve) => { timer = setTimeout(() => { abort.abort(); resolve() }, WRITE_MS) })
+  const late = new Promise<void>((resolve) => { timer = setTimeout(() => { abort.abort(); resolve() }, PIPE_MS) })
   const sent = send(`http://127.0.0.1:${port}/api/hook/observed`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal,
   }).then((answer) => answer.body?.cancel(), () => {}).catch(() => {})
