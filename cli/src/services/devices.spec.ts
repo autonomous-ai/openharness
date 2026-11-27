@@ -232,6 +232,8 @@ const readers = vi.hoisted(() => ({
   ended: new Set<number>(),
   // Windows' process table, as the PTY host gives it: none unless a spec gives one.
   listProcesses: vi.fn(async () => [] as Array<RunningProcess & { startMarker?: string }>),
+  // Each Codex daemon lookup the devices made, with what it was given: its answer is never a server.
+  servedLookup: vi.fn((_platform: NodeJS.Platform, _nesting?: unknown) => async (asks: readonly unknown[]) => asks.map(() => undefined)),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -270,7 +272,7 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
 // terminals.
 vi.mock('../cable/hosts/codexServed.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/codexServed.js')>(),
-  servedLookup: () => async (asks: readonly unknown[]) => asks.map(() => undefined),
+  servedLookup: readers.servedLookup,
 }))
 vi.mock('../cable/hosts/tabs.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/tabs.js')>(),
@@ -2089,6 +2091,13 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     // This machine's own readers, every engine's, with Harness's data folder left out as search leaves it.
     expect(readers.external).toMatchObject({ providers: expect.any(Array), excluded: [dataDir] })
     expect(readers.open).toMatchObject({ providers: readers.external!.providers })
+  })
+
+  it('a Codex daemon\'s client is looked up by process as the scan looks up one nested in tmux or herdr', () => {
+    readers.servedLookup.mockClear()
+    start({ faults: ['fleet'] })
+    expect(readers.servedLookup.mock.calls).toEqual([
+      ['linux', expect.objectContaining({ madeBy: expect.any(Function), nested: expect.any(Function) })]])
   })
 
   it('HARNESS_DEVICE_OBSERVED=off ignores observed events and lists only harness agents with no window', async () => {
