@@ -749,15 +749,20 @@ fs.appendFileSync(${JSON.stringify(heard())}, '${who}: ' + said + '\n')
     expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude.clean', rings: 0, grade: { rang: 0 } }])
   })
 
-  it('takes a listed answer to a Stop hook', () => {
+  it('takes a listed answer to a Stop hook, and counts its block as a nudge', () => {
     const stop = { argv: ['device', 'claude', 'stop'], stdout: '{"decision":"block","reason":"Ring the dial, or end."}\n', stop: true }
-    writeState({ harness_paths: [variantFile('hooks.json', HOOKS), variantFile('harness-answers.json', [...ANSWERS, stop])] })
-    fakeClaude(hooked('agent') + QUIET)
+    const hooks = { ...HOOKS, Stop: [{ hooks: [{ type: 'command', command: 'harness device claude stop' }] }] }
+    writeState({ harness_paths: [variantFile('hooks.json', hooks), variantFile('harness-answers.json', [...ANSWERS, stop])] })
+    // Runs the staged Stop hook's command as Claude Code does when a turn ends on an ask.
+    const stopped = String.raw`require('node:child_process').execSync(JSON.parse(fs.readFileSync(hookFile, 'utf8')).hooks.Stop[0].hooks[0].command,
+  { input: JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: 'Which flag name do you want?' }) })
+`
+    fakeClaude(hooked('agent') + stopped + QUIET)
 
     const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
 
     expect(out.status, out.stderr).toBe(0)
-    expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'add-version-flag.claude.clean' }])
+    expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'add-version-flag.claude.clean', grade: { nudged: 1 } }])
   })
 
   it.each([
