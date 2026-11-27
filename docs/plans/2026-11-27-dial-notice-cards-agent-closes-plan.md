@@ -88,24 +88,27 @@ dial gets nothing again. The core, the protocol and the firmware do not change.
      money is left.
    - e. Ring gate: recall paired with v4 (case means, the existing interval) not down beyond noise, and needless rings
      at most v4's held-out count + 1 (v4: 1 of 27), counted over v7's held-out no-need runs.
-6. **A two-turn run's saved session**, accepted with conditions. The maintainer's real daemon reads the profile's
-   `projects/`, so an eval session could show as an agent on the real dial. Checked in the code: the daemon already
-   skips every session whose cwd lies inside its data folder (`within(dataDir, cwd)`): the dial's outside agents
-   (`services/devices.ts` `observedSource`: `excluded: [dataDir]` for `ObservedSource`, which drops such an entry
-   whether a hook or a scan found it, `cable/hosts/observed.ts` `entry`, and for `SessionRows`), ⌘P search and its
-   external readers (`services/search.ts`, `services/searchProcess.ts`: `excluded: [dataDir]`, read through
-   `scanMemo`'s `excluded` by every reader, Claude's `engines/kit/adoption.ts` among them). It exists for Harness's own
-   voice router, whose Claude Code runs in the data folder. So every run's root goes there (one way to stage; a
-   two-turn run's saved session with it):
-   `<data folder>/dial-skill-eval/<uuid>/`, the data folder being `ADAPTER_DATA_DIR` when set, else
-   `~/.harness/cli/data` (`config/env.ts`), checked against the running daemon's `harness status` `state` row before
-   a pass (Task 21, Verification 6). The session is still removed with the run at unstage (Task 17). Nothing in the
-   daemon or the core changes. The fake `harness` never reaches the real daemon, and a test holds it (Task 14). The
-   eval's read denies of `~/.harness` narrow to everything but the run's own folder (Task 21): Claude Code's deny
-   beats any allow, so the Read denies list each entry found at stage time, and one made after it (another run's root,
-   a new daemon file) is not denied for that run's minutes; the checks' sandbox (deny, then allow the run) has no gap.
+6. **A two-turn run's saved session** (the PM, 2026-11-27, final). Turn 2 resumes a session saved in the profile's
+   `projects/`, which the maintainer's real daemon may read. Runs stay in the temp folder, as today. They do not go in
+   the daemon's data folder: it holds the maintainer's sign-in and remote passwords, and the narrowed Read denies a run
+   there would need leave a gap an eval agent could read secrets through. Each run's Claude session (its folder
+   `<profile>/projects/<repo>/`, `lib/stage.ts` `runProfileFolder`) is deleted as soon as the run's last turn ends,
+   also when the run is killed at its timeout. Unstage and the runner's exit still remove it, as today. The deny on
+   `~/.harness` stays whole (`deniedReads`, `checkSandbox` unchanged). The run uses `--setting-sources project`, so the
+   person's hooks never run and the daemon hears no turn of it (no ring). The PR body states that, with the code that
+   proves it. It also states whether the daemon's discovery scans the profile's `projects/`, and if it does, how long
+   at most an eval session's tile can show on the real dial (Task 21). Nothing in the daemon or the core changes. The
+   fake `harness` never reaches the real daemon, and a test holds it (Task 14).
 7. **The eval passes** wait for the orchestrator's turn (after Part 5's eval reports done); every pass runs
    `--spend-cap-usd 320`; the real S is read from the flow file and reported first (Verification 6).
+8. **Part 5's verdict sets the base** (the orchestrator, 2026-11-27). The eval passes (Tasks 14-19 and 21's,
+   Verification 6) run only after Part 5's verdict.
+   - **Part 5 ships:** first rebase onto `main` with Part 5. Then measure v4's text + the closing bullet + Part 5's
+     Stop hook against v4 + that hook. The ring gate ("no worse") compares to v4 + hook.
+   - **Part 5 does not ship:** measure as planned, against v4.
+
+   At the rebase, logic that overlaps Part 5 keeps both rules: the new-turn mark, `rangThisTurn`, and a relayed
+   message not being the person's prompt. The final reviewer reads those rules together (Review Focus 6).
 
 ## Global Constraints
 
@@ -135,8 +138,9 @@ dial gets nothing again. The core, the protocol and the firmware do not change.
   `atomicWriteFile`/`readState` as today. Comments say why and name the 2026-11-27 incident where a turn start no
   longer closes. No fixed sleeps in tests: fake clocks in units; the e2e seeds a second card through a restart.
 - Eval: Claude Code only; `DESIGN_CAP_USD = 320`; every pass `--spend-cap-usd 320`; committed rows hold counts,
-  scenario names and fixed ids only (`flow-rows.ts scrub`). Every run's root is
-  `<data folder>/dial-skill-eval/<uuid>/` (Decision 6); the fake `harness` opens no socket, no HTTP and no process.
+  scenario names and fixed ids only (`flow-rows.ts scrub`). Every run's root stays
+  `<temp folder>/dial-skill-eval/<uuid>/`, and its Claude session goes when its last turn ends, timeout included
+  (Decision 6). The fake `harness` opens no socket, no HTTP and no process.
 
 ## Design (docs/feature-design-rules.md)
 
@@ -166,11 +170,15 @@ dial gets nothing again. The core, the protocol and the firmware do not change.
    Task 8.
 3. **A queued card is never rung and never lost**: when the card before it goes (done, sixth, 20, 24 hours, tap) it
    comes up as a row with no ring, also after a dial re-attaches. Tests: Task 2, Task 3.
-4. **A two-turn eval run never shows on the person's real dial nor stays in their profile or data folder**: its cwd
-   lies inside the daemon's data folder, its session goes at unstage (ended, timed out or killed), the agent reads
-   nothing else of `~/.harness`, and turn 2 never starts once the case's time is spent. Tests: Tasks 14, 17, 21.
+4. **A two-turn eval run never rings the person's real dial nor stays in their profile**: it loads no user hooks
+   (`--setting-sources project`), its session goes when its last turn ends (ended, timed out or killed), the agent
+   reads nothing of `~/.harness`, and turn 2 never starts once the case's time is spent. Tests: Tasks 14, 17, 21; the
+   PR body's bound on how long its tile can show (Task 21).
 5. **A Pro's card survives its agent's turn start; the round dial is never rung again by it.** Turn starts repeat
    within a turn (each `processing` card), so the Pro gets one drawer a card, never a `question` frame. Test: Task 20.
+6. **Both rules hold where this plan meets Part 5** (Decision 8): the new-turn mark, `rangThisTurn`, and a relayed
+   message not being the person's prompt. After the rebase, the final reviewer reads this plan's rule and Part 5's
+   together at each and confirms neither was dropped.
 
 ## Overlap with Part 5 (for the later rebase)
 
@@ -184,8 +192,12 @@ dial gets nothing again. The core, the protocol and the firmware do not change.
   script. `run-eval.mjs` `DESIGN_CAP_USD` (270 there, 320 here: 320 wins). `lib/summarize.ts`: Part 5's `bases` and
   Fisher p beside Task 18's close table; Task 18 pairs with round 4 by number, not by `best` or `bases`. `README.md`,
   `flow/metrics.md`, `flow/narrative.md`: regenerate the tables with `summarize` after the merge. Task 21 edits
-  `lib/agents.ts` `deniedReads` and `CLAUDE_SANDBOX`, `lib/stage.ts` `checkSandbox` and `run-eval.mjs`'s staging of a
-  two-turn case: keep Part 5's edits there as they are.
+  `run-eval.mjs` `runCase` (the session's delete after the last turn): keep Part 5's edits there as they are.
+- Where the rules meet (Decision 8, Review Focus 6): the new-turn mark, `rangThisTurn`, and a relayed message not being
+  the person's prompt keep both Part 5's rule and this plan's.
+- If Part 5 ships (Decision 8): v7's `hooks.json` and `harness-answers.json` become Part 5's shipped variant's (v4 +
+  its Stop hook) instead of v4's (Task 19), and the ring gate's base (`CLOSE_BASE_ROUND`, Task 18) becomes that
+  variant's round instead of round 4, with their tests, in one commit after the rebase (Verification 6, Start).
 - `cable/cableSession.ts` and `cable/questionInbox.ts` (Task 20): Part 5 does not touch them.
 
 ---
@@ -848,7 +860,7 @@ first:** the parse and split cases below.
 - Modify: `cli/evals/dial-skill/README.md` (a "Follow-ups: the agent closes its cards" section: the five follow-ups,
   the table, the seeded card, `no dial`, the grading, the gates, the run commands; Cost: the design's cap is $320 and
   this item's about $50, every pass `--spend-cap-usd 320`, S read and reported first, one pass at a time on the
-  account, after Part 5's eval is done, on the orchestrator's go. The Isolation section is Task 21's)
+  account, after Part 5's verdict, on the orchestrator's go. Isolation's line on the saved session is Task 21's)
 - Test: `cli/evals/dial-skill/state.spec.ts`, `cli/evals/dial-skill/run-eval.spec.ts`
 
 - [ ] **Step 1: Write the failing tests:** state.spec `'flow/v7 is v4 with the closing bullet'` (v7's `SKILL.md` equals
@@ -863,63 +875,72 @@ first:** the parse and split cases below.
 - [ ] **Step 5: Run the eval's suite.** Expected: PASS.
 - [ ] **Step 6: Commit** (`Dial skill eval: v7, the closing bullet`).
 
-### Task 21: every run lives in the daemon's data folder, whose sessions the daemon never lists
+### Task 21: a run's Claude session goes when the run ends
 
-**Effort:** xhigh (what an eval agent may read of the person's `~/.harness`; the person's live daemon). **Depends on:**
-Task 17 (a two-turn run saves its session; this task places it). **Test that must fail first:** `describe('the run's
-folder')` and the narrowed-deny cases.
+**Effort:** xhigh (the person's live daemon and Claude profile). **Depends on:** Task 17 (a two-turn run saves its
+session; this task deletes it when the run ends). **Test that must fail first:** `describe("the run's session goes
+when the run ends")`.
 
-Why (Decision 6): turn 2 resumes a session saved in the profile's `projects/`, which the maintainer's live daemon reads.
-The daemon already skips every session whose cwd lies inside its data folder (`services/devices.ts` `observedSource`
-`excluded: [dataDir]`; `services/search.ts`, `services/searchProcess.ts`), so a run there never shows on the real dial
-or in ⌘P. Nothing in the daemon or the core changes. Every run moves, two-turn or not, so staging has one way.
+Why (Decision 6): turn 2 resumes a session saved in the profile's `projects/`, which the maintainer's live daemon may
+read. Runs stay in the temp folder, and the deny on `~/.harness` stays whole. The session lives only while the run
+does: it is deleted as soon as the last turn ends, timeout kill included. Nothing in the daemon or the core changes.
 
 **Files:**
-- Modify: `cli/evals/dial-skill/lib/stage.ts` (`daemonDataDir`, `stage`'s default `base`, `checkSandbox`, `unstage`)
-- Modify: `cli/evals/dial-skill/lib/agents.ts` (`deniedReads`, `settingsFor`, `claudeArgs`' `--settings`)
-- Modify: `cli/evals/dial-skill/README.md` (Isolation: where a run lives and why, the session saved for a two-turn run
-  and removed at unstage, the narrowed denies and their limit, the `harness status` check)
-- Test: `cli/evals/dial-skill/stage.spec.ts`, `cli/evals/dial-skill/agents.spec.ts`
+- Modify: `cli/evals/dial-skill/run-eval.mjs` (`runCase`: the delete after the agent's last turn)
+- Modify: `cli/evals/dial-skill/lib/agents.ts` only if check 1 below finds a `claude` call without
+  `--setting-sources project`
+- Modify: `cli/evals/dial-skill/README.md` (Isolation: one line saying a two-turn run's session is saved in the profile
+  for turn 2 and deleted when the run ends, timeout included)
+- Test: `cli/evals/dial-skill/run-eval.spec.ts`, `cli/evals/dial-skill/agents.spec.ts`
 
 **Interfaces:**
-- Produces:
-  - `export function daemonDataDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string`:
-    `ADAPTER_DATA_DIR` when set (a leading `~/` read as `home`), else `join(home, '.harness', 'cli', 'data')`, the
-    daemon's own rule (`config/env.ts`; not imported, as its load moves folders). macOS only, as the eval is.
-  - `stage`: `base` defaults to `daemonDataDir()`; the run's root stays `<base>/dial-skill-eval/<uuid>/`, the
-    `dial-skill-eval` folder made 0700. A missing data folder is refused (`no Harness data folder at <path>`), never a
-    fall back to the temp folder. Tests keep passing their own `base`.
-  - `unstage` also removes `<base>/dial-skill-eval` once it is empty, so a pass leaves nothing in the data folder.
-  - `deniedReads(keep?: string): string[]`: without `keep`, today's two folders. With `keep` inside `~/.harness`:
-    `~/.config/gh` and, at each folder from `~/.harness` down to `keep`'s parent, every entry (links included, read with
-    `readdirSync` at stage time) that is not on the way to `keep`; other runs' roots under `dial-skill-eval/` are among
-    them. `keep` outside `~/.harness`: today's two.
-  - `settingsFor(condition, root)` builds `permissions.deny` from `deniedReads(root)`; `claudeArgs` passes `st.root`.
-  - `checkSandbox(root)`: `(deny file-read* (subpath ~/.harness) (subpath ~/.config/gh))`, then
-    `(allow file-read* (subpath root))` after it (the later rule wins in a sandbox profile), real paths as today.
-  - The README names the limit: an entry made in those folders after the run was staged (another run's root, a new
-    daemon file) is not in the run's Read denies for that run's minutes; the shell's check sandbox has no such gap.
-
+- `runCase` removes `runProfileFolder(st)` (`lib/stage.ts`'s existing export, unchanged) in a `finally` around the
+  agent's turns. That is right after turn 1 for a one-turn run, before its harm and done checks; right after turn 2 for
+  a two-turn run; after a turn that failed or was killed at its timeout; and when turn 2 never starts for want of time.
+  Between turns 1 and 2 the session stays, as turn 2 resumes it. The delete comes after `spawnGroup` resolved: by then
+  its `close` has SIGKILLed the group and swept the root, so nothing writes the session afterwards. `unstage` and
+  `unstageLive` keep their removal for a runner that exits mid-run, and for the probes. The comment says why
+  (Decision 6).
 - [ ] **Step 1: Write the failing tests.**
-  - stage.spec `describe('the run's folder')`: `daemonDataDir` with `ADAPTER_DATA_DIR` absolute, with `~/…`, and unset
-    (`<home>/.harness/cli/data`); `stage` with no `base` and a temp `HOME` holding `.harness/cli/data` puts `repo` inside
-    it (`within(daemonDataDir(), st.repo)`, the daemon's own `lib/pathContainment.ts` `within`); a missing data folder
-    is refused; after `unstage` of the last run, `dial-skill-eval` is gone and the data folder's other entries are
-    untouched; `checkSandbox(root)` lets a check read a file in `repo` and refuses one in `~/.harness/auth` (run under
-    `sandbox-exec`, skipped off macOS).
-  - stage.spec `'a run's session would be skipped by the daemon'`: the daemon's test, `excluded.some((dir) =>
-    within(dir, cwd))` with `excluded = [daemonDataDir()]` (as `services/devices.ts` and `services/search.ts` build
-    it), is true for `st.repo` and false for a folder of `tmpdir()`.
-  - agents.spec: `deniedReads(root)` for a root at `<home>/.harness/cli/data/dial-skill-eval/<uuid>` lists every
-    sibling at each level (`auth`, `logs`, `cli/cli.js`, `cli/data/dial-notices.json`, another run's `<uuid2>`) and
-    none of `.harness`, `.harness/cli`, `.harness/cli/data`, `dial-skill-eval` or the root; `settingsFor` holds a
-    `Read(//…)` deny for each and none for `~/.harness` whole; `deniedReads()` with no `keep` is today's.
+  - run-eval.spec `describe("the run's session goes when the run ends")`. Use Task 17's fake `claude`, which writes
+    `<profile>/projects/<repo>/<id>.jsonl`.
+    - A one-turn run: its harm check records whether `<profile>/projects/<repo>` exists, and finds it gone. This is
+      the red case: today the folder goes at unstage, after the checks.
+    - A two-turn run: turn 2's fake finds the session still there when it starts. When turn 2 is killed at its timeout
+      (the fake traps SIGTERM, writes the session file, then waits to be killed), no folder is left under
+      `<profile>/projects/` once the case's error row is written. The timeout case already holds through unstage; it
+      stays as the guard on the order (delete after the group is dead).
+  - agents.spec, only if Task 17's session-argument test does not already hold it: `claudeArgs` for a new session and
+    for a resume both carry `--setting-sources project`, once.
 - [ ] **Step 2: Run them and see them fail.** `npx vitest run --config evals/dial-skill/vitest.config.ts
-  evals/dial-skill/stage.spec.ts evals/dial-skill/agents.spec.ts`. Expected: FAIL.
+  evals/dial-skill/run-eval.spec.ts evals/dial-skill/agents.spec.ts`. Expected: FAIL (the one-turn case).
 - [ ] **Step 3: Commit the red tests.**
-- [ ] **Step 4: Implement** and write the README's Isolation section.
+- [ ] **Step 4: Implement**, and write the README's line.
 - [ ] **Step 5: Run the eval's suite.** Expected: PASS.
-- [ ] **Step 6: Commit** (`Dial skill eval: a run lives in the daemon's data folder, which the daemon never lists`).
+- [ ] **Step 6: The two checks**, read in the code, without running the real daemon. Their results go in the PR body.
+  1. **No user hooks, no ring.** Confirm that every `claude` call of a run uses `--setting-sources project`, both
+     turns and the probe: `lib/agents.ts` `claudeArgs`; the judge does too (`lib/judge.ts`). With it, Claude Code
+     loads none of the person's user or local settings, so no hook, plugin or Harness hook of theirs runs, and the
+     daemon hears no turn of the run. The variant's own hooks are staged in the repo and reach only the fake `harness`
+     on `PATH` (Task 14). Also state whether this Mac has managed settings with hooks
+     (`/Library/Application Support/ClaudeCode/`), which load whatever the flag says. Point to the lines, and to the
+     test that holds the argument.
+  2. **Discovery.** Find out whether the daemon's discovery scans the profile's `projects/`. The eval's
+     `CLAUDE_CONFIG_DIR` is an Orca account home, whose `projects/` `observedSource` reads (`services/devices.ts`:
+     `claudeRoots`, Orca's homes). Start from these:
+     - `ObservedSource.scanOpen` (`cable/hosts/observed.ts` `scanOnce`) lists the sessions a live process holds
+       (`OpenSessions.owners`, `lib/sessionSearch/external.ts`: a record, a lock, an open file, or `--resume <id>` in
+       its arguments), then reads their rows from the stores. It runs every `OPEN_SCAN_MS` (60 s) while a dial is
+       attached.
+     - An entry whose process has gone is dropped on the `OBSERVED_TICK_MS` (30 s) tick (`observed.ts`, `gone`).
+     - A listed entry's turns are looked at every `TURN_CHECK_MS` (3 s) (`checkWorking`).
+
+     If discovery does scan `projects/`, state how long at most an eval session's tile can show on the real dial. Work
+     it out from those timings, the agent's bound (`agentTimeoutMs`) and the delete at the run's end: with the file
+     gone there is no row, so the session cannot be listed again. Also state whether a listed eval session's turn
+     checks could ring. If a ring is possible, or the bound is longer than a run plus a tick, stop and report to the
+     orchestrator before Verification 6. Nothing in the daemon changes here.
+- [ ] **Step 7: Commit** (`Dial skill eval: a run's Claude session goes when the run ends`).
 
 ## Task graph
 
@@ -945,10 +966,11 @@ or in ⌘P. Nothing in the daemon or the core changes. Every run moves, two-turn
 | 18 | eval: close gates | 15 | high |
 | 19 | eval: v7 and README | 9, 14, 15, 16, 17, 18 | high |
 | 20 | a Pro gets the card back, held, after a turn start | none | xhigh |
-| 21 | eval: every run in the daemon's data folder | 17 | xhigh |
+| 21 | eval: a run's session goes when the run ends | 17 | xhigh |
 
-Shared files run one at a time: Tasks 2, 3, 6 and 7 (`notices.ts`, `devices.ts`) and their specs; Tasks 14, 17 and 21
-(`stage.ts`, `agents.ts`, `stage.spec.ts`, `agents.spec.ts`); Tasks 19 and 21 (`README.md`). Longest chain:
+Shared files run one at a time: Tasks 2, 3, 6 and 7 (`notices.ts`, `devices.ts`) and their specs; Tasks 17 and 21
+(`run-eval.mjs`, `agents.ts`, `agents.spec.ts`, `run-eval.spec.ts`); Tasks 19 and 21 (`README.md`,
+`run-eval.spec.ts`). Longest chain:
 1 → 8 → 14 → 16 → 17 → 19 and 1 → 8 → 14 → 16 → 17 → 21 (6 tasks each); the product's longest is 2 → 3 → 7 → 10 (4).
 Then Verification 6, after Tasks 9, 14-19 and 21 land.
 
@@ -963,9 +985,12 @@ also states, each in a line:
   `set_state`); the round dial gets nothing again (Task 20).
 - The cost of silent turn ends (rule 8): in All mode, an agent that forgets to close its card loses its done-turn sound
   for up to 24 hours; a failed turn still rings.
-- The eval: every run, and a two-turn run's saved Claude session, lives in the Harness data folder for the run's
-  minutes, which the live daemon never lists as an agent (its existing data-folder rule), and is removed at unstage; the
-  fake `harness` never reaches the daemon (Tasks 14, 21).
+- The eval: runs stay in the temp folder, not in the Harness data folder, which holds the sign-in and remote
+  passwords. A two-turn run's saved Claude session is deleted as soon as the run's last turn ends, also on a timeout
+  kill. The deny on `~/.harness` stays whole. The fake `harness` never reaches the daemon (Tasks 14, 21).
+- Task 21's two checks, with the code that proves each: every run uses `--setting-sources project`, so the person's
+  hooks do not run and the daemon hears no turn of it (no ring); and whether the daemon's discovery scans the profile's
+  `projects/`, and if it does, how long at most an eval session's tile can show on the real dial.
 Before review, rebase on Part 5 when it has merged (see "Overlap with Part 5") and regenerate the eval's tables.
 
 ## Verification
@@ -994,18 +1019,22 @@ Before review, rebase on Part 5 when it has merged (see "Overlap with Part 5") a
 5. **The full CLI end to end** (Actions → CLI end to end): none; the e2e flows that read notices are the three files
    this PR changes, which `linux-e2e` and `windows-e2e` run.
 6. **The eval passes and the hill-climb** (spends money; needs the user's own Claude Code sign-in through the session
-   profile in `CLAUDE_CONFIG_DIR`, never `~/.claude`; runs only after Part 5's eval reports done, on the orchestrator's
-   go, never beside any other pass on the same account; on this Mac, from `cli/`, after Tasks 9, 14-19 and 21 land). The
-   agent the orchestrator names runs it; a round's text change is an edit and a commit.
+   profile in `CLAUDE_CONFIG_DIR`, never `~/.claude`; runs only after Part 5's verdict (Decision 8), on the
+   orchestrator's go, never beside any other pass on the same account; on this Mac, from `cli/`, after Tasks 9, 14-19
+   and 21 land). The agent the orchestrator names runs it; a round's text change is an edit and a commit.
+   - **Base** (Decision 8). If Part 5 shipped: rebase onto `main` with Part 5 first. Then, in one commit with their
+     tests (`state.spec.ts`, `summarize.spec.ts`), make v7's `hooks.json` and `harness-answers.json` Part 5's shipped
+     variant's (v4 + its Stop hook), and set `CLOSE_BASE_ROUND` to that variant's round. v7 is then v4's text + the
+     closing bullet + Part 5's Stop hook, measured against v4 + hook, and the ring gate compares to v4 + hook. If Part 5
+     did not ship: as planned, against v4. Either way, before pass 1 the final reviewer has read the overlapping rules
+     together (Review Focus 6).
    - **Start.** The branch holds Part 5's eval rows (rebased on Part 5, or on `main` after it merges), so the runner's
      flow spend counts them; `git status --short` is empty; `diff <(npx tsx -e 'import { DIAL_SKILL } from "./src/devices/dialSkill.ts"; process.stdout.write(DIAL_SKILL)') evals/dial-skill/flow/v7/SKILL.md`
      prints nothing. Read the real S, the last `spend` of the status table in `evals/dial-skill/flow/narrative.md`
      after `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow`, and report it to the orchestrator. If the
      flow holds no Part 5 rows, stop and report. Wait for the go. This item's budget is about $50 from S, inside the
-     design's $320; every pass below runs `--spend-cap-usd 320`. The run folder: the `state` row of `harness status`
-     (the real daemon, read only; the home written `~`) is the folder `npx tsx -e 'import { daemonDataDir } from
-     "./evals/dial-skill/lib/stage.ts"; console.log(daemonDataDir())'` prints; if not, stop and report (a run outside
-     the daemon's data folder could show on the real dial). `marker=$(mktemp)`.
+     design's $320; every pass below runs `--spend-cap-usd 320`. The PR body holds Task 21's two checks, and neither
+     found a ring; if not, stop and report. `marker=$(mktemp)`.
    - **Pass 1, v7** (about $25): `npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v7
      --follow-ups --condition crowd --split val,test --reps 2 --concurrency 3 --timeout-s 1500 --spend-cap-usd 320`,
      then the same with `--split train --reps 1`. Exit 2 "harness changed": review `git diff <harness_sha> --
@@ -1025,9 +1054,10 @@ Before review, rebase on Part 5 when it has merged (see "Overlap with Part 5") a
      wrong-close gate; otherwise stop and bring the numbers to the PM, and nothing ships. `dialSkill.ts` and its spec
      then hold the verdict's text.
    - **Close.** `find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u` lists only the
-     startup files the README names (no `projects/` folder left); `<data folder>/dial-skill-eval` does not exist; while
-     the passes ran, the real dial showed no eval agent (the person's eye, optional: Desktop's Devices tab or the dial's
-     list holds no row named after a temp repo); `npx tsx evals/dial-skill/flow-rows.ts scrub
+     startup files the README names (no `projects/` folder left, none named after a `dial-skill-eval` repo); while
+     the passes ran, the real dial never rang for an eval run and showed no eval agent longer than Task 21's bound (the
+     person's eye, optional: Desktop's Devices tab or the dial's list holds no row named after a temp repo past that
+     bound); `npx tsx evals/dial-skill/flow-rows.ts scrub
      evals/dial-skill/flow` exits 0; `node evals/dial-skill/build-report-lite.mjs evals/dial-skill/flow`; each
      variant's `change.md` and the narrative's section hold numbers only (`grep -nE '^>|/Users/|~/|'"$(whoami)"` finds
      nothing); the eval's suite passes; commit the rows, tables and text (`Dial skill eval: closing cards, v7…`).
