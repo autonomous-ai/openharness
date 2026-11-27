@@ -206,7 +206,8 @@ With the fix (the PR's head):
    Code's page; the Windows Terminal one is on Other's page (Windows Terminal names no app), neither on the other's page.
 9. Embedded case: close both, run `codex --no-daemon` in a VS Code terminal, restart. Expected: VS Code's page.
 10. Two `codex` in VS Code terminals in the **same** folder, restart. Expected: listed on no app's page (never a
-    guess), and back on VS Code's page at the next hook.
+    guess). They stay there at the next hook: a daemon's hook is placed by its client too (decision 1), and two TUIs in
+    one folder give none, as on macOS (Ken's VM, 2026-11-27).
 
 ## Size
 
