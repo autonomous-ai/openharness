@@ -32,14 +32,17 @@
  * A match that leads a process group is ended with its whole group: the fake engine renames its own title, so the
  * fake Codex's child (`node …/fakeEngine.mjs app-server`) never names the root and is reached only through its group.
  * Any other match is ended alone, never its group: a test's own `tmux -S <root>/…` call runs in the Vitest worker's
- * group, and signalling that group would end the test run.
+ * group, and signalling that group would end the test run. A Codex app server a pid file names that leads a group is
+ * ended with it, what it started with it, but never when that group is the test run's own (testRunGroups), and never on
+ * Windows.
  */
 import { spawnSync } from 'node:child_process'
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { alive, identities, namedTree, processTable, processTree, startTimes, type Identity, type NamedRow } from './spawnedRuns.js'
+import { alive, foregroundGroups, identities, namedTree, processTable, processTree, startTimes, type Identity, type NamedRow,
+  type ProcessRow } from './spawnedRuns.js'
 
 export interface RootProcesses {
   /** Process groups to signal whole, each led by a match. */
@@ -279,10 +282,26 @@ function rootCodexDaemons(root: string): Identity[] {
 }
 
 /**
+ * The process groups a Codex app server's may never be, seen from this process: its own, its parent's, and the one in the
+ * foreground of its terminal (the shell's job running the tests) when it has one. Null when this process or its parent
+ * cannot be read: then no group is known to be another's.
+ */
+function testRunGroups(): Set<number> | null {
+  let table: ProcessRow[]
+  try { table = processTable() } catch { return null }
+  const self = table.find((row) => row.pid === process.pid)
+  const parent = self === undefined ? undefined : table.find((row) => row.pid === self.ppid)
+  if (self === undefined || parent === undefined) return null
+  const foreground = Number(foregroundGroups([self.pid]).get(self.pid))
+  return new Set([self.pgid, parent.pgid, ...(foreground > 0 ? [foreground] : [])])
+}
+
+/**
  * SIGKILL every process of the test's tree that names [root] or works in it, what descends from what the harness [owned]
  * (IsolatedDaemon.own) whatever it names, and each Codex app server a pid file inside [root] names that is the test's
- * (codexDaemons), once [root] is known to be a test's, and wait, at most [ms], until none of them is alive: the tree of
- * this worker and of what was [seen] (seenNow) or [owned] that still runs as itself.
+ * (codexDaemons), with the group it leads unless that is the test run's own, once [root] is known to be a test's, and
+ * wait, at most [ms], until none of them is alive: the tree of this worker and of what was [seen] (seenNow) or [owned]
+ * that still runs as itself.
  * Returns those still alive, as `pid <n> <command>`; empty when none is.
  */
 export async function endRootProcesses(root: string, seen: ReadonlyMap<number, string>, owned: ReadonlyMap<number, string> = new Map(),
@@ -291,8 +310,12 @@ export async function endRootProcesses(root: string, seen: ReadonlyMap<number, s
   const mine = stillRunning(owned)
   const { rows, groups, pids, all } = matched(root, [process.pid, ...stillRunning(seen), ...mine], mine)
   const codex = rootCodexDaemons(root).filter((row) => !all.includes(row.pid))
+  // Windows' processes have no groups to signal.
+  const run = process.platform !== 'win32' && codex.some((row) => row.pgid === row.pid) ? testRunGroups() : null
+  const whole = (row: Identity) => run !== null && row.pgid === row.pid && !run.has(row.pgid)
   for (const pgid of groups) { try { process.kill(-pgid, 'SIGKILL') } catch { /* the group is gone */ } }
-  for (const pid of [...pids, ...codex.map((row) => row.pid)]) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  for (const row of codex) { try { process.kill(whole(row) ? -row.pid : row.pid, 'SIGKILL') } catch { /* gone */ } }
   const ended = [...rows.filter((row) => all.includes(row.pid)), ...codex]
   // Waited for asynchronously: a child of this process stays a zombie, alive to a signal, until Node's event loop reaps it.
   const deadline = Date.now() + ms

@@ -214,7 +214,7 @@ describe('a Codex app server a pid file in the root names', () => {
     const root = Date.parse('Mon Nov 23 10:00:00 2026') + 400
     const server = 'codex app-server --managed-daemon'
     const pidRow = (pid: number, started: string, command = server, uid = 501, recorded = started): PidRow =>
-      ({ pid, uid, started, command, recorded })
+      ({ pid, pgid: pid, uid, started, command, recorded })
     const rows = [
       pidRow(10, 'Mon Nov 23 10:00:03 2026'),
       // Linux's start can name the second before the one the clock was in (spawnedRuns.ts daemonOf).

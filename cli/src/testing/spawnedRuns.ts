@@ -79,7 +79,7 @@ function psLines(pids: readonly number[], columns: string): string[] {
 }
 
 /** [field] of each of [pids] still running, by pid, as `ps -p` prints it. */
-function psOf(pids: readonly number[], field: 'command' | 'comm' | 'lstart'): Map<number, string> {
+function psOf(pids: readonly number[], field: 'command' | 'comm' | 'lstart' | 'tpgid'): Map<number, string> {
   return new Map(psLines(pids, `pid=,${field}=`).flatMap((line) => {
     const match = /^\s*(\d+)\s+(.*?)\s*$/.exec(line)
     return match ? [[Number(match[1]), match[2]!] as const] : []
@@ -92,17 +92,19 @@ export const commandLines = (pids: readonly number[]): Map<number, string> => ps
 export const comms = (pids: readonly number[]): Map<number, string> => psOf(pids, 'comm')
 /** When each of [pids] started, to the second: what tells a process the test saw from one given its pid later. */
 export const startTimes = (pids: readonly number[]): Map<number, string> => psOf(pids, 'lstart')
+/** The process group in the foreground of the terminal of each of [pids], processes of the test's own: 0 or -1 for none. */
+export const foregroundGroups = (pids: readonly number[]): Map<number, string> => psOf(pids, 'tpgid')
 
-/** A process as one `ps -p` read gives it: its account, its start to the second, its command line. */
-export interface Identity { pid: number; uid: number; started: string; command: string }
+/** A process as one `ps -p` read gives it: its group, its account, its start to the second, its command line. */
+export interface Identity { pid: number; pgid: number; uid: number; started: string; command: string }
 
 /** Each of [pids] still running, as one read gives it, so every field is of the same process: what a pid a Codex pid file
  *  names is judged by (rootProcesses.ts codexDaemons). */
 export function identities(pids: readonly number[]): Identity[] {
-  return psLines(pids, 'pid=,uid=,lstart=,command=').flatMap((line) => {
+  return psLines(pids, 'pid=,pgid=,uid=,lstart=,command=').flatMap((line) => {
     // C's start is five words: `Mon Nov 23 10:00:03 2026`.
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/.exec(line)
-    return match ? [{ pid: Number(match[1]), uid: Number(match[2]), started: match[3]!, command: match[4]! }] : []
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/.exec(line)
+    return match ? [{ pid: Number(match[1]), pgid: Number(match[2]), uid: Number(match[3]), started: match[4]!, command: match[5]! }] : []
   })
 }
 

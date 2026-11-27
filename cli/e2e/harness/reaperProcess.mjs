@@ -121,13 +121,13 @@ function psOf(pids, field) {
   }))
 }
 
-/** Each of [pids] still running, its account, start and command line, as one read gives it, so every field is of the same
- *  process (src/testing/spawnedRuns.ts identities). */
+/** Each of [pids] still running, its group, account, start and command line, as one read gives it, so every field is of
+ *  the same process (src/testing/spawnedRuns.ts identities). */
 function identities(pids) {
-  return psLines(pids, 'pid=,uid=,lstart=,command=').flatMap((line) => {
+  return psLines(pids, 'pid=,pgid=,uid=,lstart=,command=').flatMap((line) => {
     // C's start is five words: `Mon Nov 23 10:00:03 2026`.
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/.exec(line)
-    return match ? [{ pid: Number(match[1]), uid: Number(match[2]), started: match[3], command: match[4] }] : []
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/.exec(line)
+    return match ? [{ pid: Number(match[1]), pgid: Number(match[2]), uid: Number(match[3]), started: match[4], command: match[5] }] : []
   })
 }
 
@@ -349,24 +349,45 @@ function rootCodexDaemons(root) {
   const since = Math.floor(made / 1_000) * 1_000 - 1_000
   return identities([...new Set(files.map((file) => file.pid))]).filter((row) => row.uid === process.getuid()
     && CODEX_APP_SERVER.test(row.command) && Date.parse(row.started) >= since
-    && files.some((file) => file.pid === row.pid && sameStart(file.started, row.started))).map((row) => row.pid)
+    && files.some((file) => file.pid === row.pid && sameStart(file.started, row.started)))
 }
 
 /**
+ * The process groups a Codex app server's may never be (src/testing/rootProcesses.ts testRunGroups), read as this process
+ * starts, while the worker that started it is its parent: the worker's, the worker's parent's, and the one in the
+ * foreground of the worker's terminal (the shell's job running the tests) when it has one. This process leads a group of
+ * its own (reaper.ts), never a Codex app server's. Null when they cannot be read, and on Windows, whose processes have no
+ * groups to signal: then no group is ended whole.
+ */
+const runGroups = (() => {
+  if (process.platform === 'win32') return null
+  let table
+  try { table = processTable() } catch { return null }
+  const worker = table.find((row) => row.pid === process.ppid)
+  const parent = worker && table.find((row) => row.pid === worker.ppid)
+  if (!parent) return null
+  const foreground = Number(psOf([worker.pid], 'tpgid').get(worker.pid))
+  return new Set([worker.pgid, parent.pgid, ...(foreground > 0 ? [foreground] : [])])
+})()
+
+/**
  * SIGKILL what of the worker's tree still names [root] or works in it (treeMatches), and each Codex app server a pid file
- * inside [root] names that is the test's (rootCodexDaemons), [root] being a test's (isTestRoot), and wait, at most 5 s,
- * until none is left. Codex's managed app server detaches itself, names no root and need not work in it, so no tree leads
- * to it: a real one from the tester of #4660 and #4668 outlived its test, launchd's. Codex records it in
- * `<CODEX_HOME>/app-server-daemon/daemon.pid`, so those are read even when nothing the worker saw still runs.
+ * inside [root] names that is the test's (rootCodexDaemons), with the group it leads unless that is the test run's own
+ * (runGroups), [root] being a test's (isTestRoot), and wait, at most 5 s, until none is left. Codex's managed app server
+ * detaches itself, names no root and need not work in it, so no tree leads to it: a real one from the tester of #4660 and
+ * #4668 outlived its test, launchd's. Codex records it in `<CODEX_HOME>/app-server-daemon/daemon.pid`, so those are read
+ * even when nothing the worker saw still runs.
  */
 async function endRootProcesses(root, seen) {
   const { groups, pids, all } = treeMatches(root, seen)
-  const codex = rootCodexDaemons(root).filter((pid) => !all.includes(pid))
+  const codex = rootCodexDaemons(root).filter((row) => !all.includes(row.pid))
   if (all.length) console.error(`[e2e reaper] ended ${all.length} processes that still named ${root} or ran in it`)
   if (codex.length) console.error(`[e2e reaper] ended ${codex.length} Codex app servers that pid files in ${root} named`)
+  const whole = (row) => runGroups !== null && row.pgid === row.pid && !runGroups.has(row.pgid)
   for (const pgid of groups) signal(pgid, 'SIGKILL')
-  for (const pid of [...pids, ...codex]) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
-  const ended = [...all, ...codex]
+  for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  for (const row of codex) { try { process.kill(whole(row) ? -row.pid : row.pid, 'SIGKILL') } catch { /* gone */ } }
+  const ended = [...all, ...codex.map((row) => row.pid)]
   const deadline = Date.now() + 5_000
   while (ended.some(exists) && Date.now() < deadline) await sleep(100)
   const left = ended.filter(exists)
