@@ -63,7 +63,9 @@ What the script does, for reading the workflow:
 1. Reads the current version from the live manifest (falling back to `package.json` if the manifest is
    unreadable), then bumps or takes the version it was given.
 2. Bundles with `ADAPTER_VERSION="$VERSION" npm run bundle` and asserts `node dist/cli.js version`
-   reads back that exact string before uploading anything.
+   reads back that exact string, and that `node dist/inbox.mjs device claude inbox not-a-session-id` answers
+   `{"off":true}` and exits 0 in a throwaway home within 15 s (`scripts/check-inbox-bundle.mjs`), before uploading
+   anything.
 3. Uploads `cli.js`, `notify.mjs` and `inbox.mjs` to `harness/cli/<version>/`, then download-merge-reuploads
    `metadata.json` in a single write, touching only the `cli` key.
 
@@ -157,6 +159,11 @@ files it points at are the opposite: immutable once published, so their `url` fi
 `inbox.mjs` is the dial's inbox follower on its own, which `harness.exe` runs on Windows instead of the whole
 `cli.js`. One manifest serves every OS; `inbox` is optional, and a reader ignores it when it is absent or
 malformed.
+
+A known behavior of the first release with `inbox.mjs`: a Windows machine that an older CLI updates to it gets a
+version folder without `inbox.mjs`, since the older updaters stage only `cli.js` and `notify.mjs`, and the new daemon
+does not add it until the next release. So `inbox.mjs` reaches Windows from the second release on; until then the
+follower runs on `cli.js`'s short path.
 
 The bucket must be public-read — that is bucket policy, not something the scripts set.
 
