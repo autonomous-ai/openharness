@@ -336,7 +336,7 @@ describe('the dial set up from its first attach', () => {
 
   it.runIf(!!process.env.E2E_REAL_CODEX)('a real Codex app-server\'s rollout gives its home', async () => {
     const codex = process.env.E2E_REAL_CODEX!
-    const { d, desk } = await fresh()
+    const { d, desk: theDesk } = await fresh()
     const home = join(d.env.HOME!, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
     mkdirSync(home, { recursive: true })
     mkdirSync(work, { recursive: true })
@@ -384,7 +384,7 @@ trust_level = "trusted"
       const args = execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(held)]).toString()
       console.log(`the rollout's holder is an app-server: ${args.includes('app-server') ? 'yes' : 'no'}`)
 
-      await plugged(desk)
+      await plugged(theDesk)
       await until('the skill in the real Codex\'s home', () => read(skillOf(home)) === DIAL_SKILL, 45_000, 100)
       noPathLogged(d)
     } finally {
@@ -392,13 +392,18 @@ trust_level = "trusted"
       try { tmux('kill-server') } catch { /* already gone */ }
       // Codex's app server outlives the pane: IsolatedDaemon.close() ends it through <home>/app-server-daemon/daemon.pid
       // (rootProcesses.ts), so the sweep is the one cleanup and this case proves it. Its start, read before, tells it
-      // from a process given its pid since; the close in afterEach is then a second one, which ends nothing more.
+      // from a process given its pid since.
       // A pid file missing or cut short fails the case below, never this cleanup, which would hide the case's own error.
       try {
         const { pid } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid: number }
         server = { pid, started: startTimes([pid]).get(pid) }
       } catch { /* no server read: the expect below says so */ }
+      // The desk first: its close writes dials.json in the root the daemon's close removes. Each is cleared once closed, so
+      // afterEach closes neither again.
+      await theDesk.close()
+      desk = undefined
       await d.close()
+      daemon = undefined
     }
     expect(server?.started, 'the Codex app server its pid file names, running before the close').toBeDefined()
     expect(startTimes([server!.pid]).get(server!.pid), 'the Codex app server after the close').not.toBe(server!.started)
