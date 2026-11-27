@@ -38,7 +38,7 @@ import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statS
 import { tmpdir, userInfo } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { alive, commandLines, namedTree, processTable, processTree, startTimes, uids, type NamedRow } from './spawnedRuns.js'
+import { alive, identities, namedTree, processTable, processTree, startTimes, type Identity, type NamedRow } from './spawnedRuns.js'
 
 export interface RootProcesses {
   /** Process groups to signal whole, each led by a match. */
@@ -223,8 +223,8 @@ export function codexPidFiles(root: string): number[] {
 /** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
 const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
 
-/** A process a Codex pid file names, as `ps -p` gives it: its account, its start to the second, its command line. */
-export interface PidRow { pid: number; uid: number; started: string; command: string }
+/** A process a Codex pid file names, as one `ps -p` read gives it (spawnedRuns.ts identities). */
+export type PidRow = Identity
 
 /**
  * Of [rows], the processes Codex pid files inside a root made at [made] (ms) name, what is the test's: the account [uid]'s,
@@ -241,7 +241,9 @@ export function codexDaemons(rows: readonly PidRow[], made: number, uid: number)
  *  or pid 1. None, and one line said, when the root's birth time is unknown. */
 function rootCodexDaemons(root: string): PidRow[] {
   const spared = new Set([process.pid, process.ppid, 1])
-  const pids = codexPidFiles(root).filter((pid) => !spared.has(pid))
+  // Only a pid that runs is asked of: macOS's `ps -p` given one no machine has (100000 or over) prints nothing of any pid
+  // asked with it.
+  const pids = codexPidFiles(root).filter((pid) => !spared.has(pid) && alive(pid))
   if (pids.length === 0) return []
   // Any failure to read it (gone, not this account's to read) is no birth time: the rest of the sweep still runs.
   let made = 0
@@ -250,11 +252,7 @@ function rootCodexDaemons(root: string): PidRow[] {
     console.error(`[e2e sweep] no birth time for ${root}: no Codex app server its pid files name is ended`)
     return []
   }
-  const accounts = uids(pids), started = startTimes(pids), commands = commandLines(pids)
-  const rows = pids.flatMap((pid) => {
-    const uid = accounts.get(pid), start = started.get(pid), command = commands.get(pid)
-    return uid === undefined || start === undefined || command === undefined ? [] : [{ pid, uid: Number(uid), started: start, command }]
-  })
+  const rows = identities(pids)
   const theirs = new Set(codexDaemons(rows, made, process.getuid!()))
   return rows.filter((row) => theirs.has(row.pid))
 }

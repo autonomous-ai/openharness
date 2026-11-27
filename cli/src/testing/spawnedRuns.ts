@@ -68,14 +68,19 @@ export function processTree(table: readonly ProcessRow[], roots: Iterable<number
   return table.filter((row) => tree.has(row.pid))
 }
 
-/** [field] of each of [pids] still running, by pid, as `ps -p` prints it: never of a process not asked of. */
-function psOf(pids: readonly number[], field: 'command' | 'comm' | 'lstart' | 'uid'): Map<number, string> {
-  if (pids.length === 0) return new Map()
+/** The lines `ps -p` prints of [columns] for each of [pids] still running: never of a process not asked of. */
+function psLines(pids: readonly number[], columns: string): string[] {
+  if (pids.length === 0) return []
   // It exits 1 once none of them runs: what it printed is read whatever its status. C's dates, so every read prints a
   // start alike and Date reads it.
-  const listed = spawnSync('ps', ['-ww', '-o', `pid=,${field}=`, '-p', pids.join(',')],
+  const listed = spawnSync('ps', ['-ww', '-o', columns, '-p', pids.join(',')],
     { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 64 * 1024 * 1024, timeout: 10_000 })
-  return new Map(String(listed.stdout ?? '').split('\n').flatMap((line) => {
+  return String(listed.stdout ?? '').split('\n')
+}
+
+/** [field] of each of [pids] still running, by pid, as `ps -p` prints it. */
+function psOf(pids: readonly number[], field: 'command' | 'comm' | 'lstart'): Map<number, string> {
+  return new Map(psLines(pids, `pid=,${field}=`).flatMap((line) => {
     const match = /^\s*(\d+)\s+(.*?)\s*$/.exec(line)
     return match ? [[Number(match[1]), match[2]!] as const] : []
   }))
@@ -87,9 +92,19 @@ export const commandLines = (pids: readonly number[]): Map<number, string> => ps
 export const comms = (pids: readonly number[]): Map<number, string> => psOf(pids, 'comm')
 /** When each of [pids] started, to the second: what tells a process the test saw from one given its pid later. */
 export const startTimes = (pids: readonly number[]): Map<number, string> => psOf(pids, 'lstart')
-/** The account each of [pids] runs as, by its number: a Codex app server a pid file names is ended only while it is this
- *  account's (rootProcesses.ts codexDaemons). */
-export const uids = (pids: readonly number[]): Map<number, string> => psOf(pids, 'uid')
+
+/** A process as one `ps -p` read gives it: its account, its start to the second, its command line. */
+export interface Identity { pid: number; uid: number; started: string; command: string }
+
+/** Each of [pids] still running, as one read gives it, so every field is of the same process: what a pid a Codex pid file
+ *  names is judged by (rootProcesses.ts codexDaemons). */
+export function identities(pids: readonly number[]): Identity[] {
+  return psLines(pids, 'pid=,uid=,lstart=,command=').flatMap((line) => {
+    // C's start is five words: `Mon Nov 23 10:00:03 2026`.
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/.exec(line)
+    return match ? [{ pid: Number(match[1]), uid: Number(match[2]), started: match[3]!, command: match[4]! }] : []
+  })
+}
 
 /** [roots]'s tree now (processTree), each process with its command line; one gone meanwhile is left out. */
 export function namedTree(roots: Iterable<number>, table: readonly ProcessRow[] = processTable()): NamedRow[] {

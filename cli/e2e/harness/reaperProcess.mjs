@@ -104,16 +104,31 @@ function processTree(table, roots) {
   return table.filter((row) => tree.has(row.pid))
 }
 
-/** [field] of each of [pids] still running, by pid, as `ps -p` prints it: never of a process not asked of. It exits 1
+/** The lines `ps -p` prints of [columns] for each of [pids] still running: never of a process not asked of. It exits 1
  *  once none of them runs, and what it printed is read whatever its status; C's dates, so each read prints a start alike. */
-function psOf(pids, field) {
-  if (!pids.length) return new Map()
-  const listed = spawnSync('ps', ['-ww', '-o', `pid=,${field}=`, '-p', pids.join(',')],
+function psLines(pids, columns) {
+  if (!pids.length) return []
+  const listed = spawnSync('ps', ['-ww', '-o', columns, '-p', pids.join(',')],
     { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 64 * 1024 * 1024, timeout: 5_000 })
-  return new Map(String(listed.stdout ?? '').split('\n').flatMap((line) => {
+  return String(listed.stdout ?? '').split('\n')
+}
+
+/** [field] of each of [pids] still running, by pid, as `ps -p` prints it. */
+function psOf(pids, field) {
+  return new Map(psLines(pids, `pid=,${field}=`).flatMap((line) => {
     const match = /^\s*(\d+)\s+(.*?)\s*$/.exec(line)
     return match ? [[Number(match[1]), match[2]]] : []
   }))
+}
+
+/** Each of [pids] still running, its account, start and command line, as one read gives it, so every field is of the same
+ *  process (src/testing/spawnedRuns.ts identities). */
+function identities(pids) {
+  return psLines(pids, 'pid=,uid=,lstart=,command=').flatMap((line) => {
+    // C's start is five words: `Mon Nov 23 10:00:03 2026`.
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*?)\s*$/.exec(line)
+    return match ? [{ pid: Number(match[1]), uid: Number(match[2]), started: match[3], command: match[4] }] : []
+  })
 }
 
 /** Of [started] (pid → its start time), what still runs as the same process: a pid that started at another time is
@@ -306,7 +321,9 @@ const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)
  * parent or pid 1. None, and one line said, when the root's birth time is unknown.
  */
 function rootCodexDaemons(root) {
-  const pids = codexPidFiles(root).filter((pid) => ![process.pid, process.ppid, 1].includes(pid))
+  // Only a pid that runs is asked of: macOS's `ps -p` given one no machine has (100000 or over) prints nothing of any pid
+  // asked with it.
+  const pids = codexPidFiles(root).filter((pid) => ![process.pid, process.ppid, 1].includes(pid) && exists(pid))
   if (!pids.length) return []
   let made = 0
   try { made = statSync(root).birthtimeMs } catch { /* gone: no birth time */ }
@@ -317,9 +334,8 @@ function rootCodexDaemons(root) {
   // `ps` gives a start to the second, and Linux's can name the second before the one the clock was in
   // (src/testing/spawnedRuns.ts daemonOf).
   const since = Math.floor(made / 1_000) * 1_000 - 1_000
-  const uids = psOf(pids, 'uid'), started = psOf(pids, 'lstart'), commands = psOf(pids, 'command')
-  return pids.filter((pid) => Number(uids.get(pid)) === process.getuid() && CODEX_APP_SERVER.test(commands.get(pid) ?? '')
-    && Date.parse(started.get(pid) ?? '') >= since)
+  return identities(pids).filter((row) => row.uid === process.getuid() && CODEX_APP_SERVER.test(row.command)
+    && Date.parse(row.started) >= since).map((row) => row.pid)
 }
 
 /**
