@@ -97,6 +97,14 @@ describe('the move lock', () => {
     expect(await withMoveLock(legacy, async () => ownerOf(legacy), UNCOMMITTED, as(1001))).toEqual({ held: true, value: { pid: 1001, start: 7 } })
   })
 
+  it('a folder at a draft\'s name is not the take\'s: it stays, with what is in it, and the take\'s error is thrown', async () => {
+    const legacy = legacyHome()
+    mkdirSync(join(moveLockPath(legacy), 'owner.1001'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(moveLockPath(legacy), 'owner.1001', 'notes.txt'), 'mine')
+    await expect(withMoveLock(legacy, async () => ownerOf(legacy), UNCOMMITTED, as(1001))).rejects.toMatchObject({ code: 'EISDIR' })
+    expect(readFileSync(join(moveLockPath(legacy), 'owner.1001', 'notes.txt'), 'utf8')).toBe('mine')
+  })
+
   it('a gone owner set aside that cannot be removed is still taken over', async () => {
     const legacy = legacyHome()
     heldBy(legacy, 4242, 1)
