@@ -3545,13 +3545,7 @@ export class CableSession {
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
-    // The Pro's firmware drops an agent's question at any state but asking (pod_model.c set_state), and a turn start no
-    // longer closes a notice card (2026-11-27): the card stayed open, off the Pro. It goes back held, a drawer row, which
-    // the firmware's later sweeps keep; once a card, as a turn starts again at each working card. Never a question
-    // frame, and nothing to a round dial: it keeps the card through a turn start, and any question frame rings it.
-    const open = this.questionInbox.read(agentId)
-    if (this.seqOn && open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX) && this.questionInbox.rehold(agentId, open.id))
-      await this.replaceNotifications(this.host.listUnread())
+    await this.reholdNotice(agentId)
     // The paragraph the agent last wrote, so the working screen has a sentence before the footer is read.
     if (this.stepsActivity && update) await this.send({ t: 'turn.activity', agentId, text, action: clipUtf8(update, ACTION_MAX_BYTES) })
     if (!this.link?.isOpen || !this.canReadActivity()) { this.activityReads.delete(agentId); return }
@@ -3665,6 +3659,7 @@ export class CableSession {
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.done', agentId })
+    await this.reholdNotice(agentId)
   }
   /**
    * A finished turn's recap.
@@ -3682,6 +3677,20 @@ export class CableSession {
     // The card carries the answer; the host is asked only when it did not, and not for long.
     const full = this.fullField(this.longRecap ? fullText ?? await this.storedFullText(agentId, text) : undefined)
     await this.send(this.withinCap({ t: 'summary', agentId, ...who, recap, text, ...full, tier, ...(tier === 'list' ? { quiet: true } : {}), ...(tier === 'silent' ? { silent: true } : {}) }))
+    await this.reholdNotice(agentId)
+  }
+
+  /**
+   * The Pro's firmware drops an agent's question whenever that agent leaves the asking state (pod_model.c set_state): at
+   * a turn start, a turn's end or failure, and a live summary, which ends the turn there. A turn no longer closes a
+   * notice card (2026-11-27): the card stayed open, off the Pro. It goes back held, a drawer row, which the firmware's
+   * later sweeps keep; once a card, as those frames come again and again. Never a question frame, and nothing to a round
+   * dial: it keeps the card through them, and any question frame rings it.
+   */
+  private async reholdNotice(agentId: string): Promise<void> {
+    const open = this.questionInbox.read(agentId)
+    if (this.seqOn && open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX) && this.questionInbox.rehold(agentId, open.id))
+      await this.replaceNotifications(this.host.listUnread())
   }
 
   /**
@@ -3812,6 +3821,7 @@ export class CableSession {
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.error', agentId, message })
+    await this.reholdNotice(agentId)
   }
   /**
    * An agent stopped to ask.
