@@ -81,6 +81,9 @@ describe('a Windows TUI\'s state folder, from the files harness-pty reads it hol
     // A process gone from the table, or a table that could not be read: unknown, and no files are asked for.
     await expect(nativeOpenFiles(4246, 'win32', failed, table)).rejects.toThrow()
     await expect(nativeOpenFiles(4243, 'win32', failed, async () => null)).rejects.toThrow()
+    // Past harness-pty's 32 processes a run, some would go unread: unknown, and none are asked for.
+    const brood = Array.from({ length: 32 }, (_, n) => at(20_000 + n, 10104, 30 + n))
+    await expect(nativeOpenFiles(10104, 'win32', failed, tableOf(launcher, ...brood))).rejects.toThrow()
     expect(asked).toEqual([[4243], [4244], [4245]])
   })
 })
