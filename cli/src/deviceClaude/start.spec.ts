@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_START_LINE, ownSkillIn, runStart, startOutput } from './start.js'
 
-const LINE = 'The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for finished work or progress. The dial skill has the rest.'
+const LINE = 'The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the dial skill and follow it. Not for finished work or progress.'
 /** The skill 0.6.58 wrote, with its marker line: homes still hold it. */
 const OLD_SKILL = '---\nname: dial\ndescription: older\n# Written by Harness. Turn off the agent in Harness Device to remove it.\n---\n\nOlder.\n'
 /** A person's own dial skill: no marker line. */
@@ -43,17 +43,17 @@ describe('the line', () => {
     expect(DIAL_START_LINE).toBe(LINE)
   })
 
-  it('the line is at most 300 characters of printable ASCII on one line, with the command, both flags and the moment', () => {
+  it('the line is at most 300 characters of printable ASCII on one line, names the moment, sends the agent to the dial skill and carries no command', () => {
     expect(DIAL_START_LINE.length).toBeLessThanOrEqual(300)
     expect(DIAL_START_LINE).toMatch(/^[\x20-\x7e]+$/)
-    for (const part of ['harness device notify', '--suggest', '--waiting', '--proceeding', 'leaves them something to decide, answer or do']) {
-      expect(DIAL_START_LINE).toContain(part)
-    }
     expect(DIAL_START_LINE).not.toMatch(/[<>]/)
+    expect(DIAL_START_LINE).toContain('decide, answer or do')
+    expect(DIAL_START_LINE).toContain('dial skill')
+    for (const word of ['harness device notify', '--suggest', '--waiting', '--proceeding']) expect(DIAL_START_LINE).not.toContain(word)
   })
 
-  it('the line and the dial skill\'s description agree: the same command, flags and moment', () => {
-    for (const part of ['harness device notify "[the ask', '--suggest "[your pick]"', '--waiting', '--proceeding', 'decide, answer or do', 'Not for finished work or progress.']) {
+  it('the line and the dial skill\'s description agree on the moment', () => {
+    for (const part of ['decide, answer or do', 'Not for finished work or progress.']) {
       expect(DIAL_SKILL_DESCRIPTION).toContain(part)
       expect(DIAL_START_LINE).toContain(part)
     }
@@ -169,35 +169,15 @@ describe('runStart', () => {
 
 // The eval runs the variant against a fake harness, so its answer must be this command's output byte for byte.
 describe('the eval', () => {
-  const V3 = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'evals', 'dial-skill', 'flow', 'v3')
+  const V4 = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'evals', 'dial-skill', 'flow', 'v4')
 
-  it('the eval\'s Part 4 variant answers exactly what this command prints', () => {
-    const answers = JSON.parse(readFileSync(join(V3, 'harness-answers.json'), 'utf8')) as { argv: string[], stdout?: string, stderr?: string, code?: number }[]
+  it('the eval\'s round 2 variant answers exactly what this command prints', () => {
+    const answers = JSON.parse(readFileSync(join(V4, 'harness-answers.json'), 'utf8')) as { argv: string[], stdout?: string, stderr?: string, code?: number }[]
     expect(answers.filter((answer) => answer.argv.join(' ') === 'device claude start'))
       .toEqual([{ argv: ['device', 'claude', 'start'], stdout: `${startOutput()}\n` }])
-    const hooks = JSON.parse(readFileSync(join(V3, 'hooks.json'), 'utf8')) as Record<string, { matcher: string, hooks: { command: string }[] }[]>
+    const hooks = JSON.parse(readFileSync(join(V4, 'hooks.json'), 'utf8')) as Record<string, { matcher: string, hooks: { command: string }[] }[]>
     expect(hooks.SessionStart).toHaveLength(1)
     expect(hooks.SessionStart[0].matcher).toBe('startup|resume|clear|compact')
     expect(hooks.SessionStart[0].hooks.map((hook) => hook.command)).toEqual(['harness device claude start'])
-  })
-
-  it('the eval\'s round 2 variant answers the SessionStart JSON of a line that sends the agent to the skill', () => {
-    const V4 = join(V3, '..', 'v4')
-    const answers = JSON.parse(readFileSync(join(V4, 'harness-answers.json'), 'utf8')) as { argv: string[], stdout?: string, stderr?: string, code?: number }[]
-    const starts = answers.filter((answer) => answer.argv.join(' ') === 'device claude start')
-    expect(starts).toHaveLength(1)
-    expect(starts[0].stderr).toBeUndefined()
-    expect(starts[0].code).toBeUndefined()
-    const line: unknown = (JSON.parse(starts[0].stdout ?? '') as { hookSpecificOutput: { additionalContext: unknown } }).hookSpecificOutput.additionalContext
-    if (typeof line !== 'string') throw new Error('additionalContext is not a string')
-    expect(starts[0].stdout).toBe(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: line } })}\n`)
-    expect(line.length).toBeLessThanOrEqual(300)
-    expect(line).toMatch(/^[\x20-\x7e]+$/)
-    expect(line).not.toMatch(/[<>]/)
-    expect(line).toContain('decide, answer or do')
-    expect(line).toContain('dial skill')
-    for (const word of ['harness device notify', '--suggest', '--waiting', '--proceeding']) expect(line).not.toContain(word)
-    expect(DIAL_SKILL_DESCRIPTION).toContain('decide, answer or do')
-    expect(JSON.parse(readFileSync(join(V4, 'hooks.json'), 'utf8'))).toStrictEqual(JSON.parse(readFileSync(join(V3, 'hooks.json'), 'utf8')))
   })
 })
