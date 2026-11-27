@@ -228,7 +228,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   (src/services/devicesListener.ts), never through the core: a new message is a handler registered there by its
   type, with its own body and rate limits, beside `front`, `tab`, `wrote`, Harness Device's answer to a spoken text
   or its Enter sent on the `tabs` stream, `thread`, the title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
-  from `harness device notify`, `notify`,
+  from `harness device notify`, `noticeList` and `noticeDone`, its `--list` and `--done`, which name the caller's own
+  cards alone, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
   Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). The listener runs on every
   platform, on Windows over its pipe. Only where the devices run inside the core with no listener (Harness OS) does

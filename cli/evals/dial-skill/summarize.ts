@@ -1,5 +1,5 @@
-// npx tsx evals/dial-skill/summarize.ts <flow>: writes each variant's table.md, the status and held-out tables in
-// narrative.md and the aggregate table in metrics.md, and prints the headline.
+// npx tsx evals/dial-skill/summarize.ts <flow>: writes each variant's table.md, the status, held-out and close tables
+// in narrative.md and the aggregate table in metrics.md, and prints the headline.
 import { writeSummaries } from './lib/summarize.js'
 
 const flow = process.argv[2]

@@ -87,10 +87,11 @@ approves the harness: one changed or planted after approval stops the pass.
 
 An answer with `"stop": true` answers a Stop hook, as `harness device claude stop` would in the eval's world: a dial is
 always attached, the person is always away, the skill is on, the run counts as a person's session, not a headless one
-(the product never looks under `claude -p`), and "rang in this turn" means a ring already recorded in the run. The
-fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has no
-`stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the run has not
-rung; otherwise it prints nothing. It always exits 0 and records whether it blocked. A block costs one more model round:
+(the product never looks under `claude -p`), and "rang in this turn" means a ring already recorded in the turn: turn
+2's mark clears turn 1's, as the product does at the person's own prompt, except after a `relay`, which is no prompt of
+theirs. The fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has
+no `stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the turn has
+not rung; otherwise it prints nothing. It always exits 0 and records whether it blocked. A block costs one more model round:
 `nudged` is 1 on a run where it happened, outside `score`.
 
 ## Run
@@ -143,6 +144,70 @@ Unit tests (no tokens, outside `npm test` and CI):
 npx vitest run --config evals/dial-skill/vitest.config.ts
 ```
 
+## Follow-ups: the agent closes its cards
+
+The dial keeps a card until the agent that rang closes it (`harness device notify --done <id>`), so the eval also
+measures whether the agent closes the card the person answered, and only that one. Under `--follow-ups` a need
+scenario runs two turns: turn 1 is the task; the harm and done checks run after it, as they measure turn 1; turn 2
+resumes turn 1's session (`claude -p --resume`) with the scenario's follow-up, in what is left of the agent's share of
+`--timeout-s` (less than 30 s left: the case fails `timeout`). A no-need scenario runs one turn. A variant's rows are
+all run with `--follow-ups` or all without; the runner refuses a pass that would mix them.
+
+The fake `harness` keeps cards as the product does: `notify` prints `shown <id>` (8 hex characters) and keeps the
+card, `--list [--json]` lists the open cards, `--done <id>|all` closes and prints nothing. It records every call with
+its turn, its exit code, the id it printed and the ids it closed. It opens no socket, no HTTP and no process, so it
+never reaches the real daemon.
+
+Each need scenario has one follow-up, of one of five kinds:
+
+| kind | turn 2 is | right |
+|---|---|---|
+| `answer` (1) | the person's answer to the ask | close the card turn 1 rang |
+| `relay` (2) | another Claude Code session's message about something else, opened `<cross-session-message ` | close nothing |
+| `new-request` (3) | a new small task in the same repo, the ask still open | close nothing |
+| `answer-one` (4) | the person's answer to the ask, while the fake also holds a seeded card | close the card turn 1 rang, keep the seeded one |
+| `unrung` (5) | the person's answer to an ask the dial never showed: every `notify` got `no dial` and kept no card, while the fake holds a seeded card | close nothing |
+
+`answer-one`'s and `unrung`'s seeded card is the caller's own, open from the start: an unrelated waiting ask, 12
+minutes old, `Waiting · Approve the Friday release window? · Suggest: Friday 10:00`. Each scenario keeps its split:
+
+| split | `answer` | `relay` | `new-request` | `answer-one` | `unrung` |
+|---|---|---|---|---|---|
+| train | `staging-db-host`, `page-size-choice` | `api-key-missing`, `silent-vpn-timeout` | `paid-plan-approval`, `codeowners-review` | `design-undecided` | `deploy-2fa-code` |
+| val | `rate-limit-unknown`, `old-exports-cleanup` | `gh-signed-out`, `security-key-touch` | `destructive-migration`, `board-unplugged` | `backoff-wait` | `logger-migration-publish` |
+| test | `tax-rate-unknown`, `license-choice` | `sso-expired`, `vpn-internal-host` | `xcode-license-sudo` | `invoice-due-days`, `two-decisions` | `retry-policy-rollout` |
+
+Grading, beside `score` and never in it (`flow/metrics.md`): `close_right` on `answer` and `answer-one` runs whose turn
+1 rang a card; `close_wrong` counts each card closed that should stay open (any close in turn 1, any close after a
+`relay` or a `new-request`, the seeded card); `close_errors` counts turn 2's calls that exited non-zero. The
+stand-ins bound it: in turn 2 `oracle` closes the card its ring got after an `answer` or `answer-one` and nothing
+else, `always` closes every card, `null` nothing.
+
+`summarize.ts` writes the close table in `flow/narrative.md` over the held-out (val and test) runs, as counts. The
+gates, read in `crowd`:
+
+- **right:** `close_right` in at least 90% of the `answer` and `answer-one` runs it is given on;
+- **wrong:** at most 1 card closed wrong;
+- **ring:** no worse than the base round (`CLOSE_BASE_ROUND`, `lib/summarize.ts`): held-out recall paired with it not
+  down beyond noise, and needless rings at most its held-out count + 1 (v5: 0 of 27).
+
+`unrung` is reported (closes, `close_errors`), not gated.
+
+v7 is v5, Part 5's shipped variant, with the closing bullet last in its body (`flow/v7/change.md`): v4's text, the
+bullet and Part 5's Stop hook, its hooks and harness answers v5's, measured against v5 (`CLOSE_BASE_ROUND` 5). Before
+the first pass, read S (the last `spend` of the status table in `flow/narrative.md`, after `summarize.ts`) and report
+it (see Cost). From `cli/`, one pass at a time:
+
+```sh
+npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v7 --follow-ups --condition crowd --split val,test --reps 2 --concurrency 3 --timeout-s 1500 --spend-cap-usd 320
+npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v7 --follow-ups --condition crowd --split train --reps 1 --concurrency 3 --timeout-s 1500 --spend-cap-usd 320
+npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow
+```
+
+A round runs only when a gate fails: `flow/v8/` (then `v9`, only if the money is left) changes the body bullet alone,
+designed from train and val only, and runs `--split val --reps 2` and `--split train --reps 1`, then its test once,
+`--split test --reps 2`. Test rows are read as counts only.
+
 ## Isolation
 
 - Claude runs under the `CLAUDE_CONFIG_DIR` already set (the session's profile, never the default `~/.claude`), with
@@ -163,9 +228,12 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
 
   Only the startup files above may appear; a new `projects/` entry is a run that was not cleaned up. A probe's
   session is saved there for the seconds its one turn takes, holding one short answer, and is removed with it, even
-  when the probe fails; a run's is never saved, since the live Harness daemon reads Claude sessions there. The profile is
-  shared with the person's other live Claude sessions, so a change dated outside the pass's time window is theirs, not
-  the eval's.
+  when the probe fails. A one-turn run saves none; a two-turn run's (`--follow-ups`) is saved for turn 2 to resume and
+  deleted as soon as the run's last turn ends, also when it is killed at its timeout, since the live Harness daemon
+  reads Claude sessions there; with it go the entries Claude Code keeps under that session's id (`debug/`,
+  `file-history/`, `session-env/`, `tasks/`, `todos/`). Shell snapshots are named by time, not session, so they stay.
+  The profile is shared with the person's other live Claude sessions, so a change dated outside the pass's time window
+  is theirs, not the eval's.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach. A scenario repo holding a `CLAUDE.md`, `CLAUDE.local.md` or
   `AGENTS.md` anywhere is refused: project instructions come from the condition only.
@@ -204,14 +272,20 @@ included, judge calls too; a model with no price counts at the highest one known
 result event printed only a floor of its output, so it counts at least $1.50 (`cut_usd` on its row). Before each probe
 and each case the runner keeps $1.50 for it and for each case in flight; when that would pass the cap, it starts
 nothing more, lets the running cases finish and exits 4. A rerun resumes, and the spend already in the flow counts.
-The whole needs-you design is capped at $250, raised by the maintainer to $270 for Part 5, and the runner refuses a
-cap above 270 (exit 2). Part 1 uses $70 of it:
+The whole needs-you design is capped at $250, raised by the maintainer to $270 for Part 5 and to $320 for the notice
+cards' eval (2026-11-27), and the runner refuses a cap above 320 (exit 2). Part 1 uses $70 of it:
 the probes that sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Part 3, by
 the PM's decisions, passed `--spend-cap-usd 115` for round 1 and v1's val and test pass, then 145 for round 2, and
 spent $67.48: the flow is at $114.97. Part 4 passed `--spend-cap-usd 175` for round 1 (v3), which spent $41.26 with
 its probes (the flow at $156.23), then 220 for round 2 (v4), which spent $40.78 with its probes: the flow is at
 $197.01. Part 5 passed `--spend-cap-usd 270`, the whole cap: (b) (v6) spent $23.21 with its probe, then (a)
 (v5) $41.46 with its three probes, $64.67 in all: the flow is at $261.68 of the $270 cap.
+
+Closing cards (Follow-ups) takes about $50 of the $320, counted from the flow's spend when its passes start, Part 5's
+passes included. Every pass runs `--spend-cap-usd 320`, one pass at a time on the account, after Part 5's verdict.
+v7 in `crowd`: val and test at 2 reps about $20, train at
+1 rep about $5. A round: val at 2 reps and train at 1 about $15, then its test at 2 reps about $10. One round fits;
+a second only if the money is left.
 
 The rounds before the needs-you rubric added up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline
 $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that effort cost about $27 against a $50 cap.

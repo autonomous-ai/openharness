@@ -47,6 +47,9 @@ export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answer
 /** The id of a question the dial only shows: a permission prompt waiting in its agent's own app (services/devices.ts),
  *  which is where it is answered. Nothing the dial sends for it reaches its host. */
 export const SHOWN_ONLY_PREFIX = 'shown:'
+/** The key of an agent's notice card's one question (cable/notices.ts), which tells it from a prompt an outside agent
+ *  waits on: both are shown only, but only the card stays open as its agent moves on. */
+export const NOTICE_KEY = 'notice'
 
 const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
@@ -3545,6 +3548,7 @@ export class CableSession {
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
+    await this.reholdNotice(agentId)
     // The paragraph the agent last wrote, so the working screen has a sentence before the footer is read.
     if (this.stepsActivity && update) await this.send({ t: 'turn.activity', agentId, text, action: clipUtf8(update, ACTION_MAX_BYTES) })
     if (!this.link?.isOpen || !this.canReadActivity()) { this.activityReads.delete(agentId); return }
@@ -3658,6 +3662,7 @@ export class CableSession {
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.done', agentId })
+    await this.reholdNotice(agentId)
   }
   /**
    * A finished turn's recap.
@@ -3675,6 +3680,21 @@ export class CableSession {
     // The card carries the answer; the host is asked only when it did not, and not for long.
     const full = this.fullField(this.longRecap ? fullText ?? await this.storedFullText(agentId, text) : undefined)
     await this.send(this.withinCap({ t: 'summary', agentId, ...who, recap, text, ...full, tier, ...(tier === 'list' ? { quiet: true } : {}), ...(tier === 'silent' ? { silent: true } : {}) }))
+    await this.reholdNotice(agentId)
+  }
+
+  /**
+   * The Pro's firmware drops an agent's question whenever that agent leaves the asking state (pod_model.c set_state): at
+   * a turn start, a turn's end or failure, and a live summary, which ends the turn there. A turn no longer closes a
+   * notice card (2026-11-27): the card stayed open, off the Pro. It goes back held, a drawer row, which the firmware's
+   * later sweeps keep; once a card, as those frames come again and again. Never a question frame, and nothing to a round
+   * dial: it keeps the card through them, and any question frame rings it. Never a prompt an outside agent waits on,
+   * shown only as well: it goes with its wait, and its row would stay after the agent moved on.
+   */
+  private async reholdNotice(agentId: string): Promise<void> {
+    const open = this.questionInbox.read(agentId)
+    if (this.seqOn && open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX) && open.questions[0].key === NOTICE_KEY
+      && this.questionInbox.rehold(agentId, open.id)) await this.replaceNotifications(this.host.listUnread())
   }
 
   /**
@@ -3805,6 +3825,7 @@ export class CableSession {
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.error', agentId, message })
+    await this.reholdNotice(agentId)
   }
   /**
    * An agent stopped to ask.

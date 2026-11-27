@@ -11,6 +11,9 @@ import { parseClaudeStream, type RunResult } from './parse.js'
 import type { AgentKind, Condition, Scenario } from './scenarios.js'
 import type { Staged } from './stage.js'
 
+/** A two-turn run's Claude session: turn 1 starts it under `id`, turn 2 resumes it. */
+export interface Session { id: string; resume: boolean }
+
 /** `timeoutMs` 0 leaves the run unbounded. */
 export interface AgentConfig { claudeBin: string; claudeModel: string; claudeEffort: string; maxTurns: number; timeoutMs: number }
 
@@ -64,14 +67,17 @@ export function settingsFor(condition: Condition): object {
   return condition === 'name-only' ? { ...CLAUDE_SANDBOX, skillOverrides: { dial: 'name-only' } } : CLAUDE_SANDBOX
 }
 
-export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin' | 'condition'>, prompt: string): string[] {
+export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin' | 'condition'>, prompt: string, session?: Session): string[] {
   return [
     '-p', prompt,
     '--output-format', 'stream-json', '--verbose',
     '--model', cfg.claudeModel, '--effort', cfg.claudeEffort, '--max-turns', String(cfg.maxTurns),
     // The profile's user settings hold hooks that call the live daemon and Orca.
     '--setting-sources', 'project',
-    '--no-session-persistence',
+    // A two-turn run's session is saved, as turn 2 resumes it: in the person's profile, <profile>/projects/<repo>/
+    // (lib/stage.ts runProfileFolder), deleted as soon as the run's last turn ends (lib/stage.ts endSession), timeout
+    // included, and by unstage for a runner that exits mid-run. A one-turn run saves none.
+    ...(session ? [session.resume ? '--resume' : '--session-id', session.id] : ['--no-session-persistence']),
     '--permission-mode', 'acceptEdits',
     '--disallowedTools', 'WebFetch', 'WebSearch',
     // The fake harness records rings in rec/, and TMPDIR (npm's cache with it) is tmp/: both outside the repo. A push
@@ -81,26 +87,38 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
   ]
 }
 
-export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig): Promise<RunResult> {
-  if (agent === 'claude') return runClaude(s, st, cfg)
+export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig, session?: Session): Promise<RunResult> {
+  if (agent === 'claude') return runClaude(s.prompt, st, cfg, session)
   // The oracle says the state the scenario expects, and a recommendation with --proceeding, as the skill asks.
   const words = agent === 'always' ? ['Please check in']
     : agent === 'oracle' && s.ask !== null ? [s.ask, `--${s.expect}`, ...(s.expect === 'proceeding' ? ['--suggest', 'the first option'] : [])]
     : null
-  // The staged fake by its own path, never a `harness` found on PATH, which could be the real one.
-  if (words !== null) await promisify(execFile)(join(st.root, 'bin', 'harness'), ['device', 'notify', ...words], { cwd: st.repo, env: st.env })
+  if (words !== null) await harness(st, ['device', 'notify', ...words])
   // What states_ask passes: the ask, the recommendation, and whether it went on or waited.
   const went = s.expect === 'proceeding' ? 'I went on with it.' : 'I am waiting for you.'
-  return {
-    answer: agent === 'oracle' && s.ask !== null ? `${s.ask} I recommend the first option. ${went}` : '',
-    transcript: [],
-    model: null,
-    usage: { input_tokens: 0, output_tokens: 0 },
-    stop_reason: null,
-    status: 'ok',
-    tool_calls: 0,
-    limited: false,
-  }
+  return standIn(agent === 'oracle' && s.ask !== null ? `${s.ask} I recommend the first option. ${went}` : '')
+}
+
+/** Turn 2 of a two-turn run: the scenario's follow-up, in the session turn 1 saved. `rung` holds the cards turn 1 rang
+ *  and left open (lib/grade.ts rungOf). The oracle closes those when the follow-up answers them, and nothing else;
+ *  always closes every card; null does nothing. */
+export async function runFollowUp(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig, sessionId: string, rung: string[]): Promise<RunResult> {
+  if (!s.follow_up) throw new Error(`${s.id} has no follow-up`)
+  if (agent === 'claude') return runClaude(s.follow_up.text, st, cfg, { id: sessionId, resume: true })
+  const answers = s.follow_up.kind === 'answer' || s.follow_up.kind === 'answer-one'
+  const ids = agent === 'always' ? ['all'] : agent === 'oracle' && answers ? rung : []
+  for (const id of ids) await harness(st, ['device', 'notify', '--done', id])
+  return standIn('')
+}
+
+/** Runs the staged fake by its own path, never a `harness` found on PATH, which could be the real one. */
+async function harness(st: Staged, argv: string[]): Promise<void> {
+  await promisify(execFile)(join(st.root, 'bin', 'harness'), argv, { cwd: st.repo, env: st.env })
+}
+
+/** A stand-in's run: no model, no tokens. */
+function standIn(answer: string): RunResult {
+  return { answer, transcript: [], model: null, usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: null, status: 'ok', tool_calls: 0, limited: false }
 }
 
 /** Whether `dir` is the person's default profile, ~/.claude, however it is reached: a link, or HOME through one. */
@@ -116,14 +134,14 @@ export function isDefaultProfile(dir: string): boolean {
   return real(dir) === real(join(homedir(), '.claude'))
 }
 
-async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<RunResult> {
+async function runClaude(prompt: string, st: Staged, cfg: AgentConfig, session?: Session): Promise<RunResult> {
   const profile = st.env.CLAUDE_CONFIG_DIR
   // Unset, Claude falls back to ~/.claude: the person's default profile, which the eval never uses.
   if (!profile || isDefaultProfile(profile)) {
     throw new Error('CLAUDE_CONFIG_DIR must name the session profile, not the default ~/.claude')
   }
   if (!cfg.claudeBin) throw new Error('claude was not found on PATH when the eval started')
-  const exit = await spawnGroup(cfg.claudeBin, claudeArgs(cfg, st, s.prompt), st, cfg.timeoutMs)
+  const exit = await spawnGroup(cfg.claudeBin, claudeArgs(cfg, st, prompt, session), st, cfg.timeoutMs)
   const run = parseClaudeStream(exit.stdout)
   // A failed run was billed for what it did: its error carries what the stream reported to the errors sidecar, the
   // usage of the messages it printed when it was cut before its result event (lib/parse.ts), and that it was cut.

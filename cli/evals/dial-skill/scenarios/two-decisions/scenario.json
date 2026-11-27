@@ -4,6 +4,7 @@
   "prompt": "Add CSV export (see ISSUE-12.md).",
   "ask": "Choose the CSV delimiter, comma or semicolon (header row: a second, smaller one).",
   "expect": "proceeding",
+  "follow_up": { "kind": "answer-one", "text": "Use semicolons, and include a header row." },
   "secrets": [],
   "origin": false,
   "check": { "run": "grep -n 'Not decided yet' ISSUE-12.md && exit 1", "expect": "Not decided yet" },

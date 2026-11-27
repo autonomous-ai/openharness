@@ -51,6 +51,8 @@ type StopFields = { stop_hook_active: boolean; last_assistant_message: string }
 /** In every answer and notice, so a log line that holds one is found. */
 const CANARY = 'PRIVATE_ANSWER_CANARY'
 const LINE = `${CANARY} needs the export database picked`
+/** What `harness device notify` prints for a card shown: its id, which the agent closes it by. */
+const SHOWN = expect.stringMatching(/^shown [0-9a-f]{8}\n$/)
 const quiet: Run = { code: 0, stdout: '', stderr: '' }
 const blocked: Run = { code: 0, stdout: `${stopOutput()}\n`, stderr: '' }
 
@@ -316,7 +318,7 @@ describe('a second look when a turn stops', () => {
     expect(of(dial, a, 'turn.done', since)).toEqual([])
 
     // The continuation rings the dial, and its own stop ends the turn.
-    expect(await notify(d, a)).toMatchObject({ code: 0, stdout: 'shown\n' })
+    expect(await notify(d, a)).toMatchObject({ code: 0, stdout: SHOWN })
     await dial.next((m) => m.t === 'question' && m.agentId === a.id, 45_000, 'the notice', since)
     const continued = `${CANARY} rang the dial for the export database.`
     a.answer(continued)
@@ -374,7 +376,7 @@ describe('a second look when a turn stops', () => {
     let since = dial.messages.length
     let before = nudges(d).length
     let asked = await turn(a, true)
-    expect(await notify(d, a)).toMatchObject({ code: 0, stdout: 'shown\n' })
+    expect(await notify(d, a)).toMatchObject({ code: 0, stdout: SHOWN })
     await dial.next((m) => m.t === 'question' && m.agentId === a.id, 45_000, 'the notice', since)
     await a.stop({ stop_hook_active: false, last_assistant_message: asked })
     expect(await a.look({ stop_hook_active: false, last_assistant_message: asked })).toEqual(quiet)
@@ -496,7 +498,7 @@ describe('a second look when a turn stops', () => {
     expect(await a.look({ stop_hook_active: false, last_assistant_message: asked })).toEqual(blocked)
     expect(of(dial, a, 'summary', since)).toEqual([])
     expect(of(dial, a, 'turn.done', since)).toEqual([])
-    expect(await notify(d, a)).toMatchObject({ code: 0, stdout: 'shown\n' })
+    expect(await notify(d, a)).toMatchObject({ code: 0, stdout: SHOWN })
     await dial.next((m) => m.t === 'question' && m.agentId === a.id, 45_000, 'the notice', since)
     const continued = `${CANARY} rang the dial for the export database.`
     a.answer(continued)
@@ -574,7 +576,7 @@ describe('a second look when a turn stops', () => {
     window.send('app_panes', { agentIds: [h.id], foreground: true })
     window.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [h.id], panes: 1 }], tiles: [] })
     await dial.next((m) => m.t === 'agents.end' && m.tab === 't1', 45_000, 'the tab\'s list', since)
-    expect(await notify(d, h)).toMatchObject({ code: 0, stdout: 'shown\n' })
+    expect(await notify(d, h)).toMatchObject({ code: 0, stdout: SHOWN })
     await dial.next((m) => m.t === 'question' && m.agentId === h.id, 45_000, 'the notice rung', since)
     writeFileSync(join(d.engineConfig.root, 'stop-look-h.release'), '')
     await dial.next((m) => m.t === 'turn.done' && m.agentId === h.id, 45_000, 'its continuation\'s end', since)

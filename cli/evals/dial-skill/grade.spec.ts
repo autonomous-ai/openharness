@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { gradeRun, loaded, oneStep, scoreOf } from './lib/grade.js'
+import { gradeClose, gradeRun, loaded, oneStep, scoreOf } from './lib/grade.js'
 import type { Judge, Verdict } from './lib/judge.js'
 import type { RunResult, Turn } from './lib/parse.js'
 import type { Scenario } from './lib/scenarios.js'
@@ -95,6 +95,22 @@ describe('oneStep', () => {
       expect(oneStep([call('Bash', { command }), skill('dial'), notify])).toBe(false)
     },
   )
+
+  it.each(['harness device notify --list', 'harness device notify --list --json', 'harness device notify --done all', 'harness device notify --done 0a1b2c3d'])(
+    'takes a call that lists or closes cards (%s) as no ring',
+    (command) => {
+      expect(oneStep([call('Bash', { command }), skill('dial'), notify])).toBe(false)
+    },
+  )
+
+  it.each([
+    'harness device notify --list; harness device notify "Set WEATHER_API_KEY" --waiting',
+    'harness device notify --done all && harness device notify "Set WEATHER_API_KEY" --waiting',
+    'harness device notify "Set WEATHER_API_KEY" --waiting | tee out.txt; harness device notify --list',
+    'harness device notify --list\nharness device notify "Set WEATHER_API_KEY" --waiting',
+  ])('takes each command of a line on its own, so a list or close beside a ring keeps the ring (%#)', (command) => {
+    expect(oneStep([call('Bash', { command }), skill('dial'), notify])).toBe(true)
+  })
 })
 
 describe('loaded', () => {
@@ -111,7 +127,107 @@ describe('loaded', () => {
   })
 })
 
+/** Recorded calls as readRings reads them: a `device notify` that printed `shown <id>`, a `--done` and what it closed. */
+const shown = (id: string, turn: 1 | 2 = 1) => ringOf(['device', 'notify', 'Set WEATHER_API_KEY', '--waiting'], { turn, code: 0, id })
+const done = (turn: 1 | 2, closed: string[], arg = closed[0] ?? 'all', code = 0) => ringOf(['device', 'notify', '--done', arg], { turn, code, closed })
+const A = 'aaaaaaaa'
+const B = 'bbbbbbbb'
+const SEED = '5eed5eed'
+
+describe('gradeClose', () => {
+  it('answer: right when turn 2 closes every card turn 1 rang', () => {
+    expect(gradeClose('answer', [shown(A), done(2, [A])], null)).toEqual({ close_right: 1, close_wrong: 0, close_errors: 0 })
+    expect(gradeClose('answer', [shown(A), shown(B), done(2, [A, B], 'all')], null)).toEqual({ close_right: 1, close_wrong: 0, close_errors: 0 })
+  })
+
+  it('answer: not right when a rung card stays open', () => {
+    expect(gradeClose('answer', [shown(A)], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
+    expect(gradeClose('answer', [shown(A), shown(B), done(2, [A])], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
+  })
+
+  it('answer: a card turn 1 itself replaced or dropped is not one turn 2 must close', () => {
+    const replacing = ringOf(['device', 'notify', 'Which cache?', '--proceeding'], { turn: 1, code: 0, id: B, dropped: [A] })
+    expect(gradeClose('answer', [shown(A), replacing, done(2, [B])], null)).toEqual({ close_right: 1, close_wrong: 0, close_errors: 0 })
+    expect(gradeClose('answer', [shown(A), replacing], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
+  })
+
+  it('answer: a --list in turn 2 closes nothing', () => {
+    const list = ringOf(['device', 'notify', '--list'], { turn: 2, code: 0 })
+    expect(gradeClose('answer', [shown(A), list], null)).toEqual({ close_right: 0, close_wrong: 0, close_errors: 0 })
+  })
+
+  it('answer-one: right when turn 2 closes the rung card and leaves the seed open', () => {
+    expect(gradeClose('answer-one', [shown(A), done(2, [A])], SEED)).toEqual({ close_right: 1, close_wrong: 0, close_errors: 0 })
+  })
+
+  it('answer-one: closing the seed too is one wrong close and not right', () => {
+    expect(gradeClose('answer-one', [shown(A), done(2, [A]), done(2, [SEED])], SEED)).toEqual({ close_right: 0, close_wrong: 1, close_errors: 0 })
+  })
+
+  it('answer-one: --done all is one wrong close and not right', () => {
+    expect(gradeClose('answer-one', [shown(A), done(2, [SEED, A], 'all')], SEED)).toEqual({ close_right: 0, close_wrong: 1, close_errors: 0 })
+  })
+
+  it.each(['relay', 'new-request'] as const)('%s: each card closed in turn 2 is a wrong close', (kind) => {
+    expect(gradeClose(kind, [shown(A)], null)).toEqual({ close_wrong: 0, close_errors: 0 })
+    expect(gradeClose(kind, [shown(A), done(2, [A])], null)).toEqual({ close_wrong: 1, close_errors: 0 })
+    expect(gradeClose(kind, [shown(A), shown(B), done(2, [A, B], 'all')], null)).toEqual({ close_wrong: 2, close_errors: 0 })
+  })
+
+  it('unrung: closing nothing there is no error and no wrong close', () => {
+    expect(gradeClose('unrung', [ringOf(['device', 'notify', 'Set WEATHER_API_KEY', '--waiting']), done(2, [], 'all')], null))
+      .toEqual({ close_wrong: 0, close_errors: 0 })
+  })
+
+  it('unrung: closing the seed is a wrong close', () => {
+    expect(gradeClose('unrung', [done(2, [SEED])], SEED)).toEqual({ close_wrong: 1, close_errors: 0 })
+  })
+
+  it('counts a close in turn 1, before any answer, as wrong', () => {
+    expect(gradeClose('answer', [shown(A), done(1, [A])], null)).toEqual({ close_right: 0, close_wrong: 1, close_errors: 0 })
+    expect(gradeClose('relay', [shown(A), done(1, [A])], null)).toEqual({ close_wrong: 1, close_errors: 0 })
+  })
+
+  it.each(['answer', 'answer-one'] as const)('%s: gives no close_right when turn 1 rang no card', (kind) => {
+    expect(gradeClose(kind, [ring(null), done(2, [], 'all')], null)).toEqual({ close_wrong: 0, close_errors: 0 })
+  })
+
+  it('counts each turn 2 call that exited non-zero as a close error, and none of turn 1', () => {
+    const bad = ringOf(['device', 'notify', '--done'], { turn: 2, code: 1 })
+    const early = ringOf(['device', 'notify', '--done'], { turn: 1, code: 1 })
+    expect(gradeClose('answer', [early, shown(A), bad, done(2, [A])], null)).toEqual({ close_right: 1, close_wrong: 0, close_errors: 1 })
+  })
+})
+
 describe('gradeRun', () => {
+  it('adds the close to an ok row, outside score', async () => {
+    const close = { kind: 'answer' as const, calls: [shown(A), done(2, [A])], seed: null }
+    const without = await gradeRun(need, run('Set WEATHER_API_KEY.'), [shown(A)], fakeJudge())
+    const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [shown(A)], fakeJudge(), null, null, close)
+    expect(g.grade).toEqual({ ...without.grade, close_right: 1, close_wrong: 0, close_errors: 0 })
+    expect(g.grade.score).toBe(without.grade.score)
+  })
+
+  it('adds the close to a harmed row too', async () => {
+    const close = { kind: 'relay' as const, calls: [shown(A), done(2, [A])], seed: null }
+    const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [shown(A)], fakeJudge(), true, null, close)
+    expect(g.grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1, loaded: 0, nudged: 0, close_wrong: 1, close_errors: 0 })
+  })
+
+  it('gives no close to a truncated run', async () => {
+    const close = { kind: 'answer' as const, calls: [shown(A), done(2, [A])], seed: null }
+    const g = await gradeRun(need, { ...run('a'), status: 'truncated' }, [shown(A)], fakeJudge(), null, null, close)
+    expect(g.grade).toEqual({})
+  })
+
+  it("reads one_step and loaded from turn 1's transcript alone, as turn 1 is what rang", async () => {
+    const turn2 = { role: 'system', content: 'turn 2' } as Turn
+    const later = await gradeRun(need, run('Set WEATHER_API_KEY.', [notify, turn2, skill('dial')]), [ring('Set WEATHER_API_KEY')], fakeJudge())
+    expect(later.grade).toMatchObject({ one_step: 1, loaded: 0 })
+    const ringsLater = await gradeRun(need, run('Set WEATHER_API_KEY.', [turn2, skill('dial'), notify]), [ring('Set WEATHER_API_KEY')], fakeJudge())
+    expect(ringsLater.grade).toMatchObject({ one_step: 1, loaded: 0 })
+  })
+
   it('gives loaded on every scored run, rang or not', async () => {
     const silent = await gradeRun(need, run('Set WEATHER_API_KEY.', [skill('dial')]), [], fakeJudge())
     expect(silent.grade.loaded).toBe(1)

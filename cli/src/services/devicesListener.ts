@@ -3,9 +3,9 @@
  * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, the selected
  * tab (`tab`), the thread the ChatGPT app shows (`thread`), the Notifications setting (`notify`) and whether Harness
  * Device wrote a person's words to a tab (`wrote`), the harness-device mod the session the Claude app shows (`attach`),
- * `harness device notify` an agent's one line for the dial (`notice`), and an agent's Stop hook whether its answer asks
- * the person something (`nudge`); later device routes register a handler of their own beside these, each with its own
- * body and rate limit.
+ * `harness device notify` an agent's one line for the dial (`notice`), its open cards (`noticeList`) and the close of
+ * one or all of them (`noticeDone`), and an agent's Stop hook whether its answer asks the person something (`nudge`);
+ * later device routes register a handler of their own beside these, each with its own body and rate limit.
  *
  * Who may connect is the core's own answer (lib/localSocket.ts): a 0600 socket in a folder that is this account's
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
@@ -45,7 +45,9 @@ import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
 import { TYPE_ANSWER_MS, typingLine, typingOf, wroteOf, type TabsLine, type TabsTyping, type WroteAnswer } from '../cable/hosts/tabsLines.js'
 import { threadTitleOf } from '../cable/hosts/threadTitle.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
-import { NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
+import {
+  NOTICE_CARD_ID, NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeCard, type NoticeResult,
+} from '../lib/dialNotice.js'
 
 /** Connections at once. Each type's rate across them is what this many could send at its rate on one, so a sender that
  *  opens one per message is held to that too. */
@@ -482,24 +484,83 @@ export const NOTICE_MAX_BYTES = 2048
 
 const NOTICE_ENGINES: ReadonlySet<unknown> = new Set(['claude', 'codex'])
 
-/** An agent's notice, from `harness device notify`: handed on as four typed fields, answered `{ result }`. It keeps
- *  nothing and logs nothing: the line is the agent's words. */
-export function noticeHandler(notify: (ask: NoticeAsk) => NoticeResult): ListenerHandler {
+type NoticeCaller = Pick<NoticeAsk, 'engine' | 'sessionId' | 'folder'>
+
+/** Who sent a notice message, as `harness device notify` reads it (devices/notice.ts `noticeCaller`): typed, or
+ *  REFUSED for fields the command would not send. */
+function callerOf({ engine, sessionId, folder }: Record<string, unknown>): NoticeCaller | typeof REFUSED {
+  if (engine !== undefined && !NOTICE_ENGINES.has(engine)) return REFUSED
+  // A session id ties a notice to an agent only beside the engine that made it.
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || !NOTICE_SESSION.test(sessionId) || engine === undefined)) return REFUSED
+  // The command cleans the folder before it sends: one that differs did not come from it.
+  if (folder !== undefined && (typeof folder !== 'string' || folder === '' || folder !== noticeFolder(folder))) return REFUSED
+  const caller: NoticeCaller = {}
+  if (engine !== undefined) caller.engine = engine as NoticeAsk['engine']
+  if (sessionId !== undefined) caller.sessionId = sessionId
+  if (folder !== undefined) caller.folder = folder
+  return caller
+}
+
+/** An agent that names itself: its engine and session id, and its folder when the command read one. */
+export interface NoticeWho { engine: 'claude' | 'codex'; sessionId: string; folder?: string }
+
+/** The agent a message names, or REFUSED: a command typed by hand outside an agent's session sends no session id, so
+ *  it names no agent's cards. */
+function whoOf(message: Record<string, unknown>): NoticeWho | typeof REFUSED {
+  const caller = callerOf(message)
+  // callerOf takes a session id only beside its engine.
+  return caller === REFUSED || caller.sessionId === undefined ? REFUSED : caller as NoticeWho
+}
+
+/** One a second on a connection: an agent lists or closes its cards a few times a turn, so more is a loop. */
+export const NOTICE_CARDS_PER_SECOND = 1
+/** The longest message, a `noticeDone` with a 128-character session id and a folder of 64 four-byte letters, is under
+ *  512 bytes. */
+export const NOTICE_CARDS_MAX_BYTES = 1024
+
+/** An agent's open cards, for `harness device notify --list`: the caller handed on as typed fields, answered
+ *  `{ cards }`. It keeps nothing and logs nothing: a card is the agent's words. */
+export function noticeListHandler(list: (who: NoticeWho) => NoticeCard[]): ListenerHandler {
+  return {
+    maxBytes: NOTICE_CARDS_MAX_BYTES,
+    perSecond: NOTICE_CARDS_PER_SECOND,
+    handle: (message) => {
+      const who = whoOf(message)
+      return who === REFUSED ? REFUSED : { cards: list(who) }
+    },
+  }
+}
+
+/** The close of an agent's card, or all of them, for `harness device notify --done <id>|all`: the caller and the id
+ *  handed on, answered `{ closed }`. It keeps nothing and logs nothing, as an id names a card. */
+export function noticeDoneHandler(done: (who: NoticeWho, id: string) => number): ListenerHandler {
+  return {
+    maxBytes: NOTICE_CARDS_MAX_BYTES,
+    perSecond: NOTICE_CARDS_PER_SECOND,
+    handle: (message) => {
+      const { id } = message
+      if (typeof id !== 'string' || (id !== 'all' && !NOTICE_CARD_ID.test(id))) return REFUSED
+      const who = whoOf(message)
+      return who === REFUSED ? REFUSED : { closed: done(who, id) }
+    },
+  }
+}
+
+/** An agent's notice, from `harness device notify`: handed on as four typed fields, answered `{ result }`, with the id
+ *  of the card it made so its agent can close that card without a list. It keeps nothing and logs nothing: the line is
+ *  the agent's words. */
+export function noticeHandler(notify: (ask: NoticeAsk) => { result: NoticeResult; id?: string }): ListenerHandler {
   return {
     maxBytes: NOTICE_MAX_BYTES,
     perSecond: NOTICE_PER_SECOND,
-    handle: ({ text, engine, sessionId, folder }) => {
-      // The command cleans the line and the folder before it sends: one that differs did not come from it.
+    handle: (message) => {
+      const { text } = message
+      // The command cleans the line before it sends: one that differs did not come from it.
       if (typeof text !== 'string' || text === '' || text !== noticeLine(text)) return REFUSED
-      if (engine !== undefined && !NOTICE_ENGINES.has(engine)) return REFUSED
-      // A session id ties a notice to an agent only beside the engine that made it.
-      if (sessionId !== undefined && (typeof sessionId !== 'string' || !NOTICE_SESSION.test(sessionId) || engine === undefined)) return REFUSED
-      if (folder !== undefined && (typeof folder !== 'string' || folder === '' || folder !== noticeFolder(folder))) return REFUSED
-      const ask: NoticeAsk = { text }
-      if (engine !== undefined) ask.engine = engine as NoticeAsk['engine']
-      if (sessionId !== undefined) ask.sessionId = sessionId
-      if (folder !== undefined) ask.folder = folder
-      return { result: notify(ask) }
+      const caller = callerOf(message)
+      if (caller === REFUSED) return REFUSED
+      const { result, id } = notify({ text, ...caller })
+      return id !== undefined && NOTICE_CARD_ID.test(id) ? { result, id } : { result }
     },
   }
 }

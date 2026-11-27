@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { DIAL_SKILL } from '../../src/devices/dialSkill.js'
 import { caseId, loadScenarios } from './lib/scenarios.js'
 
 const evalDir = dirname(fileURLToPath(import.meta.url))
@@ -112,6 +113,18 @@ describe('flow/_state.json', () => {
       .filter((path) => existsSync(path))
       .map((path) => relative(cliDir, path))
     expect(variantFiles.filter((path) => !listed.has(path))).toEqual([])
+  })
+
+  // v7 measures the closing bullet alone: v5, the shipped Part 5 (v4's skill, its session-start line and the Stop hook),
+  // with the bullet added to the body.
+  it('flow/v7 is v5 with the closing bullet', () => {
+    const read = (variant: string, name: string) => readFileSync(join(evalDir, 'flow', variant, name), 'utf8')
+    expect(read('v7', 'SKILL.md')).toBe(DIAL_SKILL)
+    expect(read('v7', 'SKILL.before.md')).toBe(read('v5', 'SKILL.md'))
+    for (const name of ['hooks.json', 'harness-answers.json']) {
+      expect(read('v7', name), name).toBe(read('v5', name))
+      expect(state.harness_paths).toContain(`evals/dial-skill/flow/v7/${name}`)
+    }
   })
 
   it('lists every scenario file and every lib file the runner imports, and never the skill', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  composeNotice, isNoticeResult, NOTICE_HOUR_MS, noticeFolder, noticeKind, NoticeLimits, noticeLine, parseNotice,
+  composeNotice, isNoticeCard, isNoticeResult, NOTICE_HOUR_MS, noticeFolder, noticeKind, NoticeLimits, noticeLine,
+  parseNotice,
 } from './dialNotice.js'
 
 const clock = () => {
@@ -30,15 +31,65 @@ describe('noticeLine', () => {
 describe('parseNotice', () => {
   it('the words parse into the question, the suggestion, the state and --json', () => {
     expect(parseNotice(['Which', 'DB?', '--suggest', ' Postgres ', '--proceeding', '--json']))
-      .toEqual({ question: 'Which DB?', suggest: ' Postgres ', state: 'proceeding', json: true })
-    expect(parseNotice(['Q', '--suggest'])).toEqual({ question: 'Q', json: false })
-    expect(parseNotice(['--waiting', '--proceeding', '-x', 'Q'])).toEqual({ question: '-x Q', state: 'waiting', json: false })
+      .toEqual({ question: 'Which DB?', suggest: ' Postgres ', state: 'proceeding', json: true, list: false })
+    expect(parseNotice(['Q', '--suggest'])).toEqual({ question: 'Q', json: false, list: false })
+    expect(parseNotice(['--waiting', '--proceeding', '-x', 'Q'])).toEqual({ question: '-x Q', state: 'waiting', json: false, list: false })
   })
 
   it('--help or -h as the whole question is no question; elsewhere it is text', () => {
-    expect(parseNotice(['--help'])).toEqual({ question: '', json: false })
-    expect(parseNotice(['-h', '--json'])).toEqual({ question: '', json: true })
-    expect(parseNotice(['Does', '--help', 'work?'])).toEqual({ question: 'Does --help work?', json: false })
+    expect(parseNotice(['--help'])).toEqual({ question: '', json: false, list: false })
+    expect(parseNotice(['-h', '--json'])).toEqual({ question: '', json: true, list: false })
+    expect(parseNotice(['Does', '--help', 'work?'])).toEqual({ question: 'Does --help work?', json: false, list: false })
+  })
+})
+
+describe('--list and --done', () => {
+  it('--list asks for the cards, with or without --json', () => {
+    expect(parseNotice(['--list'])).toEqual({ question: '', list: true, json: false })
+    expect(parseNotice(['--list', '--json'])).toEqual({ question: '', list: true, json: true })
+  })
+
+  it('--done takes the next word whatever it is', () => {
+    expect(parseNotice(['--done', '3f9a1c2e'])).toEqual({ question: '', done: '3f9a1c2e', list: false, json: false })
+    expect(parseNotice(['--done'])).toEqual({ question: '', done: '', list: false, json: false })
+    expect(parseNotice(['--done', 'all'])).toEqual({ question: '', done: 'all', list: false, json: false })
+    expect(parseNotice(['--done', '--list'])).toEqual({ question: '', done: '--list', list: false, json: false })
+  })
+
+  it('the last --done wins', () => {
+    expect(parseNotice(['--done', 'aaaaaaaa', '--done', 'bbbbbbbb']).done).toBe('bbbbbbbb')
+  })
+
+  // A consumer composes its line from the question: none, so a close or a list never rings.
+  it('a question beside --done or --list is none', () => {
+    expect(parseNotice(['Use', 'Redis?', '--done', 'x'])).toEqual({ question: '', done: 'x', list: false, json: false })
+    expect(parseNotice(['Use', 'Redis?', '--list'])).toEqual({ question: '', list: true, json: false })
+  })
+})
+
+describe('isNoticeCard', () => {
+  const card = { id: '3f9a1c2e', ageS: 0, kind: 'waiting', line: 'Waiting · Which DB?' }
+
+  it('takes a card', () => {
+    expect(isNoticeCard(card)).toBe(true)
+    expect(isNoticeCard({ ...card, ageS: 86_400, kind: 'plain', line: 'x'.repeat(239) })).toBe(true)
+  })
+
+  it.each([
+    ['a 7-character id', { id: '3f9a1c2' }],
+    ['a 9-character id', { id: '3f9a1c2e0' }],
+    ['an upper-case id', { id: '3F9A1C2E' }],
+    ['a negative age', { ageS: -1 }],
+    ['a fractional age', { ageS: 1.5 }],
+    ['an unknown kind', { kind: 'asked' }],
+    ['an empty line', { line: '' }],
+    ['a 240-byte line', { line: 'x'.repeat(240) }],
+  ])('refuses %s', (_, change) => {
+    expect(isNoticeCard({ ...card, ...change })).toBe(false)
+  })
+
+  it('refuses what is not a card', () => {
+    for (const other of [null, undefined, 'x', 1, {}]) expect(isNoticeCard(other)).toBe(false)
   })
 })
 

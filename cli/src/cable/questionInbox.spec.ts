@@ -159,6 +159,34 @@ describe('QuestionInbox', () => {
   })
 })
 
+describe('rehold', () => {
+  const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+  it('holds a question the dial was told, once, as a row it holds: never asked again, though the dial loses it', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice)
+    expect(inbox.ask('a', 'shown:n1')).toBe(true)
+    expect(inbox.rehold('a', 'shown:n1')).toBe(true)
+    expect(inbox.held('a', 'shown:n1')).toBe(true)
+    expect(inbox.told('a', 'shown:n1')).toBe(true)
+    expect(inbox.refile('a', 'shown:n1')).toBe(false)   // asked: the drawer that follows carries it
+    expect(inbox.rehold('a', 'shown:n1')).toBe(false)
+    inbox.forget()
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+  })
+  it('holds nothing the dial was never told, another id, nor a question already held', () => {
+    const inbox = new QuestionInbox()
+    expect(inbox.rehold('a', 'shown:n1')).toBe(false)   // no entry
+    inbox.set('a', 'shown:n1', notice)
+    expect(inbox.rehold('a', 'shown:n1')).toBe(false)   // never told: it is rung
+    expect(inbox.held('a', 'shown:n1')).toBe(false)
+    expect(inbox.ask('a', 'shown:n1')).toBe(true)
+    expect(inbox.rehold('a', 'shown:n2')).toBe(false)   // not the open one
+    expect(inbox.held('a', 'shown:n1')).toBe(false)
+    inbox.set('b', 'shown:n3', notice, true)            // restored: held from the start
+    expect(inbox.rehold('b', 'shown:n3')).toBe(false)
+  })
+})
+
 describe('a question the dial cannot answer', () => {
   const one = question()[0]
   const summaryOnly = (q: string) => [{ key: '', q, options: [], multi: false }]

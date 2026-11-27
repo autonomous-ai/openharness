@@ -76,7 +76,7 @@ describe('the dial skill', () => {
     expect(file![2]).toContain('\n    harness device notify "<the ask, in one line>" --suggest "<your recommendation, a few words>" --waiting\n')
   })
 
-  it('the skill is the v1 text, byte for byte', () => {
+  it('the skill is its text, byte for byte', () => {
     expect(DIAL_SKILL_DESCRIPTION).toBe('Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "[the ask, one line]" --suggest "[your pick]" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress.')
     expect(DIAL_SKILL).toBe(`---
 name: dial
@@ -106,7 +106,17 @@ working.
 - In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
   what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
   prints, your answer carries the ask.
+- When the person's answer to an ask you rang reaches you, close that card: \`harness device notify --done <id>\` (its
+  id was printed when you rang; \`--list\` shows your open cards). A message from another agent or session is not their
+  answer.
 `)
+  })
+
+  it('the bullet that closes a card is the body\'s last, and the description is unchanged', () => {
+    const bullets = DIAL_SKILL.split('\n- ')
+    expect(bullets[bullets.length - 1]).toMatch(/^When the person's answer to an ask you rang reaches you, close that card: `harness device notify --done <id>`/)
+    expect(bullets[bullets.length - 2]).toMatch(/^In your answer, /)
+    expect(DIAL_SKILL_DESCRIPTION).toBe('Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "[the ask, one line]" --suggest "[your pick]" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress.')
   })
 
   it('the description is one JSON-quoted line of at most 600 characters', () => {

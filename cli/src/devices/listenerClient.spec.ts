@@ -280,6 +280,18 @@ describe.skipIf(process.platform === 'win32')('askDevices, on a socket', () => {
     expect(await askDevices(dir, NOTICE)).toEqual(JSON.parse(body))
   })
 
+  it('maxBytes lets a larger answer through, and the default still refuses past 1024', async () => {
+    const dir = dataDir()
+    let body = ''
+    await listener(dir, res => json(body)(res))
+    body = JSON.stringify({ cards: 'x'.repeat(8192 - '{"cards":""}'.length) })
+    expect(Buffer.byteLength(body)).toBe(8192)
+    expect(await askDevices(dir, NOTICE, { maxBytes: 8192 })).toEqual(JSON.parse(body))
+    expect(await askDevices(dir, NOTICE)).toBeNull()
+    body = JSON.stringify({ cards: 'x'.repeat(8193 - '{"cards":""}'.length) })
+    expect(await askDevices(dir, NOTICE, { maxBytes: 8192 })).toBeNull()
+  })
+
   it('null with no socket and with a socket of another account, and nothing is sent', async () => {
     const { heard: elsewhere } = await listener(dataDir(), json('{"result":"shown"}'))
     expect(await askDevices(dataDir(), NOTICE)).toBeNull()

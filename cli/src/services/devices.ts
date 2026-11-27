@@ -90,7 +90,7 @@ import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/h
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { NoticeFile, NOTICES_FILE } from '../cable/noticeFile.js'
-import { listedAgent, noticeKeys, Notices, type NoticeCaller } from '../cable/notices.js'
+import { listedAgent, noticeKeys, Notices, type NoticeCaller, type NoticeOutcome } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -111,7 +111,7 @@ import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import { trustedCodexHomes } from '../lib/codexProfiles.js'
-import { noticeKind, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
+import type { NoticeAsk, NoticeCard, NoticeKind, NoticeResult } from '../lib/dialNotice.js'
 import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
@@ -127,7 +127,7 @@ import { createTally, createTierDecider, type Tier, type TierDecision, type Tier
 import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, nudgeHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler, type NudgeAsk } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, noticeDoneHandler, noticeHandler, noticeListHandler, notifyHandler, nudgeHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler, type NoticeWho, type NudgeAsk } from './devicesListener.js'
 import { FLEET_FALLBACKS, FLEET_UNAVAILABLE, startFleet, type Fleet } from './fleet.js'
 import { TURN_UNANSWERED } from './fleetRouter.js'
 
@@ -1528,19 +1528,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     opened: (machineId, agentId, reason) =>
       core.clients.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
     // A person's tap on an agent, a notice's "In <app>" among them, is use of the dial, and the person answering on the dial
-    // what that agent waits on. Its notice's card stays on the dial's face of that agent until its next turn.
+    // what that agent waits on: the card the dial shows of it. That card stays on the dial's face of that agent until the
+    // agent closes it.
     tapped: (agentId) => count((usage) => {
       usage.used()
       usage.tapped(agentId)
-      usage.waitEnded(`notice:${agentId}`, 'answered')
+      const card = notices.shown(agentId)
+      if (card) usage.waitEnded(noticeWait(agentId, card), 'answered')
     }),
     noticeFrom: (agentId) => notices.from(agentId),
     newsKept: (agentId) => notifyMode.get() !== 'you' || failedLast.has(agentId),
     // A caller no list holds has no face on the dial to ask on, and with no session its next turn is never heard: kept,
-    // its card would stay pinned until the devices restart. The tap is its end, as its leaving would be. Only a card its
-    // notice found no list for (`who`): a router that has read no list yet, as while the fleet is unavailable, finds no
-    // machine for a Harness agent either, whose card waits for its next turn.
-    tappedUnlisted: (agentId) => part.call('notices', () => { if (notices.from(agentId)) notices.ended(agentId) }),
+    // its card would stay pinned until the devices restart. The tap is that card's end, as its leaving would be. Only a
+    // card its notice found no list for (`who`): a router that has read no list yet, as while the fleet is unavailable,
+    // finds no machine for a Harness agent either, whose card waits for its agent to close it.
+    tappedUnlisted: (agentId) => part.call('notices', () => notices.tapped(agentId)),
     // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer,
     // which holds them too.
     noticeRows: () => {
@@ -1842,13 +1844,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return entry ? outsidePresent(entry) : harnessPresent(agentId, began.get(agentId) ?? lastBegan.get(agentId))
   }
 
+  /** The agents whose done decided a rouse that waits for the turn's tokens: one whose next turn starts meanwhile, the
+   *  person's answer most likely, is not roused, and its card stays quiet for that turn's end. Each goes as its done
+   *  finishes or its next turn starts, so it holds at most the agents whose done waits. */
+  const rousing = new Set<string>()
   /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
   const announced = (agentId: string, tier: Tier): void => {
     if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
   }
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
-   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
-   *  card came (toDial). */
+   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent held a card as the card came
+   *  (toDial). */
   const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
     // A turn starting or ending says whether its agent's last one failed; a sub-agent's or a restored card is not its turn.
@@ -1871,6 +1877,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // Read while the turn's start is kept, which a Harness agent's presence reads. A sub-agent's or a given-up turn's
       // end is not its agent's, and a failed turn rang as one.
       const rouse = !event.subagent && !failedLast.has(event.agentId) && notices.quiet(event.agentId) && !present(event.agentId)
+      if (rouse) rousing.add(event.agentId)
       if (!event.subagent) nudgeOver(event.agentId)
       // Its Stop hook's report comes after this done (presentAtStop).
       if (at !== undefined && !outside(event.agentId)) noteEnded(event.agentId, at)
@@ -1883,8 +1890,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         const all = { ...fields, ...tokens }
         if (Object.keys(all).length) void cable.turnStats(event.agentId, all)
         void cable.turnDone(event.agentId)
-        // After the done, which may wait for its tokens: a next turn started meanwhile ended the card, and none is asked.
-        if (rouse) rouseNotice(event.agentId)
+        // After the done, which may wait for its tokens: a card closed meanwhile is not asked, nor one whose agent's next
+        // turn started meanwhile.
+        if (rouse && rousing.delete(event.agentId)) rouseNotice(event.agentId)
       }
       if (!start || !cable.wantsStats()) return finish({})
       return turnTokens(event.agentId, start).then(finish)
@@ -1901,8 +1909,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
-      // Its notice rang for this turn: the dial keeps one drawer row an agent, so a summary that rang or listed would
-      // replace the notice's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
+      // Its agent holds a card: the dial keeps one drawer row an agent, so a summary that rang or listed would replace the
+      // card's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
       if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       // The person watched an outside agent end: its tile alone, in Needs you too. A Harness agent's keeps `onScreen`.
       const row = outside(agentId)
@@ -1920,7 +1928,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         else tally(event.tier, 'recaps', 'decided upstream', 0)
         const tier = lowered ? 'silent' : event.tier
         announced(agentId, tier)
-        void cable.summary(agentId, recap, event.text, tier, event.fullText, false)
+        void cable.summary(agentId, recap, event.text, tier, event.fullText, false).then(() => cardBack(agentId, tier))
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
@@ -1929,7 +1937,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         .then((d) => d.tier, (): Tier => (tileOnly ? 'silent' : 'list'))
         .then((tier) => {
           announced(agentId, tier)
-          void cable.summary(agentId, recap, event.text, tier, event.fullText, false)
+          void cable.summary(agentId, recap, event.text, tier, event.fullText, false).then(() => cardBack(agentId, tier))
         })
     }
     else {
@@ -1938,9 +1946,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       starts.delete(event.agentId)
       tally('alert', 'rule:failed', 'turn.error', 0)
       count((usage) => usage.turnAnnounced(event.agentId))
-      void cable.turnError(event.agentId, event.text)
+      void cable.turnError(event.agentId, event.text).then(() => cardBack(event.agentId, 'alert'))
     }
   }
+  /** A failed turn rings whatever card its agent holds (rule 8), and its recap or error took that agent's drawer row: the
+   *  dial keeps one an agent. The card stays on the dial, so its row goes back over it, after the frame that took it. */
+  const cardBack = (agentId: string, tier: Tier): void => part.call('notices', () => {
+    if (tier !== 'silent' && notices.pending(agentId)) redrawNotices([agentId])
+  })
   /**
    * The reply as it streams: a `steps-v1` device shows the agent's latest paragraph, but a text delta arrives every
    * few tokens and the link is lossy. So at most one send per 750 ms per agent, a trailing send of the last text
@@ -1988,10 +2001,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     void tail.then(() => { if (queued.get(agentId) === tail) queued.delete(agentId) })
   }
   const toDial = (event: DialEvent): void => {
+    // As it comes, not in its agent's order, which holds it behind a done waiting for its tokens.
+    if (event.kind === 'processing') rousing.delete(event.agentId)
     // The last streamed text goes out before the turn's end, in the same per-agent order.
     if (event.kind !== 'processing') endReplies(event.agentId, true)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
-    // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
+    // (TOKENS_WAIT_MS), and the agent may close its card meanwhile. The card may be from an earlier turn: a turn start no
+    // longer closes a waiting card, so each turn end stays silent until its agent closes it or it goes at 24 hours
+    // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8).
     const notice = event.kind === 'summary' && notices.pending(event.agentId)
     // So is the end it may announce: a turn started while the card waits is the agent's next, and spends it.
     if (event.kind === 'summary' || event.kind === 'error') count((usage) => usage.turnEnded(event.agentId))
@@ -2080,8 +2097,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   // ── an agent's notice ──────────────────────────────────────────────────────────────────────────────
   //
-  // `harness device notify`: the agent's own one line for the person, a card every dial pins until that agent's next turn
-  // starts or it leaves (cable/notices.ts). A tap that opens it in its app keeps it, so the dial's face of that agent
+  // `harness device notify`: the agent's own one line for the person, a card every dial pins until that agent closes it,
+  // leaves, or the card is 24 hours old; a proceeding or plain one also goes at the person's next prompt to it, or a
+  // Harness agent's next turn (cable/notices.ts `prompted`). A tap that opens it in its app keeps it, so the dial's face of that agent
   // still asks; a tap on a caller no list holds opens nothing and ends it. It takes its own path to the dials, never
   // `tell` or `showWaits`: it is the agent asking for the person, so it rings with a window open on its tab too, which
   // holds an outside agent's turns (heldOnTab), and `showWaits` closes any question `shown` does not hold
@@ -2101,8 +2119,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The agent a session's notice and nudge are kept under, so its marks are cleared under the same id: a Harness agent or
    *  another source's row may hold the session under an id of its own. */
   const callerOf = (engine: NudgeAsk['engine'], sessionId: string): string => noticeCaller({ text: '', engine, sessionId }).agentId
+  /** A card's wait on the person: a waiting card's own, as up to five stay open at once. The other card keeps its
+   *  agent's key: a newer one replaces it (rule 2), and the count reads one wait for it, which a proceeding card answers
+   *  and a plain one keeps. */
+  const noticeWait = (agentId: string, card: { id: string; kind: NoticeKind }): string =>
+    card.kind === 'waiting' ? `notice:${agentId}:${card.id}` : `notice:${agentId}`
   const noticeTally = createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log)
   const noticeFile = new NoticeFile({ file: join(core.dataDir, NOTICES_FILE), cards: () => notices.stored(), after: timerIn('notices'), log })
+  /** Those agents' notice rows changed with no question frame to carry them: the dial's drawer is replaced. Behind every
+   *  send those agents' order holds, their holds among them: a close that came after would drop the row. */
+  const redrawNotices = (agentIds: readonly string[]): void => {
+    const replace = (): void => { void cable.replaceNotifications(cableHost.listUnread()) }
+    const behind = agentIds.flatMap((agentId) => queued.get(agentId) ?? [])
+    if (behind.length === 0) replace()
+    else void Promise.all(behind).then(() => part.call('notices', replace))
+  }
   // Typed, or its type would be read from itself: the cable host's wiring reads it, and it reads the cable built on that host.
   const notices: Notices = new Notices({
     connected: () => cable.isConnected,
@@ -2124,47 +2155,72 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     restored: noticeFile.load(),
     log,
-    // Behind every send those agents' order holds, their holds among them: a close that came after would drop the row.
-    redraw: (agentIds) => {
-      const replace = (): void => { void cable.replaceNotifications(cableHost.listUnread()) }
-      const behind = agentIds.flatMap((agentId) => queued.get(agentId) ?? [])
-      if (behind.length === 0) replace()
-      else void Promise.all(behind).then(() => part.call('notices', replace))
-    },
+    redraw: redrawNotices,
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
+    after: timerIn('notices'),
+    // Its wait ends as it goes: answered only when its agent closed it, the one sure sign the person answered, or when the
+    // person's own prompt, or a Harness agent's next turn, closed an other card. A card replaced leaves its wait to the
+    // card that took its key (noticeShown).
+    closed: (agentId, card, end) => {
+      if (end === 'replaced') return
+      const key = noticeWait(agentId, card)
+      const answered = end === 'done' || end === 'prompted'
+      count((usage) => {
+        usage.waitEnded(key, answered ? 'answered' : 'gone')
+        usage.noticeEnded(key, answered)
+      })
+    },
   })
-  /** That agent's next turn started (`answered`) or it left (`gone`): its card goes, and its wait on the person ends so. */
-  const endNotice = (agentId: string, end: 'answered' | 'gone'): void => {
-    part.call('notices', () => notices.ended(agentId))
-    count((usage) => usage.waitEnded(`notice:${agentId}`, end))
-  }
-  /** A notice shown is a wait on the person unless its agent says it proceeds (Decision 8), or it was held quiet: the
-   *  waits count the dial's rings. One that takes the place of the agent's own: proceeding, the person most likely acted,
-   *  so that wait is answered; waiting, it is the same wait. Of every kind, the person's next prompt to that agent within
-   *  10 min answers it. */
-  const noticeShown = (ask: NoticeAsk): void => count((usage) => {
+  /** That agent left: its cards go, and with them their waits on the person, with no answer (closed). Only its leaving:
+   *  Harness cannot tell from a turn's start whether the person answered (2026-11-27: another agent's message started the
+   *  turn, and the card went unseen), so the agent closes its own. */
+  const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
+  /** A card shown is a wait on the person when it rang, unless its agent says it proceeds (Decision 8): the waits count
+   *  the dial's rings, so a card held quiet or queued behind another opens none. A proceeding card that takes the place of
+   *  the agent's other card answers that one's wait: the person most likely acted. */
+  const noticeShown = (ask: NoticeAsk, card: NonNullable<NoticeOutcome['card']>): void => count((usage) => {
     const { agentId, host } = noticeCaller(ask)
-    const quiet = notices.quiet(agentId)
-    usage.noticeShown(agentId, quiet)
+    const key = noticeWait(agentId, card)
+    usage.noticeShown(key, card.quiet)
     // A ring after a yes, once a yes (Part 5's counts): an outside agent's while the hold its yes started lasts; a Harness
     // agent's while its continuation runs, till that one's done, as the devices hold no stop of its: its reader continues
-    // the turn (rangInContinuation).
-    const rang = quiet ? undefined : host === 'harness' ? rangInContinuation(agentId) : observed?.rangInHold(agentId)
+    // the turn (rangInContinuation). A card that rang no dial, held quiet or queued behind its agent's waiting card, is
+    // none.
+    const rang = !card.rang ? undefined : host === 'harness' ? rangInContinuation(agentId) : observed?.rangInHold(agentId)
     if (rang) usage.nudgeRang(rang)
-    if (noticeKind(ask.text) === 'proceeding') usage.waitEnded(`notice:${agentId}`, 'answered')
-    else if (!quiet) usage.waitOpened(`notice:${agentId}`, agentId)
+    if (card.kind === 'proceeding') usage.waitEnded(key, 'answered')
+    else if (card.rang) usage.waitOpened(key, agentId)
   })
   /** Its turn ended with the person gone: its quiet card is asked (cable/notices.ts `rouse`), counted, and from then a
    *  wait on the person as a rung notice is, unless it proceeds (docs/plans/2026-11-26-needs-you-right-design.md, Part 2b). */
   const rouseNotice = (agentId: string): void => part.call('notices', () => {
-    const kind = notices.rouse(agentId)
-    if (!kind) return
+    const card = notices.rouse(agentId)
+    if (!card) return
     count((usage) => {
       usage.noticeRoused()
-      if (kind !== 'proceeding') usage.waitOpened(`notice:${agentId}`, agentId)
+      if (card.kind !== 'proceeding') usage.waitOpened(noticeWait(agentId, card), agentId)
     })
   })
+  /** The caller's cards, oldest first, for `harness device notify --list`: found as its notice finds it, so it names its
+   *  own alone. */
+  const noticeList = (who: NoticeWho): NoticeCard[] => {
+    let cards: NoticeCard[] = []
+    part.call('notices', () => {
+      // By the wall clock a card was shown by: one ahead of a clock set back is new, never an age the command drops.
+      const now = Date.now()
+      cards = notices.list(noticeCaller({ text: '', ...who }))
+        .map(({ id, at, kind, line }) => ({ id, ageS: Math.max(0, Math.floor((now - at) / 1000)), kind, line }))
+    })
+    return cards
+  }
+  /** The caller closes its card by its id, or all of them, for `harness device notify --done`: how many went. Another
+   *  agent's id, or one no card has, closes nothing. */
+  const noticeDone = (who: NoticeWho, id: string): number => {
+    let closed = 0
+    part.call('notices', () => { closed = notices.done(noticeCaller({ text: '', ...who }), id) })
+    return closed
+  }
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
 
@@ -2197,13 +2253,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     observed?.stopReported(stopped, answer === 'yes')
     return answer === 'yes'
   }
-  /** The outside sources' lists as they are now: a restored notice waiting for one of their agents finds it, or goes. */
+  /** The outside sources' lists as they are now: a restored notice waiting for one of their agents finds it. */
   const lookOutside = (entries: HostEntry[]): void => part.call('notices', () =>
-    notices.look(false, () => entries.map(({ agent }) => listedAgent(agent.id, agent, busyState(agent.state)))))
-  /** The core's agents as last read: a restored notice waiting for a Harness agent finds it. Its turn is not known here:
-   *  the first card of a running turn heard ends the notice (`toCable`). */
+    notices.look(false, () => entries.map(({ agent }) => listedAgent(agent.id, agent))))
+  /** The core's agents as last read: a restored notice waiting for a Harness agent finds it. */
   const lookHarness = (): void => part.call('notices', () =>
-    notices.look(true, () => core.agents.advertised().map((session) => listedAgent(session.agentId, session, false))))
+    notices.look(true, () => core.agents.advertised().map((session) => listedAgent(session.agentId, session))))
 
   /** The ids on the dial's lists, built now, which reads the core's agents again. Both lists a dial can hold: the one
    *  ring, and the shown app's for a dial that says appFilter, read only while one is connected: that read can switch the
@@ -2238,8 +2293,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const outsideTurn = (): void => {
     const entries = outsideEntries()
     showWaits(entries)
-    // Before `told` is read: an agent listed busy for the first time ends its restored notice here, under the id the
-    // notice was kept by.
+    // Before `told` is read: an agent listed for the first time takes its restored notice here, under the id the notice
+    // was kept by.
     lookOutside(entries)
     const ids = new Set(entries.map((entry) => entry.agent.id))
     const fresh = new Map<string, DialEvent[]>()
@@ -2247,7 +2302,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (ids.has(id)) continue
       told.delete(id)
       prompted.delete(id)
-      endNotice(id, 'gone')
+      endNotice(id)
     }
     for (const entry of entries) {
       const { agent } = entry
@@ -2276,10 +2331,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         checking.set(agent.id, held)
       }
       // Only an observed agent has a hook to say its turn started (port.observed): another's going busy is its next turn.
-      if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) {
-        endNotice(agent.id, 'answered')
-        count((usage) => usage.turnStarted(agent.id))
-      }
+      if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) count((usage) => usage.turnStarted(agent.id))
       // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
       // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
       // by its hook, which may be the turn's end.
@@ -3352,15 +3404,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => { answer = setNotify(mode) })
       return answer
     }),
+    noticeList: noticeListHandler(noticeList),
+    noticeDone: noticeDoneHandler(noticeDone),
     notice: noticeHandler((ask) => {
-      let result: NoticeResult = 'no dial'
+      let answer: { result: NoticeResult; id?: string } = { result: 'no dial' }
       part.call('notices', () => {
         // Only a session's notice: none other is ever nudged.
         if (ask.engine && ask.sessionId) noteRang(noticeCaller(ask).agentId)
-        result = notices.notify(ask)
-        if (result === 'shown') noticeShown(ask)
+        const { result, card } = notices.notify(ask)
+        answer = card ? { result, id: card.id } : { result }
+        if (card) noticeShown(ask, card)
       })
-      return result
+      return answer
     }),
     nudge: nudgeHandler((ask) => {
       let yes = false
@@ -3434,11 +3489,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     if (ran.payload?.kind === 'turn_started' && ran.agentId) {
       const agentId = ran.agentId
-      endNotice(agentId, 'answered')
+      // Its other card goes, as before 2026-11-27; its waiting cards stay until it closes them. Only the core knows who
+      // started the turn, so the other card may go at another session's message (rule 5).
+      part.call('notices', () => notices.prompted({ agentId, keys: [] }))
+      rousing.delete(agentId)
       count((usage) => usage.turnStarted(agentId))
-      // A question its last turn left open is stale: it must not hold a notice of this turn back.
+      // A question its last turn left open is stale: it must not hold a notice of this turn back, and a card it held back
+      // is sent now, as at its close.
       questionsEnded(agentId, 'answered')
-      questionsOpen.delete(ran.agentId)
+      if (questionsOpen.delete(agentId)) reaskNotice(agentId)
       endReplies(ran.agentId, false)
       stats.take(ran.agentId)
       if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
@@ -3450,7 +3509,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); lastBegan.delete(gone.payload.agentId); clearRang(gone.payload.agentId); clearNudged(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); lastBegan.delete(gone.payload.agentId); clearRang(gone.payload.agentId); clearNudged(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
     if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
@@ -3463,8 +3522,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!event) return
     // A silent one (a sub-agent's, a restored recap) is not news of the agent itself.
     if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
-    // A turn running: a restored notice of that agent rang before it, and is over.
-    if (event.kind === 'processing') part.call('notices', () => notices.working(event.agentId))
     toDial(event)
   }
   /**
@@ -3741,9 +3798,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // switched off.
     observed: (event) => {
       part.call('observed', () => {
-        // With the source switched off too: a notice no list held is under its session's id.
-        if (event.event === 'turn-start') endNotice(observedAgentId(event.engine, event.sessionId), 'answered')
-        if (!observed) return
+        if (!observed) {
+          // Its agent is gone (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5). With the source off
+          // no list holds this session: its card is kept under the session's id, and nothing else would end it.
+          if (event.event === 'session-end') endNotice(observedAgentId(event.engine, event.sessionId))
+          return
+        }
         // The id the agent's notices and nudges were kept under (callerOf), read before the source takes the event: an
         // ended session hands its row to another source's live copy of it. Only Claude Code and Codex ring or are nudged.
         const caller = (event.event === 'turn-start' || event.event === 'session-end') && (event.engine === 'claude' || event.engine === 'codex')
@@ -3754,6 +3814,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (caller && (source === 'person' || source === 'dial' || event.event === 'session-end')) {
           clearRang(caller)
           clearNudged(caller)
+        }
+        // The person's own prompt to it, by the dial's words too, never another session's message (2026-11-27): its other
+        // card goes, as before; its waiting cards stay until it closes them (rule 5). Found as its notice found it; only
+        // Claude Code and Codex ring.
+        if ((source === 'person' || source === 'dial') && (event.engine === 'claude' || event.engine === 'codex')) {
+          const found = noticeCaller({ text: '', engine: event.engine, sessionId: event.sessionId })
+          part.call('notices', () => notices.prompted(found))
         }
         // The interrupt is a hooked agent's alone (Decision 2): a Harness agent's aborted turn ends as a finished one does.
         if (event.event === 'turn-aborted') count((usage) => usage.turnAborted(observedAgentId(event.engine, event.sessionId)))

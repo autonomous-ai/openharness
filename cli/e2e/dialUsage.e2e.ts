@@ -6,8 +6,10 @@
  * its report sends no flag twice: one wait for the report covers both.
  *
  * The dial skill's use rides the same report (docs/plans/2026-11-26-dial-skill-usage-design.md): an outside Claude Code
- * session runs the real `harness device notify`, the dial shows it, and the person's prompt right after answers it; the
- * attach's setup pass wrote the skill, which the devices then find.
+ * session runs the real `harness device notify`, the dial shows it, and the agent answers it by closing its card with
+ * `notify --done <id>`, the id `--list` printed, before its next prompt: the person's prompt answers no waiting card
+ * (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md). The attach's setup pass wrote the skill, which the
+ * devices then find.
  *
  * With the person there the notice is held quiet (docs/plans/2026-11-26-needs-you-right-design.md, Part 2): the person
  * just prompted the session, its app is in front and the dial shows it, so its turn end is silent and its notice is a
@@ -142,8 +144,8 @@ describe('the dial\'s usage counts', () => {
     window.close()
     window = undefined
 
-    // Three outside sessions in Ghostty, each prompted by the person in its own app: its UserPromptSubmit hook, the one
-    // source that answers a notice and that says the person is there.
+    // Three outside sessions in Ghostty, each prompted by the person in its own app: its UserPromptSubmit hook says the
+    // person is there.
     const there = await Outside.start(d, 'PRIVATE_NOTICE_CANARY', { TERM_PROGRAM: 'ghostty' })
     outsides.push(there)
     const away = await Outside.start(d, 'PRIVATE_AWAY_CANARY', { TERM_PROGRAM: 'ghostty' })
@@ -173,6 +175,14 @@ describe('the dial\'s usage counts', () => {
       return dial.next((m) => m.t === 'summary' && m.agentId === session.id, 60_000, 'its answer', started)
     }
     const items = (m: DialMessage) => (m.items ?? []) as Array<Record<string, unknown>>
+    /** [session]'s agent closes its one card, the person's answer in, as the dial skill says: by the id `--list` prints. */
+    const done = async (session: Outside): Promise<void> => {
+      const folder = join(d.projectsDir, session.folder)
+      const listed = await notify(caller(session), folder, ['--list'])
+      expect(listed).toMatchObject({ code: 0, out: expect.stringMatching(/^[0-9a-f]{8} \d+[smh] waiting [^\n]+$/) })
+      expect(await notify(caller(session), folder, ['--done', listed.out.split(' ')[0]])).toMatchObject({ code: 0, out: '' })
+      expect(await notify(caller(session), folder, ['--list'])).toMatchObject({ code: 0, out: '' })
+    }
 
     // The person there: the turn end draws the tile alone, and the notice is a drawer row, never asked.
     await withFront('ghostty', there)
@@ -181,7 +191,7 @@ describe('the dial\'s usage counts', () => {
     const quiet = dial.messages.length
     const line = 'Waiting · PRIVATE_LINE_CANARY needs the VPN · Suggest: connect it'
     expect(await notify(caller(there), join(d.projectsDir, there.folder),
-      ['PRIVATE_LINE_CANARY needs the VPN', '--suggest', 'connect it', '--waiting'])).toMatchObject({ code: 0, out: 'shown' })
+      ['PRIVATE_LINE_CANARY needs the VPN', '--suggest', 'connect it', '--waiting'])).toMatchObject({ code: 0, out: expect.stringMatching(/^shown [0-9a-f]{8}$/) })
     const drawer = await dial.next((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === there.id), 45_000, 'the row', quiet)
     expect(items(drawer).find((item) => item.agentId === there.id)).toMatchObject({ question: true, summary: line })
     // The hold goes in its agent's order, a turn of the loop behind the drawer replace: the list asked first is the
@@ -195,6 +205,7 @@ describe('the dial\'s usage counts', () => {
       .toMatchObject({ ok: true, questions: [{ key: 'notice', q: line, options: ['In Ghostty'] }] })
     expect(dial.messages.slice(quiet).filter((m) => m.t === 'question' && m.agentId === there.id)).toEqual([])
     await until('the quiet notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown · waiting · present'), 30_000, 50)
+    await done(there)
     await turn(there, 'connected', 2)
 
     // Another app in front: the same notice rings.
@@ -202,9 +213,10 @@ describe('the dial\'s usage counts', () => {
     await turn(away, 'first', 1)
     const rung = dial.messages.length
     expect(await notify(caller(away), join(d.projectsDir, away.folder), ['PRIVATE_RING_CANARY needs a key', '--waiting']))
-      .toMatchObject({ code: 0, out: 'shown' })
+      .toMatchObject({ code: 0, out: expect.stringMatching(/^shown [0-9a-f]{8}$/) })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === away.id, 45_000, 'the ring', rung))
       .toMatchObject({ id: expect.stringMatching(/^shown:/) })
+    await done(away)
     away.type('connected')
 
     // The person there mid-turn: the notice is held quiet. Once they go to another app, its turn's end asks it, and the
@@ -214,7 +226,7 @@ describe('the dial\'s usage counts', () => {
     left.type('!until left-turn')
     await dial.next((m) => m.t === 'turn.started' && m.agentId === left.id, 45_000, 'its turn started', held)
     expect(await notify(caller(left), join(d.projectsDir, left.folder), ['PRIVATE_LEFT_CANARY needs the VPN', '--waiting']))
-      .toMatchObject({ code: 0, out: 'shown' })
+      .toMatchObject({ code: 0, out: expect.stringMatching(/^shown [0-9a-f]{8}$/) })
     const row = await dial.next((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === left.id), 45_000, 'its row', held)
     expect(items(row).find((item) => item.agentId === left.id)).toMatchObject({ question: true })
     // The list asked after the turn to another app is the barrier: the hold, a turn of the loop behind the row, is in.
@@ -230,6 +242,7 @@ describe('the dial\'s usage counts', () => {
       .toMatchObject({ tier: 'silent' })
     await until('the silent end in the daemon\'s log', () => silentEnds() > before || null, 30_000, 50)
     await left.idle(d)
+    await done(left)
     await turn(left, 'connected', 2)
 
     // The person in another app: a second look at the fourth session's stop, and its notice in the turn the yes holds.
@@ -257,7 +270,8 @@ describe('the dial\'s usage counts', () => {
     await stopped('second', 2)
     expect(await report(true)).toEqual({ nudge: true })
     expect(await notify(caller(look), join(d.projectsDir, look.folder), ['PRIVATE_LOOK_CANARY needs a key', '--waiting']))
-      .toMatchObject({ code: 0, out: 'shown' })
+      .toMatchObject({ code: 0, out: expect.stringMatching(/^shown [0-9a-f]{8}$/) })
+    await done(look)
     // The person's answer: the hold ends, and that turn's stop is told once its report came.
     const answered = dial.messages.length
     await stopped('connected', 3)

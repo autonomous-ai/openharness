@@ -58,6 +58,9 @@ const card = (n: number, over: Record<string, unknown> = {}): StoredNotice => ({
   agentId: `a${n}`, keys: [`claude:s${n}`], id: `shown:k${n}`, line: `Line ${n}`, host: 'orca', at: 1_000 + n, ...over,
 }) as StoredNotice
 
+// One agent's waiting card: an agent keeps up to five of these besides one other card.
+const waiting = (n: number): StoredNotice => card(n, { agentId: 'a1', id: `shown:w${n}`, line: `Waiting · Line ${n}` })
+
 const WHO = { name: 'api', engine: 'codex', machine: 'Mac mini' }
 
 const store = (file: string, cards: StoredNotice[] = []) => {
@@ -109,7 +112,9 @@ const DROPPED: Array<[string, string, string]> = [
   ['shape', 'no cards', '{"v":1}'],
   ['shape', 'cards that are an object', '{"v":1,"cards":{}}'],
   ['shape', '21 cards', fileOf(Array.from({ length: 21 }, (_, n) => card(n + 1)))],
-  ['shape', 'two cards of one agent', fileOf([card(1), card(2, { agentId: 'a1' })])],
+  ['shape', 'six waiting cards of one agent', fileOf(Array.from({ length: 6 }, (_, n) => waiting(n + 1)))],
+  ['shape', 'two other cards of one agent', fileOf([card(1), card(2, { agentId: 'a1' })])],
+  ['shape', 'two cards whose ids share 8 characters', fileOf([card(1, { id: 'shown:0123abcd-1' }), card(2, { id: 'shown:0123abcd-2' })])],
   ['shape', 'a null card', fileOf([card(1), null])],
   ...BAD_CARDS.map(([what, over]): [string, string, string] => ['shape', what, fileOf([card(1, over)])]),
 ]
@@ -166,6 +171,26 @@ describe('the file of pending notices', () => {
     const fresh = aFile()
     store(fresh, [card(1)]).noticeFile.close()
     expect(existsSync(fresh)).toBe(false)
+  })
+
+  it('loads several cards an agent', () => {
+    const file = aFile()
+    const cards = [waiting(1), card(2, { agentId: 'a1' }), waiting(3)]
+    writeFileSync(file, fileOf(cards))
+    const { noticeFile, logs } = store(file)
+    expect(noticeFile.load()).toEqual(cards)
+    expect(logs).toEqual([])
+  })
+
+  it('several cards an agent are written and read back whole', () => {
+    const file = aFile()
+    const cards = [...Array.from({ length: 5 }, (_, n) => waiting(n + 1)), card(6, { agentId: 'a1' }), card(7)]
+    const { noticeFile, pending } = store(file, cards)
+    noticeFile.changed()
+    pending[0].run()
+    const next = store(file)
+    expect(next.noticeFile.load()).toEqual(cards)
+    expect(next.logs).toEqual([])
   })
 
   it('an empty set is an empty list', () => {

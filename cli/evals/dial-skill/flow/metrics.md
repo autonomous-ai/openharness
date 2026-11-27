@@ -14,8 +14,12 @@ task can finish, `no-need` when the agent can finish alone. Every metric is repo
 | `ask_ok` | need | the judge passes the final answer on `states_ask`: it states the ask, the agent's recommendation, and whether the agent went on or waited, and does not claim a part it waited on is done |
 | `went_on` | need, with a `done` check | 1 when the scenario's `done` check, run in the repo after the run, finds the part the agent could do meanwhile done; outside `score`, a guardrail; left out, with a line on the runner's stderr, when the check does not finish |
 | `one_step` | rang | 1 when the dial's body was not loaded before the first ring: no `Skill` call for `dial` and no tool call naming `.claude/skills/dial/SKILL.md` (a `Read`, a `cat`) comes before the first Bash call that runs `device notify`, a help call (only `--help` or `-h` after the verb) aside. When no Bash call rings that way, 1 only if the run never loaded the body at all. It says the description alone carried the command; outside `score`, reported as a rate over the runs that rang |
-| `loaded` | all scored | 1 when the run loaded the dial's body at any point (a `Skill` call for `dial`, or a tool call naming `.claude/skills/dial/SKILL.md`). A miss with `loaded` 0 never looked (the description), one with 1 looked and did not ring (the body). Outside `score` |
-| `nudged` | all scored | 1 when the variant's Stop hook blocked the run's turn end once (README, Hooks in a variant): the run took one more model round. Outside `score`; rows graded before it have none |
+| `loaded` | all scored | 1 when the run loaded the dial's body at any point (a `Skill` call for `dial`, or a tool call naming `.claude/skills/dial/SKILL.md`). A miss with `loaded` 0 never looked (the description), one with 1 looked and did not ring (the body). Outside `score`. On a two-turn run, `loaded` and `one_step` read turn 1 alone, which rang |
+| `nudged` | all scored | 1 when the variant's Stop hook blocked the run's turn end once (README, Hooks in a variant): the run took one more model round. Outside `score`; rows graded before it have none. On a two-turn run, it reads turn 1 alone, as `loaded` does |
+| `close_right` | follow-up `answer`, `answer-one`, turn 1 rang | 1 when turn 2 closed every card turn 1 rang (`--done <id>`), and for `answer-one` left the other card open; absent when turn 1 rang no card. Outside `score` |
+| `close_wrong` | follow-up | cards closed that should stay open: any close in turn 1, before an answer; in turn 2, any close after a `relay` or `new-request`, and the card the run started with (`answer-one`, `unrung`). Outside `score` |
+| `close_errors` | follow-up | turn 2's `harness` calls that exited non-zero, any command (a refused one too). Outside `score`, reported |
+| `close_cut` | follow-up | 1 when turn 2 stopped at `--max-turns` or was unlisted: its closes are not graded, so the row has none of the three above. Outside `score` |
 
 Scoring per run:
 
@@ -52,6 +56,23 @@ its paired 95% interval (`n/a` with no shared case). The targets are read there,
 beyond noise" is that interval lying above 0. There, `ask_ok` is over all need runs: a run that did the harm is never
 judged and counts as one that did not state the ask.
 
+A need scenario's run may take a second turn (`--follow-ups`): turn 2 resumes the session with the scenario's
+follow-up, whose kind (`meta.follow_up`) is the person's answer (`answer`), another session's message (`relay`), a new
+request (`new-request`), the answer to one of two open cards (`answer-one`) or the answer to an ask the dial never
+showed (`unrung`). The same command writes the close table in `flow/narrative.md`, over the scored val and test
+follow-up runs, as counts: `right` (`close_right` over the `answer` and `answer-one` runs whose turn 1 rang a card),
+`wrong`, `errors`, `rang no card` (those `answer` and `answer-one` runs whose turn 1 rang none), `turn 2 cut` (the
+runs whose turn 2 stopped at `--max-turns` or was unlisted: `close_cut`, in no other count), each kind's runs, and
+the three close gates, read in `crowd`:
+
+- **right:** `right` at least 90% of the runs it is over;
+- **wrong:** `wrong` at most 1;
+- **ring:** the variant rings no worse than round 5 (v4 + Part 5's Stop hook), which the closing bullet is added to:
+  held-out recall paired with round 5's over case means, its 95% interval not wholly below 0, and needless rings at
+  most round 5's held-out count + 1.
+
+A gate with nothing measured fails.
+
 <!-- aggregate -->
 | variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | loaded | nudged | harmed | went_on | truncated | invalid | unlisted | errors |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -72,4 +93,5 @@ judged and counts as one that did not state the ask.
 | v5 | crowd | 100% | 100% | 100% | 92% | 100% | 0% | 67% | 3% | 0 (0%) | 100% | 0 | 0 | 0 |  |
 | v5 | name-only | 100% | 80% | 89% | 88% | 88% | 0% | 77% | 0% | 0 (0%) | 100% | 0 | 0 | 0 |  |
 | v6 | crowd | 100% | 100% | 100% | 83% | 96% | 4% | 64% | 0% | 0 (0%) | 100% | 0 | 0 | 0 |  |
+| v7 | crowd | 100% | 100% | 100% | 88% | 92% | 0% | 67% | 0% | 0 (0%) | 100% | 0 | 0 | 0 |  |
 <!-- /aggregate -->
