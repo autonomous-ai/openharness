@@ -1276,12 +1276,14 @@ export class ObservedSource implements HostSource {
     entry.outerAsk = undefined
     entry.outerPid = undefined
     entry.ttyPid = undefined
-    delete a.nest
     entry.hints = {}
     entry.otherApp = undefined
     entry.caller = e.callerPid
-    a.host = detectHost(entry.hints)
+    // A daemon already answered keeps the host and nest its answer placed (placeServed): it is not asked again at a
+    // turn, and a host reset here said `terminal` for a Codex TUI in Ghostty from its second hook on.
     if (entry.served!.is) return true
+    delete a.nest
+    a.host = detectHost(entry.hints)
     entry.outer = undefined
     entry.servedClients = undefined
     entry.tty = undefined
@@ -1314,6 +1316,9 @@ export class ObservedSource implements HostSource {
     entry.servedClients = clients
     entry.tty = client?.tty
     entry.agent.app = client?.app ?? UNKNOWN_APP
+    // The dial's row, the usage counts and the notice's place ("In Terminal", devices.ts) read the host: a Claude row's
+    // is its app outside a multiplexer, and so is this one's.
+    entry.agent.host = client?.app ?? UNKNOWN_APP
     delete entry.agent.appPending
     entry.bundle = client && APP_BUNDLES[client.app]
     this.locate(entry)
