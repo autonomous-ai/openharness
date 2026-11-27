@@ -1174,14 +1174,15 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.told).toEqual([stop + 1_500, second + 6_000])
     })
 
-    it('an early report is dropped by a turn-start', async () => {
-      const r = rig()
-      await r.mark()
-      r.hook('turn-start')
-      r.report(false)
-      r.hook('turn-start')
-      await waitsForItsReport(r)
-    })
+    it.each(['turn-start', 'needs-input', 'turn-error', 'turn-aborted', 'session-end'] as const)(
+      'an early report is dropped by %s', async (event) => {
+        const r = rig()
+        await r.mark()
+        r.hook('turn-start')
+        r.report(false)
+        r.hook(event)
+        await waitsForItsReport(r)
+      })
 
     it('an early report older than 6 s is not used', async () => {
       const r = rig()
@@ -1371,6 +1372,28 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.told).toHaveLength(1)
     })
 
+    it.each<[string, (r: Rig) => Promise<void>]>([
+      ['a prompt', async (r) => { r.hook('turn-start') }],
+      ['a removal', async (r) => {
+        r.gens.set(100, null)
+        await r.src.tick()
+        expect(r.src.list()).toEqual([])
+      }],
+    ])('%s while the stamp is being read: nothing told at the read, and no timer left', async (_what, end) => {
+      let read!: (stamp: { stamp: string; mtime: number } | null) => void
+      const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>((resolve) => { read = resolve }))
+      const r = rig('claude', { fileStamp })
+      const yes = await heldAfterYes(r)
+      await r.advance(10_000)
+      expect(fileStamp).toHaveBeenCalledTimes(1)
+      await end(r)
+      read({ stamp: '', mtime: yes - 2_000 })
+      await r.advance(0)
+      expect(r.told).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+      expect(r.heldEnds()).toEqual([])
+    })
+
     it('a stamp read that never answers (a stalled network share): told at the 120 s cap all the same', async () => {
       const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>(() => {}))
       const r = rig('claude', { fileStamp })
@@ -1395,6 +1418,13 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.told).toEqual([])
       expect(r.agent().state).toBe('working')
       expect(r.heldEnds()).toEqual(['[observed] held stop · unheard'])
+      // The hold is gone: the owner's record reading idle ends the turn, as it does any turn no stop is held for.
+      r.open.set(SESSION, 'terminal')
+      r.owners.set(SESSION, { pid: 100, engine: 'claude' })
+      r.working.set(SESSION, false)
+      await r.src.checkWorking()
+      expect(r.agent().state).toBe('idle')
+      expect(r.told).toEqual([])
     })
 
     it('the yes before its stop, and no stop at all, the transcript growing: nothing told at 120 s either', async () => {

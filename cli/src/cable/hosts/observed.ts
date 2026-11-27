@@ -1649,7 +1649,9 @@ export class ObservedSource implements HostSource {
     entry.heldStop.unref()
   }
 
-  /** Its Stop passed the grace with no word of the turn going on: done, unless its subagents still run. */
+  /** Its turn ended at its held Stop: the grace passed with no word of the turn going on (stopHeard), a no released it
+   *  (stopReported), no report came (reportMissed), or the turn a yes kept going went quiet or reached its cap after that
+   *  Stop (holdDue). Done, unless its subagents still run. */
   private finish(entry: Entry): void {
     entry.heldStop = undefined
     entry.secondLook.stopWait = undefined
