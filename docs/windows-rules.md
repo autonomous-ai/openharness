@@ -206,6 +206,12 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   writable first.
 - **There is no `ps`.** Read the process table through `lib/windows/processTable.ts`. A check that treats a failed `ps` as "gone"
   quietly does nothing on Windows: viewers piled up for that reason (`dsh/viewerLedger.ts`).
+- **There is no `lsof`.** A process's open files and folder come from `harness-pty files --json`
+  (`lib/windows/openFiles.ts`). A read that could not run is unknown, never "nothing open": `processView` answered an
+  empty map without spawning, so the open scan never found a running Codex after a restart (Ken's VM, 2026-11-26).
+  A process it left out that still runs (elevated, past a bound) is unknown too; one that exited holds nothing.
+  Name a handle only when `GetFileType` says disk: `NtQueryObject` hangs on a synchronous pipe with a read pending.
+  Tests: the "on Windows" cases of `cli/src/lib/sessionSearch/externals/support.spec.ts`, `pty/src/open_files.rs`.
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
 - **A file Windows writes is read in Git Bash as Windows wrote it.** `current-node` holds `C:\…\node.exe` and a CRLF,
   and `${x%/*}` cuts nothing from it: every store package's `harness_node` failed under `set -e` on a computer whose

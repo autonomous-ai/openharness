@@ -264,12 +264,12 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   readTtyName: readers.tty,
   readBundleId: readers.bundleId,
 }))
-// Whether a Codex hook's caller is the TUIs' daemon (codexServed.ts): none is here, so a Codex hook is placed by its hints
-// once that answer lands, and no spec reads this machine's processes, their folders or their terminals.
+// Whether a Codex hook's caller is the TUIs' daemon (codexServed.ts), asked on every platform: none is here, so a Codex
+// hook is placed by its hints once that answer lands, and no spec reads this machine's processes, their folders or their
+// terminals.
 vi.mock('../cable/hosts/codexServed.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/codexServed.js')>(),
-  servedLookup: (platform: NodeJS.Platform) =>
-    (platform === 'win32' ? undefined : async (asks: readonly unknown[]) => asks.map(() => undefined)),
+  servedLookup: () => async (asks: readonly unknown[]) => asks.map(() => undefined),
 }))
 vi.mock('../cable/hosts/tabs.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/tabs.js')>(),
@@ -6853,6 +6853,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     const PACKAGED = 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.0.0.0_x64__abc\\app\\resources\\codex.exe'
     started({ codex: { ...codex, platform: 'win32', appBinary: () => PACKAGED }, orca: { ...orca, platform: 'win32' } },
       { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    // As on macOS, its app is known once the served lookup says its caller is no server.
+    await landed()
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(codexRuns.map(([file]) => file)).toEqual([PACKAGED])
     expect(said()).toEqual(['[device] voice · codex'])
