@@ -3,10 +3,11 @@
  *
  * The state folder is not in the TUI's arguments (it renames its process to a bare `openclaw`) and not in the
  * transcript. What the TUI does show is the file it holds open: `<stateDir>/state/openclaw.sqlite` (`ps-*.txt`,
- * Linux `/proc/<pid>/fd`, macOS `lsof`). That is the one exact answer, and it also covers a `--profile` or `--dev`
- * TUI, whose state folder is `~/.openclaw-<name>`. Once bound, the session is read from the folder its TUI held then
- * (`RegisteredSession.openclawStateDir`): a TUI keeps its folder for life, and its pid, once it exits, can name another
- * TUI with another store. Where neither is known (Windows reads no open files), OpenClaw's own default is used:
+ * Linux `/proc/<pid>/fd`, macOS `lsof`, Windows `harness-pty files`, of the child its launcher respawned there). That is
+ * the one exact answer, and it also covers
+ * a `--profile` or `--dev` TUI, whose state folder is `~/.openclaw-<name>`. Once bound, the session is read from the
+ * folder its TUI held then (`RegisteredSession.openclawStateDir`): a TUI keeps its folder for life, and its pid, once
+ * it exits, can name another TUI with another store. Where neither is known, OpenClaw's own default is used:
  * `env.OPENCLAW_STATE_DIR`, resolved as OpenClaw resolves it (`OPENCLAW_STATE_DIR`, else
  * `<OPENCLAW_HOME or home>/.openclaw`).
  *
@@ -15,7 +16,7 @@
  */
 import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { isAbsolute, join, posix, win32 } from 'node:path'
 import { env } from '../config/env.js'
 import { OPENCLAW_KEY, openclawAgentDb } from '../engines/openclaw/contract.js'
 import { errorKind } from './log.js'
@@ -36,7 +37,8 @@ function once(line: string): void {
 }
 
 /** The state folder from the files a TUI holds open, or null when it holds no state database. */
-export function stateDirOfOpenFiles(files: readonly string[]): string | null {
+export function stateDirOfOpenFiles(files: readonly string[], platform: NodeJS.Platform = process.platform): string | null {
+  const { basename, dirname } = platform === 'win32' ? win32 : posix
   const database = files.find((file) => basename(file) === 'openclaw.sqlite' && basename(dirname(file)) === 'state')
   return database ? dirname(dirname(database)) : null
 }
@@ -50,7 +52,7 @@ export async function openclawStateDir(pid: number, openFiles: (pid: number) => 
   try {
     held = stateDirOfOpenFiles(await openFiles(pid))
   } catch (error) {
-    // Windows has neither /proc nor lsof; a TUI that exited has no files.
+    // A TUI that exited has no files; harness-pty may be missing or fail on Windows.
     once(`[openclaw] open files of ${pid} unreadable · ${errorKind(error)}`)
   }
   if (!held) return null

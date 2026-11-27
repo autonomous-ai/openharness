@@ -2062,7 +2062,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const darwin = [...fixture('ps-darwin.txt').split('# Gateway')[0].matchAll(/^\S+ REG (\S+)$/gm)].map((match) => match[1].replace('<scratch>', '/scratch'))
     expect(await openclawStateDir(7714, async () => linux)).toBe('/root/.openclaw')
     expect(await openclawStateDir(28234, async () => darwin)).toBe('/scratch/state')
-    // Windows reads no open files: OpenClaw's own default.
+    // Open files that cannot be read (harness-pty missing or failed on Windows) or hold no state database: OpenClaw's own default.
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await openclawStateDir(9001, async () => { throw new Error('no lsof') })).toBeNull()
     expect(await openclawStateDir(9002, async () => ['/tmp/other.sqlite'])).toBeNull()

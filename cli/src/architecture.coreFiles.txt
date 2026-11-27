@@ -529,6 +529,7 @@ lib/windows/hermesLaunch.ts
 lib/windows/installNames.ts
 lib/windows/launch.ts
 lib/windows/noWindow.ts
+lib/windows/openFiles.ts
 lib/windows/pipeAuth.ts
 lib/windows/pipeClient.ts
 lib/windows/powershell.ts

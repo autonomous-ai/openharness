@@ -9,9 +9,11 @@ import { readDescriptorEvidence, descriptorPaths, descriptorKey, type Descriptor
 import { NativePaths, nativeFileKey } from '../engines/kit/nativePaths.js'
 import { descriptorHeader } from '../engines/kit/nativeHeader.js'
 import { readProcessEvidence } from './processEvidence.js'
-import { argvTokens, engineProcessMatchScore } from './processTable.js'
+import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './processTable.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 import type { RepairedSession } from './sessionRepair.js'
+import { WINDOWS_FILES_MAX_PIDS, windowsOpenFiles, type WindowsFilesRead } from './windows/openFiles.js'
+import { windowsStartTime } from './windows/treeKill.js'
 
 export interface NativeConversationSources {
   processes: typeof readProcessEvidence
@@ -25,8 +27,34 @@ export interface NativeConversationOptions {
 }
 const nativeSources: NativeConversationSources = { processes: readProcessEvidence, descriptors: readDescriptorEvidence }
 
-export async function nativeOpenFiles(pid: number): Promise<string[]> {
+/**
+ * The files [pid] and the processes it started hold open, on Windows, where harness-pty reads them (there is no lsof).
+ * Windows has no exec, so a launcher's work runs in its child: OpenClaw's respawns itself with --stack-size=8192 and the
+ * child is the TUI that holds the state database, while discovery names the launcher, the shallowest
+ * (engines/openclaw/__fixtures__/ps-win32.txt). A failed read, or any of them left out, is unknown, never "holds nothing".
+ */
+async function windowsHeldFiles(pid: number, files: WindowsFilesRead, table: () => Promise<ProcessRow[] | null>): Promise<string[]> {
+  const rows = await table()
+  const own = rows?.find(row => row.pid === pid)
+  const born = own ? windowsStartTime(own.startMarker) : null
+  if (!rows || !own || born === null) return nativeUnavailable('the open files could not be read')
+  // Windows never re-parents a process and reuses pids: a row naming this pid as its parent, started before it, is an
+  // earlier process's orphan.
+  const children = rows.filter(row => row.parentPid === pid && row.pid !== pid && (windowsStartTime(row.startMarker) ?? -1n) >= born)
+  const asked = [own, ...children]
+  if (asked.length > WINDOWS_FILES_MAX_PIDS) return nativeUnavailable('the open files could not be read')
+  const read = await files(asked.map(row => row.pid))
+  // A row of another start marker is a process that took the pid between the two reads.
+  return asked.flatMap(row => {
+    const held = read?.get(row.pid)
+    return held?.startMarker === row.startMarker ? held.files : nativeUnavailable('the open files could not be read')
+  })
+}
+
+export async function nativeOpenFiles(pid: number, platform: NodeJS.Platform = process.platform,
+  windowsFiles: WindowsFilesRead = windowsOpenFiles, windowsTable: () => Promise<ProcessRow[] | null> = processRows): Promise<string[]> {
   if (!Number.isSafeInteger(pid) || pid <= 0) return []
+  if (platform === 'win32') return windowsHeldFiles(pid, windowsFiles, windowsTable)
   const evidence = await readDescriptorEvidence(pid, new NativeEvidenceBudget())
   await evidence.verify()
   return evidence.descriptors.map(row => row.path).filter(path => path.startsWith('/'))
