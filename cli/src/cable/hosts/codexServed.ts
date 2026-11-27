@@ -5,11 +5,12 @@
  * that TUI exits. The daemon holds the rollout and runs every hook, with its own environment, the first TUI's: neither a
  * hook's hints, nor its caller's terminal, nor the daemon's parents say where the person sees the session (Diego, CLI
  * 0.6.90, 2026-11-26: a Codex in Terminal on no page). Its TUI does, and Codex tells a hook nothing of it: the client is
- * the one Codex on a terminal working in the session's folder. None is never guessed at, nor one of two: several there,
- * all in one app, place it at that app with no tab, as that app holds whichever is the client (Ken's VM, 2026-11-27,
- * #4663 step 10: two in VS Code's terminals on Other's page), and in two apps, or one naming none, at none. Windows names no
- * terminal (a TUI there has a console, never a tty), so every Codex TUI there counts as on one, and its folder is read
- * through harness-pty (externals/support.ts processCwds; docs/plans/2026-11-27-windows-codex-rescan-design.md).
+ * the one Codex on a terminal working in the session's folder. With none there, the session is on no app's page. Of
+ * several, none is guessed: all in one app place it at that app with no tab, as that app holds whichever is the client
+ * (Ken's VM, 2026-11-27, #4663 step 10: two in VS Code's terminals on Other's page); in two apps, or with one whose
+ * parents name none, it is on no app's page. Windows names no terminal (a TUI there has a console, never a tty), so
+ * every Codex TUI there counts as on one, and its folder is read through harness-pty (externals/support.ts
+ * processCwds; docs/plans/2026-11-27-windows-codex-rescan-design.md).
  *
  * Of a process only its parents, its terminal and its folder are compared, and its arguments are read only to tell a
  * server (externals/codex.ts codexServer) and the daemon; none is kept.
@@ -144,7 +145,8 @@ async function clientsIn(
     const folder = await deps.folder(ask.cwd)
     const inFolder = candidates.filter((pid) => cwds.get(pid) === folder)
     // Windows names no terminal, so nothing tells a TUI from a `codex exec` or Harness's `codex queue` there: every Codex
-    // in the folder counts, and one whose parents name no app (the queue's are harnessd's) leaves the client unknown.
+    // in the folder counts. The session's own TUI is among them, so all in one app is that TUI's app, and one in another
+    // app, or whose parents name none, leaves the client unknown.
     if (deps.platform === 'win32') {
       if (inFolder.length) found.set(ask, inFolder.map((pid) => ({ pid })))
       continue

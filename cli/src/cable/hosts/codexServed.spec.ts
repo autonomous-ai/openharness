@@ -90,7 +90,7 @@ describe('codexServed', () => {
       .toEqual([{ client: { app: 'terminal-app', tty: '/dev/ttys005', pid: 500 } }])
   })
 
-  it('never guesses: none in the folder, two there, or one whose parents name no app leaves the client unknown', async () => {
+  it('never guesses: none in the folder, two there in two apps, or one whose parents name no app leaves the client unknown', async () => {
     const tmux = [row(30, 1, '/opt/homebrew/bin/tmux'), row(31, 30, '-zsh'), row(800, 31, BREW, 'codex')]
     const d = deps([...TERMINAL_TUI, ...ITERM_TUI, ...tmux, row(900, 1, DAEMON_BIN, DAEMON_ARGS)], {
       500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009', cwd: '/work/app' },

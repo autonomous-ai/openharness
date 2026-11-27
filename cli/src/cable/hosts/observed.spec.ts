@@ -8083,7 +8083,13 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.src.tabTty(id)).toBeUndefined()
     expect(t.src.windowOf(id)).toBeUndefined()
     expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
-    expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
+    // The app alone: no pane of either TUI is raised.
+    expect(t.actions.open.mock.calls[0][1]).toEqual({ bundle: 'com.apple.Terminal' })
+    expect(t.src.paneOf(id, 'tabs')).toBeUndefined()
+    // Its words go by Codex's queue, never into a tab.
+    expect(await t.src.send(t.agent(), 'next')).toEqual({ ok: true })
+    expect(t.actions.codexQueue.send).toHaveBeenCalledTimes(1)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
     t.src.ingest(t.codex('turn-start'))
     expect(t.lookup).toHaveBeenCalledTimes(2)
     expect(t.agent().app).toBe('terminal-app')

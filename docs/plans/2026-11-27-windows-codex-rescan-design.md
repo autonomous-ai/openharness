@@ -160,7 +160,8 @@ TypeScript, at the layer where each behavior lives (all run on macOS through the
    C:\work\dial)`, `codex.exe app-server --listen unix:// --analytics-default-enabled` (parent: the TUI):
    - daemon holds the rollout → one entry on VS Code's page, `outer.pid` the TUI, pane `client:<tuiPid>`;
    - the TUI holds it itself (embedded) → VS Code's page, pane `term:<tuiPid>`;
-   - two TUIs in that folder → on no app's page (never a guess);
+   - two TUIs in that folder → on no app's page (never a guess); superseded after step 10 (2026-11-27): two both in
+     VS Code → VS Code's page with no tab, two in two apps → on no app's page;
    - the daemon's parent is a TUI in Windows Terminal, the client is in VS Code → VS Code's page (the daemon's
      parents are never the place).
    **Red today: 0 found.**
@@ -208,6 +209,8 @@ With the fix (the PR's head):
 10. Two `codex` in VS Code terminals in the **same** folder, restart. Expected: listed on no app's page (never a
     guess). They stay there at the next hook: a daemon's hook is placed by its client too (decision 1), and two TUIs in
     one folder give none, as on macOS (Ken's VM, 2026-11-27).
+    Superseded after that run (PM, 2026-11-27): both are on VS Code's page with no tab, as VS Code holds whichever is
+    the client, and a tap brings VS Code forward. Once one is closed, the other's next prompt puts it at its terminal.
 
 ## Size
 
