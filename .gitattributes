@@ -22,3 +22,4 @@ plugins/harness-device/hooks/codex-asked text eol=lf
 plugins/harness-device/hooks/start text eol=lf
 plugins/harness-device/hooks/stop text eol=lf
 plugins/harness-device/hooks/codex-start text eol=lf
+plugins/harness-device/hooks/codex-stop text eol=lf
