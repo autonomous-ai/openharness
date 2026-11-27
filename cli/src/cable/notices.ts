@@ -218,7 +218,8 @@ export class Notices {
   }
 
   /** The person's own next prompt to that agent, typed or by the dial's words, never another session's message: its other
-   *  card was for the person, who has acted, so it goes, as before 2026-11-27. Its waiting cards stay until it closes them
+   *  card was for the person, who has acted, so it goes, as before 2026-11-27. A Harness agent's next turn counts as one:
+   *  its start cannot tell the two apart. Its waiting cards stay until it closes them
    *  (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5). */
   prompted(caller: Mine): void {
     this.drop(this.mine(caller).filter(({ kind }) => kind !== 'waiting'), 'prompted')

@@ -58,8 +58,9 @@ export interface DialUsage {
   /** A notice was shown now, under its wait's key (services/devices.ts noticeWait), which a newer one under the same key
    *  replaces. [present]: held quiet, as the person was with that agent. */
   noticeShown(key: string, present: boolean): void
-  /** That notice's card went: [done], its agent closed it, or the person's own prompt to its agent closed an other card
-   *  (services/devices.ts), which within 10 min of its showing answers it. Forgotten either way. */
+  /** That notice's card went: [done], its agent closed it, or the person's own prompt to its agent, or a Harness agent's
+   *  next turn, closed an other card (services/devices.ts), which within 10 min of its showing answers it. Forgotten
+   *  either way. */
   noticeEnded(key: string, done: boolean): void
   /** A notice held quiet was asked at its turn's end, the person gone (cable/notices.ts `rouse`). */
   noticeRoused(): void
@@ -206,10 +207,10 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   // does the announced turn end before it, whose prompt the voice then was.
   const unwaited = new Map<string, { at: number; announced?: number }>()
   // a notice's wait key → when it was shown and whether it was held quiet, oldest first: at most the cards the desk
-  // keeps. Only its agent's close answers it, or for an other card the person's own prompt, never another session's
-  // message: Harness cannot tell from a turn's start whether the person answered (2026-11-27: another agent's message
-  // started the turn, and the card counted as answered went unseen). An unplug keeps it, as its agent closes its card
-  // with or without a dial.
+  // keeps. Its agent's close answers it, or for an other card the person's own prompt, or a Harness agent's next turn,
+  // whose start cannot tell that prompt from another session's message. A waiting card only by its agent's close: Harness
+  // cannot tell from a turn's start whether the person answered (2026-11-27: another agent's message started the turn, and
+  // the card counted as answered went unseen). An unplug keeps it, as its agent closes its card with or without a dial.
   const notices = new Map<string, ShownNotice>()
   const noticeAnswered = (notice: ShownNotice | undefined, at: number) => {
     if (notice === undefined || at - notice.at >= VALUE_MS) return

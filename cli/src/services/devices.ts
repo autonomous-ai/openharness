@@ -2098,7 +2098,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // ── an agent's notice ──────────────────────────────────────────────────────────────────────────────
   //
   // `harness device notify`: the agent's own one line for the person, a card every dial pins until that agent closes it,
-  // leaves, or the card is 24 hours old (cable/notices.ts). A tap that opens it in its app keeps it, so the dial's face of that agent
+  // leaves, or the card is 24 hours old; a proceeding or plain one also goes at the person's next prompt to it, or a
+  // Harness agent's next turn (cable/notices.ts `prompted`). A tap that opens it in its app keeps it, so the dial's face of that agent
   // still asks; a tap on a caller no list holds opens nothing and ends it. It takes its own path to the dials, never
   // `tell` or `showWaits`: it is the agent asking for the person, so it rings with a window open on its tab too, which
   // holds an outside agent's turns (heldOnTab), and `showWaits` closes any question `shown` does not hold
@@ -2159,8 +2160,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
     after: timerIn('notices'),
     // Its wait ends as it goes: answered only when its agent closed it, the one sure sign the person answered, or when the
-    // person's own prompt closed an other card. A card replaced leaves its wait to the card that took its key
-    // (noticeShown).
+    // person's own prompt, or a Harness agent's next turn, closed an other card. A card replaced leaves its wait to the
+    // card that took its key (noticeShown).
     closed: (agentId, card, end) => {
       if (end === 'replaced') return
       const key = noticeWait(agentId, card)
@@ -3488,6 +3489,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     if (ran.payload?.kind === 'turn_started' && ran.agentId) {
       const agentId = ran.agentId
+      // Its other card goes, as before 2026-11-27; its waiting cards stay until it closes them. Only the core knows who
+      // started the turn, so the other card may go at another session's message (rule 5).
+      part.call('notices', () => notices.prompted({ agentId, keys: [] }))
       rousing.delete(agentId)
       count((usage) => usage.turnStarted(agentId))
       // A question its last turn left open is stale: it must not hold a notice of this turn back, and a card it held back
