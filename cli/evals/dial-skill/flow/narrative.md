@@ -31,6 +31,7 @@ v5, the best variant, against the baseline on test:
 | 5 | crowd | Part 5 (a): v4 and a second look when a turn stops | 2.41 [1.21, 3.61] |  | 2.56 [1.33, 3.78] | 100% | 100% | 92% | 100% | 0 (0%) | 100% | 34.4 | 9.2 | 0.62 | 241002 | $22.22 | $230.86 |
 | 5 | name-only | Part 5 (a): v4 and a second look when a turn stops | 2.23 [0.97, 3.49] |  | 2.58 [1.36, 3.81] | 100% | 80% | 88% | 88% | 0 (0%) | 100% | 36.6 | 10.7 | 0.69 | 249671 | $7.61 | $238.47 |
 | 6 | crowd | Part 5 (b): v1 and a second look when a turn stops | 2.33 [1.17, 3.50] |  | 1.97 [0.77, 3.18] | 100% | 100% | 83% | 96% | 0 (0%) | 100% | 38.5 | 10.2 | 0.62 | 265109 | $23.21 | $261.68 |
+| 7 | crowd | Closing cards, round 1: the spec's starting bullet | 2.38 [1.19, 3.58] | 2.23 [1.07, 3.39] | 2.50 [1.24, 3.76] | 100% | 100% | 88% | 92% | 0 (0%) | 100% | 52.7 | 11.4 | 0.62 | 302631 | $20.77 | $282.45 |
 <!-- /status -->
 
 Held out: val and test pooled, as counts.
@@ -55,12 +56,15 @@ Held out: val and test pooled, as counts.
 | v5 | crowd | 48 of 48 | 0 of 27 | 43 of 48 | 47 of 48 | 0 of 12 | 12 of 12 | 0 of 48 | 50 of 75 | 1 of 75 | +1.12 [0.32, 1.92] | +0.00 [0.00, 0.00] | 1.000 |
 | v5 | name-only | 16 of 16 | 1 of 9 | 14 of 16 | 15 of 16 | 0 of 4 | 4 of 4 | 0 of 17 | 18 of 25 | 0 of 25 | +3.20 [2.13, 4.27] | +0.00 [0.00, 0.00] | 1.000 |
 | v6 | crowd | 44 of 48 | 0 of 27 | 37 of 44 | 45 of 48 | 0 of 12 | 12 of 12 | 1 of 44 | 45 of 75 | 0 of 75 | +0.80 [0.15, 1.45] | +0.06 [-0.03, 0.16] | 0.262 |
+| v7 | crowd | 32 of 32 | 1 of 18 | 29 of 32 | 30 of 32 | 0 of 8 | 8 of 8 | 0 of 33 | 35 of 50 | 0 of 50 | +1.08 [0.29, 1.87] | +0.00 [0.00, 0.00] | 1.000 |
 <!-- /held-out -->
 
 Closes: held-out follow-up runs, as counts, with the close gates in crowd (metrics.md).
 
 <!-- close -->
-
+| variant | condition | right | wrong | errors | rang no card | turn 2 cut | by kind | right ≥ 90% | wrong ≤ 1 | ring |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| v7 | crowd | 14 of 14 | 0 | 0 | 0 | 0 | answer 8 runs, 8 right, 0 wrong; answer-one 6 runs, 6 right, 0 wrong; relay 8 runs, 0 wrong; new-request 6 runs, 0 wrong; unrung 4 runs, 0 wrong | pass | pass | pass |
 <!-- /close -->
 
 ## Round 1
@@ -293,3 +297,23 @@ Needless rings pooled over the held-out no-need runs: 2 of 54 (96% quiet), again
 Verdict: (a) passes. No condition's recall falls, the no-need runs hold 2 needless rings of 54 against at most 2, and
 `harmed` and `went_on` equal v4's in every condition. The hook ships, and v5 is the best round. The spend of Part 5 is
 $64.67, $261.68 in the flow, under the cap of $270.
+
+## Closing cards
+
+v7 is v5 with one closing bullet last in its body (`v7/change.md`), run with `--follow-ups` in `crowd`, against v5
+(round 5). Claude Code 2.1.332. One listing probe per pass, then 63 runs, all scored, none cut: val and test at 2
+reps (50), train at 1 rep (13).
+
+Held out, val and test pooled, as counts:
+
+- closes: right 14 of 14 (`answer` 8 of 8, `answer-one` 6 of 6), wrong 0, errors 0, turn 2 cut 0; `relay` 8 runs,
+  `new-request` 6 and `unrung` 4, each 0 wrong;
+- rings: recall 32 of 32 (v5 48 of 48), paired +0.00 [0.00, 0.00]; needless rings 1 of 18 against at most 1 (v5 0 of
+  27), `minor-choice` (test) 1 of 2, after loading the skill; `line_ok` 29 of 32, `ask_ok` 30 of 32, harmed 0 of 8,
+  `went_on` 8 of 8;
+- train: closes right 3 of 3, wrong 0, errors 0; recall 8 of 8, needless rings 0 of 5;
+- mean per run $0.325 (two-turn $0.37, one-turn $0.25); held out $0.332 and 55.2 s (v5 in `crowd` $0.295, 35.2 s);
+- spend $20.77 with both probes (val and test $16.72, train $4.05), $282.45 in the flow.
+
+Verdict: the right, wrong and ring gates all pass on round 1, so no round 2 ran, and v7 ships: `dialSkill.ts` holds
+its text. The spend of the closing cards is $20.77 of its $50, $282.45 in the flow, under the cap of $320.
