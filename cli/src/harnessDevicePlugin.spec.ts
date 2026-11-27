@@ -87,6 +87,20 @@ const CODEX_START_INPUT = JSON.stringify({
   permission_mode: 'default',
   source: 'startup',
 })
+const CODEX_STOP = join(pluginRoot, 'hooks', 'codex-stop')
+const codexStopHook = (root = pluginRoot): Hook => codexHooks(root).Stop[0].hooks[0]
+// Codex's Stop input, as Codex 0.172.0 writes it (the spike of 2026-11-27, F2).
+const CODEX_STOP_INPUT = JSON.stringify({
+  session_id: 's-1',
+  turn_id: 't-1',
+  transcript_path: '/home/person/.codex/sessions/2026/11/27/rollout-s-1.jsonl',
+  cwd: '/home/person/work',
+  hook_event_name: 'Stop',
+  model: 'gpt-5.5',
+  permission_mode: 'default',
+  stop_hook_active: false,
+  last_assistant_message: 'Should I push the branch?',
+})
 
 const tmpDirs: string[] = []
 // Every child has exited when spawnSync returns, but Windows still holds a just-run copy of node.exe for a moment (its
@@ -119,6 +133,13 @@ function runCodexHook(shell: string, root: string, home: string, path = '/usr/bi
 function runCodexStartHook(shell: string, root: string, home: string, path = '/usr/bin:/bin') {
   return spawnSync(shell, ['-c', codexStartHook(root).command], {
     input: CODEX_START_INPUT, env: { HOME: home, PATH: path, PLUGIN_ROOT: root }, encoding: 'utf8',
+  })
+}
+
+/** Runs the Codex Stop hook's command as Codex does off Windows. */
+function runCodexStopHook(shell: string, root: string, home: string, path = '/usr/bin:/bin') {
+  return spawnSync(shell, ['-c', codexStopHook(root).command], {
+    input: CODEX_STOP_INPUT, env: { HOME: home, PATH: path, PLUGIN_ROOT: root }, encoding: 'utf8',
   })
 }
 
@@ -462,10 +483,12 @@ describe('the harness-device plugin', () => {
     expect(manifest.description).not.toMatch(/allow|deny|approv|answers/i)
   })
 
-  it('hooks/codex.json holds the PermissionRequest and PreToolUse hooks and one SessionStart hook for startup, resume, clear and compact, 5 s, onFailure continue, and no mod', () => {
+  it('hooks/codex.json holds the PermissionRequest and PreToolUse hooks, one SessionStart hook for startup, resume, clear and compact, and one Stop hook with no matcher, 5 s, onFailure continue, and no mod', () => {
     expect(json(pluginRoot, 'hooks', 'codex.json')).not.toHaveProperty('modules')
     const hooks = codexHooks()
-    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'PreToolUse', 'SessionStart'])
+    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'PreToolUse', 'SessionStart', 'Stop'])
+    expect(hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: expect.any(String), onFailure: 'continue', timeout: 5 }] }])
+    expect(hooks.Stop[0].hooks[0].command.split('\n')[0]).toBe('echo `# <#` >/dev/null; exec "$PLUGIN_ROOT/hooks/codex-stop"')
     expect(hooks.PermissionRequest.map((block) => block.matcher)).toEqual(['*'])
     expect(hooks.PreToolUse.map((block) => block.matcher)).toEqual(['request_user_input'])
     const command = codexHook().command
@@ -608,6 +631,80 @@ describe('the harness-device plugin', () => {
     expect(calls).toHaveLength(1)
     expect(calls![0].trim()).toBe('device codex start 2> $null')
     expect(windows).toContain(`if ("$o".StartsWith('${SESSION_PREFIX}')) { [Console]::Out.Write("$o") }`)
+    expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
+  })
+
+  // Codex reads what a Stop hook prints as its decision, as Claude Code does: a block keeps the agent's turn going (F2).
+  posix.each(SHELLS)("the Codex Stop hook runs hooks/codex-stop under %s, from a folder named with a space, a quote and a dollar sign, and prints the launcher's block", (shell) => {
+    const root = join(tempDir(), 'Harness "Device" $x')
+    cpSync(pluginRoot, root, { recursive: true })
+    const home = tempDir()
+    const record = join(home, 'rec')
+    fakeLauncher(join(home, '.local', 'bin', 'harness'), record, BLOCK)
+    const result = runCodexStopHook(shell, root, home)
+    expect(readFileSync(`${record}.argv`, 'utf8')).toBe('device\ncodex\nstop\n')
+    expect(readFileSync(`${record}.stdin`, 'utf8')).toBe(CODEX_STOP_INPUT)
+    expect(result).toMatchObject({ status: 0, stdout: `${BLOCK}\n`, stderr: '' })
+  })
+
+  // An older launcher's usage, another hook's JSON, nothing, a failure or text on stderr: none of it may reach Codex as
+  // a decision.
+  posix('the Codex Stop hook prints nothing but the block', () => {
+    const home = tempDir()
+    const launcher = join(home, '.local', 'bin', 'harness')
+    mkdirSync(join(launcher, '..'), { recursive: true })
+    for (const out of ['harness v0.6 — connect this computer to your machine', ALLOW, '']) {
+      for (const code of [0, 1, 2]) {
+        writeFileSync(launcher, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${out}'\necho 'usage: harness device' >&2\nexit ${code}\n`)
+        chmodSync(launcher, 0o755)
+        expect(runCodexStopHook('/bin/sh', pluginRoot, home), `${out} exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
+      }
+    }
+  })
+
+  posix('with no launcher the Codex Stop hook prints nothing and exits 0', () => {
+    expect(runCodexStopHook('/bin/sh', pluginRoot, tempDir())).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix('the Codex Stop hook runs ~/.local/bin/harness first, then PATH', () => {
+    const home = tempDir()
+    const bin = tempDir()
+    const placements = [join(home, '.local', 'bin', 'harness'), join(bin, 'harness')]
+    const record = (i: number) => join(home, `rec-${i}`)
+    placements.forEach((launcher, i) => fakeLauncher(launcher, record(i), BLOCK))
+    // Each run finds the first placement still there; the next run has it removed.
+    for (const [i, launcher] of placements.entries()) {
+      const result = runCodexStopHook('/bin/sh', pluginRoot, home, `${bin}:/usr/bin:/bin`)
+      expect(readFileSync(`${record(i)}.argv`, 'utf8'), launcher).toBe('device\ncodex\nstop\n')
+      expect(readFileSync(`${record(i)}.stdin`, 'utf8'), launcher).toBe(CODEX_STOP_INPUT)
+      for (let later = i + 1; later < placements.length; later++) expect(existsSync(`${record(later)}.argv`), launcher).toBe(false)
+      expect(result, launcher).toMatchObject({ status: 0, stdout: `${BLOCK}\n`, stderr: '' })
+      rmSync(launcher)
+    }
+  })
+
+  posix('hooks/codex-stop is executable and starts with #!/bin/sh', () => {
+    expect(statSync(CODEX_STOP).mode & 0o111).toBe(0o111)
+    expect(readFileSync(CODEX_STOP, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
+  })
+
+  // The native command inherits the hook's stdin as Codex wrote it; PowerShell reading or re-piping it would re-encode
+  // the person's text.
+  it('the Codex Stop Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device codex stop once with its stdin untouched, writes only the block, and exits 0', () => {
+    const windows = windowsForm(codexStopHook().command)
+    expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
+    expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
+    expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
+    expect(windows).not.toContain('[Console]::In')
+    expect(windows).not.toMatch(/\|\s*&\s*\$h/)
+    const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
+    const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
+    expect(profile).toBeGreaterThan(-1)
+    expect(onPath).toBeGreaterThan(profile)
+    const calls = windows.match(/device codex stop[^;}]*/g)
+    expect(calls).toHaveLength(1)
+    expect(calls![0].trim()).toBe('device codex stop 2> $null')
+    expect(windows).toContain(`if ("$o".StartsWith('${BLOCK_PREFIX}')) { [Console]::Out.Write("$o") }`)
     expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
   })
 
@@ -818,4 +915,55 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     const result = runCodex({ cwd, input: CODEX_START_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStartHook().command)
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   }, 30_000)
+
+  // The person's answer holds what a console code page would change: it must reach the launcher byte for byte.
+  it("Codex: Stop passes the launcher's block, with the hook's stdin byte for byte, and exits 0", () => {
+    const { profile, cwd, env } = place()
+    standIn(profile, cwd, 0, BLOCK)
+    const stopInput = JSON.stringify({ ...JSON.parse(CODEX_STOP_INPUT), last_assistant_message: 'Đã xong, không cần gì thêm.' })
+    const result = runCodex({ cwd, input: stopInput, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStopHook().command)
+    expect(JSON.parse(readFileSync(join(cwd, 'argv.json'), 'utf8'))).toEqual(['codex', 'stop'])
+    expect(readFileSync(join(cwd, 'stdin'), 'utf8')).toBe(stopInput)
+    expect(result.status).toBe(0)
+    expect(result.stdout.trim()).toBe(BLOCK)
+  }, 30_000)
+
+  it('Codex: Stop prints nothing for a launcher that prints anything else', () => {
+    const { profile, cwd, env } = place()
+    standIn(profile, cwd, 0)
+    const result = runCodex({ cwd, input: CODEX_STOP_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStopHook().command)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  }, 30_000)
+
+  it('Codex: Stop with no launcher, prints nothing and exits 0', () => {
+    const { cwd, env } = place()
+    const result = runCodex({ cwd, input: CODEX_STOP_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStopHook().command)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  }, 30_000)
+
+  // The devices hold a turn's end for its report up to 6 s, and the report goes out once the launcher starts: this is
+  // the shell's share of that wait, as the stand-in starts at once. It measures and asserts only that each run ended.
+  it("Codex: the Stop form's time to the report", () => {
+    const { profile, cwd, env } = place()
+    standIn(profile, cwd, 0, BLOCK)
+    const started = join(cwd, 'started')
+    // hrtime is the system's monotonic clock on Windows, so the stand-in's reading compares with this process's.
+    writeFileSync(join(cwd, 'device.js'), [
+      "const fs = require('fs')",
+      `fs.writeFileSync(${JSON.stringify(started)}, String(process.hrtime.bigint()))`,
+      'fs.readFileSync(0)',
+      `process.stdout.write(${JSON.stringify(BLOCK)})`,
+    ].join('\n'))
+    const times: number[] = []
+    for (let run = 0; run < 10; run++) {
+      rmSync(started, { force: true })
+      const spawned = process.hrtime.bigint()
+      const result = runCodex({ cwd, input: CODEX_STOP_INPUT, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } }, codexStopHook().command)
+      expect(result.status, `run ${run}`).toBe(0)
+      times.push(Number(BigInt(readFileSync(started, 'utf8')) - spawned) / 1e6)
+    }
+    const sorted = [...times].sort((a, b) => a - b)
+    const median = (sorted[4] + sorted[5]) / 2
+    console.log(`[measure] stop report · Codex PowerShell · median ${Math.round(median)} · max ${Math.round(sorted[9])} · past 6 s ${times.filter((ms) => ms > 6_000).length}`)
+  }, 180_000)
 })

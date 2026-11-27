@@ -38,6 +38,7 @@ const PERMISSION = 'sha256:617e7ac70aedcde8a745bdaa988454f2c32389d38f063bfa30d91
 const QUESTION = 'sha256:6eb05987d4cd76c5a8db8417b05c315f7fd0e7ad5de4668803d7542134829c2d'
 const PERMISSION_KEY = 'harness-device@openharness:hooks/codex.json:permission_request:0:0'
 const QUESTION_KEY = 'harness-device@openharness:hooks/codex.json:pre_tool_use:0:0'
+const STOP_KEY = 'harness-device@openharness:hooks/codex.json:stop:0:0'
 
 // Names whose order tells the walk apart: a folder `a` beside `a-b` (depth first, `a/c` comes before `a-b`, though `-`
 // sorts before `/`), and a full-width tilde beside an emoji (UTF-8 bytes put the tilde first, UTF-16 the emoji). The
@@ -164,6 +165,7 @@ describe("the plugin's trust records", () => {
     const records = pluginTrustRecords(root)
     expect(records.map((record) => record.key)).toEqual([
       'harness-device@openharness:hooks/codex.json:session_start:0:0',
+      STOP_KEY,
       PERMISSION_KEY,
       QUESTION_KEY,
     ])
@@ -175,6 +177,20 @@ describe("the plugin's trust records", () => {
     const withMatcher = reviewHash(reviewed, 'SessionStart', 'startup|resume|clear|compact', { command, timeout: 5 })
     expect(records[0].trustedHash).toBe(withMatcher)
     expect(reviewHash(reviewed, 'SessionStart', undefined, { command, timeout: 5 })).not.toBe(withMatcher)
+  })
+
+  // F7 (the spike of 2026-11-27): `hooks/list` showed this key `trusted`, its hash the same with or without a matcher.
+  it("the repository's plugin gets a stop record, its matcher not hashed", () => {
+    const root = fileURLToPath(new URL('../../../plugins/harness-device', import.meta.url))
+    const records = pluginTrustRecords(root)
+    const stop = records.find((record) => record.key === STOP_KEY)
+    const command = (JSON.parse(readFileSync(join(root, 'hooks', 'codex.json'), 'utf8')) as {
+      hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> }
+    }).hooks.Stop[0].hooks[0].command
+    const reviewed = { ...hooks.settings.reviewed!, matcherEvents: ['PreToolUse', 'PermissionRequest', 'PostToolUse', 'SessionStart'] }
+    expect(stop?.trustedHash).toBe(reviewHash(reviewed, 'Stop', undefined, { command, timeout: 5 }))
+    expect(reviewHash(reviewed, 'Stop', '*', { command, timeout: 5 })).toBe(stop?.trustedHash)
+    expect(new Set(records.map((record) => record.contentHash)).size).toBe(1)
   })
 })
 
