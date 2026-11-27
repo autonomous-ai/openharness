@@ -82,7 +82,7 @@ fn every_windows_build_is_a_gui_program() {
 
 // The side of a square icon image: a PNG, or for an icns' ic04 (16 px) and ic05 (32 px) "ARGB" then each channel's
 // plane run-length encoded, where a byte below 0x80 copies the next byte + 1 bytes and any other repeats the next byte
-// (byte - 0x80 + 3) times.
+// (byte - 0x80 + 3) times. The runs end where the image does and make four square planes.
 fn side(what: &str, image: &[u8]) -> usize {
     let Some(planes) = image.strip_prefix(b"ARGB") else {
         let png = tauri::image::Image::from_bytes(image).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -94,17 +94,19 @@ fn side(what: &str, image: &[u8]) -> usize {
         let run = planes[at] as usize;
         (len, at) = if run < 0x80 { (len + run + 1, at + 2 + run) } else { (len + run - 0x80 + 3, at + 2) };
     }
-    (len / 4).isqrt()
+    let side = (len / 4).isqrt();
+    assert_eq!((at, len), (planes.len(), 4 * side * side), "{what}: runs past its end, or not four square planes");
+    side
 }
 
 /// icon.icns and icon.ico are the design team's (the Harness_AppIcon set, dark), as they sent them; the PNGs are
 /// written from icons/app-1024.png by `scripts/icons.py app`.
 #[test]
 fn the_icns_and_the_ico_hold_every_size() {
-    // An icns is an 8-byte header, then chunks of a 4-byte type, a 4-byte big-endian length (header included) and the
-    // image. iconutil adds an `info` chunk, which is no image.
+    // An icns is an 8-byte header (`icns` and the file's big-endian length), then chunks of a 4-byte type, a 4-byte
+    // big-endian length (header included) and the image. iconutil adds an `info` chunk, which is no image.
     let icns = bytes("icons/icon.icns");
-    assert_eq!(&icns[..4], b"icns");
+    assert_eq!((&icns[..4], u32::from_be_bytes(icns[4..8].try_into().unwrap()) as usize), (&b"icns"[..], icns.len()));
     let (mut images, mut at) = (Vec::new(), 8);
     while at < icns.len() {
         let kind = std::str::from_utf8(&icns[at..at + 4]).unwrap();
@@ -114,6 +116,7 @@ fn the_icns_and_the_ico_hold_every_size() {
         }
         at += len;
     }
+    assert_eq!(at, icns.len(), "icons/icon.icns: a chunk runs past its end");
     images.sort();
     assert_eq!(
         images,
@@ -130,9 +133,11 @@ fn the_icns_and_the_ico_hold_every_size() {
             ("ic14", 512)
         ]
     );
-    // An ICO is a 6-byte header with the image count at 4, a 16-byte entry per image (width at 0 and height at 1, where
-    // 0 means 256; length at 8; offset at 12), then the images, each a PNG.
+    // An ICO is a 6-byte header (0, then 1 for an icon, then the image count, each a little-endian u16), a 16-byte
+    // entry per image (width at 0 and height at 1, where 0 means 256; length at 8; offset at 12), then the images, each
+    // a PNG.
     let ico = bytes("icons/icon.ico");
+    assert_eq!(ico[..4], [0, 0, 1, 0], "icons/icon.ico: not an icon");
     let u32_at = |i: usize| u32::from_le_bytes(ico[i..i + 4].try_into().unwrap()) as usize;
     let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
     let mut sizes = Vec::new();
