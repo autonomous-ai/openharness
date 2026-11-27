@@ -18077,7 +18077,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       ['no dial attached', { attached: false }, 'iterm'],
       ['another app settled', {}, 'ghostty'],
       ['a pane whose client is in no listed app', { rows: IN_NO_APP }, 'iterm'],
-      // Its pages are Orca's and tmux's, skipped as Orca's own focus follows its panes.
+      // Its pages are Orca's and tmux's: no Orca order read placed its client at an Orca terminal, so the poll takes none
+      // of it (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md §3).
       ['an agent in tmux inside an Orca terminal with Orca settled', { rows: IN_ORCA }, 'orca'],
       ['the observed agents off', { observed: false }, 'iterm'],
     ])('nothing runs with %s', async (_, over, app) => {
