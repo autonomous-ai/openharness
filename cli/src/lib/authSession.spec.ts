@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { AuthSession } from './authSession.js'
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
@@ -321,6 +321,23 @@ describe('AuthSessionManager', () => {
     releaseHeldAuthLock()
     await expect(stat(lock)).resolves.toBeTruthy()
     await rm(lock, { force: true })
+  })
+
+  it('drops only a lock file: a folder at the lock\'s name is left, with what is in it', async () => {
+    const lock = `${authDir}/session.lock`
+    writeAuthSession(baseSession())
+    let answer!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockReturnValue(new Promise<Response>((resolve) => { answer = resolve })))
+    const refreshing = new AuthSessionManager('https://api.example.test').accessToken()
+    await vi.waitFor(() => stat(lock))
+    await rm(lock)
+    await mkdir(join(lock, 'in-the-way'), { recursive: true })
+    releaseHeldAuthLock()
+    expect(await readdir(lock)).toEqual(['in-the-way'])
+    answer(new Response(JSON.stringify({ success: true, data: { token: 'new-access', expiresIn: 3600 } })))
+    await expect(refreshing).resolves.toBe('new-access')
+    expect(await readdir(lock)).toEqual(['in-the-way'])
+    await rm(lock, { recursive: true, force: true })
   })
 
   it('uses the newer persisted access token rather than refreshing a stale 401 again', async () => {
