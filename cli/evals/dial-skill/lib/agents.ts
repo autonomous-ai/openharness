@@ -75,7 +75,7 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
     // The profile's user settings hold hooks that call the live daemon and Orca.
     '--setting-sources', 'project',
     // A two-turn run's session is saved, as turn 2 resumes it: in the person's profile, <profile>/projects/<repo>/
-    // (lib/stage.ts runProfileFolder), deleted as soon as the run's last turn ends (run-eval.mjs endSession), timeout
+    // (lib/stage.ts runProfileFolder), deleted as soon as the run's last turn ends (lib/stage.ts endSession), timeout
     // included, and by unstage for a runner that exits mid-run. A one-turn run saves none.
     ...(session ? [session.resume ? '--resume' : '--session-id', session.id] : ['--no-session-persistence']),
     '--permission-mode', 'acceptEdits',

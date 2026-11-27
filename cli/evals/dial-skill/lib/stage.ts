@@ -42,6 +42,8 @@ export interface Staged {
   skills: StagedSkill[]
   /** The id of the card the fake started with (StageOptions.seed), or null. */
   seed: string | null
+  /** The Claude session id the run saves its session under (StageOptions.session), or null. */
+  session: string | null
 }
 
 export interface StagedSkill {
@@ -64,6 +66,8 @@ export interface StageOptions {
   seed?: boolean
   /** Every notify answers `no dial` and keeps no card. */
   noDial?: boolean
+  /** The Claude session id a two-turn run saves its session under, so endSession can remove it. */
+  session?: string
 }
 
 /** The fake harness's answer to a call whose argv equals `argv` exactly. */
@@ -217,7 +221,7 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
       mkdirSync(join(repo, '.claude'), { recursive: true })
       writeFileSync(join(repo, '.claude', 'settings.json'), JSON.stringify({ hooks: opts.hooks }, null, 2))
     }
-    const st: Staged = { root, repo, recFile, origin, env, skill, condition, skills, seed }
+    const st: Staged = { root, repo, recFile, origin, env, skill, condition, skills, seed, session: opts.session ?? null }
     live.add(st)
     return st
   } catch (error) {
@@ -349,10 +353,31 @@ export function unstage(st: Staged): void {
   try {
     rmSync(st.root, { recursive: true, force: true })
   } finally {
-    // In the person's profile, so it goes even when the run root does not. `claude -p` makes
-    // <profile>/projects/<repo>/memory/ even with no session saved.
-    const folder = runProfileFolder(st)
-    if (folder) rmSync(folder, { recursive: true, force: true })
+    // In the person's profile, so it goes even when the run root does not.
+    endSession(st)
+  }
+}
+
+/** Removes the run's Claude session from the person's profile, as the run's last turn ends (run-eval.mjs runCase), also
+ *  when that turn failed or was killed at its timeout, and at unstage: their live daemon may read the profile, so the
+ *  session lives only while its run does (docs/plans/2026-11-27-dial-notice-cards-agent-closes-plan.md, Decision 6).
+ *  That is the run's folder under projects/, which `claude -p` makes even with no session saved, and, for a run that
+ *  saved one, what Claude Code keeps by its id in the profile's other folders: the debug log, file history, hook
+ *  environment, task list and todos (its own and its subagents'), each by the id's exact name or prefix, so no other
+ *  session's is touched. Shell snapshots are named by time, so none is known to be the run's. */
+export function endSession(st: Pick<Staged, 'repo' | 'env' | 'session'>): void {
+  const folder = runProfileFolder(st)
+  if (!folder) return
+  rmSync(folder, { recursive: true, force: true })
+  const id = st.session
+  if (!id) return
+  const profile = st.env.CLAUDE_CONFIG_DIR!
+  for (const path of [join('debug', `${id}.txt`), join('file-history', id), join('session-env', id), join('tasks', id)]) {
+    rmSync(join(profile, path), { recursive: true, force: true })
+  }
+  const todos = join(profile, 'todos')
+  for (const name of existsSync(todos) ? readdirSync(todos) : []) {
+    if (name.startsWith(`${id}-agent-`)) rmSync(join(todos, name), { force: true })
   }
 }
 

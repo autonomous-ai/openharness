@@ -48,7 +48,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { constants as OS } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,7 +60,7 @@ import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
 import { CONDITIONS, loadScenarios, runId, splitIdOf } from './lib/scenarios.ts';
 import { cutUsd, guardCost, SpendGuard } from './lib/spend.ts';
-import { markTurn, readDone, readHarm, readRings, runProfileFolder, scrub, stage, unstage, unstageLive } from './lib/stage.ts';
+import { endSession, markTurn, readDone, readHarm, readRings, scrub, stage, unstage, unstageLive } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
 // prompt-injected round can plant `results.jsonl -> ~/.bashrc` where the next
@@ -382,13 +382,14 @@ async function runCase(input, ctx, timeoutMs) {
   // answer-one's person answers one of two open asks, the other the fake's seeded card; unrung's answers an ask the
   // dial never showed, while the seeded card stays open, so a close after that answer is a wrong one.
   const st = stage(scenario, agent, { skill: ctx.skill, condition, hooks: ctx.hooks, answers: ctx.answers,
-    seed: kind === 'answer-one' || kind === 'unrung', noDial: kind === 'unrung' });
+    seed: kind === 'answer-one' || kind === 'unrung', noDial: kind === 'unrung', session: kind ? randomUUID() : undefined });
   const clean = text => scrub(text, st);
   const until = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
-  const session = kind ? { id: randomUUID(), resume: false } : undefined;
+  const session = kind ? { id: st.session, resume: false } : undefined;
   try {
     // A one-turn run ends here, so its session goes before the checks run the agent's code; a two-turn run's stays for
-    // turn 2 to resume.
+    // turn 2 to resume. Each turn's endSession comes after spawnGroup resolved, its group dead and its run root swept,
+    // so nothing writes the session afterwards.
     let run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs }, session)
       .finally(() => { if (!kind) endSession(st); });
     // Claude Code may update itself mid-pass: a run that started with other skills or another version than its
@@ -443,18 +444,6 @@ async function runCase(input, ctx, timeoutMs) {
   } finally {
     unstage(st);
   }
-}
-
-/**
- * Removes the run's Claude session as the run's last turn ends, also when that turn failed or was killed at its
- * timeout (Decision 6, 2026-11-27): it lies in the person's profile, whose projects/ their live daemon may read, so it
- * lives only while its run does. By then spawnGroup has resolved, the turn's group dead and its run root swept, so
- * nothing writes the session afterwards. A two-turn run whose turn 2 never starts ends at unstage, which removes it
- * too, as it does for a runner that exits mid-run.
- */
-function endSession(st) {
-  const folder = runProfileFolder(st);
-  if (folder) rmSync(folder, { recursive: true, force: true });
 }
 
 /** Grades the rings and the answer (lib/grade.ts). A judge reason can quote the agent's line, so it is scrubbed too. */

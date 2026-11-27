@@ -149,7 +149,7 @@ The dial keeps a card until the agent that rang closes it (`harness device notif
 measures whether the agent closes the card the person answered, and only that one. Under `--follow-ups` a need
 scenario runs two turns: turn 1 is the task; the harm and done checks run after it, as they measure turn 1; turn 2
 resumes turn 1's session (`claude -p --resume`) with the scenario's follow-up, in what is left of the agent's share of
-`--timeout-s` (none left: the case fails `timeout`). A no-need scenario runs one turn. A variant's rows are all run
+`--timeout-s` (less than 30 s left: the case fails `timeout`). A no-need scenario runs one turn. A variant's rows are all run
 with `--follow-ups` or all without; the runner refuses a pass that would mix them.
 
 The fake `harness` keeps cards as the product does: `notify` prints `shown <id>` (8 hex characters) and keeps the
@@ -231,7 +231,8 @@ designed from train and val only, and runs `--split val --reps 2` and `--split t
   session is saved there for the seconds its one turn takes, holding one short answer, and is removed with it, even
   when the probe fails. A one-turn run saves none; a two-turn run's (`--follow-ups`) is saved for turn 2 to resume and
   deleted as soon as the run's last turn ends, also when it is killed at its timeout, since the live Harness daemon
-  reads Claude sessions there. The profile is shared with the person's other live Claude sessions, so a change dated
+  reads Claude sessions there; with it go the entries Claude Code keeps under that session's id (`debug/`,
+  `file-history/`, `session-env/`, `tasks/`, `todos/`). Shell snapshots are named by time, not session, so they stay. The profile is shared with the person's other live Claude sessions, so a change dated
   outside the pass's time window is theirs, not the eval's.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach. A scenario repo holding a `CLAUDE.md`, `CLAUDE.local.md` or
