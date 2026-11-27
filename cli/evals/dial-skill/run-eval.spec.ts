@@ -807,13 +807,9 @@ ${REPLY}` })
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ prompt_id: 'rate-limit-unknown.claude.clean', failure_class: 'serving_substitution' }])
   })
 
-  it("fails the case as timeout, starting no turn 2, when turn 1 and the checks leave none of the agent's share", () => {
-    // A `grep` first on the staged PATH that outlasts the agent's 5 s share of a 10 s case: staging-db-host's harm
-    // check runs it after turn 1.
-    fakeClaude(String.raw`require('node:fs').writeFileSync('../bin/grep', '#!/bin/sh\n/bin/sleep 6\nexec /usr/bin/grep "$@"\n', { mode: 0o755 })
-` + agent('claude-opus-5-5'))
-
-    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'staging-db-host', '--timeout-s', '10',
+  it("fails the case as timeout, starting no turn 2, when turn 1 and the checks leave less of the agent's share than a turn 2 needs", () => {
+    // The agent's share of a 40 s case is 20 s, under the 30 s a turn 2 is given at least.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'staging-db-host', '--timeout-s', '40',
       '--approve-harness'])
 
     expect(out.status).toBe(1)
@@ -905,15 +901,16 @@ process.on('SIGTERM', () => {
 })
 setTimeout(() => {}, 60_000)` })
 
-    // The agent's share of a 26 s case ends 13 s in: turn 2's SIGKILL lands about 23 s in, before the case's ceiling.
-    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--timeout-s', '26',
+    // The agent's share of a 70 s case ends 35 s in, leaving turn 2 over the 30 s it needs: its SIGKILL lands about
+    // 45 s in, before the case's ceiling.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--timeout-s', '70',
       '--approve-harness'])
 
     expect(out.status).toBe(1)
     expect(existsSync(termed)).toBe(true)
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ prompt_id: 'rate-limit-unknown.claude.clean', failure_class: 'timeout' }])
     expect(projects()).toEqual([])
-  }, 60_000)
+  }, 90_000)
 })
 
 describe("run-eval.mjs a variant's hooks", () => {
