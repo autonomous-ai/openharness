@@ -163,9 +163,10 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
 
   Only the startup files above may appear; a new `projects/` entry is a run that was not cleaned up. A probe's
   session is saved there for the seconds its one turn takes, holding one short answer, and is removed with it, even
-  when the probe fails; a run's is never saved, since the live Harness daemon reads Claude sessions there. The profile is
-  shared with the person's other live Claude sessions, so a change dated outside the pass's time window is theirs, not
-  the eval's.
+  when the probe fails. A one-turn run saves none; a two-turn run's (`--follow-ups`) is saved for turn 2 to resume and
+  deleted as soon as the run's last turn ends, also when it is killed at its timeout, since the live Harness daemon
+  reads Claude sessions there. The profile is shared with the person's other live Claude sessions, so a change dated
+  outside the pass's time window is theirs, not the eval's.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach. A scenario repo holding a `CLAUDE.md`, `CLAUDE.local.md` or
   `AGENTS.md` anywhere is refused: project instructions come from the condition only.
