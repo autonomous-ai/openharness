@@ -430,12 +430,46 @@ record only while the installed folder is the copy this CLI carries. Part 4 adds
 - Codex's side cannot be measured by the eval (no Codex quota). It is judged by the same field counts, the days before
   and 7 days after, and it ships only together with Claude Code's side, on Claude Code's gain.
 
+### Round 1: the line above (v3), not shipped
+
+Held out, val and test pooled, v1 then v1 with the line (2026-11-27):
+
+| condition | recall | needless rings |
+| --- | --- | --- |
+| `crowd` | 41 of 48 → 48 of 48, paired +0.15 [-0.01, 0.30], within noise | 0 of 27 → 5 of 27 |
+| `clean` | 28 of 32 → 31 of 32 | 2 of 18 → 2 of 18 |
+| `name-only` | 0 of 16 → 16 of 16, beyond noise | 0 of 9 → 2 of 9 |
+
+9 needless rings of 54 against at most 2: not shipped. Recall is what a line at session start gives; the cost is rings
+for choices that were the agent's to make. The line hands the agent the command, so it can ring without reading the
+skill's body, and that body is what tells which asks need the person (v1 alone rang needlessly 0 of 27 times in
+`crowd`). The flow had spent $156.23.
+
+### Round 2: a line that sends the agent to the skill (v4)
+
+Decided by the PM and the author (2026-11-27), before Part 5 is built: round 1 shows the line solves recall, and Part
+5 is a fix for recall at the most risk. The line names the moment and sends the agent to the skill; the skill's body
+decides and gives the command. Its starting text (at most 300 characters):
+
+> The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, load the
+> dial skill and follow it. Not for finished work or progress.
+
+- It is changed only from what the train and val traces show. A test scenario is read as counts alone: Part 3's
+  round 2 read test traces and was discarded.
+- The same eval and ship rule as round 1, paired with v1: held-out recall up beyond noise in `crowd` or `name-only`
+  and down beyond noise in none; at most 2 needless rings in the 54 pooled no-need runs. The flow's cap is $220.
+- One more round is all this design tries. If v4 fails, no line ships and Part 5's gate is read on v1.
+- Shipped, v4's text replaces the line above; the command, the hooks and their trust are round 1's, unchanged. The
+  agreement test then holds the line to the description's moment, as it carries no command.
+
 ## Part 5. A second look when a turn stops
 
-Built only if, after Parts 3 and 4, Claude Code's recall in `crowd` is still under 90%. It is the one step that
+Built only if, after Part 3 and Part 4's two rounds, Claude Code's recall in `crowd` is still under 90%. It is the one step that
 enforces the rule, and the one with the most risk. The gate is read from Part 4's eval, held out, val and test pooled
 (v1 alone: 41 of 48, 85%): under 90% with Part 4's line, the PM opens Part 5 at once, with no one asked (the
-maintainer, 2026-11-27). If Part 4 does not ship, v1's own number stands, and Part 5 opens.
+maintainer, 2026-11-27). If Part 4 does not ship, v1's own number stands, and Part 5 opens. Its plan may be written
+meanwhile; nothing of it is built or measured before Part 4's round 2 is read (the PM, 2026-11-27). Its eval needs about
+$45; past the $250 cap, the maintainer is asked to raise it, with round 2's numbers.
 
 A Stop hook, in the plugin for Claude Code. Codex's side goes in the same plugin's `hooks/codex.json`, proven with a
 real Codex CLI against the local stub, as Part 7's spike was: a blocked stop behaves differently there (below). On a
