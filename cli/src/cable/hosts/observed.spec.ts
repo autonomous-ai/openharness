@@ -8119,6 +8119,22 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.lookup).toHaveBeenCalledTimes(2)
   })
 
+  it('at its client\'s app with no tab, it leaves that app once one of its TUIs exited and a later process took its pid', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [{ pid: 500, generation: 'g500' }, { pid: 501, generation: 'g501' }] }])
+    // Windows gives a freed pid to the next process soon: 501 is another program's now, started later.
+    t.gens.set(501, 'reused')
+    await t.src.tick()
+    expect(t.agent().app).toBe('terminal')
+    // A start the table could not read this time tells nothing: the one that runs keeps it there.
+    const kept = served()
+    kept.src.ingest(kept.codex('session-start'))
+    await kept.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [{ pid: 500, generation: 'g500' }, { pid: 501 }] }])
+    await kept.src.tick()
+    expect(kept.agent().app).toBe('terminal-app')
+  })
+
   it('a session whose client exited leaves that tab at the next tick, which holds a shell now: on no page until asked again', async () => {
     const t = served()
     t.src.ingest(t.codex('session-start'))
