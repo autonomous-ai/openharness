@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -165,6 +165,27 @@ describe("--if-down's view of this computer", () => {
       const answered = own('win32', { isAlive: () => true, rows: async () => [master(500, Date.now() + 60_000)] })
       expect(answered.readPid()).toBe(500)
       await expect(answered.masterRuns(500)).resolves.toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+      rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('forgets only a pid file: a folder at its name is left, with what is in it', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'if-down-folder-'))
+    vi.stubEnv('ADAPTER_DATA_DIR', dataDir)
+    try {
+      vi.resetModules()
+      const { PID_FILE, setAnsweredPid } = await import('./daemonState.js')
+      const { processIfDownDeps: own } = await import('./startIfDown.js')
+      mkdirSync(PID_FILE)
+      writeFileSync(join(PID_FILE, 'kept'), 'x')
+      // The folder cannot be read, so the pid in use is the one the daemon answered with, proven another process's.
+      setAnsweredPid(500)
+      const proven = own('win32', { isAlive: () => true, pidFileWrittenMs: () => CLAIMED, rows: async () => [] }, { forget: true })
+      await expect(proven.masterRuns(500)).resolves.toBe(false)
+      expect(readFileSync(join(PID_FILE, 'kept'), 'utf8')).toBe('x')
     } finally {
       vi.unstubAllEnvs()
       vi.resetModules()

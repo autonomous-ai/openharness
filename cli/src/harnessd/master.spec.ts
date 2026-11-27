@@ -106,6 +106,13 @@ describe('the status file', () => {
     expect(() => writeStatusFile(join(dir, 'data', 'harnessd-status.json'), status())).not.toThrow()
   })
 
+  it('leaves a folder at its temporary\'s name, with what is in it', () => {
+    const file = join(dir, 'harnessd-status.json')
+    mkdirSync(join(`${file}.42.tmp`, 'in-the-way'), { recursive: true })
+    expect(() => writeStatusFile(file, status())).not.toThrow()
+    expect(readdirSync(`${file}.42.tmp`)).toEqual(['in-the-way'])
+  })
+
   it('says what the master knows when the core cannot answer', () => {
     expect(describeMasterStatus(null)).toBeNull()
     expect(describeMasterStatus(status())).toBeNull()

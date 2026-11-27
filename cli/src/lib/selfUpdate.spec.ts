@@ -715,6 +715,23 @@ describe('staging, all or nothing (e2e/updateHostile.e2e.ts)', () => {
     }
   })
 
+  it('fails over a folder at a backup\'s name and leaves it, with what is in it', () => {
+    const dir = installed()
+    mkdirSync(join(dir, 'cli.js.prev'))
+    writeFileSync(join(dir, 'cli.js.prev', 'kept'), 'x')
+    expect(() => stage(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')).toThrow()
+    expect(files(dir)).toEqual({ 'cli.js': 'v1', 'cli.js.prev': '<dir>', 'notify.mjs': 'n1', 'package.json': '{"type":"module"}\n' })
+    expect(readFileSync(join(dir, 'cli.js.prev', 'kept'), 'utf8')).toBe('x')
+  })
+
+  it('confirms by removing only a backup file: a folder at a backup\'s name is left, with what is in it', () => {
+    const dir = installed()
+    mkdirSync(join(dir, 'cli.js.prev'))
+    writeFileSync(join(dir, 'cli.js.prev', 'kept'), 'x')
+    confirm(dir)
+    expect(readFileSync(join(dir, 'cli.js.prev', 'kept'), 'utf8')).toBe('x')
+  })
+
   it('mends a package.json emptied by an earlier write, and leaves a sound one untouched', () => {
     const dir = installed()
     const sound = statSync(join(dir, 'package.json')).ino

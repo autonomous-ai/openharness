@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { StopDeps } from './daemonStop.js'
@@ -109,6 +109,19 @@ describe('stopDaemonProcess', () => {
     await expect(stopDaemonProcess(fakeDeps(state))).resolves.toEqual({ pid: null, stopped: false })
     expect(existsSync(PID_FILE)).toBe(false)
     expect(state.released).toBe(1)
+  })
+
+  it('leaves a folder at the pid file\'s name, with what is in it: only a pid file is the stop\'s to remove', async () => {
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    mkdirSync(PID_FILE)
+    writeFileSync(join(PID_FILE, 'kept'), 'x')
+    // A pid naming nothing, a daemon the signals stopped, and one launchd or systemd stopped.
+    await stopDaemonProcess(fakeDeps({ pid: 9, alive: new Set(), killed: [], locked: 0, released: 0 }))
+    await stopDaemonProcess(fakeDeps({ pid: 500, alive: new Set([500]), killed: [], locked: 0, released: 0 }))
+    const platform = { pid: 600, alive: new Set([600]), killed: [] as string[], locked: 0, released: 0 }
+    await stopDaemonProcess(fakeDeps(platform, { stopPlatform: () => ({ ok: true, stopped: 600 }), sleep: async () => { platform.alive.delete(600) } }))
+    expect(readFileSync(join(PID_FILE, 'kept'), 'utf8')).toBe('x')
   })
 
   it('leaves a pid file it cannot read while another process holds the lock, and says so', async () => {
@@ -273,6 +286,17 @@ describe('stopDaemonProcess on Windows', () => {
       expect(warned).toEqual([])
       expect(existsSync(PID_FILE)).toBe(false)
     }
+  })
+
+  it('leaves a folder at the pid file\'s name when its pid is proven another process\'s now', async () => {
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    mkdirSync(PID_FILE)
+    writeFileSync(join(PID_FILE, 'kept'), 'x')
+    const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+    const { w } = windows(state, { ask: async () => false, rows: async () => [core], corePid: () => null })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w }))).resolves.toEqual({ pid: null, stopped: false })
+    expect(readFileSync(join(PID_FILE, 'kept'), 'utf8')).toBe('x')
   })
 
   it('still stops a Harness that takes the stop under a pid file it does not prove: a core no master runs leaves by itself', async () => {

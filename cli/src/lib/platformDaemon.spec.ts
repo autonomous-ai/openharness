@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -340,6 +340,16 @@ describe('Windows', () => {
       // The default is this data folder's.
       expect(taskStoppedThisBoot()).toBe(false)
       clearTaskStopped()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('forgets only a stop marker: a folder at its name is left, with what is in it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'task-stopped-folder-'))
+    try {
+      mkdirSync(join(dir, TASK_STOPPED_FILE))
+      writeFileSync(join(dir, TASK_STOPPED_FILE, 'kept'), 'x')
+      clearTaskStopped(dir)
+      expect(readFileSync(join(dir, TASK_STOPPED_FILE, 'kept'), 'utf8')).toBe('x')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
