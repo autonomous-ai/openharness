@@ -1618,6 +1618,10 @@ export class ObservedSource implements HostSource {
         return
       }
     }
+    // No stop ended it: the continuation went quiet or reached the cap with no Stop of its own, or the stop the yes came
+    // before never came. Fixed words: never the session.
+    const why = hold.phase === 'awaited' ? 'unheard' : this.deps.now() < cap ? 'quiet' : 'cap'
+    this.deps.log(`[observed] held stop · ${why}`)
     if (hold.phase === 'heard') {
       this.finish(entry)
       return
