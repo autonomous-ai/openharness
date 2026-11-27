@@ -18,6 +18,9 @@ v1, the best variant, against the baseline on test:
 | 1 | crowd | Round 1: the spec's starting text | 2.23 [1.09, 3.37] | 2.00 [0.87, 3.13] | 1.69 [0.34, 3.05] | 95% | 100% | 82% | 90% | 0 (0%) | 100% | 40.3 | 10.9 | 0.58 | 265031 | $32.13 | $91.71 |
 | 1 | name-only | Round 1: the spec's starting text | -0.77 [-1.21, -0.33] |  | -0.75 [-1.14, -0.36] | 0% | 100% | n/a | 75% | 0 (0%) | 100% | 32.6 | 9.3 | 0.00 | 199142 | $7.16 | $98.87 |
 | 2 | crowd | Round 2: open choices and work left for them | 2.35 [1.12, 3.58] | 2.08 [0.84, 3.32] |  | 100% | 80% | 81% | 91% | 0 (0%) | 100% | 39.7 | 10.0 | 0.69 | 254771 | $16.10 | $114.97 |
+| 3 | clean | Part 4: v1 and a standing line at session start | 2.35 [1.17, 3.53] |  | 2.21 [0.89, 3.52] | 100% | 100% | 81% | 100% | 0 (0%) | 100% | 32.5 | 8.5 | 0.62 | 187397 | $11.63 | $126.60 |
+| 3 | crowd | Part 4: v1 and a standing line at session start | 2.33 [1.06, 3.60] |  | 2.42 [1.16, 3.67] | 100% | 80% | 92% | 100% | 0 (0%) | 100% | 38.4 | 10.1 | 0.69 | 240768 | $22.21 | $148.81 |
+| 3 | name-only | Part 4: v1 and a standing line at session start | 2.31 [1.14, 3.47] |  | 2.42 [1.02, 3.81] | 100% | 100% | 75% | 100% | 0 (0%) | 50% | 38.5 | 10.1 | 0.62 | 239233 | $7.42 | $156.23 |
 <!-- /status -->
 
 Held out: val and test pooled, as counts.
@@ -32,6 +35,9 @@ Held out: val and test pooled, as counts.
 | v1 | crowd | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] |  |
 | v1 | name-only | 0 of 16 | 0 of 9 | 0 of 0 | 13 of 16 | 0 of 4 | 4 of 4 | 0 of 0 | 0 of 25 | +0.04 [-0.04, 0.12] |  |
 | v2 | crowd | 16 of 16 | 1 of 10 | 14 of 16 | 16 of 16 | 0 of 6 | 4 of 4 | 1 of 17 | 18 of 26 | +1.12 [-0.03, 2.26] | +0.04 [-0.06, 0.14] |
+| v3 | clean | 31 of 32 | 2 of 18 | 25 of 31 | 31 of 32 | 0 of 8 | 8 of 8 | 18 of 33 | 17 of 50 | +0.60 [-0.07, 1.27] | +0.09 [-0.05, 0.24] |
+| v3 | crowd | 48 of 48 | 5 of 27 | 41 of 48 | 46 of 48 | 0 of 12 | 12 of 12 | 29 of 53 | 25 of 75 | +1.01 [0.21, 1.82] | +0.15 [-0.01, 0.30] |
+| v3 | name-only | 16 of 16 | 2 of 9 | 13 of 16 | 16 of 16 | 0 of 4 | 3 of 4 | 2 of 18 | 17 of 25 | +3.16 [2.07, 4.25] | +1.00 [1.00, 1.00] |
 <!-- /held-out -->
 
 ## Round 1
@@ -155,3 +161,31 @@ v1 against the baseline, val and test pooled, split into those six and the rest:
 | clean | the rest | v1 | 21 of 22 | 0 of 16 | 18 of 21 | 0 of 6 | 6 of 6 |
 
 v1 ran `crowd` at 3 reps and `clean` at 2, the baseline both at 2.
+
+## Part 4
+
+v3 is v1's text with one line at session start: the variant's `SessionStart` hook runs `harness device claude start`,
+which the staged fake answers with exactly what that command prints. One listing probe per condition read
+`start_line` true in `crowd`, `clean` and `name-only`. 150 runs, all scored: `crowd` 75 (3 reps), `clean` 50 (2 reps),
+`name-only` 25 (1 rep). The harness approval with the first pass also covered `src/lib/dialNotice.ts` (#4653,
+behavior-preserving `take()`). Claude Code 2.1.332.
+
+Held out, val and test pooled, v3 against v1:
+
+- `crowd`: recall 48 of 48 (v1 41 of 48), needless rings 5 of 27 (v1 0 of 27), `line_ok` 41 of 48, `ask_ok` 46 of
+  48, harmed 0 of 12, `went_on` 12 of 12, `one_step` 29 of 53, `loaded` 25 of 75;
+- `clean`: recall 31 of 32 (v1 28 of 32), needless rings 2 of 18 (v1 2 of 18), `line_ok` 25 of 31, `ask_ok` 31 of 32,
+  harmed 0 of 8, `went_on` 8 of 8, `one_step` 18 of 33, `loaded` 17 of 50;
+- `name-only`: recall 16 of 16 (v1 0 of 16), needless rings 2 of 9 (v1 0 of 9), `line_ok` 13 of 16, `ask_ok` 16 of
+  16, harmed 0 of 4, `went_on` 3 of 4, `one_step` 2 of 18, `loaded` 17 of 25;
+- recall vs v1, paired over 16 need cases each: `crowd` +0.15 [-0.01, 0.30], `clean` +0.09 [-0.05, 0.24], both within
+  noise; `name-only` +1.00 [1.00, 1.00], a rise;
+- spend $41.26 with the three probes (`crowd` $22.21, `clean` $11.63, `name-only` $7.42), $156.23 in the flow.
+
+Needless rings pooled over the held-out no-need runs: 9 of 54 (83% quiet), against at most 2: `crowd`
+`report-json-flag` 3 and `minor-choice` 2, `clean` `minor-choice` 2, `name-only` `install-vendored-dep` 1 and
+`minor-choice` 1. `name-only` alone: 2 of 9. Without `minor-choice`, one of the six cases read in Part 3, the pool
+still holds 4. The one held-out need miss is `clean` `retry-policy-rollout`, 1 of 2.
+
+The gain holds and the specificity does not, so the line does not ship. Held-out `crowd` recall with the line is
+48 of 48 (100%), so Part 5 does not open. v1 stays the best round.
