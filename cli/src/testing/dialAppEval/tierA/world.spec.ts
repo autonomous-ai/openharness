@@ -4,6 +4,8 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
+import type { TabsLine } from '../../../cable/hosts/tabsLines.js'
+import { tabsTyping } from '../../../cable/hosts/tabsType.js'
 import { env } from '../../../config/env.js'
 import type { CoreApi, CorePorts, DevicesPort } from '../../../core/api.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
@@ -96,16 +98,16 @@ describe("tier A's world records every send, failing closed", () => {
 
   it("a send of the devices' own Codex queue is a codex delivery to its thread", async () => {
     const { world, deps } = worldOn('darwin')
-    const queue = createCodexQueue({ ...deps.codex!, home: '/eval-codex-home', cwd: '/eval-cwd' })
-    expect(await queue.send(world.session('t1').id, WORDS, true)).toEqual({ outcome: 'queued' })
+    const queue = createCodexQueue({ ...deps.codex!, cwd: '/eval-cwd' })
+    expect(await queue.send(world.session('t1').id, WORDS, true, '/eval-codex-home')).toEqual({ outcome: 'queued' })
     expect(world.seen([]).deliveries).toEqual([{ at: 0, path: 'codex', target: 't1', text: WORDS }])
   })
 
   it('a codex queue run that failed queued nothing', async () => {
     const { world, deps } = worldOn('darwin')
     world.answer((argv) => (argv.includes('queue') ? { code: 1 } : undefined))
-    const queue = createCodexQueue({ ...deps.codex!, home: '/eval-codex-home', cwd: '/eval-cwd' })
-    expect(await queue.send(world.session('t1').id, WORDS, true)).toMatchObject({ outcome: 'failed', reason: 'exit 1' })
+    const queue = createCodexQueue({ ...deps.codex!, cwd: '/eval-cwd' })
+    expect(await queue.send(world.session('t1').id, WORDS, true, '/eval-codex-home')).toMatchObject({ outcome: 'failed', reason: 'exit 1' })
     expect(world.seen([]).deliveries).toEqual([])
   })
 
@@ -190,6 +192,33 @@ describe("tier A's world records every send, failing closed", () => {
     expect(machine.installed.has('tmux')).toBe(false)
     await deps.orca!.run('/opt/eval/bin/tmux', ['list-panes', '-a', '-F', '#{pane_id}'], 1_000)
     expect(world.gaps).toEqual(['a command tier A does not answer: tmux'])
+  })
+
+  // PM decision 1 (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md): ps's start, a tab's process and lsof's
+  // readers are not readable here, so no tab is typed into in the eval.
+  it("an iTerm2 agent's tab has no proof and takes no words: the tabs probes are not readable", async () => {
+    machine.reset()
+    const { deps } = worldOn('darwin', { ...S1, app: 'iterm' })
+    machine.start({ pid: 41_000, ppid: 1, executable: 'claude', tty: 'ttys003' })
+    expect(await deps.tty!(41_000)).toEqual({ tty: '/dev/ttys003' })
+    expect(await deps.tabProcess!(41_000)).toBeUndefined()
+    expect(await deps.ttyReaders!('/dev/ttys003')).toBeUndefined()
+    // Even a pane given a proof by hand gets no line: its process is not read.
+    const sent: unknown[] = []
+    const line: TabsLine = {
+      writable: () => true,
+      ready: async () => true,
+      send: (typing) => {
+        sent.push(typing)
+        return { answer: Promise.resolve('ok'), settled: Promise.resolve() }
+      },
+      ended: new AbortController().signal,
+    }
+    const typing = tabsTyping({ line: () => line, shared: () => false, process: deps.tabProcess!, readers: deps.ttyReaders!,
+      processes: async () => [], after: () => () => {} })
+    const pane = { adapter: 'tabs', id: 'ghostty:/dev/ttys003', proof: { pid: 41_000, start: 'ps:1' } }
+    expect(await typing.type(pane, WORDS, 'claude', () => true)).toEqual({ notSent: 'process' })
+    expect(sent).toEqual([])
   })
 
   it("Cursor's CLI is answered only on a folder, as Linux's folder row runs it: any other run is a gap", async () => {

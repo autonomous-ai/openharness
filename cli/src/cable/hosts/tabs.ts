@@ -1,10 +1,13 @@
 /**
- * The terminal apps whose tabs the dial follows, and the tty that names a tab. A tty reaches Harness Device's fixed
- * AppleScript handlers as a parameter, so every hop checks it against TAB_TTY and the app against TAB_APPS.
+ * The terminal apps whose tabs the dial follows, the tty that names a tab, and the proof a tab's pane carries: the
+ * process its tty was read for, and when it started. A tty reaches Harness Device's fixed AppleScript handlers as a
+ * parameter, so every hop checks it against TAB_TTY and the app against TAB_APPS.
  */
 import { execFile } from 'node:child_process'
-// Types only, and hostDetect's constants (a file that imports nothing): the CLI's watch loads this file, and it must
-// load nothing of the daemon.
+// Types only, hostDetect's constants, ps's locale and the lstart parser (files that import nothing): the CLI's watch
+// loads this file, and it must load nothing of the daemon.
+import { psEnv } from '../../lib/childLocale.js'
+import { lstartGeneration } from '../../lib/lstart.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { UNKNOWN_APP } from './hostDetect.js'
 import type { PaneSwitch } from './types.js'
@@ -43,20 +46,32 @@ export function tabOf(value: unknown): Tab | null {
 /** ps's stdout, or null when the run failed. */
 export type RunPs = (args: string[], bounds: { timeout: number; maxBuffer: number }) => Promise<string | null>
 
-const runPs: RunPs = (args, bounds) => new Promise((resolve) => {
-  execFile('/bin/ps', args, { ...bounds, killSignal: 'SIGKILL' }, (error, stdout) => resolve(error === null ? stdout : null))
+/** Under psEnv: its lstart is in the C form the parser reads, whatever LC_TIME the person set. */
+export const runPs: RunPs = (args, bounds) => new Promise((resolve) => {
+  execFile('/bin/ps', args, { ...bounds, env: psEnv(), killSignal: 'SIGKILL' },
+    (error, stdout) => resolve(error === null ? stdout : null))
 })
 
+/** A tab's tty, and the start of the process it was read for (`ps:<ms>`) when ps's start parsed. */
+export interface TabTty {
+  tty: string
+  start?: string
+}
+
 /**
- * The tty of a pid's terminal; an agent with none (`??`) or one the check refuses has no tab to follow. A run that failed
- * (a timeout, a spawn error, a non-zero exit) rejects: it said nothing of the tty, so it may be asked again.
+ * The tty of a pid's terminal, and that process's start from the same read, so the two name one process; an agent with
+ * no tty (`??`) or one the check refuses has no tab to follow. A run that failed (a timeout, a spawn error, a non-zero
+ * exit) rejects: it said nothing of the tty, so it may be asked again.
  */
-export async function readTty(pid: number, run: RunPs = runPs): Promise<string | undefined> {
+export async function readTabTty(pid: number, run: RunPs = runPs): Promise<TabTty | undefined> {
   if (!Number.isInteger(pid) || pid <= 0) return undefined
-  const out = await run(['-o', 'tty=', '-p', String(pid)], { timeout: 1_000, maxBuffer: 256 })
+  const out = await run(['-o', 'tty=,lstart=', '-p', String(pid)], { timeout: 1_000, maxBuffer: 256 })
   if (out === null) throw new Error('ps failed')
-  const tty = `/dev/${out.trim()}`
-  return TAB_TTY.test(tty) ? tty : undefined
+  const [name = '', ...lstart] = out.trim().split(/\s+/)
+  const tty = `/dev/${name}`
+  if (!TAB_TTY.test(tty)) return undefined
+  const start = lstartGeneration(lstart.join(' '))
+  return start === undefined ? { tty } : { tty, start }
 }
 
 /** The tabs stream a watch holds open (services/devicesListener.ts tabsStream). */
@@ -67,7 +82,7 @@ export interface TabsDeps {
 }
 
 /** A tab's pane id, read back: the app before the first `:`, the tty after it, both checked again. */
-function paneTab(pane: Pane): Tab | null {
+export function paneTab(pane: Pane): Tab | null {
   const at = pane.id.indexOf(':')
   return at < 0 ? null : tabOf({ app: pane.id.slice(0, at), tty: pane.id.slice(at + 1) })
 }
@@ -87,7 +102,10 @@ export function createTabsAdapter(deps: TabsDeps): HostAdapter & Required<Pick<H
       // and its parents named the app.
       if (!place.outer && place.host !== place.app && place.host !== UNKNOWN_APP) return undefined
       const tab = tabOf(place.outer ?? { app: place.app, tty: place.tty })
-      return tab ? { adapter: 'tabs', id: `${tab.app}:${tab.tty}` } : undefined
+      if (!tab) return undefined
+      const id = `${tab.app}:${tab.tty}`
+      // A nested agent's process is on the multiplexer's pane: the tab holds its client, which no proof names.
+      return place.proof && !place.outer ? { adapter: 'tabs', id, proof: place.proof } : { adapter: 'tabs', id }
     },
     // Asked at each look: a watch may have opened or closed the stream since the last one.
     canFocus: () => deps.isOpen(),

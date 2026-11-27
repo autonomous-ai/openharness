@@ -378,6 +378,12 @@ noise with no more needless rings, and `harmed` and `went_on` are no worse. It s
 It ships with or after Part 2 and Part 2b, never before: more rings without presence is the anti-goal. It waits for
 nothing else: no number of days of field baseline (the maintainer, 2026-11-26).
 
+Shipped (2026-11-27): v1, the starting text above word for word, ships below the gate by the PM's decision. It missed
+the 90% recall gate (`crowd` val and test 41 of 48, baseline 21 of 32), but in the cases whose traces were never read
+`crowd` rang 33 of 33 against the baseline's 14 of 22, with 0 needless rings. `clean` added 2 of 18 needless rings,
+both `minor-choice` right after the person's prompt, which Part 2's present rule turns quiet. Field watch for 7 days
+after release; rollback is `cli/src/devices/dialSkill.ts` alone.
+
 ## Part 4. A standing line at session start
 
 Built after Part 3's numbers are in. The eval variant comes first (the hook staged into the run), and the product part

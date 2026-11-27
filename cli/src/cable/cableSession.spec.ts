@@ -7297,7 +7297,7 @@ describe('the app filter', () => {
       speak(port, 'g1', 'u1')
       await vi.waitFor(() => expect(voiceAnswered(port)).toBe(true))
       expect(port.sent.find((m) => m.t === 'voice.error' || m.t === 'voice.transcript')).toEqual({ t: 'voice.error', uploadId: 'u1',
-        message: 'This agent is in Ghostty. Talking to it from the device comes in an update.' })
+        message: 'This agent is in Ghostty. Type your reply in Ghostty.' })
       expect(transcribe).not.toHaveBeenCalled()
       expect(host.sendTurn).not.toHaveBeenCalled()
     } finally { await session.stop() }
@@ -7612,8 +7612,9 @@ describe('the app filter', () => {
 describe('what the dial cannot do for an agent', () => {
   // a1 is in Orca, heard from its hooks (`s`); a2 is a Harness agent with no window (`sva`); o1 is in Orca, which a tap
   // can bring forward (`sf`).
-  const CAPS: Record<string, string> = { a1: 's', a2: 'sva', o1: 'sf' }
-  const HOSTS: Record<string, string> = { a1: 'orca', a2: 'harness', o1: 'orca' }
+  // i1 is in iTerm2 and t1 in Terminal, heard from their hooks.
+  const CAPS: Record<string, string> = { a1: 's', a2: 'sva', o1: 'sf', i1: 's', t1: 's' }
+  const HOSTS: Record<string, string> = { a1: 'orca', a2: 'harness', o1: 'orca', i1: 'iterm', t1: 'terminal-app' }
   const caps = (over: Partial<CableHost> = {}) => makeHost({
     capsOf: (id) => CAPS[id], hostOf: (id) => HOSTS[id], markSeen: vi.fn(), ...over,
   })
@@ -7668,17 +7669,18 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
-  it('voice to an observed agent keeps no audio and answers voice.error on voice.end', async () => {
+  // PM 2026-11-25: the dial cannot type into these apps, so it says where to type instead.
+  it.each([['a1', 'Orca'], ['i1', 'iTerm2'], ['t1', 'Terminal']])('voice to an observed agent keeps no audio and answers voice.error on voice.end, naming its app (%s in %s)', async (agentId, app) => {
     const { session, port } = await greeted(caps())
     try {
-      speak(port, 'a1', 'u1')
+      speak(port, agentId, 'u1')
       await settle()
       expect(session['voice']).toBeNull()
       // Today's firmware drops a voice error before the person lets go: nothing is said at voice.begin.
       expect(port.types()).not.toContain('voice.error')
       port.say({ t: 'voice.end', uploadId: 'u1' })
       await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
-        message: 'This agent is in Orca. Talking to it from the device comes in an update.' }))
+        message: `This agent is in ${app}. Type your reply in ${app}.` }))
     } finally { await session.stop() }
   })
 
@@ -8363,6 +8365,7 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
       // The ChatGPT app's: no ChatGPT row here.
       openThread: vi.fn(),
       queue: { send: vi.fn() },
+      codexHome: '/eval-codex-home',
       monotonic: () => 0,
       log: () => {},
       count: () => {},
@@ -8474,6 +8477,7 @@ describe("a resting ChatGPT row's words (docs/plans/2026-11-23-dial-chatgpt-voic
       after: (ms, run) => { timers.push({ ms, run }); return () => {} },
       openThread: (threadId) => { opens.push(threadId); return new Promise<never>(() => {}) },
       queue: { send: async (threadId, text) => { queued.push({ threadId, text }); return { outcome: 'queued' } } },
+      codexHome: '/eval-codex-home',
       monotonic: () => 0,
       log: () => {},
       count: () => {},

@@ -797,10 +797,11 @@ function tabStreams() {
   const send = (...lines: string[]) => opens.at(-1)!.chunk(Buffer.from(lines.map(line => `${line}\n`).join('')))
   return { selects, opens, send }
 }
-/** A watch the daemon has answered, its stream open. */
-async function streaming(over: Partial<DialWatchDeps> = {}) {
+/** A watch the daemon has answered, its stream open, and [heard] the lines on its stdin before that. */
+async function streaming(over: Partial<DialWatchDeps> = {}, heard = '') {
   const streams = tabStreams()
   const run = watch({ dataDir: LISTENING, selects: streams.selects, ...over })
+  if (heard) run.stdin.emit('data', heard)
   await opened(run.socket)
   connected(run.socket, ['dial-watch'])
   return { run, ...streams }
@@ -1104,6 +1105,167 @@ describe('harness hardware watch: the selected tab', () => {
     dial(run.socket, { attached: true, fw: '0.0.95' })
     dial(run.socket, { attached: false })
     expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}', SELECT, '{"attached":false}'])
+    await stillRunning(run)
+  })
+})
+
+// Typing lines as the devices write them on the tabs stream (cable/hosts/tabsLines.ts), and the answer Harness Device
+// writes on the watch's stdin for each.
+const WRITE_ID = '0123456789abcdef'
+const ENTER_ID = 'fedcba9876543210'
+const WRITE = JSON.stringify({ write: { id: WRITE_ID, app: 'ghostty', tty: '/dev/ttys004', text: 'run the tests' } })
+const ENTER = JSON.stringify({ enter: { id: ENTER_ID, app: 'ghostty', tty: '/dev/ttys005' } })
+const wroteLine = (wrote: unknown) => `${JSON.stringify({ wrote })}\n`
+/** The line Harness Device writes first on every watch's stdin: it answers each write and enter line. */
+const WRITES_LINE = '{"writes":true}\n'
+/** The stream as a watch told that opens it, and the same standing by. */
+const WRITING = { type: 'tabs', writes: true }
+const WRITING_STANDBY = { type: 'tabs', standby: true, writes: true }
+/** A watch on macOS as Harness Device starts it: told writes first, the daemon answered and its stream open. */
+const writing = (over: Partial<DialWatchDeps> = {}) => streaming({ platform: 'darwin', ...over }, WRITES_LINE)
+
+describe('harness hardware watch: spoken words', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it('on macOS a watch told writes opens its stream saying writes, and so does one that stands by', async () => {
+    const { run, opens, send } = await writing()
+    expect(opens[0]!.message).toStrictEqual(WRITING)
+    send('{"replaced":true}')
+    opens[0]!.end(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(opens.map(({ message }) => message)).toStrictEqual([WRITING, WRITING_STANDBY])
+    await stillRunning(run)
+  })
+  // PM decision 3 (2026-11-25): Harness Device 0.1.x drops write and enter lines unanswered, and writes no writes line.
+  it('a watch never told writes opens its stream as before and prints no write or enter line, a select still', async () => {
+    const { run, opens, send } = await streaming({ platform: 'darwin' })
+    expect(opens[0]!.message).toStrictEqual(TABS)
+    send(WRITE, ENTER, '{"app":"terminal-app","tty":"/dev/ttys023"}')
+    expect(run.printed).toEqual([SELECT])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('told writes once its stream is open, the watch lets that stream go and opens it again saying writes, once', async () => {
+    const { run, opens, send } = await streaming({ platform: 'darwin' })
+    expect(opens[0]!.message).toStrictEqual(TABS)
+    run.stdin.emit('data', WRITES_LINE)
+    expect(opens[0]!.signal.aborted).toBe(true)
+    opens[0]!.end(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(opens.map(({ message }) => message)).toStrictEqual([TABS, WRITING])
+    // Told again: the stream already says it, and is kept.
+    run.stdin.emit('data', WRITES_LINE)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(opens).toHaveLength(2)
+    expect(opens[1]!.signal.aborted).toBe(false)
+    send(WRITE)
+    expect(run.printed).toEqual([WRITE])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a writes line that is not exactly {"writes":true} changes nothing', async () => {
+    const { run, opens, send } = await streaming({ platform: 'darwin' })
+    for (const line of [{ writes: false }, { writes: 'true' }, { writes: 1 }, { writes: null }, { writes: true, x: 1 }]) {
+      run.stdin.emit('data', `${JSON.stringify(line)}\n`)
+    }
+    send(WRITE)
+    expect(opens.map(({ message, signal }) => [message, signal.aborted])).toStrictEqual([[TABS, false]])
+    expect(run.printed).toEqual([])
+    await stillRunning(run)
+  })
+  // A watch of a CLI older than this line ignores it: Harness Device writes it to every watch, whatever its version.
+  it('a stdin line the watch does not take, as {"writes":true} is off macOS, is told nothing and printed nowhere, and the next line is told', async () => {
+    const { run, opens } = await streaming({ platform: 'linux' }, `${WRITES_LINE}{"else":true}\n`)
+    run.stdin.emit('data', tabLine(TAB))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'tab', ...TAB }])
+    expect(opens.map(({ message, signal }) => [message, signal.aborted])).toStrictEqual([[TABS, false]])
+    expect([run.printed, run.errors]).toEqual([[], []])
+    await stillRunning(run)
+  })
+  it('on macOS a write line and an enter line print exactly as sent', async () => {
+    const { run, send } = await writing()
+    send(WRITE, ENTER)
+    expect(run.printed).toEqual([WRITE, ENTER])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a write line of 64 KiB with its newline prints, one a byte longer prints nothing, and the next line prints', async () => {
+    const { run, send } = await writing()
+    // The longest text, 20,000 three-byte letters; spaces after the JSON, which it allows, make the line as long as asked.
+    const longest = JSON.stringify({ write: { id: WRITE_ID, app: 'ghostty', tty: '/dev/ttys004', text: '中'.repeat(20_000) } })
+    const padded = (bytes: number) => `${longest}${' '.repeat(bytes - Buffer.byteLength(longest))}`
+    send(padded(65_536))
+    send(ENTER)
+    expect(run.printed).toEqual([ENTER])
+    send(padded(65_535))
+    expect(run.printed).toEqual([ENTER, longest])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a select keeps its own 96 bytes: a longer one prints nothing, and a select prints as before', async () => {
+    const { run, send } = await writing()
+    send(`{"app":"terminal-app","tty":"/dev/ttys023","pad":"${'x'.repeat(46)}"}`, `{"app":"iterm","tty":"/dev/ttys4","pad":"${'x'.repeat(1_000)}"}`)
+    expect(run.printed).toEqual([])
+    send('{"app":"terminal-app","tty":"/dev/ttys023"}')
+    expect(run.printed).toEqual([SELECT])
+    await stillRunning(run)
+  })
+  for (const platform of ['linux', 'win32'] as const) {
+    it(`on ${platform} a watch told writes opens its stream as before, write and enter lines print nothing, and a select still prints`, async () => {
+      const { run, opens, send } = await writing({ platform })
+      expect(opens.map(({ message }) => message)).toStrictEqual([TABS])
+      send(WRITE, ENTER, '{"app":"terminal-app","tty":"/dev/ttys023"}')
+      expect(run.printed).toEqual([SELECT])
+      expect(run.errors).toEqual([])
+      await stillRunning(run)
+    })
+  }
+  it('a line with Terminal.app, iTerm2, another tty, a short id, no text, a newline, a lone surrogate or another key prints nothing', async () => {
+    const { run, send } = await writing()
+    const write = { id: WRITE_ID, app: 'ghostty', tty: '/dev/ttys004', text: 'run the tests' }
+    const enter = { id: ENTER_ID, app: 'ghostty', tty: '/dev/ttys005' }
+    for (const line of [
+      { write: { ...write, app: 'terminal-app' } }, { enter: { ...enter, app: 'terminal-app' } },
+      { write: { ...write, app: 'iterm' } }, { enter: { ...enter, app: 'iterm' } },
+      { write: { ...write, tty: '/dev/pts/1' } }, { enter: { ...enter, tty: '/dev/pts/1' } },
+      { write: { ...write, id: WRITE_ID.slice(1) } }, { enter: { ...enter, id: ENTER_ID.slice(1) } },
+      { write: { ...write, text: '' } }, { write: { ...write, text: 'run\nthe tests' } },
+      { write: { ...write, cwd: '/Users/me' } }, { enter: { ...enter, text: 'run the tests' } },
+      { write, enter }, { write, raise: true },
+    ]) send(JSON.stringify(line))
+    // A lone surrogate is a JSON escape Harness Device cannot read into its text: the devices never send one (cleanWords).
+    send(`{"write":{"id":"${WRITE_ID}","app":"ghostty","tty":"/dev/ttys004","text":"run \\ud800 tests"}}`)
+    send(`{"write":{"id":"${WRITE_ID}","app":"ghostty","tty":"/dev/ttys004","text":"run \\udc00"}}`)
+    expect(run.printed).toEqual([])
+    send(WRITE)
+    expect(run.printed).toEqual([WRITE])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a wrote line is told at once, one tell each, in order, though the one before has no answer yet', async () => {
+    const held = heldListener()
+    const { run } = await streaming({ platform: 'darwin', tell: held.tell })
+    run.stdin.emit('data', wroteLine({ id: WRITE_ID, ok: true }))
+    expect(told(run)).toEqual([{ type: 'wrote', id: WRITE_ID, ok: true }])
+    run.stdin.emit('data', `${wroteLine({ id: ENTER_ID, ok: false })}${wroteLine({ id: WRITE_ID, ok: true })}`)
+    expect(told(run)).toEqual([
+      { type: 'wrote', id: WRITE_ID, ok: true }, { type: 'wrote', id: ENTER_ID, ok: false }, { type: 'wrote', id: WRITE_ID, ok: true },
+    ])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a wrote line with another key, a bad id or an ok that is not a boolean is told nothing', async () => {
+    const { run } = await streaming({ platform: 'darwin' })
+    for (const wrote of [
+      { id: WRITE_ID, ok: true, text: 'run the tests' }, { id: WRITE_ID }, { ok: true }, { id: WRITE_ID.slice(1), ok: true },
+      { id: WRITE_ID.toUpperCase(), ok: true }, { id: `${WRITE_ID}0`, ok: true }, { id: WRITE_ID, ok: 'true' }, null, [WRITE_ID, true],
+    ]) run.stdin.emit('data', wroteLine(wrote))
+    run.stdin.emit('data', `${JSON.stringify({ wrote: { id: WRITE_ID, ok: true }, x: 1 })}\n`)
+    await turn()
+    expect(told(run)).toEqual([])
+    expect(run.errors).toEqual([])
+    run.stdin.emit('data', wroteLine({ id: WRITE_ID, ok: true }))
+    expect(told(run)).toEqual([{ type: 'wrote', id: WRITE_ID, ok: true }])
     await stillRunning(run)
   })
 })

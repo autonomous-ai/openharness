@@ -8,10 +8,11 @@
  *
  * The watch opens the devices' own `tabs` stream handler, as the listener hands it, with a stream of this file's, and
  * reports the tab the person selected on their `tab` handler. Calling the handlers directly skips the listener's own
- * limits, which have their own specs. Each line both ways is recorded in the world's streams under TABS_STREAM with its
- * tab named by label (itermRecords.ts), so no tty reaches a result.
+ * limits, which have their own specs. Each select and tab report is recorded in the world's streams under TABS_STREAM
+ * with its tab named by label (itermRecords.ts), so no tty reaches a result.
  */
 import { APP_BUNDLES } from '../../../../cable/hosts/hostDetect.js'
+import { tabOf } from '../../../../cable/hosts/tabs.js'
 import { REFUSED, type ListenerStream, type ListenerStreamHandler } from '../../../../services/devicesListener.js'
 import { selectRecord, TABS_STREAM, tabLabel, type TabRef } from '../../itermRecords.js'
 import type { StepHandler, TierAWorld } from '../world.js'
@@ -78,17 +79,23 @@ export function selectedTab(world: TierAWorld): TabRef | undefined {
   return models.get(world)?.selected
 }
 
-/** The watch's tabs stream, opened on the devices' own handler: each select they write is recorded by its tab's label. */
+/**
+ * The watch's tabs stream, opened on the devices' own handler: each select they write is recorded by its tab's label. A
+ * line that is no select (a typing's write or enter) is taken and not recorded: tier A has no terminal to type into.
+ */
 export function openTabs(world: TierAWorld): void {
   const opened = { type: 'tabs' }
   world.streams.push({ at: Date.now(), window: TABS_STREAM, line: opened })
   const stream: ListenerStream = {
     write: (line) => {
+      if (tabOf(line) === null) return true
       const select = selectRecord(line as { app: string; tty: string; raise?: boolean }, (tty) => labelOf(world, tty))
       world.streams.push({ at: Date.now(), window: TABS_STREAM, line: select })
       return true
     },
     // Every line is taken as it is written: none waits to drain, so the devices need never be told they can write.
+    // Never told, they send no words either, a second reason the eval types into no tab: words go only after
+    // onWritable.
     onWritable: () => {},
     // The watch holds it open for the whole scenario.
     ended: new AbortController().signal,

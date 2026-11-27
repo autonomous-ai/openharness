@@ -1,8 +1,8 @@
 //! The tabs of Terminal, iTerm2 and Ghostty on macOS, through three fixed scripts run in this process by
 //! `NSAppleScript`: macOS asks the person once to let Harness Device control each app, and the daemon sends no event.
-//! A tty reaches a script only as a handler's parameter, after the tty check, and never as script text.
+//! A tty and a spoken text reach a script only as a handler's parameters, after their checks, and never as script text.
 
-use crate::tabs::{Selected, TabApp, TabError, TabScripts, tab_error, tty_ok};
+use crate::tabs::{Selected, TabApp, TabError, TabScripts, Written, tab_error, tty_ok};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, ClassType, msg_send};
@@ -20,8 +20,11 @@ use std::thread;
 // so a source compiles on a Mac without that app, compiling sends no event, and an app whose dictionary lacks a term
 // answers an error number instead of failing to compile. Every event is inside a 2 s timeout (tabs::CALL_TIMEOUT).
 // Each handler that tells its app first asks AppleScript, with no event, whether it runs: `tell application id`
-// launches one that does not, and it may have quit since the runner asked.
-// With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`.
+// launches one that does not, and it may have quit since the runner asked. One that does not run raises -600
+// (procNotFound), a failed call: an answer is the rules' sign that macOS lets the app be scripted, and only an event
+// can give one.
+// With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`, and each
+// of Ghostty's writes whether it wrote to the one terminal of `t`.
 
 const TERMINAL: &str = r#"
 -- Terminal: «class cwin» window, «property pvis» visible, «property pidx» index, «property tcnt» selected tab,
@@ -29,7 +32,7 @@ const TERMINAL: &str = r#"
 property app_id : "com.apple.Terminal"
 
 on selected_tty()
-	if not (running of application id app_id) then return ""
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -41,7 +44,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -68,7 +71,7 @@ const ITERM: &str = r#"
 property app_id : "com.googlecode.iterm2"
 
 on selected_tty()
-	if not (running of application id app_id) then return ""
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			set shown to every «class cwin» whose «property pvis» is true
@@ -79,7 +82,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -105,14 +108,17 @@ end focus_tty
 
 // Ghostty's `select tab` may bring Ghostty forward, so a swipe selects only while it is in front. A Ghostty with no
 // `tty` and a terminal or tab that closed between two events fail a tty read alike: the script raises tabs::NO_TTY only
-// when the object it read is still there.
+// when the object it read is still there. A write that fails either way is an error: it writes nothing.
+// The writes' codes, `input text` (GhstInTx, its `to` GItT) and `send key` (GhstSKey, its `to` GKeT), are from
+// Ghostty's dictionary at v1.3.0: https://raw.githubusercontent.com/ghostty-org/ghostty/v1.3.0/macos/Ghostty.sdef
 const GHOSTTY: &str = r#"
 -- Ghostty: «class Gwnd» window, «property GFWn» front window, «property GWsT» selected tab, «class Gtab» tab,
--- «property GTfT» focused terminal, «class Gtrm» terminal, «property Gtty» tty, «event GhstSlTb» select tab.
+-- «property GTfT» focused terminal, «class Gtrm» terminal, «property Gtty» tty, «event GhstSlTb» select tab,
+-- «event GhstInTx» input text, «class GItT» its terminal, «event GhstSKey» send key, «class GKeT» its terminal.
 property app_id : "com.mitchellh.ghostty"
 
 on selected_tty()
-	if not (running of application id app_id) then return ""
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			-- A window, tab or terminal that is not there is no tab.
@@ -135,7 +141,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	if not in_front then return false
 	with timeout of 2 seconds
 		tell application id app_id
@@ -166,6 +172,40 @@ end select_tty
 on focus_tty(t)
 	return select_tty(t, true)
 end focus_tty
+
+on write_text(t, s)
+	if not (running of application id app_id) then error number -600
+	with timeout of 2 seconds
+		tell application id app_id
+			-- Every window, visible or not: a hidden window's terminal is still the agent's.
+			set held to {}
+			repeat with w in (every «class Gwnd»)
+				set held to held & (every «class Gtrm» of w whose «property Gtty» is t)
+			end repeat
+			-- Exactly one (check 7): a pty no terminal of Ghostty holds is not its pane.
+			if length of held is not 1 then return false
+			-- Pasted, with no newline: the Enter is its own event, after the devices' settle and their checks again.
+			«event GhstInTx» s given «class GItT»:(item 1 of held)
+		end tell
+	end timeout
+	return true
+end write_text
+
+on send_enter(t)
+	if not (running of application id app_id) then error number -600
+	with timeout of 2 seconds
+		tell application id app_id
+			-- Found again as write_text finds it, in every window, and only when exactly one terminal holds t.
+			set held to {}
+			repeat with w in (every «class Gwnd»)
+				set held to held & (every «class Gtrm» of w whose «property Gtty» is t)
+			end repeat
+			if length of held is not 1 then return false
+			«event GhstSKey» "enter" given «class GKeT»:(item 1 of held)
+		end tell
+	end timeout
+	return true
+end send_enter
 "#;
 
 /// Harness Device's own table: the app a line names picks one of these, and nothing of the line reaches its text.
@@ -274,16 +314,32 @@ impl MacTabs {
         }
     }
 
-    /// A swipe's or a tap's select. A tty that fails the check is refused before any descriptor is made.
-    fn select(&self, app: TabApp, handler: &'static str, tty: &str, front: Option<bool>) -> Result<Selected, TabError> {
+    /// Calls `handler` with a tty and, for some, a second parameter; its answer is whether the app held the tty. A tty
+    /// that fails the check is refused before any descriptor is made.
+    fn held(&self, app: TabApp, handler: &'static str, tty: &str, second: Option<Arg>) -> Result<bool, TabError> {
         if !tty_ok(tty) {
             return Err(TabError::Failed);
         }
         self.scripted(app)?;
         let mut args = vec![Arg::Text(tty.to_string())];
-        args.extend(front.map(Arg::Flag));
-        let held = call((self.source)(app), handler, args, flag).map_err(tab_error)?;
-        Ok(if held { Selected::Done } else { Selected::NoTab })
+        args.extend(second);
+        call((self.source)(app), handler, args, flag).map_err(tab_error)
+    }
+
+    /// A swipe's or a tap's select.
+    fn select(&self, app: TabApp, handler: &'static str, tty: &str, front: Option<bool>) -> Result<Selected, TabError> {
+        Ok(if self.held(app, handler, tty, front.map(Arg::Flag))? { Selected::Done } else { Selected::NoTab })
+    }
+
+    /// A typing's write or Enter. Ghostty alone has write handlers: Terminal's `do script`, its only way to put text in
+    /// a tab, runs the text as a command and adds a newline, and iTerm2's `write` reaches every session its Broadcast
+    /// Input joins, which its dictionary does not show.
+    fn write(&self, app: TabApp, handler: &'static str, tty: &str, text: Option<&str>) -> Result<Written, TabError> {
+        if app != TabApp::Ghostty {
+            return Ok(Written::NoSession);
+        }
+        let text = text.map(|text| Arg::Text(text.to_string()));
+        Ok(if self.held(app, handler, tty, text)? { Written::Done } else { Written::NoSession })
     }
 }
 
@@ -304,6 +360,14 @@ impl TabScripts for MacTabs {
 
     fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError> {
         self.select(app, "focus_tty", tty, None)
+    }
+
+    fn write_text(&self, app: TabApp, tty: &str, text: &str) -> Result<Written, TabError> {
+        self.write(app, "write_text", tty, Some(text))
+    }
+
+    fn send_enter(&self, app: TabApp, tty: &str) -> Result<Written, TabError> {
+        self.write(app, "send_enter", tty, None)
     }
 }
 
@@ -415,10 +479,11 @@ fn flag(answer: &NSAppleEventDescriptor) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::{CALL_TIMEOUT, NO_TTY};
+    use crate::tabs::{CALL_TIMEOUT, NO_TTY, Next, TabFollow, Typing};
     use std::process::Command;
+    use std::sync::LazyLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const T: TabApp = TabApp::Terminal;
     const TTY: &str = "/dev/ttys023";
@@ -474,8 +539,23 @@ end focus_tty
 "#;
 
     /// Stands in for an app's script in the tty check's test alone: no other test compiles it.
-    const SENT: &str =
-        "on select_tty(t, in_front)\n\treturn true\nend select_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty";
+    const SENT: &str = "on select_tty(t, in_front)\n\treturn true\nend select_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty\n\non write_text(t, s)\n\treturn true\nend write_text\n\non send_enter(t)\n\treturn true\nend send_enter";
+
+    /// Stands in for Ghostty's writes, with no event: whether each got the tty and the text it names.
+    const WRITES: &str = r#"
+on write_text(t, s)
+	return t is "/dev/ttys023" and s is "fix the build"
+end write_text
+
+on send_enter(t)
+	return t is "/dev/ttys023"
+end send_enter
+"#;
+
+    /// Stands in for every app's writes in the test of the apps with no write handler alone, where it writes for any
+    /// tty: no other test compiles it.
+    const WRITES_ANY: &str =
+        "on write_text(t, s)\n\treturn true\nend write_text\n\non send_enter(t)\n\treturn true\nend send_enter";
 
     /// Stands in for every app's script in the scripting check's tests alone: no other test compiles it.
     const CHECKED: &str = "on selected_tty()\n\treturn \"/dev/ttys023\"\nend selected_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty";
@@ -547,6 +627,10 @@ end focus_tty
                     "class Gtrm",
                     "property Gtty",
                     "event GhstSlTb",
+                    "event GhstInTx",
+                    "class GItT",
+                    "event GhstSKey",
+                    "class GKeT",
                 ],
             };
             let terms: Vec<&str> =
@@ -561,10 +645,89 @@ end focus_tty
     #[test]
     fn every_source_compiles() {
         // With every term a code and the app named only at run time, compiling reads no dictionary and sends no event:
-        // it passes on a Mac without iTerm2 or Ghostty. On the script thread, as every compile is.
+        // it passes on a Mac without iTerm2 or Ghostty, the writes' parameters given by their codes too. On the script
+        // thread, as every compile is.
         for app in APPS {
             assert_eq!(on_script_thread(move |_| compile(source(app)).err()), Some(None), "{app:?}");
         }
+    }
+
+    #[test]
+    fn only_ghostty_has_the_write_handlers() {
+        for app in APPS {
+            for handler in ["on write_text(t, s)", "on send_enter(t)"] {
+                let count = source(app).lines().filter(|line| *line == handler).count();
+                assert_eq!(count, usize::from(app == TabApp::Ghostty), "{app:?}: {handler}");
+            }
+        }
+        // iTerm2's write reaches every session its Broadcast Input joins, which its dictionary does not show.
+        for script in [TERMINAL, ITERM] {
+            assert!(!script.contains("write_text") && !script.contains("send_enter"), "{script}");
+        }
+    }
+
+    #[test]
+    fn ghosttys_write_handlers_search_every_window_and_write_to_exactly_one() {
+        let mut written = 0;
+        for handler in GHOSTTY
+            .split("\non ")
+            .skip(1)
+            .filter(|handler| handler.starts_with("write_text(") || handler.starts_with("send_enter("))
+        {
+            // A hidden window's terminal is still the agent's.
+            assert!(!handler.contains("«property pvis»"), "{handler}");
+            let lines: Vec<&str> = handler.lines().map(str::trim).collect();
+            let writes: Vec<usize> = (0..lines.len())
+                .filter(|&at| ["«event GhstInTx»", "«event GhstSKey»"].iter().any(|event| lines[at].contains(event)))
+                .collect();
+            assert_eq!(writes.len(), 1, "{handler}");
+            let write = writes[0];
+            let search = lines.iter().position(|line| *line == "repeat with w in (every «class Gwnd»)");
+            let one = lines.iter().position(|line| *line == "if length of held is not 1 then return false");
+            assert!(search.is_some() && search < one && one < Some(write), "{handler}");
+            assert!(lines[write].contains("(item 1 of held)"), "{}", lines[write]);
+            written += 1;
+        }
+        assert_eq!(written, 2);
+    }
+
+    #[test]
+    fn no_source_types_keys_or_runs_a_command() {
+        // Words reach a terminal only through a write to its one session: never as keystrokes, through System Events,
+        // or as a command an app runs.
+        for app in APPS {
+            let text = source(app).to_lowercase();
+            for word in ["dosc", "do script", "do shell script", "system events", "keystroke", "key code"] {
+                assert!(!text.contains(word), "{app:?}: {word}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_write_passes_its_tty_and_text_as_parameters() {
+        let tabs = MacTabs { source: |_| WRITES, ..scripted() };
+        let g = TabApp::Ghostty;
+        assert_eq!(tabs.write_text(g, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(tabs.write_text(g, TTY, "fix the tests"), Ok(Written::NoSession));
+        assert_eq!(tabs.write_text(g, "/dev/ttys024", "fix the build"), Ok(Written::NoSession));
+        assert_eq!(tabs.send_enter(g, TTY), Ok(Written::Done));
+        assert_eq!(tabs.send_enter(g, "/dev/ttys024"), Ok(Written::NoSession));
+        // Compiled once for every tty and text: neither is in what was compiled.
+        assert_eq!(compiled(WRITES).len(), 1);
+    }
+
+    #[test]
+    fn terminal_and_iterm_answer_no_session_with_no_event() {
+        let tabs = MacTabs { source: |_| WRITES_ANY, ..scripted() };
+        for app in [T, TabApp::Iterm] {
+            assert_eq!(tabs.write_text(app, TTY, "fix the build"), Ok(Written::NoSession), "{app:?}");
+            assert_eq!(tabs.send_enter(app, TTY), Ok(Written::NoSession), "{app:?}");
+        }
+        // No call reached the script thread: its script was not even compiled.
+        assert!(compiled(WRITES_ANY).is_empty());
+        // The same stand-in writes for Ghostty.
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(compiled(WRITES_ANY).len(), 1);
     }
 
     #[test]
@@ -577,23 +740,64 @@ end focus_tty
         }
     }
 
+    /// Each fixed handler's check that its app runs, which sends no event.
+    const RUNS: &str = "(running of application id app_id)";
+
     #[test]
     fn every_handler_that_tells_its_app_first_checks_that_it_runs() {
         // `tell application id` launches an app that is not running, and the app may have quit since the runner asked.
+        // One that does not run raises procNotFound, a failed call: an answer with no event is never macOS's consent.
         for app in APPS {
             let handlers: Vec<&str> = source(app).split("\non ").skip(1).collect();
-            assert_eq!(handlers.len(), 3, "{app:?}");
+            // Only Ghostty has write handlers.
+            assert_eq!(handlers.len(), if app == TabApp::Ghostty { 5 } else { 3 }, "{app:?}");
             for handler in handlers {
                 if !handler.contains("tell application") {
                     // It sends no event of its own: it calls one that checks.
                     assert!(!handler.contains('«'), "{app:?}: {handler}");
                     continue;
                 }
-                let answer = if handler.starts_with("selected_tty()") { r#""""# } else { "false" };
                 let first = handler.lines().nth(1).unwrap_or_default().trim();
-                assert_eq!(first, format!("if not (running of application id app_id) then return {answer}"), "{app:?}");
+                assert_eq!(first, format!("if not {RUNS} then error number -600"), "{app:?}");
             }
         }
+    }
+
+    /// Each app's fixed script with its check that the app runs answering no, as once the app has quit.
+    static QUIT: LazyLock<[String; 3]> = LazyLock::new(|| APPS.map(|app| source(app).replace(RUNS, "false")));
+
+    fn quit(app: TabApp) -> &'static str {
+        &QUIT[APPS.iter().position(|known| *known == app).unwrap()]
+    }
+
+    #[test]
+    fn an_app_that_quit_answers_a_failed_call_that_is_no_consent() {
+        // Every check was replaced, and each comes before any event: no handler gets as far as its app.
+        for app in APPS {
+            assert!(source(app).contains(RUNS) && !quit(app).contains("running of"), "{app:?}");
+        }
+        let tabs = MacTabs { source: quit, ..scripted() };
+        for app in APPS {
+            assert_eq!(tabs.selected_tty(app), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.select_tty(app, TTY, true), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.select_tty(app, TTY, false), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.focus_tty(app, TTY), Err(TabError::Failed), "{app:?}");
+        }
+        let now = Instant::now();
+        let app = TabApp::Ghostty;
+        assert_eq!(tabs.write_text(app, TTY, "fix the build"), Err(TabError::Failed));
+        assert_eq!(tabs.send_enter(app, TTY), Err(TabError::Failed));
+        // macOS was never asked to let Harness Device script it: a typing for it is answered no unrun, as an event
+        // could bring the consent prompt and hold the tab thread for minutes.
+        let mut follow = TabFollow::default();
+        follow.front(app.bundle());
+        follow.watching(true);
+        follow.attached(true);
+        follow.polled(app, tabs.selected_tty(app), 0);
+        follow.selected(app, tabs.select_tty(app, TTY, true));
+        follow.selected(app, tabs.focus_tty(app, TTY));
+        follow.typed(Typing::Enter { id: "0123456789abcdef".into(), app, tty: TTY.into() }, now);
+        assert!(matches!(follow.next_typing(now), Some(Next::Refused { .. })));
     }
 
     #[test]
@@ -607,6 +811,20 @@ end focus_tty
             assert!(tells > 0, "{app:?}");
             assert_eq!(text.matches("tell application id app_id").count(), tells, "{app:?}");
             assert_eq!(text.matches("with timeout of 2 seconds").count(), tells, "{app:?}");
+            // Every term goes to the app, a write's too, inside the timeout and the tell.
+            for handler in text.split("\non ").skip(1) {
+                let (mut timeout, mut tell) = (false, false);
+                for line in handler.lines().map(str::trim) {
+                    match line {
+                        "with timeout of 2 seconds" => timeout = true,
+                        "end timeout" => timeout = false,
+                        "tell application id app_id" => tell = timeout,
+                        "end tell" => tell = false,
+                        _ if line.contains('«') => assert!(tell, "{app:?}: {line}"),
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -637,12 +855,16 @@ end focus_tty
         for bad in ["/dev/ttys023; rm", "/dev/ttys023\n", "/dev/pts/3", "/dev/ttys12345", ""] {
             assert_eq!(tabs.select_tty(T, bad, true), Err(TabError::Failed), "{bad:?}");
             assert_eq!(tabs.focus_tty(T, bad), Err(TabError::Failed), "{bad:?}");
+            assert_eq!(tabs.write_text(TabApp::Ghostty, bad, "fix the build"), Err(TabError::Failed), "{bad:?}");
+            assert_eq!(tabs.send_enter(TabApp::Ghostty, bad), Err(TabError::Failed), "{bad:?}");
         }
         // No call reached the script thread: its script was not even compiled.
         assert!(compiled(SENT).is_empty());
         // The same calls with a tty that passes are sent.
         assert_eq!(tabs.select_tty(T, TTY, true), Ok(Selected::Done));
         assert_eq!(tabs.focus_tty(T, TTY), Ok(Selected::Done));
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(tabs.send_enter(TabApp::Ghostty, TTY), Ok(Written::Done));
         assert_eq!(compiled(SENT).len(), 1);
     }
 
@@ -683,10 +905,13 @@ end focus_tty
         assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::NoScripting));
         assert_eq!(tabs.select_tty(TabApp::Ghostty, TTY, true), Err(TabError::NoScripting));
         assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::NoScripting));
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Err(TabError::NoScripting));
+        assert_eq!(tabs.send_enter(TabApp::Ghostty, TTY), Err(TabError::NoScripting));
         // One that quit as it was checked: the next tick tries again.
         let tabs = MacTabs { source: |_| UNASKED, scripting: |_| None, ..MacTabs::default() };
         assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::Failed));
         assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::Failed));
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Err(TabError::Failed));
         // No call reached the script thread.
         assert!(compiled(UNASKED).is_empty());
     }
