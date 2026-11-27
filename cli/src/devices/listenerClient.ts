@@ -21,10 +21,10 @@ interface SendOptions {
 
 /**
  * `fetch` to the devices of [dataDir], or why there is none to use: nothing to reach, or a socket not this account's
- * own. An injected [SendOptions.fetch] is handed every send, whatever is at the socket's path. Over the pipe, a send that fails (nothing listens,
- * an answer without the token's proof, none in time) drops the proof held for the recorded process, so the next one
- * proves it by the process table before it sends: its pid may have gone to another process inside the minute a proof
- * holds (listenerPipe.ts PROOF_MAX_AGE_MS).
+ * own. An injected [SendOptions.fetch] is handed every send, whatever is at the socket's path. Over the pipe, a send
+ * that fails (nothing listens, an answer without the token's proof, none in time) drops the proof held for the recorded
+ * process, so the next one proves it by the process table before it sends: its pid may have gone to another process
+ * inside the minute a proof holds (listenerPipe.ts PROOF_MAX_AGE_MS).
  */
 async function devicesFetch(dataDir: string, options: SendOptions): Promise<typeof fetch | 'no listener' | 'unproven'> {
   const proof = options.proof ?? devicesProof
@@ -50,12 +50,19 @@ async function devicesFetch(dataDir: string, options: SendOptions): Promise<type
  * The bound on an answer of the devices, [ms] from now, with [outer] aborting it too. Its timer aborts only from a
  * `setImmediate`, so the loop reads its sockets once in between: Node runs a timer that expired while the loop was held
  * before it reads an answer that arrived meanwhile. Run 45948212750: the devices logged `shown` at 06:06:58.843, and
- * the CLI printed `no dial` about 5 s later. An answer that comes after the bound, the loop free, is still none in time.
+ * the CLI printed `no dial` about 5 s later. A timer late by more than half the bound means the loop was held, maybe
+ * before the request was even written (connecting and writing take a loop turn), so it waits [ms] once more instead.
+ * An answer that comes after the bound, the loop free, is still none in time.
  */
 function answerBound(ms: number, outer?: AbortSignal): { signal: AbortSignal; clear(): void } {
   const bound = new AbortController()
   let turn: NodeJS.Immediate | undefined
-  const timer = setTimeout(() => { turn = setImmediate(() => bound.abort()) }, ms)
+  const abort = () => { turn = setImmediate(() => bound.abort()) }
+  const due = performance.now() + ms
+  let timer = setTimeout(() => {
+    if (performance.now() - due > ms / 2) timer = setTimeout(abort, ms)
+    else abort()
+  }, ms)
   return {
     signal: outer ? AbortSignal.any([outer, bound.signal]) : bound.signal,
     clear: () => {
