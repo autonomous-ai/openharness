@@ -12,7 +12,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudePluginFiles, ClaudePluginSource, ClaudeRun } from '../devices/claudePlugin.js'
-import { carriedCodexHash, codexFailureWords, codexHomeState, codexMarketplace, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
+import { carriedCodexHash, CODEX_RETRY_MS, codexFailureWords, codexHomeState, codexMarketplace, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
 import type { TrustWrite } from '../devices/codexPluginTrust.js'
 import { listable, MAX_HOMES, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 
@@ -50,7 +50,6 @@ export interface DialCodexPluginSetupDeps {
 /** One pass at a time; never rejects. [attached]: a dial attached this moment. */
 export interface DialCodexPluginSetup { pass(attached?: boolean): Promise<void> }
 
-const RETRY_MS = 3_600_000
 /** As Claude Code's plugin setup: a computer with a dial and no Codex looks for it at every scan, so the login shell's
  *  PATH is read for it this often at most, and at once when a dial attaches. */
 const SHELL_MS = 600_000
@@ -87,12 +86,12 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
 
   const wait = (home: string): void => {
     // Only hours not yet up are kept, so the map holds no more homes than can fail within one.
-    for (const [other, at] of waitFrom) if (deps.now() - at >= RETRY_MS) waitFrom.delete(other)
+    for (const [other, at] of waitFrom) if (deps.now() - at >= CODEX_RETRY_MS) waitFrom.delete(other)
     waitFrom.set(home, deps.now())
   }
   const waiting = (home: string): boolean => {
     const at = waitFrom.get(home)
-    return at !== undefined && deps.now() - at < RETRY_MS
+    return at !== undefined && deps.now() - at < CODEX_RETRY_MS
   }
   /** Fixed words, never Codex's own line, which can name the home's folder. */
   const failed = (home: string, reason: string): void => {
@@ -109,7 +108,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     failed(home, codexFailureWords(failure))
     return 'go'
   }
-  const tooOld = (): boolean => deps.now() - tooOldAt < RETRY_MS
+  const tooOld = (): boolean => deps.now() - tooOldAt < CODEX_RETRY_MS
 
   const trusted = (home: string, matched: boolean): void => {
     if (matched) differs.delete(home)

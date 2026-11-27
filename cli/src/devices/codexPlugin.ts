@@ -147,8 +147,9 @@ const codexRunner = (bin: string, env: NodeJS.ProcessEnv): CodexRun => Object.as
  *  answers, it is kept for keptFor. A few binaries at most, the oldest out first. */
 const versions = new Map<string, { mtimeMs: number; answer: Promise<ClaudeAnswer>; until: number }>()
 const MAX_VERSIONS = 8
-/** The hour the plugin setup waits on a Codex too old (dialCodexPluginSetup.ts). */
-const TOO_OLD_MS = 3_600_000
+/** How long the plugin setup waits before it asks a home again, after a failure or a Codex too old
+ *  (cable/dialCodexPluginSetup.ts). */
+export const CODEX_RETRY_MS = 3_600_000
 
 /** How long [answer] is kept: a supported version until the binary changes; one too old for the setup's hour, as a
  *  version manager's shim keeps its path and time across an upgrade; a failure, hang or refusal one bound, long enough
@@ -156,7 +157,7 @@ const TOO_OLD_MS = 3_600_000
  *  hang once. */
 function keptFor(answer: ClaudeAnswer): number {
   if (answer.code !== 0 || !parseVersion(answer.stdout)) return LOCAL_MS
-  return versionAtLeast(answer.stdout, MIN) ? Infinity : TOO_OLD_MS
+  return versionAtLeast(answer.stdout, MIN) ? Infinity : CODEX_RETRY_MS
 }
 
 /** [bin]'s real path and modification time; null for none, or one that cannot be read. */
