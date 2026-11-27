@@ -54,7 +54,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAL_SKILL } from '../../src/devices/dialSkill.ts';
 import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent, runFollowUp } from './lib/agents.ts';
-import { gradeRun, rungOf } from './lib/grade.ts';
+import { gradeRun, readAnswerKey, rungOf } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
@@ -405,8 +405,9 @@ async function runCase(input, ctx, timeoutMs) {
       }
     }
     let close;
-    // A turn 1 cut short, unlisted or left unchecked is not graded, so its turn 2 would only spend.
-    if (kind && run.status === 'ok' && !checkError) {
+    // A turn 1 cut short, unlisted, left unchecked, that reached the answer key or that another model served is not
+    // graded, so its turn 2 would only spend.
+    if (kind && run.status === 'ok' && !checkError && !readAnswerKey(run) && !otherModels(agent, [run.model]).length) {
       // After the checks, which measure what turn 1 left: the calls after the mark are turn 2's.
       markTurn(st);
       const left = until - Date.now();
@@ -455,8 +456,8 @@ function endSession(st) {
 async function gradeCase(input, run, ref, ctx) {
   // Checked here rather than in runCase, so the error row keeps the billed run's model and usage; the harness's own
   // check compares with --model, which this runner does not take.
-  const other = [run.model, ...('turn2_model' in run ? [run.turn2_model] : [])].filter(model => !String(model).startsWith(AGENT_CONFIG.claudeModel));
-  if (input.meta.agent === 'claude' && other.length > 0) {
+  const other = otherModels(input.meta.agent, [run.model, ...('turn2_model' in run ? [run.turn2_model] : [])]);
+  if (other.length > 0) {
     const e = new Error(`served model ${other[0]} != requested ${AGENT_CONFIG.claudeModel}`);
     e.failure_class = 'serving_substitution';
     throw e;
@@ -476,6 +477,11 @@ async function gradeCase(input, run, ref, ctx) {
   if (g.status === 'invalid') run.status = 'invalid';
   return { ...g, judge_usage: addUsage(run.judge_usage, g.judge_usage),
     explanation: Object.fromEntries(Object.entries(g.explanation).map(([key, value]) => [key, run.clean(value)])) };
+}
+
+/** Of the models that served a claude run's turns, those other than the one requested; none for a stand-in. */
+function otherModels(agent, models) {
+  return agent === 'claude' ? models.filter(model => !String(model).startsWith(AGENT_CONFIG.claudeModel)) : [];
 }
 
 /** The sum of two token usages, either of which may be missing. */
