@@ -3,6 +3,7 @@ import { failedNode, nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { createHash } from 'crypto'
+import { createServer, type AddressInfo } from 'net'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, DigestMismatchError, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadBuild, downloadVerified,
@@ -1981,8 +1982,6 @@ describe('the inbox follower\'s file (Windows)', () => {
     expect(await canaryOf(follower)).toEqual({ ok: true, ptyProtocol: 2 })
     expect(await canaryOf('process.exit(1)\n')).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: exit 1' })
     expect(await canaryOf('console.log("{}")\n')).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: another answer' })
-    // A second's deadline, not less: cli.js must answer within it first, on a machine that may be busy.
-    expect(await canaryOf('setInterval(() => {}, 1000)\n', undefined, 1_000)).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: no answer within 1 s' })
     // A canary folder that will not take inbox.mjs: here cli.js leaves a folder in its place.
     const squatter = 'import { mkdirSync } from "node:fs"\nmkdirSync(new URL("inbox.mjs", import.meta.url))\nconsole.log("9.9.9")\n'
     expect(await canaryOf(follower, squatter)).toMatchObject({ ok: false, problem: 'unwritable' })
@@ -1996,6 +1995,27 @@ describe('the inbox follower\'s file (Windows)', () => {
     expect(await canaryOf(marking, 'console.log("9.9.8")\n')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
     expect(existsSync(marker)).toBe(false)
     expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
+  })
+
+  it('fails an inbox.mjs that never answers, on its own deadline once cli.js answered', async () => {
+    // The canary's clock is a fake one, moved only once the silent fake has dialed the test back: cli.js gets as long as
+    // it takes on a busy machine (a shared real second failed there), and inbox.mjs exactly its limit.
+    let dialed: () => void = () => {}
+    const started = new Promise<void>((resolve) => { dialed = resolve })
+    const server = createServer((socket) => { socket.destroy(); dialed() })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    try {
+      const silent = `import { connect } from "node:net"\nconnect(${port}, "127.0.0.1")\nsetInterval(() => {}, 1000)\n`
+      const result = runCanary(Buffer.from('console.log("9.9.9")\n'), tempDir(), '9.9.9', 1_000, undefined, Buffer.from(silent))
+      await started
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(await result).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: no answer within 1 s' })
+    } finally {
+      vi.useRealTimers()
+      server.close()
+    }
   })
 
   it('stages inbox.mjs into the version folder on Windows, and never off it', () => {
