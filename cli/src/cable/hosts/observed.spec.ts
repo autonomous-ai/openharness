@@ -1366,6 +1366,20 @@ describe('ObservedSource and a stop its Stop hook reports', () => {
       expect(r.told).toHaveLength(1)
     })
 
+    it('a stamp read that never answers (a stalled network share): told at the 120 s cap all the same', async () => {
+      const fileStamp = vi.fn((_path: string) => new Promise<{ stamp: string; mtime: number } | null>(() => {}))
+      const r = rig('claude', { fileStamp })
+      const yes = await heldAfterYes(r)
+      await r.advance(10_000)
+      expect(fileStamp).toHaveBeenCalledTimes(1)
+      await r.advance(109_999)
+      expect(r.told).toEqual([])
+      await r.advance(1)
+      expect(r.told).toEqual([yes + 120_000])
+      await r.advance(0)
+      expect(r.agent()).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: ANSWER })
+    })
+
     it('the yes before its stop, and no stop at all, quiet for 10 s: nothing told, and the turn still works', async () => {
       const r = rig()
       await r.mark()
