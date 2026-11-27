@@ -8,10 +8,11 @@ function payloadOf(msg: CommanderMsg): Record<string, unknown> {
 }
 
 /**
- * The released backend's write of a device hello (main at ac285a931a, src/lib/deviceWs.ts handleHello's version line and
- * its recordHello call, src/services/DeviceService.ts recordHello), word for word but for three changes: `prisma` is
- * [db], `deviceService.recordHello` is the copy below, and the call is awaited (released: `void`) so a test reads the
- * row after it.
+ * The released backend's write of a device hello (main at ac285a931a, src/lib/deviceWs.ts payloadOf, handleHello's version
+ * line and its recordHello call, src/services/DeviceService.ts recordHello), word for word but for these changes:
+ * `prisma` is [db]; `deviceService.recordHello` is the copy below, awaited (released: `void`) so a test reads the row
+ * after it; the version is a local `const` (released: a `let` of the socket's closure); the `if (deviceId)` around the
+ * call is gone, since the caller names the device; `CommanderMsg` keeps only the two fields read.
  */
 export async function oldBackendHello(db: PrismaClient, deviceId: string, msg: CommanderMsg): Promise<void> {
   const payload = payloadOf(msg)
