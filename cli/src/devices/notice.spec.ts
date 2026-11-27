@@ -113,18 +113,25 @@ describe('harness device notify', () => {
   })
 
   it("notify prints shown and the card's id", async () => {
-    expect(await notify(['Q'], { result: 'shown', id: '3f9a1c2e' })).toMatchObject({ code: 0, out: ['shown 3f9a1c2e'], err: [] })
-    expect(await notify(['Q', '--json'], { result: 'shown', id: '3f9a1c2e' }))
+    expect(await notify(['Q'], { result: 'shown', id: '3f9a1c2e' }, { env: CLAUDE }))
+      .toMatchObject({ code: 0, out: ['shown 3f9a1c2e'], err: [] })
+    expect(await notify(['Q', '--json'], { result: 'shown', id: '3f9a1c2e' }, { env: CLAUDE }))
       .toMatchObject({ code: 0, out: ['{"result":"shown","id":"3f9a1c2e"}'] })
+  })
+
+  it('a caller with no session gets no id, as --done could not close the card with it', async () => {
+    expect(await notify(['Q'], { result: 'shown', id: '3f9a1c2e' })).toMatchObject({ code: 0, out: ['shown'], err: [] })
+    expect(await notify(['Q', '--json'], { result: 'shown', id: '3f9a1c2e' })).toMatchObject({ code: 0, out: ['{"result":"shown"}'] })
   })
 
   it('an answer without an id prints shown', async () => {
     for (const id of [undefined, '', '3F9A1C2E', '3f9a1c2', '3f9a1c2e0', 7]) {
-      expect(await notify(['Q'], { result: 'shown', id }), String(id)).toMatchObject({ code: 0, out: ['shown'] })
-      expect(await notify(['Q', '--json'], { result: 'shown', id }), String(id)).toMatchObject({ code: 0, out: ['{"result":"shown"}'] })
+      expect(await notify(['Q'], { result: 'shown', id }, { env: CLAUDE }), String(id)).toMatchObject({ code: 0, out: ['shown'] })
+      expect(await notify(['Q', '--json'], { result: 'shown', id }, { env: CLAUDE }), String(id))
+        .toMatchObject({ code: 0, out: ['{"result":"shown"}'] })
     }
     // Only a card shown has an id to print.
-    expect(await notify(['Q'], { result: 'limited', id: '3f9a1c2e' })).toMatchObject({ code: 0, out: ['limited'] })
+    expect(await notify(['Q'], { result: 'limited', id: '3f9a1c2e' }, { env: CLAUDE })).toMatchObject({ code: 0, out: ['limited'] })
   })
 
   it('the caller is read from the command\'s own environment', () => {
