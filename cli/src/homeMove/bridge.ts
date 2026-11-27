@@ -200,7 +200,8 @@ function hardLink(source: string, place: string): boolean {
   const there = lstatOrNull(place)
   if (there && there.dev === wanted.dev && there.ino === wanted.ino) return true
   const temporary = `${place}.${process.pid}.tmp`
-  // Removed only once linked here: what else is at its name, a folder, is not this link's.
+  // Removed once linked here, or when a file is at its name (a failed removal, an earlier process with this pid), which
+  // would fail every link after; a folder at its name is not this link's.
   let linked = false
   try {
     mkdirSync(dirname(place), { recursive: true, mode: 0o700 })
@@ -210,7 +211,7 @@ function hardLink(source: string, place: string): boolean {
     renameSync(temporary, place)
     return true
   } catch {
-    if (linked) removeQuietly(temporary)
+    if (linked || lstatOrNull(temporary)?.isDirectory() === false) removeQuietly(temporary)
     return false
   }
 }
