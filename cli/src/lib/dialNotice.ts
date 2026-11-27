@@ -144,14 +144,17 @@ interface Counted { agent?: string; line?: string; at: number; hour: boolean }
 
 export class NoticeLimits {
   // What was counted, oldest first: an hour's entries for the last hour, never more than NOTICE_HOUR_MAX as a
-  // twenty-first is refused; a quiet one for NOTICE_SAME_MS, the longest its agent's own checks read it. A quiet entry
-  // needs its agent present, and an agent takes one a minute, so it keeps ten at most.
+  // twenty-first is refused; a quiet one for NOTICE_SAME_MS, the longest its agent's own checks read it. A quiet entry is
+  // a card that rings nothing: its agent present, or the card queued behind its agent's waiting card. An agent takes one
+  // a minute, so ten an agent at most; the agents with a waiting card are at most the twenty cards pending, and the person
+  // is with a few, so about twenty agents' ten.
   private counted: Counted[] = []
 
   constructor(private readonly now: () => number) {}
 
-  /** True when [agent]'s [line] may show now; it is then counted. A refusal counts nothing. [hour] false is a quiet
-   *  card: the agent's own limits bound a loop and still apply, but the hour's twenty bound beeps, and it makes none. */
+  /** True when [agent]'s [line] may show now; it is then counted. A refusal counts nothing. [hour] false is a card that
+   *  rings nothing, quiet or queued behind its agent's waiting card: the agent's own limits bound a loop and still apply,
+   *  but the hour's twenty bound beeps, and it makes none. */
   take(agent: string, line: string, hour = true): boolean {
     const at = this.now()
     if (!this.hourLeft(at) && hour) return false
