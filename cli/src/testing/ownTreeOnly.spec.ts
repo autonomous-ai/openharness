@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -242,12 +242,13 @@ const NOTED = new Map([[SERVER, LSTART], [HERDR, LSTART], [STALE, LSTART]])
 /** What descends from the noted processes that still run as themselves. */
 const NOTED_TREE = [SERVER, HELPER, CAT, HERDR, HERDR_PANE]
 
-const PERSONS = P(80), OTHERS = P(81), TESTS = P(82), HARD_LINKED = P(83), REUSED = P(84)
+const PERSONS = P(80), OTHERS = P(81), TESTS = P(82), HARD_LINKED = P(83), REUSED = P(84), EXEC = P(85), LINKED = P(86)
 /**
  * Codex app servers, launchd's, each named by a pid file in [root], which this writes with its start: the person's, started
  * an hour before the root; another account's and the test's, after it; one of this account's after it whose pid file,
- * written outside the root, the root holds a hard link to; and one of this account's after it whose pid file records the
- * start of the server that had its pid before.
+ * written outside the root, the root holds a hard link to; one of this account's after it whose pid file records the
+ * start of the server that had its pid before; and one of this account's after it whose Codex home is outside the root,
+ * reached through a link to it in the root. And this account's `codex exec`, after it: no app server.
  */
 function codexServers(root: string): Made[] {
   const born = statSync(root).birthtimeMs
@@ -267,14 +268,19 @@ function codexServers(root: string): Made[] {
   mkdirSync(join(root, 'home', 'hard', 'app-server-daemon'), { recursive: true })
   linkSync(pidFile(outside, HARD_LINKED), join(root, 'home', 'hard', 'app-server-daemon', 'daemon.pid'))
   pidFile(join(root, 'home', 'reused'), REUSED)
+  pidFile(join(root, 'home', 'exec'), EXEC)
+  pidFile(join(outside, 'linked'), LINKED)
+  symlinkSync(join(outside, 'linked'), join(root, 'home', 'linked'))
   return [made(PERSONS, 1, PERSONS, server, '/Users/person', before),
     made(OTHERS, 1, OTHERS, server, '/', after, UID + 1),
     made(TESTS, 1, TESTS, server, '/', after),
     made(HARD_LINKED, 1, HARD_LINKED, server, '/', after),
-    made(REUSED, 1, REUSED, server, '/', lstart(new Date(born + 5_000)))]
+    made(REUSED, 1, REUSED, server, '/', lstart(new Date(born + 5_000))),
+    made(EXEC, 1, EXEC, 'codex exec hi', '/', after),
+    made(LINKED, 1, LINKED, server, '/', after)]
 }
 /** The pids codexServers' pid files in the root name, which the sweep reads. */
-const NAMED = [PERSONS, OTHERS, TESTS, REUSED]
+const NAMED = [PERSONS, OTHERS, TESTS, REUSED, EXEC]
 
 describe("the process table the harness reads of every process", () => {
   it('is each one\'s pid, parent and group, and nothing else', () => {
