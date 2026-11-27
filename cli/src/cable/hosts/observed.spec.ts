@@ -546,6 +546,58 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
+  describe('a transcript stamp read that never answers (a stalled network share)', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('holds no pass: another waiting agent still works again, and every pass after leaves one read waiting', async () => {
+      const stalled = '/share/a.jsonl'
+      const grown = new Map<string, number>()
+      const fileStamp = vi.fn((path: string) => (path === stalled
+        ? new Promise<{ stamp: string; mtime: number } | null>(() => {})
+        : Promise.resolve(grown.has(path) ? { stamp: '', mtime: grown.get(path)! } : null)))
+      const { src, clock, ev } = setup({ fileStamp })
+      src.ingest(ev('turn-start', { sessionId: 'a', callerPid: 100, transcriptPath: stalled }))
+      src.ingest(ev('turn-start', { sessionId: 'b', callerPid: 101, transcriptPath: '/t/b.jsonl' }))
+      clock.t += 6_000
+      src.ingest(ev('needs-input', { sessionId: 'a', callerPid: 100 }))
+      src.ingest(ev('needs-input', { sessionId: 'b', callerPid: 101 }))
+      grown.set('/t/b.jsonl', clock.t + 1)
+      const state = (id: string): string | undefined => src.list().find((x) => x.sessionId === id)?.state
+      void src.checkWorking()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(state('b')).toBe('working')
+      expect(state('a')).toBe('needs-you')
+      // The 3 s passes after it: the stalled transcript's one read is still the one waiting.
+      for (let i = 0; i < 5; i++) {
+        void src.checkWorking()
+        await vi.advanceTimersByTimeAsync(3_000)
+      }
+      expect(fileStamp.mock.calls.filter(([path]) => path === stalled)).toHaveLength(1)
+      expect(state('a')).toBe('needs-you')
+    })
+  })
+
+  it('one pass at a time: a pass called while one runs starts no other', async () => {
+    const { src, clock, open, owners, ev, hold, looks } = setup()
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1' }))
+    clock.t += 3_000
+    let release!: () => void
+    hold(new Promise((resolve) => { release = resolve }))
+    const before = looks()
+    const first = src.checkWorking()
+    const second = src.checkWorking()
+    await flushed()
+    expect(looks()).toBe(before + 1)
+    release()
+    await Promise.all([first, second])
+    expect(looks()).toBe(before + 1)
+    await src.checkWorking()
+    expect(looks()).toBe(before + 2)
+  })
+
   it('scanOpen adds terminal/app sessions, working while their owner reads busy, and skips harness-owned ones', async () => {
     const { src, open, owners, working, externals } = setup()
     open.set('a', 'terminal')
