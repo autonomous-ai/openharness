@@ -52,27 +52,57 @@ export function composeNotice(question: string, suggest?: string, state?: Notice
   return `${row.opening}${fitQuestion(q, room, bytes)}${tail}`
 }
 
-export interface NoticeWords { question: string; suggest?: string; state?: NoticeState; json: boolean }
+export interface NoticeWords {
+  question: string; suggest?: string; state?: NoticeState; json: boolean; list: boolean; done?: string
+}
 
 /** [words]: what follows `harness device notify`. `--suggest` takes the next word whatever it is, so an agent's slip
  *  (`--suggest --proceeding`) is still a ring; the last one decides. `--waiting` wins over `--proceeding`, the safer
- *  word. Every other word, `-x` and `--suggest=x` too, is the question, joined by one space and not yet cleaned; a
+ *  word. `--list` asks for the caller's cards and `--done` closes the one its next word names (`''` when none, the last
+ *  one deciding); with either the question is none, so a consumer that composes a line from it rings nothing. Every
+ *  other word, `-x` and `--suggest=x` too, is the question, joined by one space and not yet cleaned; a
  *  question that is only `--help` or `-h` is none, so asking for the usage never rings the dial. */
 export function parseNotice(words: readonly string[]): NoticeWords {
   const question: string[] = []
   let suggest: string | undefined
   let state: NoticeState | undefined
   let json = false
+  let list = false
+  let done: string | undefined
   for (let i = 0; i < words.length; i++) {
     const word = words[i]
     if (word === '--suggest') suggest = words[++i]
+    // The next word whatever it is, as `--suggest`: an agent's slip (`--done --list`) is then read the same way by the
+    // command and the dial skill eval.
+    else if (word === '--done') done = words[++i] ?? ''
+    else if (word === '--list') list = true
     else if (word === '--waiting') state = 'waiting'
     else if (word === '--proceeding') state ??= 'proceeding'
     else if (word === '--json') json = true
     else question.push(word)
   }
   const text = question.join(' ')
-  return { question: text === '--help' || text === '-h' ? '' : text, suggest, state, json }
+  const none = list || done !== undefined || text === '--help' || text === '-h'
+  return { question: none ? '' : text, suggest, state, json, list, done }
+}
+
+/** A card's id, as `--done` names it. */
+export const NOTICE_CARD_ID = /^[0-9a-f]{8}$/
+/** The bytes of a `noticeList` answer: 6 cards of 239-byte lines, JSON-escaped. */
+export const NOTICE_LIST_ANSWER_MAX = 8192
+
+export interface NoticeCard { id: string; ageS: number; kind: NoticeKind; line: string }
+
+const KINDS: readonly unknown[] = ['waiting', 'proceeding', 'plain'] satisfies NoticeKind[]
+
+/** A card as `--list` prints it: the devices' answer is data from another process, checked before it is printed. */
+export function isNoticeCard(value: unknown): value is NoticeCard {
+  if (typeof value !== 'object' || value === null) return false
+  const { id, ageS, kind, line } = value as Record<string, unknown>
+  return typeof id === 'string' && NOTICE_CARD_ID.test(id)
+    && typeof ageS === 'number' && Number.isSafeInteger(ageS) && ageS >= 0
+    && KINDS.includes(kind)
+    && typeof line === 'string' && line.length > 0 && Buffer.byteLength(line) <= NOTICE_LINE_MAX_BYTES
 }
 
 // The CLI fits the whole line, so the devices' byte cut never takes the suggestion off its end. A cut leaves no space
