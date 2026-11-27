@@ -647,6 +647,30 @@ describe('the fake harness answers a Stop hook', () => {
     expect([run.status, run.stdout]).toEqual([0, ''])
   })
 
+  // The product clears "rang this turn" at the person's own prompt or the dial's, never at a message relayed from
+  // another session: so does turn 2's mark, by its follow-up.
+  it.each(['answer', 'new-request', 'answer-one', 'unrung'] as const)(
+    'blocks again in turn 2 after the follow-up %s, though turn 1 rang', (kind) => {
+      const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+      expect(sh(st, 'harness device notify "Which database?" --waiting').stdout).toMatch(SHOWN)
+      markTurn(st, kind)
+
+      const run = stop(st, JSON.stringify(asking))
+
+      expect([run.status, run.stdout]).toEqual([0, BLOCK])
+      expect(readRings(st).at(-1)).toEqual({ argv: STOP, line: null, turn: 2, code: 0, blocked: true })
+    })
+
+  it('blocks nothing in turn 2 after the follow-up relay once turn 1 rang', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+    expect(sh(st, 'harness device notify "Which database?" --waiting').stdout).toMatch(SHOWN)
+    markTurn(st, 'relay')
+
+    const run = stop(st, JSON.stringify(asking))
+
+    expect([run.status, run.stdout]).toEqual([0, ''])
+  })
+
   it('still blocks after a notify that showed nothing, a list, a close or a call that is not a notify, none of them a ring', () => {
     const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
     expect(sh(st, 'harness device notify --waiting').status).toBe(1)
