@@ -98,6 +98,10 @@ Each engine's `Stop` hook runs `harness device claude stop` (`hooks/stop`, in `h
 turn's last answer and whether the stop already continues one. For Codex it also reads the first line of the session's
 rollout, only a regular file inside the session's Codex home, to know a headless run.
 
+Not on Windows in this release: there the CLI writes both hooks files without the `Stop` entry, for Claude Code and
+Codex. The engine waits for the hook at every turn end, and on a Windows 11 ARM64 VM it added 0.7-1.5 s to each, most
+of it PowerShell starting and Node loading the CLI. It comes back with a faster start.
+
 It tells the devices nothing, and the turn ends as it would without Harness, for a headless run (`claude -p`,
 `codex exec`, Codex run as another agent's MCP tool), a session in Harness's data folder (Harness's own one-shots), or
 an engine whose dial skill is not on.

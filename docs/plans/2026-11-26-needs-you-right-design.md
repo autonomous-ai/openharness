@@ -558,6 +558,16 @@ The agent still judges and still writes the line. Harness only makes it look aga
   stayed within $0.002-0.013 of v4's: 3 of 150 runs took one extra round. (a) passes and the hook ships on it (the PM, 2026-11-27). Part 5
   spent $64.67 ((b) $23.21, (a) $41.46): the flow at $261.68 of the $270 cap.
 
+  **Not on Windows in this release** (the PM, 2026-11-27). The Stop hook runs at every turn end and the engine waits
+  for it, so its time is added to every turn, not only to those that ask. Rule set before the measure: kept on
+  Windows if the median added time is at most 1 s. Measured on a Windows 11 ARM64 VM, 136 stops, none past the hook's
+  5 s: Claude Code under Git Bash +816 ms, under PowerShell about +1,490 ms, Codex +690 ms (its own hook already about
+  1.1 s); about 1.2 s of it PowerShell's start and 0.5 s Node and the CLI loading, the pipe's proof about 40 ms. Which
+  shell Claude Code uses is the computer's, not the plugin's, so one shell's number cannot be kept alone: the Stop
+  entry is left out of `hooks/hooks.json` and `hooks/codex.json` as the CLI writes them on Windows, for both engines,
+  and the Codex trust is written for that copy. It comes back with a faster start. The four `dial_nudge_*` counts
+  then hold macOS and Linux alone.
+
 ## Part 6. An outside Claude Code session's question form and plan approval reach the dial
 
 Status: decided (the PM, 2026-11-26; the maintainer left it to the PM). Built at once, ahead of Parts 4 and 5. The
@@ -826,8 +836,9 @@ One task, one pull request: Parts 1, 2 and 3 are three pull requests; Parts 2b, 
 ## Platforms
 
 macOS, Linux and Windows. Presence needs a report of the app in front (Harness Device) or a Harness window; without
-either a notice rings as today. The plugin's new hook takes the two-shell form of its `PermissionRequest` hook, so it
-runs under a POSIX shell, Git Bash and PowerShell.
+either a notice rings as today. The plugin's new hooks take the two-shell form of its `PermissionRequest` hook, so they
+run under a POSIX shell, Git Bash and PowerShell. Part 5's Stop hook is the exception: macOS and Linux only in its
+first release, as its time on Windows is added to every turn end (Part 5, "Not on Windows in this release").
 
 ## Tests (red first)
 
