@@ -37,6 +37,16 @@ vi.mock('node:child_process', async (importOriginal) => {
   const execFile = Object.assign(vi.fn(), { [promisify.custom]: run })
   return { ...actual, execFile }
 })
+// While `held.staging` is set, the removal of an update's staging folder fails with EBUSY (a folder still in use).
+const held = vi.hoisted(() => ({ staging: false }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const rmSync: typeof actual.rmSync = (path, options) => {
+    if (held.staging && /[\\/]\.hn-update-[^\\/]*$/.test(String(path))) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    actual.rmSync(path, options)
+  }
+  return { ...actual, rmSync }
+})
 let installedTuiPath: typeof import('./install.js').installedTuiPath
 let installTui: typeof import('./install.js').installTui
 let platformKey: typeof import('./install.js').platformKey
@@ -81,6 +91,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  held.staging = false
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
   rmSync(home, { recursive: true, force: true })
@@ -168,6 +179,22 @@ describe('managed hn updates', () => {
     await expect(updateTui()).rejects.toThrow()
     expect(readFileSync(target)).toEqual(old)
     expect(readdirSync(dirname(target))).toEqual(['harness-tui'])
+  })
+
+  it('throws the error that stopped the update, not the removal of its staging folder\'s', async () => {
+    const old = installed()
+    published('0.1.2', binary('0.1.9'))
+    held.staging = true
+    await expect(updateTui()).rejects.toThrow('failed its version check')
+    expect(readFileSync(target)).toEqual(old)
+  })
+
+  it('updates when its staging folder cannot be removed', async () => {
+    installed()
+    published()
+    held.staging = true
+    expect(await updateTui()).toBe(true)
+    expect(readFileSync(target)).toEqual(binary('0.1.2'))
   })
 
   it('recovers on the next check after an offline manifest or failed download', async () => {

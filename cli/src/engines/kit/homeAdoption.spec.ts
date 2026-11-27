@@ -1,6 +1,6 @@
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHomeAdopter, homeIsAbsolute, homeIsNetworkOrDevice, inspectJournalEntry, networkHomeSentence, readAdoptedHomes } from './homeAdoption.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
@@ -20,7 +20,8 @@ vi.mock('node:fs', async original => {
   const actual = await original<typeof fs>()
   return { ...actual, openSync: vi.fn(actual.openSync), closeSync: vi.fn(actual.closeSync),
     fsyncSync: vi.fn(actual.fsyncSync), linkSync: vi.fn(actual.linkSync),
-    readSync: vi.fn(actual.readSync), writeFileSync: vi.fn(actual.writeFileSync), opendirSync: vi.fn(actual.opendirSync), lstatSync: vi.fn(actual.lstatSync) }
+    readSync: vi.fn(actual.readSync), writeFileSync: vi.fn(actual.writeFileSync), opendirSync: vi.fn(actual.opendirSync), lstatSync: vi.fn(actual.lstatSync),
+    unlinkSync: vi.fn(actual.unlinkSync) }
 })
 let actual: typeof fs, root = '', file = ''
 let adopter: ReturnType<typeof createHomeAdopter>
@@ -33,7 +34,7 @@ const files = new Map<number, string>()
 beforeEach(async () => {
   clock.now = 0; clock.remaining = Infinity; platform.windows = false
   actual = await vi.importActual<typeof fs>('node:fs')
-  for (const name of ['openSync', 'closeSync', 'fsyncSync', 'linkSync', 'readSync', 'writeFileSync', 'opendirSync', 'lstatSync'] as const) {
+  for (const name of ['openSync', 'closeSync', 'fsyncSync', 'linkSync', 'readSync', 'writeFileSync', 'opendirSync', 'lstatSync', 'unlinkSync'] as const) {
     vi.mocked(fs[name]).mockReset().mockImplementation(actual[name] as never)
   }
   files.clear()
@@ -325,6 +326,31 @@ describe('durable monotone home adoption', () => {
     vi.mocked(fs.fsyncSync).mockImplementation(fd => { actual.fsyncSync(fd); clock.now += NATIVE_EVIDENCE_MS + 1 })
     expect(() => adopter.adopt(add('/held'))).toThrow('work deadline')
     expect(actual.existsSync(record(0))).toBe(false)
+  })
+})
+
+describe('a staged file whose removal fails', () => {
+  const staging = () => join(file + '.adoptions', '.staging')
+  const staged = (path: unknown) => dirname(String(path)) === staging()
+  beforeEach(() => {
+    // What Windows answers to the removal of a file another program still holds.
+    vi.mocked(fs.unlinkSync).mockImplementation(path => {
+      if (staged(path)) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+      actual.unlinkSync(path)
+    })
+  })
+
+  it('throws the error that stopped the publication, not the removal\'s', () => {
+    vi.mocked(fs.fsyncSync).mockImplementation(fd => { actual.fsyncSync(fd); if (staged(files.get(fd))) clock.now += NATIVE_EVIDENCE_MS + 1 })
+    expect(() => adopter.adopt(add('/held'))).toThrow('work deadline')
+    expect(actual.existsSync(record(0))).toBe(false)
+  })
+
+  it('confirms the adoption, and a reader takes no left file for a record', () => {
+    expect(adopter.adopt(add('/saved'))).toEqual(add('/saved'))
+    expect(actual.readdirSync(staging())).not.toEqual([])
+    expect(readAdoptedHomes(file).homes).toEqual(add('/saved'))
+    expect(adopter.adopt(add('/later'))).toEqual(add('/saved', '/later'))
   })
 })
 

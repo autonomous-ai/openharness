@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +14,8 @@ import * as packageLock from './lock.js'
 import { createHash } from 'node:crypto'
 import { bundledRevisions } from './builtinIds.js'
 import { bundledPending } from '../core/viewersWake.js'
+
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 let root: string
 let original: string
@@ -35,6 +38,7 @@ beforeEach(() => {
   invalidateInstalledDsh()
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   env.DSH_DIR = original
   invalidateInstalledDsh()
@@ -86,6 +90,35 @@ it.each(['not json', JSON.stringify({ spec: 1, id: 'other/package', name: 'Wrong
   expect(installedDsh(MODEL_MANAGER_ID)).toBeUndefined()
   expect(ensureBundledModelManager(bundle())).toBe(true)
 })
+// What Windows answers to the removal of a folder another program still holds a file in.
+const holdStaging = () => {
+  const remove = fs.rmSync
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+    if (/[\\/]\.bundled[\\/].*\.tmp$/.test(String(path))) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    remove(path, options)
+  })
+}
+
+it('throws the error that stopped the install, not the removal of its staging folder\'s, and releases its lock', () => {
+  const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+  const write = fs.writeFileSync
+  vi.spyOn(fs, 'writeFileSync').mockImplementation((path, data, options) => {
+    if (String(path).endsWith('AGENTS.md')) throw denied
+    write(path, data, options)
+  })
+  holdStaging()
+  expect(() => ensureBundledModelManager(bundle())).toThrow(denied)
+  vi.restoreAllMocks()
+  expect(ensureBundledModelManager(bundle())).toBe(true)
+})
+
+it('installs when its staging folder cannot be removed', () => {
+  holdStaging()
+  expect(ensureBundledModelManager(bundle())).toBe(true)
+  expect(installedDsh(MODEL_MANAGER_ID)?.manifest.name).toBe('Model Manager')
+  expect(ensureBundledModelManager(bundle('next'))).toBe(true)
+})
+
 const bundle = (instructions = 'Help with local models') => ({
   'harness.json': { content: JSON.stringify({ spec: 1, id: MODEL_MANAGER_ID, name: 'Model Manager', engine: 'codex' }), executable: false },
   'AGENTS.md': { content: instructions, executable: false },
