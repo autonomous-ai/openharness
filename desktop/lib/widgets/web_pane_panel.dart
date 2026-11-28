@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:webview_win_floating/webview_win_floating.dart'
+    show WindowsWebViewPlatform;
 
 import '../core/open_in_browser.dart';
 import '../core/native_webview_runtime.dart';
@@ -401,9 +403,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
     // WebKit's default media policy wants a click before any playback, which
     // leaves a viewer's muted video sitting at 00:00 with a play button; a
     // pane whose whole point is the render the harness just made autoplays it.
+    final platform = WebViewPlatform.instance;
     final controller =
         WebViewController.fromPlatformCreationParams(
-            WebViewPlatform.instance is WebKitWebViewPlatform
+            platform is WebKitWebViewPlatform
                 ? WebKitWebViewControllerCreationParams(
                     allowsInlineMediaPlayback: true,
                     mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
@@ -414,7 +417,9 @@ class _WebPanePanelState extends State<WebPanePanel> {
           ..setNavigationDelegate(
             NavigationDelegate(
               onPageStarted: _viewerLoad.started,
-              onUrlChange: (change) => unawaited(_pageChanged(change.url)),
+              onUrlChange: platform is WindowsWebViewPlatform
+                  ? null
+                  : (change) => unawaited(_pageChanged(change.url)),
               onPageFinished: (url) {
                 _viewerLoad.finished(url);
                 unawaited(_pageChanged(url));
@@ -721,10 +726,6 @@ class _WebPanePanelState extends State<WebPanePanel> {
     final controller = _controller;
     final url = widget.pane.url;
     if (controller == null) {
-      // No embedded webview here ([webviewAvailable]), so the page it would
-      // have shown opens in the browser instead of sitting here as text
-      // (openharness#108). Windows 11 ships WebView2, so on Windows this is a
-      // computer that has lost it, and it can be had again.
       final page = url == null ? null : Uri.tryParse(url);
       return _Notice(
         key: const ValueKey('web-pane-placeholder'),
@@ -732,7 +733,9 @@ class _WebPanePanelState extends State<WebPanePanel> {
         title: 'Viewer',
         detail: page == null
             ? 'No viewer yet.'
-            : defaultTargetPlatform == TargetPlatform.windows
+            : !kIsWeb &&
+                  defaultTargetPlatform == TargetPlatform.windows &&
+                  !NativeWebViewRuntime.available
             ? 'This viewer opens in your browser. Install Microsoft Edge WebView2 to see it here.\n$url'
             : 'This viewer opens in your browser on this platform.\n$url',
         action: page == null
